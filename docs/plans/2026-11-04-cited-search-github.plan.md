@@ -180,5 +180,6 @@ Roadmap slice 1 is the walking skeleton for M1. Slice 2 (agents query Rastro ove
 | T20 | Test-only overrides stay out of real use: loopback-only API override, debug-only clock and host limits | S30, S31 | T17, T19 | crates/rastro-core/, crates/rastro-connector-github/, crates/rastro-cli/ | agent | TO-DO |
 | T21 | The live check fails loudly when half-configured | S24a | none | crates/rastro-cli/tests/live.rs | agent | COMPLETE (#21) |
 | T22 | Review fix: an original must be a JSON object, or the submission is rejected | S25a | T17 | crates/rastro-core/, crates/rastro-cli/tests/, crates/rastro-test-connector/ | agent | COMPLETE (#24) |
-| T23 | Review fix: a rejected submission makes the window "couldn't look: protocol" whatever else failed | S27b | T18 | crates/rastro-core/, crates/rastro-cli/tests/, crates/rastro-test-connector/ | agent | TO-DO |
-| T24 | Review fix: an explicit null original is rejected for a source that keeps originals | S25b | T22 | crates/rastro-plugin-sdk/, crates/rastro-core/, crates/rastro-cli/tests/, crates/rastro-test-connector/ | agent | TO-DO |
+| T23 | Review fix: a rejected submission makes the window "couldn't look: protocol" whatever else failed | S27b | T18 | crates/rastro-core/, crates/rastro-cli/tests/, crates/rastro-test-connector/ | agent | COMPLETE (#26) |
+| T24 | Review fix: an explicit null original is rejected for a source that keeps originals | S25b | T22 | crates/rastro-plugin-sdk/, crates/rastro-core/, crates/rastro-cli/tests/, crates/rastro-test-connector/ | agent | COMPLETE (#25) |
+| T25 | Review fix: the rejection-precedence test compares instants, not timestamp strings | S27b | T23 | crates/rastro-cli/tests/ | agent | TO-DO |

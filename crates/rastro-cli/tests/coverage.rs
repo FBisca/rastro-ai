@@ -8,6 +8,17 @@ use std::{
 };
 use tempfile::TempDir;
 
+/// Two RFC 3339 timestamps name the same instant, however each is written
+/// (`...01Z` and `...01.000Z` are equal).
+fn same_instant(left: &Value, right: &Value, label: &str) {
+    let instant = |v: &Value| -> chrono::DateTime<chrono::Utc> {
+        v.as_str()
+            .and_then(|t| t.parse().ok())
+            .unwrap_or_else(|| panic!("{label}: not a timestamp: {v}"))
+    };
+    assert_eq!(instant(left), instant(right), "{label}: {left} vs {right}");
+}
+
 struct Env {
     home: TempDir,
 }
@@ -515,9 +526,9 @@ fn S26_coverage_lists_each_window_with_its_state_selection_and_retry_time() {
     assert_eq!(listed[1]["state"], "couldn't look");
     assert_eq!(listed[1]["selection"], "authored");
     assert_eq!(listed[1]["reason"], "rate_limited");
-    assert_eq!(listed[1]["retry_at"], retry);
+    same_instant(&listed[1]["retry_at"], &json!(retry), "retry_at");
     // Windows are half-open and consecutive: the failed window did not advance the start.
-    assert_eq!(listed[1]["from"], listed[0]["to"]);
+    same_instant(&listed[1]["from"], &listed[0]["to"], "");
     assert!(listed[0].get("retry_at").is_none());
     let human = env.ok(&["coverage", "project"]);
     for expected in [
@@ -530,7 +541,7 @@ fn S26_coverage_lists_each_window_with_its_state_selection_and_retry_time() {
     }
     // The next sync starts where the last complete window ended, not after the failed one.
     let next = sync_with(&env, &[("https://x/1", "first body")]);
-    assert_eq!(next["window"]["from"], listed[0]["to"]);
+    same_instant(&next["window"]["from"], &listed[0]["to"], "");
 }
 
 #[test]
@@ -615,7 +626,7 @@ fn S27a_some_rejected_submissions_keep_the_accepted_evidence_but_the_window_is_c
     assert_eq!(listed[0]["reason"], "protocol");
     // The window did not complete, so the next sync reads it again.
     let again = sync_with(&env, &[("https://x/1", "kept body")]);
-    assert_eq!(again["window"]["from"], listed[0]["from"]);
+    same_instant(&again["window"]["from"], &listed[0]["from"], "");
 }
 
 #[test]
@@ -763,6 +774,6 @@ fn S27b_a_rejected_submission_wins_over_a_reported_failure_or_a_failed_finish() 
         assert!(listed[0].get("retry_at").is_none(), "{label}: {listed:?}");
         // A couldn't-look window does not advance the next sync's start.
         let again = sync_with(&env, &[("https://x/1", "kept body")]);
-        assert_eq!(again["window"]["from"], listed[0]["from"], "{label}");
+        same_instant(&again["window"]["from"], &listed[0]["from"], label);
     }
 }
