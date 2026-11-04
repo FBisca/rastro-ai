@@ -10,7 +10,8 @@
 //! - `stderr` {text, repeat?}: write that line to stderr
 //! - `flood` {lines}: that many invalid `evidence.submit` lines, back to back
 //! - `send_bytes` {bytes}: those bytes as one line (may be invalid UTF-8)
-//! - `spawn_holder` {secs}: start a child that keeps the pipes open that long
+//! - `finish_big_id` {bytes}: `run.finish` with an id that long; does not read the reply
+//! - `spawn_holder` {secs, pid_file?}: start a child that keeps the pipes open that long
 //! - `dump_env` {path}: write the environment, one NAME=value per line, to that file
 //! - `exit` {code?}: end the process at once
 //!
@@ -66,6 +67,12 @@ enum Step {
     /// Starts a child that keeps this process's pipes open for `secs` seconds.
     SpawnHolder {
         secs: u64,
+        /// Where to write the child's process id, so a test can clean it up.
+        pid_file: Option<String>,
+    },
+    /// `run.finish` whose id is a string of that many bytes; does not wait for the reply.
+    FinishBigId {
+        bytes: usize,
     },
     DumpEnv {
         path: String,
@@ -156,10 +163,17 @@ fn main() -> Result<()> {
                 }
             }
             Step::SendBytes { bytes } => transport.send_bytes(&bytes)?,
-            Step::SpawnHolder { secs } => {
-                std::process::Command::new("sleep")
+            Step::SpawnHolder { secs, pid_file } => {
+                let holder = std::process::Command::new("sleep")
                     .arg(secs.to_string())
                     .spawn()?;
+                if let Some(path) = pid_file {
+                    fs::write(path, holder.id().to_string())?;
+                }
+            }
+            Step::FinishBigId { bytes } => {
+                transport.send(&json!({"jsonrpc": "2.0", "id": "x".repeat(bytes),
+                    "method": "run.finish", "params": {"status": "ok", "submitted": 0}}))?;
             }
             Step::DumpEnv { path } => {
                 let lines: Vec<_> = env::vars().map(|(k, v)| format!("{k}={v}")).collect();

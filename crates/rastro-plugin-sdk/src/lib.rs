@@ -73,6 +73,19 @@ impl Envelope {
             ..Self::default()
         })
     }
+    /// JSON-RPC 2.0 shape: the right version, an id that is a string or a number, and
+    /// either a request/notification (`method`) or a response (`result` xor `error`).
+    pub fn is_well_formed(&self) -> bool {
+        let id_ok = self
+            .id
+            .as_ref()
+            .is_none_or(|id| id.is_string() || id.is_number());
+        let shape_ok = match &self.method {
+            Some(_) => self.result.is_none() && self.error.is_none(),
+            None => self.result.is_some() != self.error.is_some(),
+        };
+        self.jsonrpc == "2.0" && id_ok && shape_ok
+    }
     pub fn params<T: for<'a> Deserialize<'a>>(&self) -> Result<T> {
         serde_json::from_value(self.params.clone().unwrap_or(Value::Null)).with_context(|| {
             format!(
