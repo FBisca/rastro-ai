@@ -1,10 +1,16 @@
+pub mod evidence;
 pub mod files;
+pub mod host;
+pub mod runs;
 use anyhow::{Context, Result, bail, ensure};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, env, fs, io::Write, path::PathBuf};
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+pub use evidence::{Evidence, Hit, TrustClass};
+pub use rastro_plugin_sdk::Counts;
+
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub struct Scope(pub String);
 
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -28,6 +34,17 @@ impl Source {
             freshness_rule: "1h".into(),
             window_start: Utc::now() - Duration::days(90),
             keep_original: false,
+        }
+    }
+    /// The freshness rule as a duration; `validate` guarantees the shape.
+    pub fn freshness(&self) -> Duration {
+        let (number, unit) = self.freshness_rule.split_at(self.freshness_rule.len() - 1);
+        let n: i64 = number.parse().unwrap_or(0);
+        match unit {
+            "s" => Duration::seconds(n),
+            "m" => Duration::minutes(n),
+            "h" => Duration::hours(n),
+            _ => Duration::days(n),
         }
     }
     pub fn validate(&self) -> Result<()> {
@@ -109,6 +126,9 @@ impl Locations {
     pub fn database(&self) -> PathBuf {
         self.data.join("rastro.sqlite3")
     }
+    pub fn plugins(&self) -> PathBuf {
+        self.config.join("plugins")
+    }
     pub fn config_file(&self) -> PathBuf {
         self.config.join("config.toml")
     }
@@ -148,7 +168,7 @@ impl Config {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 pub enum CoverageState {
     #[serde(rename = "never looked")]
     NeverLooked,
@@ -172,17 +192,60 @@ impl CoverageState {
         }
     }
 }
-#[derive(Debug, Serialize)]
+#[derive(Clone, Debug, Serialize)]
 pub struct Coverage {
     pub source: String,
     pub scope: Scope,
     pub state: CoverageState,
+    /// When the source was last checked completely (found or empty).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_checked: Option<DateTime<Utc>>,
+    /// Last complete check plus the freshness rule.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fresh_until: Option<DateTime<Utc>>,
+}
+
+/// One coverage row: what a run looked at, over the half-open window `[from, to)`.
+pub struct CoverageRecord {
+    pub run_id: i64,
+    pub source: String,
+    pub scope: Scope,
+    pub window: (DateTime<Utc>, DateTime<Utc>),
+    pub selection: String,
+    pub state: CoverageState,
+    pub reason: Option<String>,
+    pub retry_at: Option<DateTime<Utc>>,
+    pub checked_at: DateTime<Utc>,
+}
+/// How a run ended, as the core counted it.
+pub struct RunEnd {
+    pub status: String,
+    pub reason: Option<String>,
+    pub finished_at: DateTime<Utc>,
+    pub counts: Counts,
+}
+/// The most recent complete check (found or empty) of a source.
+pub struct CompleteCheck {
+    pub window_end: DateTime<Utc>,
+    pub checked_at: DateTime<Utc>,
 }
 
 pub trait Storage {
     /// Config is authoritative; retain historical source rows referenced by evidence.
     fn project_sources(&mut self, sources: &[Source]) -> Result<()>;
     fn coverage(&self, source: &Source) -> Result<Coverage>;
+    fn start_run(
+        &mut self,
+        source: &Source,
+        plugin: (&str, &str),
+        started_at: DateTime<Utc>,
+    ) -> Result<i64>;
+    /// Appends one observation and its search index entry in one transaction.
+    fn append_evidence(&mut self, run_id: i64, evidence: &Evidence) -> Result<i64>;
+    fn record_coverage(&mut self, record: &CoverageRecord) -> Result<()>;
+    fn finish_run(&mut self, run_id: i64, end: &RunEnd) -> Result<()>;
+    fn last_complete_check(&self, source: &Source) -> Result<Option<CompleteCheck>>;
+    fn search(&self, query: &str, limit: usize) -> Result<Vec<Hit>>;
 }
 
 pub struct Rastro<S> {
@@ -235,7 +298,12 @@ impl<S: Storage> Rastro<S> {
         }
         sources
             .into_iter()
-            .map(|s| self.storage.coverage(s))
+            .map(|s| self.source_coverage(s))
             .collect()
+    }
+    fn source_coverage(&self, source: &Source) -> Result<Coverage> {
+        let mut coverage = self.storage.coverage(source)?;
+        coverage.fresh_until = coverage.last_checked.map(|at| at + source.freshness());
+        Ok(coverage)
     }
 }

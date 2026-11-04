@@ -3,53 +3,449 @@
   "$id": "https://rastro.dev/schema/operations-v1.schema.json",
   "title": "Rastro operation results v1",
   "type": "object",
-  "required": ["schema_version", "operation"],
+  "required": [
+    "schema_version",
+    "operation"
+  ],
   "properties": {
-    "schema_version": {"const": 1},
-    "operation": {"enum": ["source.add", "source.list", "coverage"]},
-    "error": {"type": "string", "minLength": 1},
-    "result": {"type": "object"}
+    "schema_version": {
+      "const": 1
+    },
+    "operation": {
+      "enum": [
+        "source.add",
+        "source.list",
+        "coverage",
+        "sync",
+        "search"
+      ]
+    },
+    "error": {
+      "type": "string",
+      "minLength": 1
+    },
+    "result": {
+      "type": "object"
+    }
   },
   "additionalProperties": false,
   "oneOf": [
-    {"required": ["error"], "not": {"required": ["result"]}},
     {
-      "required": ["result"], "not": {"required": ["error"]},
+      "required": [
+        "error"
+      ],
+      "not": {
+        "required": [
+          "result"
+        ]
+      }
+    },
+    {
+      "required": [
+        "result"
+      ],
+      "not": {
+        "required": [
+          "error"
+        ]
+      },
       "oneOf": [
-        {"properties": {"operation": {"const": "source.add"}, "result": {
-          "type": "object", "required": ["source"], "additionalProperties": false,
-          "properties": {"source": {"$ref": "#/$defs/source"}}
-        }}},
-        {"properties": {"operation": {"const": "source.list"}, "result": {
-          "type": "object", "required": ["sources"], "additionalProperties": false,
-          "properties": {"sources": {"type": "array", "items": {"$ref": "#/$defs/source"}}}
-        }}},
-        {"properties": {"operation": {"const": "coverage"}, "result": {
-          "type": "object", "required": ["coverage"], "additionalProperties": false,
-          "properties": {"coverage": {"type": "array", "items": {"$ref": "#/$defs/coverage"}}}
-        }}}
+        {
+          "properties": {
+            "operation": {
+              "const": "source.add"
+            },
+            "result": {
+              "type": "object",
+              "required": [
+                "source"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "source": {
+                  "$ref": "#/$defs/source"
+                }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "source.list"
+            },
+            "result": {
+              "type": "object",
+              "required": [
+                "sources"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "sources": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/source"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "coverage"
+            },
+            "result": {
+              "type": "object",
+              "required": [
+                "coverage"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "coverage": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/coverage"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "sync"
+            },
+            "result": {
+              "type": "object",
+              "required": [
+                "runs"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "runs": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/run"
+                  }
+                }
+              }
+            }
+          }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "search"
+            },
+            "result": {
+              "type": "object",
+              "required": [
+                "query",
+                "results",
+                "coverage"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "query": {
+                  "type": "string"
+                },
+                "results": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/search_result"
+                  }
+                },
+                "coverage": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/$defs/coverage"
+                  }
+                }
+              }
+            }
+          }
+        }
       ]
     }
   ],
   "$defs": {
     "source": {
-      "type": "object", "additionalProperties": false,
-      "required": ["name", "connector", "selector", "scope", "freshness_rule", "window_start", "keep_original"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "connector",
+        "selector",
+        "scope",
+        "freshness_rule",
+        "window_start",
+        "keep_original"
+      ],
       "properties": {
-        "name": {"type": "string", "minLength": 1},
-        "connector": {"type": "string", "minLength": 1},
-        "selector": {"type": "object", "additionalProperties": {"type": "string"}},
-        "scope": {"type": "string", "minLength": 1},
-        "freshness_rule": {"type": "string", "pattern": "^[0-9]+[smhd]$"},
-        "window_start": {"type": "string", "format": "date-time"},
-        "keep_original": {"type": "boolean"}
+        "name": {
+          "type": "string",
+          "minLength": 1
+        },
+        "connector": {
+          "type": "string",
+          "minLength": 1
+        },
+        "selector": {
+          "type": "object",
+          "additionalProperties": {
+            "type": "string"
+          }
+        },
+        "scope": {
+          "type": "string",
+          "minLength": 1
+        },
+        "freshness_rule": {
+          "type": "string",
+          "pattern": "^[0-9]+[smhd]$"
+        },
+        "window_start": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "keep_original": {
+          "type": "boolean"
+        }
       }
     },
     "coverage": {
-      "type": "object", "additionalProperties": false, "required": ["source", "scope", "state"],
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "source",
+        "scope",
+        "state"
+      ],
       "properties": {
-        "source": {"type": "string"}, "scope": {"type": "string"},
-        "state": {"enum": ["never looked", "found", "empty", "couldn't look", "unknown"]}
+        "source": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "state": {
+          "enum": [
+            "never looked",
+            "found",
+            "empty",
+            "couldn't look",
+            "unknown"
+          ]
+        },
+        "last_checked": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "fresh_until": {
+          "type": "string",
+          "format": "date-time"
+        }
+      }
+    },
+    "run": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "run_id",
+        "source",
+        "scope",
+        "plugin_id",
+        "plugin_version",
+        "status",
+        "reason",
+        "started_at",
+        "finished_at",
+        "window",
+        "counts",
+        "coverage"
+      ],
+      "properties": {
+        "run_id": {
+          "type": "integer"
+        },
+        "source": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "plugin_id": {
+          "type": "string"
+        },
+        "plugin_version": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "ok",
+            "failed"
+          ]
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "started_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "finished_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "window": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "from",
+            "to"
+          ],
+          "properties": {
+            "from": {
+              "type": "string",
+              "format": "date-time"
+            },
+            "to": {
+              "type": "string",
+              "format": "date-time"
+            }
+          }
+        },
+        "counts": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "submitted",
+            "accepted",
+            "rejected",
+            "unchanged"
+          ],
+          "properties": {
+            "submitted": {
+              "type": [
+                "integer"
+              ],
+              "minimum": 0
+            },
+            "accepted": {
+              "type": [
+                "integer"
+              ],
+              "minimum": 0
+            },
+            "rejected": {
+              "type": [
+                "integer"
+              ],
+              "minimum": 0
+            },
+            "unchanged": {
+              "type": [
+                "integer"
+              ],
+              "minimum": 0
+            }
+          }
+        },
+        "coverage": {
+          "enum": [
+            "never looked",
+            "found",
+            "empty",
+            "couldn't look",
+            "unknown"
+          ]
+        }
+      }
+    },
+    "search_result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "source",
+        "scope",
+        "location",
+        "field",
+        "start",
+        "end",
+        "quote",
+        "trust_class",
+        "captured_at",
+        "source_updated_at"
+      ],
+      "properties": {
+        "id": {
+          "type": "integer"
+        },
+        "source": {
+          "type": "string"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "location": {
+          "type": "string",
+          "minLength": 1
+        },
+        "field": {
+          "type": "string",
+          "minLength": 1
+        },
+        "start": {
+          "type": [
+            "integer"
+          ],
+          "minimum": 0
+        },
+        "end": {
+          "type": [
+            "integer"
+          ],
+          "minimum": 0
+        },
+        "quote": {
+          "type": "string",
+          "minLength": 1
+        },
+        "trust_class": {
+          "enum": [
+            "structured",
+            "unstructured",
+            "untrusted content"
+          ]
+        },
+        "captured_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "source_updated_at": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "format": "date-time"
+        },
+        "coverage": {
+          "oneOf": [
+            {
+              "$ref": "#/$defs/coverage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
       }
     }
   }

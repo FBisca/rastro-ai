@@ -1,0 +1,101 @@
+//! Runs: one execution of a connector for a source, and the log it leaves.
+use crate::{Counts, CoverageState, Rastro, Source, Storage, host};
+use anyhow::{Result, bail};
+use chrono::{DateTime, Utc};
+use rastro_plugin_sdk::Window;
+use serde::Serialize;
+
+#[derive(Debug, Serialize)]
+pub struct RunReport {
+    pub run_id: i64,
+    pub source: String,
+    pub scope: String,
+    pub plugin_id: String,
+    pub plugin_version: String,
+    /// `ok` or `failed`.
+    pub status: String,
+    pub reason: Option<String>,
+    pub started_at: DateTime<Utc>,
+    pub finished_at: DateTime<Utc>,
+    pub window: Window,
+    pub counts: Counts,
+    pub coverage: CoverageState,
+}
+
+impl<S: Storage> Rastro<S> {
+    /// Runs the connector of one source, or of every source, one after another.
+    pub fn sync(&mut self, name: Option<&str>) -> Result<Vec<RunReport>> {
+        let sources: Vec<Source> = self
+            .config
+            .sources
+            .iter()
+            .filter(|s| name.is_none_or(|n| s.name == n))
+            .cloned()
+            .collect();
+        if sources.is_empty()
+            && let Some(name) = name
+        {
+            bail!("unknown source: {name}");
+        }
+        let mut reports = Vec::new();
+        for source in &sources {
+            let plugin = host::discover(&self.locations, &source.connector)?;
+            let from = match self.storage.last_complete_check(source)? {
+                Some(check) => check.window_end,
+                None => source.window_start,
+            };
+            reports.push(host::run(
+                &mut self.storage,
+                source,
+                &plugin,
+                from,
+                Utc::now(),
+            )?);
+        }
+        Ok(reports)
+    }
+
+    /// Full-text search over evidence quotes, each hit with its source's coverage.
+    pub fn search(&self, text: &str) -> Result<SearchResults> {
+        let terms: Vec<_> = text
+            .split_whitespace()
+            .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
+            .collect();
+        let hits = if terms.is_empty() {
+            Vec::new()
+        } else {
+            self.storage.search(&terms.join(" "), 50)?
+        };
+        let coverage = self.coverage(None)?;
+        let results = hits
+            .into_iter()
+            .map(|hit| {
+                let covering = coverage
+                    .iter()
+                    .position(|c| c.source == hit.evidence.source);
+                (hit, covering)
+            })
+            .collect::<Vec<_>>();
+        let results = results
+            .into_iter()
+            .map(|(hit, covering)| SearchResult {
+                hit,
+                coverage: covering.map(|i| coverage[i].clone()),
+            })
+            .collect();
+        Ok(SearchResults { results, coverage })
+    }
+}
+
+#[derive(Debug, Serialize)]
+pub struct SearchResult {
+    #[serde(flatten)]
+    pub hit: crate::Hit,
+    pub coverage: Option<crate::Coverage>,
+}
+/// Matches, plus the coverage of every source searched, so an empty answer says what it covered.
+#[derive(Debug, Serialize)]
+pub struct SearchResults {
+    pub results: Vec<SearchResult>,
+    pub coverage: Vec<crate::Coverage>,
+}
