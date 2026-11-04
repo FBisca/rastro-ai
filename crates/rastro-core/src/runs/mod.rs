@@ -47,7 +47,7 @@ impl<S: Storage> Rastro<S> {
             reports.push(host::run(
                 &mut self.storage,
                 source,
-                &plugin,
+                plugin.as_ref(),
                 from,
                 Utc::now(),
             )?);

@@ -7,11 +7,21 @@ use rastro_core::{
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
 
-/// Applied in order; never edit one that has shipped, add the next.
-const MIGRATIONS: [&str; 3] = [
-    include_str!("../migrations/0001.sql"),
-    include_str!("../migrations/0002.sql"),
-    include_str!("../migrations/0003.sql"),
+/// `(name, sql)`, named `YYYYMMDDHHmm_<what>` so migrations from different branches
+/// order by time. Never edit one that has shipped; add a new one.
+const MIGRATIONS: [(&str, &str); 3] = [
+    (
+        "202611041200_initial",
+        include_str!("../migrations/202611041200_initial.sql"),
+    ),
+    (
+        "202611041500_evidence_insert_guard",
+        include_str!("../migrations/202611041500_evidence_insert_guard.sql"),
+    ),
+    (
+        "202611041700_evidence_full_text_index",
+        include_str!("../migrations/202611041700_evidence_full_text_index.sql"),
+    ),
 ];
 
 fn stamp(time: DateTime<Utc>) -> String {
@@ -26,27 +36,77 @@ pub struct SqliteStorage {
 }
 impl SqliteStorage {
     pub fn open(path: &Path) -> Result<Self> {
+        Self::open_with(path, &MIGRATIONS)
+    }
+    /// Opens with an explicit migration list. Each pending migration applies once, in name
+    /// order, in its own transaction. A database holding a migration not in the list is refused.
+    pub fn open_with(path: &Path, migrations: &[(&str, &str)]) -> Result<Self> {
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
             rastro_core::files::private_directory(parent)?;
         }
         let _file = rastro_core::files::private_file(path)?;
         let mut connection = Connection::open(path)?;
         connection.execute_batch("PRAGMA foreign_keys = ON;")?;
+        let mut migrations = migrations.to_vec();
+        migrations.sort_by_key(|(name, _)| *name);
         let transaction =
             connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let version: u32 = transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-        ensure!(
-            version as usize <= MIGRATIONS.len(),
-            "database schema {version} is newer than supported version {}",
-            MIGRATIONS.len()
-        );
-        for (index, sql) in MIGRATIONS.iter().enumerate().skip(version as usize) {
-            transaction.execute_batch(sql)?;
-            transaction.pragma_update(None, "user_version", (index + 1) as i64)?;
+        let tracked: bool = transaction.query_row(
+            "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'schema_migrations')",
+            [],
+            |row| row.get(0),
+        )?;
+        transaction.execute_batch(
+            "CREATE TABLE IF NOT EXISTS schema_migrations (
+                name TEXT PRIMARY KEY, applied_at TEXT NOT NULL)",
+        )?;
+        if !tracked {
+            // A database from before migrations were tracked by name: user_version N
+            // means the first N migrations are in.
+            let version: i64 =
+                transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
+            ensure!(
+                version as usize <= migrations.len(),
+                "database schema {version} is newer than this version of rastro"
+            );
+            for (name, _) in &migrations[..version as usize] {
+                mark(&transaction, name)?;
+            }
+        }
+        let applied: Vec<String> = transaction
+            .prepare("SELECT name FROM schema_migrations")?
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<_, _>>()?;
+        if let Some(unknown) = applied
+            .iter()
+            .find(|name| !migrations.iter().any(|(known, _)| known == name))
+        {
+            bail!("database has migration {unknown}, which this version of rastro doesn't know");
         }
         transaction.commit()?;
+        for (name, sql) in migrations {
+            let transaction =
+                connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let done: bool = transaction.query_row(
+                "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = ?1)",
+                [name],
+                |row| row.get(0),
+            )?;
+            if !done {
+                transaction.execute_batch(sql)?;
+                mark(&transaction, name)?;
+            }
+            transaction.commit()?;
+        }
         Ok(Self { connection })
     }
+}
+fn mark(connection: &Connection, name: &str) -> Result<()> {
+    connection.execute(
+        "INSERT INTO schema_migrations (name, applied_at) VALUES (?1, ?2)",
+        params![name, stamp(Utc::now())],
+    )?;
+    Ok(())
 }
 impl Storage for SqliteStorage {
     fn project_sources(&mut self, sources: &[Source]) -> Result<()> {

@@ -321,3 +321,37 @@ fn S20_search_without_a_match_states_the_coverage_of_each_source() {
     assert_eq!(coverage[0]["state"], "found");
     assert_eq!(coverage[1]["state"], "never looked");
 }
+
+#[test]
+fn S4_sync_without_manifest_records_couldnt_look() {
+    let env = Env::new();
+    env.ok(&[
+        "source",
+        "add",
+        "ghost",
+        "--connector",
+        "missing",
+        "--repo",
+        "o/p",
+        "--scope",
+        "personal",
+    ]);
+    let output = env.rastro(&["sync", "ghost", "--json"]);
+    assert!(!output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let run = &value["result"]["runs"][0];
+    assert_eq!(run["status"], "failed");
+    assert_eq!(run["reason"], "not_installed");
+    assert_eq!(run["coverage"], "couldn't look");
+    assert_eq!(
+        env.sql::<String>("SELECT reason FROM runs"),
+        "not_installed"
+    );
+    assert_eq!(
+        env.sql::<String>("SELECT state || ':' || reason FROM coverage"),
+        "couldn't look:not_installed"
+    );
+    let human = env.rastro(&["sync", "ghost"]);
+    assert!(!human.status.success());
+    assert!(String::from_utf8_lossy(&human.stdout).contains("not_installed"));
+}

@@ -24,7 +24,8 @@ pub struct Plugin {
 
 /// Finds the manifest whose `id` is the source's connector, under `<config>/plugins` and
 /// the directories of `RASTRO_PLUGIN_PATH`. Each root may be a plugin directory or hold some.
-pub fn discover(locations: &Locations, connector: &str) -> Result<Plugin> {
+/// `None` when no manifest matches: the connector isn't installed.
+pub fn discover(locations: &Locations, connector: &str) -> Result<Option<Plugin>> {
     let mut roots = vec![locations.plugins()];
     if let Some(path) = env::var_os("RASTRO_PLUGIN_PATH") {
         roots.extend(env::split_paths(&path));
@@ -39,13 +40,13 @@ pub fn discover(locations: &Locations, connector: &str) -> Result<Plugin> {
                 continue;
             };
             match Manifest::parse(&text) {
-                Ok(manifest) if manifest.id == connector => return check(manifest, dir),
+                Ok(manifest) if manifest.id == connector => return check(manifest, dir).map(Some),
                 Ok(_) => {}
                 Err(error) => eprintln!("skipping {}: {error:#}", dir.display()),
             }
         }
     }
-    bail!("couldn't look: no plugin manifest for connector {connector}")
+    Ok(None)
 }
 
 fn check(manifest: Manifest, dir: PathBuf) -> Result<Plugin> {
@@ -80,13 +81,16 @@ struct Session {
 pub fn run<S: Storage>(
     storage: &mut S,
     source: &Source,
-    plugin: &Plugin,
+    plugin: Option<&Plugin>,
     from: DateTime<Utc>,
     to: DateTime<Utc>,
 ) -> Result<RunReport> {
-    let manifest = &plugin.manifest;
+    let (plugin_id, plugin_version) = match plugin {
+        Some(p) => (p.manifest.id.clone(), p.manifest.version.clone()),
+        None => (source.connector.clone(), String::new()),
+    };
     let started_at = Utc::now();
-    let run_id = storage.start_run(source, (&manifest.id, &manifest.version), started_at)?;
+    let run_id = storage.start_run(source, (&plugin_id, &plugin_version), started_at)?;
     let window = Window {
         from: stamp(from),
         to: stamp(to),
@@ -98,9 +102,14 @@ pub fn run<S: Storage>(
         selector: source.selector.clone(),
         window: window.clone(),
     };
-    let grant = Grant::new(manifest, &source.name, &source.scope);
     let mut session = Session::default();
-    let outcome = drive(storage, plugin, &binding, &grant, &mut session);
+    let outcome = match plugin {
+        Some(plugin) => {
+            let grant = Grant::new(&plugin.manifest, &source.name, &source.scope);
+            drive(storage, plugin, &binding, &grant, &mut session)
+        }
+        None => Ok(Err("not_installed")),
+    };
     let (status, reason) = match outcome {
         Ok(Ok(finish)) if finish.status == "ok" => ("ok", None),
         Ok(Ok(finish)) => ("failed", finish.reason.or(Some("plugin_failed".into()))),
@@ -156,8 +165,8 @@ pub fn run<S: Storage>(
         run_id,
         source: source.name.clone(),
         scope: source.scope.0.clone(),
-        plugin_id: manifest.id.clone(),
-        plugin_version: manifest.version.clone(),
+        plugin_id,
+        plugin_version,
         status: status.into(),
         reason,
         started_at,
