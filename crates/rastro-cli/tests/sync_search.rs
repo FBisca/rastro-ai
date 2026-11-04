@@ -508,3 +508,26 @@ fn S25_core_drops_an_original_from_a_source_without_the_flag() {
     let found = keeping.json(&["search", "hello"]);
     assert_eq!(found["result"]["results"][0]["original"], original);
 }
+
+/// S25a: an original that isn't a JSON object is rejected, nothing is stored, search stays schema-valid
+#[test]
+fn S25a_a_non_object_original_is_rejected_for_a_source_that_keeps_originals() {
+    for bad in [json!("not-an-object"), json!([1, 2]), json!(7), json!(true)] {
+        let env = Env::new();
+        env.add_source_with("project", &["--keep-original"]);
+        env.script(&run_script(vec![
+            with(
+                valid("https://github.com/o/p/issues/1", "hello world"),
+                "original",
+                bad.clone(),
+            ),
+            complete(),
+        ]));
+        let run = env.json(&["sync", "project"])["result"]["runs"][0].clone();
+        assert_eq!(run["counts"]["rejected"], 1, "{bad}: {run}");
+        assert_eq!(run["counts"]["accepted"], 0, "{bad}: {run}");
+        assert_eq!(env.sql::<i64>("SELECT count(*) FROM evidence"), 0);
+        let found = env.json(&["search", "hello"]);
+        assert_eq!(found["result"]["results"], json!([]));
+    }
+}
