@@ -56,7 +56,7 @@ impl Env {
     fn json(&self, args: &[&str]) -> Value {
         let value: Value = serde_json::from_str(&self.ok(&[args, &["--json"]].concat())).unwrap();
         let schema: Value =
-            serde_json::from_str(include_str!("../../../schema/operations-v1.schema.json"))
+            serde_json::from_str(include_str!("../../../schema/operations-v2.schema.json"))
                 .unwrap();
         jsonschema::validator_for(&schema)
             .unwrap()

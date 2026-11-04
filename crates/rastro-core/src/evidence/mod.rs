@@ -2,10 +2,11 @@
 use crate::Scope;
 use chrono::{DateTime, Utc};
 use rastro_plugin_sdk::{EvidenceSubmit, Manifest, Window};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub enum TrustClass {
     #[serde(rename = "structured")]
     Structured,
@@ -30,20 +31,24 @@ impl TrustClass {
 }
 
 /// One observation of one field at one location: a half-open UTF-8 byte span and its quote.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, JsonSchema, Serialize)]
 pub struct Evidence {
     pub source: String,
     pub scope: Scope,
+    #[schemars(length(min = 1))]
     pub location: String,
+    #[schemars(length(min = 1))]
     pub field: String,
     pub start: u64,
     pub end: u64,
+    #[schemars(length(min = 1))]
     pub quote: String,
     pub trust_class: TrustClass,
     pub captured_at: DateTime<Utc>,
     pub source_updated_at: Option<DateTime<Utc>>,
     /// The full original, kept only for a source added with `--keep-original`.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<serde_json::Map<String, serde_json::Value>>")]
     pub original: Option<serde_json::Value>,
 }
 
@@ -55,7 +60,7 @@ pub enum Appended {
 }
 
 /// A stored observation that matched a search.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, JsonSchema, Serialize)]
 pub struct Hit {
     pub id: i64,
     #[serde(flatten)]

@@ -1,89 +1,23 @@
 use anyhow::Result;
 use chrono::{DateTime, SecondsFormat, Utc};
-use clap::{Parser, Subcommand};
-use rastro_core::{
-    Coverage, CoverageWindow, Locations, Rastro, Scope, Source, display_safe,
-    runs::{RunReport, SearchResults},
-};
+use clap::Parser;
+use rastro_core::{Coverage, CoverageWindow, Locations, Rastro, display_safe, runs::RunReport};
+use rastro_operations::{Request, Response, catalog, envelope, results::SearchResponse};
 use rastro_storage_sqlite::SqliteStorage;
-use serde_json::{Value, json};
 use std::ffi::OsString;
 
 #[derive(Parser)]
-#[command(name = "rastro", version)]
+#[command(
+    name = "rastro",
+    version,
+    about = "Collect evidence from sources and search it, each result cited"
+)]
 struct Cli {
+    /// Print the result as a JSON envelope.
     #[arg(long, global = true)]
     json: bool,
     #[command(subcommand)]
-    command: Operation,
-}
-#[derive(Subcommand)]
-enum Operation {
-    Source {
-        #[command(subcommand)]
-        command: SourceCommand,
-    },
-    Coverage {
-        name: Option<String>,
-    },
-    /// Run the connector of one source, or of every source.
-    Sync {
-        name: Option<String>,
-    },
-    /// Maintain the search index.
-    Index {
-        #[command(subcommand)]
-        command: IndexCommand,
-    },
-    /// Full-text search over evidence, each result cited.
-    Search {
-        text: String,
-        /// Every observation, not only the latest at each location.
-        #[arg(long)]
-        history: bool,
-    },
-}
-#[derive(Subcommand)]
-enum IndexCommand {
-    /// Rebuild the full-text index from the stored evidence.
-    Rebuild,
-}
-#[derive(Subcommand)]
-enum SourceCommand {
-    Add {
-        name: String,
-        #[arg(long)]
-        connector: String,
-        #[arg(long)]
-        repo: String,
-        #[arg(long)]
-        scope: String,
-        #[arg(long, default_value = "1h")]
-        freshness_rule: String,
-        #[arg(long)]
-        window_start: Option<String>,
-        #[arg(long)]
-        keep_original: bool,
-    },
-    List,
-}
-impl Operation {
-    fn name(&self) -> &'static str {
-        match self {
-            Self::Source {
-                command: SourceCommand::Add { .. },
-            } => "source.add",
-            Self::Source {
-                command: SourceCommand::List,
-            } => "source.list",
-            Self::Coverage { .. } => "coverage",
-            Self::Sync { .. } => "sync",
-            Self::Search { .. } => "search",
-            Self::Index {
-                command: IndexCommand::Rebuild,
-            } => "index.rebuild",
-        }
-    }
+    command: Request,
 }
 fn stamp(time: DateTime<Utc>) -> String {
     time.to_rfc3339_opts(SecondsFormat::Millis, true)
@@ -146,7 +80,7 @@ fn sync_line(run: &RunReport) -> String {
     }
     line
 }
-fn search_text(text: &str, found: &SearchResults) -> String {
+fn search_text(text: &str, found: &SearchResponse) -> String {
     if found.results.is_empty() {
         let lines: Vec<_> = found.coverage.iter().map(coverage_line).collect();
         return format!("no evidence found for \"{text}\"\n{}", lines.join("\n"));
@@ -169,115 +103,46 @@ fn search_text(text: &str, found: &SearchResults) -> String {
         .collect();
     blocks.join("\n")
 }
-/// The output, its human form, and whether the operation succeeded.
-type Outcome = (Value, String, bool);
+/// The result of an operation, its human form, and whether it succeeded.
+type Outcome = (Response, String);
 
-fn execute(operation: Operation) -> Result<Outcome> {
-    let (value, human) = run(operation)?;
-    let ok = value["runs"]
-        .as_array()
-        .is_none_or(|runs| runs.iter().all(|r| r["status"] == "ok"));
-    Ok((value, human, ok))
+fn human(response: &Response) -> String {
+    let or_none = |lines: Vec<String>| {
+        if lines.is_empty() {
+            "No sources registered".into()
+        } else {
+            lines.join("\n")
+        }
+    };
+    match response {
+        Response::SourceAdd(r) => format!("Source registered: {}", r.source.name),
+        Response::SourceList(r) => or_none(r.sources.iter().map(|s| format!(
+            "{} | Connector: {} | selector: {} | Scope: {} | Freshness rule: {} | window start: {}",
+            s.name, s.connector, serde_json::to_string(&s.selector).expect("string map"), s.scope.0, s.freshness_rule, s.window_start.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true),
+        )).collect()),
+        Response::Coverage(r) => or_none(r.coverage.iter().map(coverage_block).collect()),
+        Response::Sync(r) => or_none(r.runs.iter().map(sync_line).collect()),
+        Response::IndexRebuild(r) => format!("Index rebuilt: {} observations", r.indexed),
+        Response::Search(r) => search_text(&r.query, r),
+    }
 }
-fn run(operation: Operation) -> Result<(Value, String)> {
+fn execute(request: Request) -> Result<Outcome> {
     let locations = Locations::resolve()?;
     let storage = SqliteStorage::open(&locations.database())?;
     let mut rastro = Rastro::open(locations, storage)?;
-    match operation {
-        Operation::Source {
-            command:
-                SourceCommand::Add {
-                    name,
-                    connector,
-                    repo,
-                    scope,
-                    freshness_rule,
-                    window_start,
-                    keep_original,
-                },
-        } => {
-            let mut source = Source::github(name, repo, Scope(scope));
-            source.connector = connector;
-            source.freshness_rule = freshness_rule;
-            source.keep_original = keep_original;
-            if let Some(start) = window_start {
-                source.window_start = start.parse()?;
-            }
-            let source = rastro.add_source(source)?;
-            let human = format!("Source registered: {}", source.name);
-            Ok((json!({"source": source}), human))
-        }
-        Operation::Source {
-            command: SourceCommand::List,
-        } => {
-            let lines: Vec<_> = rastro.sources().iter().map(|s| format!(
-                "{} | Connector: {} | selector: {} | Scope: {} | Freshness rule: {} | window start: {}",
-                s.name, s.connector, serde_json::to_string(&s.selector).expect("string map"), s.scope.0, s.freshness_rule, s.window_start.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true),
-            )).collect();
-            let human = if lines.is_empty() {
-                "No sources registered".into()
-            } else {
-                lines.join("\n")
-            };
-            Ok((json!({"sources": rastro.sources()}), human))
-        }
-        Operation::Coverage { name } => {
-            let coverage = rastro.coverage(name.as_deref())?;
-            let lines: Vec<_> = coverage.iter().map(coverage_block).collect();
-            let human = if lines.is_empty() {
-                "No sources registered".into()
-            } else {
-                lines.join("\n")
-            };
-            Ok((json!({"coverage": coverage}), human))
-        }
-        Operation::Sync { name } => {
-            let runs = rastro.sync(name.as_deref())?;
-            let lines: Vec<_> = runs.iter().map(sync_line).collect();
-            let human = if lines.is_empty() {
-                "No sources registered".into()
-            } else {
-                lines.join("\n")
-            };
-            Ok((json!({"runs": runs}), human))
-        }
-        Operation::Index {
-            command: IndexCommand::Rebuild,
-        } => {
-            let indexed = rastro.rebuild_index()?;
-            Ok((
-                json!({"indexed": indexed}),
-                format!("Index rebuilt: {indexed} observations"),
-            ))
-        }
-        Operation::Search { text, history } => {
-            let found = rastro.search(&text, history)?;
-            let human = search_text(&text, &found);
-            Ok((
-                json!({"query": text, "results": found.results, "coverage": found.coverage}),
-                human,
-            ))
-        }
-    }
+    let response = request.run(&mut rastro)?;
+    let text = human(&response);
+    Ok((response, text))
 }
 /// The operation a command line names, read without clap so a usage error can still say which.
 fn named_operation(args: &[OsString]) -> Option<&'static str> {
-    let mut words = args
+    let words: Vec<_> = args
         .iter()
         .skip(1)
-        .filter(|a| !a.as_encoded_bytes().starts_with(b"-"));
-    match (
-        words.next()?.to_str()?,
-        words.next().and_then(|w| w.to_str()),
-    ) {
-        ("source", Some("add")) => Some("source.add"),
-        ("source", Some("list")) => Some("source.list"),
-        ("coverage", _) => Some("coverage"),
-        ("sync", _) => Some("sync"),
-        ("search", _) => Some("search"),
-        ("index", Some("rebuild")) => Some("index.rebuild"),
-        _ => None,
-    }
+        .filter(|a| !a.as_encoded_bytes().starts_with(b"-"))
+        .filter_map(|a| a.to_str())
+        .collect();
+    catalog::find_path(&words).map(|spec| spec.name)
 }
 fn parse() -> (Cli, &'static str) {
     let args: Vec<OsString> = std::env::args_os().collect();
@@ -301,10 +166,7 @@ fn parse() -> (Cli, &'static str) {
                     let text = error.to_string();
                     let first = text.lines().next().unwrap_or_default();
                     let message = first.strip_prefix("error: ").unwrap_or(first);
-                    println!(
-                        "{}",
-                        json!({"schema_version": 1, "operation": operation, "error": format!("usage: {message}")})
-                    );
+                    println!("{}", envelope::usage_error(operation, message));
                     std::process::exit(2);
                 }
                 None => error.exit(),
@@ -315,25 +177,19 @@ fn parse() -> (Cli, &'static str) {
 fn main() {
     let (cli, operation) = parse();
     match execute(cli.command) {
-        Ok((result, human, ok)) => {
+        Ok((response, text)) => {
             if cli.json {
-                println!(
-                    "{}",
-                    json!({"schema_version": 1, "operation": operation, "result": result})
-                );
+                println!("{}", response.envelope());
             } else {
-                println!("{human}");
+                println!("{text}");
             }
-            if !ok {
+            if !response.succeeded() {
                 std::process::exit(1);
             }
         }
         Err(error) => {
             if cli.json {
-                println!(
-                    "{}",
-                    json!({"schema_version": 1, "operation": operation, "error": format!("{error:#}")})
-                );
+                println!("{}", envelope::failure(operation, format!("{error:#}")));
             } else {
                 eprintln!("error: {error:#}");
             }

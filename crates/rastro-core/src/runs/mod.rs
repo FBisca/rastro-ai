@@ -3,9 +3,10 @@ use crate::{Counts, CoverageState, Rastro, Source, Storage, files, host};
 use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
 use rastro_plugin_sdk::Window;
+use schemars::JsonSchema;
 use serde::Serialize;
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, JsonSchema, Serialize)]
 pub struct RunReport {
     pub run_id: i64,
     pub source: String,
@@ -13,11 +14,14 @@ pub struct RunReport {
     pub plugin_id: String,
     pub plugin_version: String,
     /// `ok` or `failed`.
+    #[schemars(extend("enum" = ["ok", "failed"]))]
     pub status: String,
     pub reason: Option<String>,
     pub started_at: DateTime<Utc>,
     pub finished_at: DateTime<Utc>,
+    #[schemars(with = "RunWindow")]
     pub window: Window,
+    #[schemars(with = "RunCounts")]
     pub counts: Counts,
     pub coverage: CoverageState,
 }
@@ -100,15 +104,32 @@ impl<S: Storage> Rastro<S> {
     }
 }
 
-#[derive(Debug, Serialize)]
+#[derive(Debug, JsonSchema, Serialize)]
 pub struct SearchResult {
     #[serde(flatten)]
     pub hit: crate::Hit,
     pub coverage: Option<crate::Coverage>,
 }
 /// Matches, plus the coverage of every source searched, so an empty answer says what it covered.
-#[derive(Debug, Serialize)]
+#[derive(Debug, JsonSchema, Serialize)]
 pub struct SearchResults {
     pub results: Vec<SearchResult>,
     pub coverage: Vec<crate::Coverage>,
+}
+
+// Schema of `rastro_plugin_sdk::Window`, which the SDK does not derive; keep in step with it.
+#[derive(JsonSchema)]
+#[allow(dead_code)]
+struct RunWindow {
+    from: DateTime<Utc>,
+    to: DateTime<Utc>,
+}
+// Schema of `rastro_plugin_sdk::Counts`, which the SDK does not derive.
+#[derive(JsonSchema)]
+#[allow(dead_code)]
+struct RunCounts {
+    submitted: u64,
+    accepted: u64,
+    rejected: u64,
+    unchanged: u64,
 }

@@ -38,7 +38,7 @@ fn source_add_then_list_shows_the_source() {
     let before = Utc::now();
     let added = run(&mut command(home.path()), &[ADD, &["--json"]].concat());
     let added: Value = serde_json::from_str(&added).unwrap();
-    assert_eq!(added["schema_version"], 1);
+    assert_eq!(added["schema_version"], 2);
     assert_eq!(added["operation"], "source.add");
     let source = &added["result"]["source"];
     assert_eq!(source["name"], "project");
@@ -66,7 +66,7 @@ fn source_add_then_list_shows_the_source() {
         &["source", "list", "--json"],
     ))
     .unwrap();
-    assert_eq!(listed["schema_version"], 1);
+    assert_eq!(listed["schema_version"], 2);
     assert_eq!(listed["operation"], "source.list");
     assert_eq!(listed["result"]["sources"][0], *source);
     let config: toml::Value = std::fs::read_to_string(home.path().join("config/config.toml"))
@@ -98,7 +98,7 @@ fn registered_source_has_never_looked_coverage() {
         &["coverage", "project", "--json"],
     ))
     .unwrap();
-    assert_eq!(json["schema_version"], 1);
+    assert_eq!(json["schema_version"], 2);
     assert_eq!(json["operation"], "coverage");
     assert_eq!(json["result"]["coverage"][0]["state"], "never looked");
     assert_eq!(json["result"]["coverage"][0]["source"], "project");
@@ -108,7 +108,7 @@ fn registered_source_has_never_looked_coverage() {
         .unwrap();
     assert!(!missing.status.success());
     let error: Value = serde_json::from_slice(&missing.stdout).unwrap();
-    assert_eq!(error["schema_version"], 1);
+    assert_eq!(error["schema_version"], 2);
     assert!(error["error"].as_str().unwrap().contains("unknown source"));
 }
 
@@ -278,7 +278,7 @@ fn private_files_under_permissive_umask() {
 fn freshness_rejects_signed_duration_and_outputs_match_schema() {
     let home = TempDir::new().unwrap();
     let schema: Value =
-        serde_json::from_str(include_str!("../../../schema/operations-v1.schema.json")).unwrap();
+        serde_json::from_str(include_str!("../../../schema/operations-v2.schema.json")).unwrap();
     let validator = jsonschema::validator_for(&schema).unwrap();
     let output = command(home.path())
         .args(ADD)

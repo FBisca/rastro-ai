@@ -5,6 +5,7 @@ pub mod host;
 pub mod runs;
 use anyhow::{Context, Result, bail, ensure};
 use chrono::{DateTime, Duration, Utc};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, env, fs, io::Write, path::PathBuf};
 
@@ -23,15 +24,18 @@ pub(crate) fn test_override(name: &str) -> Option<String> {
 pub use evidence::{Appended, Evidence, Hit, TrustClass};
 pub use rastro_plugin_sdk::Counts;
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
-pub struct Scope(pub String);
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+pub struct Scope(#[schemars(length(min = 1))] pub String);
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
 pub struct Source {
+    #[schemars(length(min = 1))]
     pub name: String,
+    #[schemars(length(min = 1))]
     pub connector: String,
     pub selector: BTreeMap<String, String>,
     pub scope: Scope,
+    #[schemars(regex(pattern = "^[0-9]+[smhd]$"))]
     pub freshness_rule: String,
     pub window_start: DateTime<Utc>,
     pub keep_original: bool,
@@ -185,7 +189,7 @@ impl Config {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub enum CoverageState {
     #[serde(rename = "never looked")]
     NeverLooked,
@@ -209,7 +213,7 @@ impl CoverageState {
         }
     }
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, JsonSchema, Serialize)]
 pub struct Coverage {
     pub source: String,
     pub scope: Scope,
@@ -228,10 +232,12 @@ pub struct Coverage {
     pub windows: Vec<CoverageWindow>,
 }
 /// One window `[from, to)` a run looked at, with what it found.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, JsonSchema, Serialize)]
 pub struct CoverageWindow {
     pub from: DateTime<Utc>,
     pub to: DateTime<Utc>,
+    /// A window records what a run saw, never "never looked" or "unknown".
+    #[schemars(extend("enum" = ["found", "empty", "couldn't look"]))]
     pub state: CoverageState,
     pub selection: String,
     #[serde(skip_serializing_if = "Option::is_none")]

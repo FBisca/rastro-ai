@@ -100,7 +100,7 @@ impl Env {
 
 fn check_schema(value: &Value) {
     let schema: Value =
-        serde_json::from_str(include_str!("../../../schema/operations-v1.schema.json")).unwrap();
+        serde_json::from_str(include_str!("../../../schema/operations-v2.schema.json")).unwrap();
     jsonschema::validator_for(&schema)
         .unwrap()
         .validate(value)
