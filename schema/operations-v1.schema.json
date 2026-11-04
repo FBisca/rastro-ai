@@ -17,7 +17,8 @@
         "source.list",
         "coverage",
         "sync",
-        "search"
+        "search",
+        "index.rebuild"
       ]
     },
     "error": {
@@ -167,6 +168,26 @@
               }
             }
           }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "index.rebuild"
+            },
+            "result": {
+              "type": "object",
+              "required": [
+                "indexed"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "indexed": {
+                  "type": "integer",
+                  "minimum": 0
+                }
+              }
+            }
+          }
         }
       ]
     }
@@ -247,6 +268,9 @@
         "fresh_until": {
           "type": "string",
           "format": "date-time"
+        },
+        "reason": {
+          "type": "string"
         }
       }
     },

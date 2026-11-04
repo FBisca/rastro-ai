@@ -29,6 +29,11 @@ enum Operation {
     Sync {
         name: Option<String>,
     },
+    /// Maintain the search index.
+    Index {
+        #[command(subcommand)]
+        command: IndexCommand,
+    },
     /// Full-text search over evidence, each result cited.
     Search {
         text: String,
@@ -36,6 +41,11 @@ enum Operation {
         #[arg(long)]
         history: bool,
     },
+}
+#[derive(Subcommand)]
+enum IndexCommand {
+    /// Rebuild the full-text index from the stored evidence.
+    Rebuild,
 }
 #[derive(Subcommand)]
 enum SourceCommand {
@@ -68,6 +78,9 @@ impl Operation {
             Self::Coverage { .. } => "coverage",
             Self::Sync { .. } => "sync",
             Self::Search { .. } => "search",
+            Self::Index {
+                command: IndexCommand::Rebuild,
+            } => "index.rebuild",
         }
     }
 }
@@ -81,8 +94,14 @@ fn coverage_line(c: &Coverage) -> String {
         c.scope.0,
         c.state.as_str()
     );
+    if let Some(at) = c.last_checked {
+        line += &format!(" | Last checked: {}", stamp(at));
+    }
     if let Some(until) = c.fresh_until {
         line += &format!(" | Fresh until: {}", stamp(until));
+    }
+    if let Some(reason) = &c.reason {
+        line += &format!(" | Reason: {}", display_safe(reason));
     }
     line
 }
@@ -199,6 +218,15 @@ fn run(operation: Operation) -> Result<(Value, String)> {
                 lines.join("\n")
             };
             Ok((json!({"runs": runs}), human))
+        }
+        Operation::Index {
+            command: IndexCommand::Rebuild,
+        } => {
+            let indexed = rastro.rebuild_index()?;
+            Ok((
+                json!({"indexed": indexed}),
+                format!("Index rebuilt: {indexed} observations"),
+            ))
         }
         Operation::Search { text, history } => {
             let found = rastro.search(&text, history)?;
