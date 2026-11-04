@@ -9,8 +9,8 @@ Status: `todo` · `planning` · `doing` · `done`
 
 | # | Slice | Outcome: from here on you can… | Builds on | Concept / decisions | Status |
 |---|---|---|---|---|---|
-| 1 | **Cited search over one real source** | Run `rastro sync` and `rastro search "x"` over a source you actually use and get evidence back with its citation (source, location, span, capture time). `rastro coverage` tells you when it couldn't look, so silence never passes for "nothing". Walking skeleton: Rust core library, CLI, append-only evidence store, the connector as an out-of-process plugin | — | knowledge §1–3, §11, §15; plugins §1, §4; surfaces §1, §8 | doing (`plans/2026-11-04-cited-search-github.plan.md`) |
-| 2 | **Agents can ask** | Point Claude Code or Codex at Rastro's MCP server and have them call `search` and `coverage`, generated from the same schema as the CLI | 1 | surfaces §2–5; plugins §6 | todo |
+| 1 | **Cited search over one real source** | Run `rastro sync` and `rastro search "x"` over a source you actually use and get evidence back with its citation (source, location, span, capture time). `rastro coverage` tells you when it couldn't look, so silence never passes for "nothing". Walking skeleton: Rust core library, CLI, append-only evidence store, the connector as an out-of-process plugin | — | knowledge §1–3, §11, §15; plugins §1, §4; surfaces §1, §8 | done (`plans/2026-11-04-cited-search-github.plan.md`, spec `specs/evidence.md`) |
+| 2 | **Agents can ask** | Point Claude Code or Codex at Rastro's MCP server and have them call `search` and `coverage`, generated from the same schema as the CLI | 1 | surfaces §2–5, §11–18; plugins §6; knowledge §21 | doing (`plans/2026-11-04-agents-can-ask.plan.md`) |
 | 3 | **Claims and `about`** | Ask `about(entity)` and `why(claim)` and get observed claims from structured evidence, each traceable to its evidence | 2 | knowledge §5, §7 | todo |
 | 4 | **A second source, one identity** | Add a second source and see one person seen in both as one entity. Exact identifiers merge on their own, fuzzy matches ask you, and you can undo a merge | 3 | knowledge §4; vocabulary §8 | todo |
 

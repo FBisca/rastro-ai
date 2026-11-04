@@ -18,3 +18,14 @@ The core stores evidence, coverage, runs and sources in one embedded SQLite data
   - the FTS5 table is a disposable projection, rebuilt from evidence by `rastro index rebuild`, and never the only copy of anything.
 - The database lives under the data directory, never in a checkout.
 - Migrations are named `YYYYMMDDHHmm_<name>.sql` (UTC timestamp, short snake_case name) and recorded by name in a `schema_migrations` table, so parallel branches never collide on a number. Pending migrations apply in timestamp order; a database holding a migration this binary doesn't know is refused. Applied migrations are never edited (added 2026-11-04).
+
+## Amended 2026-11-04
+Status stays accepted. Roadmap slice 2 adds a reader that runs beside a sync (`0006-mcp-server-over-stdio.md`).
+- **WAL mode.** SQLite runs in WAL mode, switched on by the writing open. A sync no longer blocks reads. An existing database switches on its next writing open; that's a mode change, not a migration, and one pragma turns it off.
+- **A read-only open path** next to the writing one. MCP tool calls use it; the CLI keeps the writing open:
+  - no migrations, no source projection, no recovery;
+  - config is read fresh on each open, under a shared config lock (the writing open keeps the exclusive one);
+  - one read transaction per call, so the hits and the coverage in one answer come from the same snapshot;
+  - a database holding a migration this binary doesn't know, or a pending one, is refused.
+- **Unfinished runs.** A read that finds an unfinished run while no sync holds `sync.lock` answers "unknown: interrupted" for that source and writes nothing; startup recovery stays on the writing open. A live sync's unfinished run doesn't change the answer.
+- **A missing database** answers from config (every source "never looked") and no file is created.

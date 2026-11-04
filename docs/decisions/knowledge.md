@@ -34,3 +34,6 @@ Status: agreed 2026-11-04. North star: `../concept.md` §1. Research: `../resear
 18. **"Couldn't look" reasons** are typed: `auth`, `forbidden`, `not_found_or_hidden`, `rate_limited`, `network`, `timeout`, `protocol`, `interrupted`, `storage`, `result_cap` (the source caps how many results a query returns, so the read is incomplete; 2026-11-04), `not_installed` (the source's connector isn't installed; 2026-11-04), each with optional safe detail and a retry time. An incomplete read never becomes "empty".
 19. **Re-observing unchanged content adds no evidence;** changed content appends. Encoding: `../adr/0005-evidence-observations-and-spans.md`.
 20. **An empty search is not an empty source.** Search results always state the coverage of the sources they searched.
+
+## Added 2026-11-04 (roadmap slice 2)
+21. **Coverage is per (source, scope) pair, across config and storage.** The pairs are those in the config plus those only in storage (a removed source, or one whose scope changed). A pair that isn't in the config is `registered: false`. Its freshness comes from its stored windows: once the freshness rule has passed it reads "unknown", and a pair that never synced stays "never looked". So a hit always states its coverage (§20), even for a removed source. This decides the hit half of open question #9; the `source remove` command is still open.
