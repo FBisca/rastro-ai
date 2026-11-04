@@ -99,8 +99,14 @@ fn sync<R: BufRead, W: Write>(
         .get("repo")
         .ok_or(Failure::new("protocol"))?
         .clone();
+    // The override is for tests: it may only point at this machine, so no real token or
+    // request can be sent anywhere else.
+    let base = match std::env::var("RASTRO_GITHUB_API_URL") {
+        Ok(base) if api::loopback(&base) => base,
+        Ok(_) => return Err(Failure::new("protocol")),
+        Err(_) => DEFAULT_API.into(),
+    };
     let token = api::token().ok_or(Failure::new("auth"))?;
-    let base = std::env::var("RASTRO_GITHUB_API_URL").unwrap_or_else(|_| DEFAULT_API.into());
     let mut run = Run {
         transport,
         client: Client::new(&base, token),

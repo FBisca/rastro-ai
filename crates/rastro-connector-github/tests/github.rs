@@ -718,3 +718,44 @@ fn S25_connector_sends_originals_only_when_told() {
     assert!(!not_told.is_empty());
     assert!(not_told.iter().all(|e| e.get("original").is_none()));
 }
+
+#[test]
+fn S30_a_non_loopback_api_base_url_sends_no_request_and_is_couldnt_look_protocol() {
+    let fixture = Fixture::start(standard);
+    let port = fixture.base.rsplit(':').next().unwrap().to_string();
+    for base in [
+        "https://api.github.com".to_string(),
+        "http://example.com".to_string(),
+        format!("http://127.0.0.1.example.com:{port}"),
+        format!("http://127.0.0.1:{port}@example.com"),
+        format!("http://localhost.example.com:{port}"),
+        format!("http://192.168.1.10:{port}"),
+        "ftp://127.0.0.1".to_string(),
+        "not a url".to_string(),
+    ] {
+        let env = Env::new(&base);
+        let started = std::time::Instant::now();
+        let run = sync(&env);
+        assert_eq!(run["status"], "failed", "{base}: {run}");
+        assert_eq!(run["reason"], "protocol", "{base}: {run}");
+        assert_eq!(run["coverage"], "couldn't look", "{base}");
+        assert_eq!(
+            env.sql::<String>("SELECT state || ':' || reason FROM coverage"),
+            "couldn't look:protocol",
+            "{base}"
+        );
+        assert!(
+            started.elapsed().as_secs() < 10,
+            "{base}: it tried the network"
+        );
+    }
+    assert!(fixture.requests().is_empty(), "{:?}", fixture.requests());
+    // Loopback hosts keep working.
+    for base in [
+        fixture.base.clone(),
+        fixture.base.replace("127.0.0.1", "localhost"),
+    ] {
+        let env = Env::new(&base);
+        assert_eq!(sync(&env)["status"], "ok", "{base}");
+    }
+}

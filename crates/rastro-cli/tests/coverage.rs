@@ -781,6 +781,26 @@ fn S27b_a_rejected_submission_wins_over_a_reported_failure_or_a_failed_finish() 
     }
 }
 
+#[test]
+fn S30_manifest_parse_diagnostics_name_the_position_and_never_echo_values() {
+    let env = Env::new();
+    env.add_source("project");
+    let broken = env.home.path().join("dev-plugins/broken");
+    fs::create_dir_all(&broken).unwrap();
+    fs::write(
+        broken.join("rastro-plugin.toml"),
+        "id = \"test-secret-token-1234\"\nname = \"x\"\nversion = \n",
+    )
+    .unwrap();
+    env.script(&[json!({"do": "initialize"})]);
+    let output = env.rastro(&["sync", "project"]);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("rastro-plugin.toml"), "{stderr}");
+    assert!(stderr.contains("line 3"), "{stderr}");
+    assert!(!stderr.contains("test-secret-token-1234"), "{stderr}");
+    assert!(!stderr.contains("version ="), "{stderr}");
+}
+
 /// S21a: a last-checked time on a whole second is the same instant in human output and --json
 #[test]
 fn S21a_a_whole_second_last_checked_is_the_same_instant_in_human_and_json() {

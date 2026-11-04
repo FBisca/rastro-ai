@@ -8,6 +8,18 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, env, fs, io::Write, path::PathBuf};
 
+/// Test-only knobs (`RASTRO_NOW`, `RASTRO_HOST_*`) are honoured only by debug builds, so a
+/// stray variable can't change how a release build judges time or bounds a connector.
+pub fn overrides_allowed(debug_build: bool) -> bool {
+    debug_build
+}
+/// The value of a test-only knob, or `None` when this build ignores them.
+pub(crate) fn test_override(name: &str) -> Option<String> {
+    overrides_allowed(cfg!(debug_assertions))
+        .then(|| env::var(name).ok())
+        .flatten()
+}
+
 pub use evidence::{Appended, Evidence, Hit, TrustClass};
 pub use rastro_plugin_sdk::Counts;
 

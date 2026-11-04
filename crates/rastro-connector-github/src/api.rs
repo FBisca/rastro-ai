@@ -158,3 +158,64 @@ pub fn token() -> Option<String> {
         (output.status.success() && !token.is_empty()).then_some(token)
     })
 }
+
+/// Whether `base` is an http(s) URL on a loopback host: `127.0.0.1`, `[::1]` or `localhost`.
+/// The API base URL override exists for tests; it must never aim the token elsewhere.
+pub fn loopback(base: &str) -> bool {
+    let Some(rest) = base
+        .strip_prefix("http://")
+        .or_else(|| base.strip_prefix("https://"))
+    else {
+        return false;
+    };
+    let authority = rest.split(['/', '?', '#']).next().unwrap_or_default();
+    // Userinfo would let `127.0.0.1@elsewhere` pass for a prefix match.
+    if authority.contains('@') {
+        return false;
+    }
+    let host = match authority.strip_prefix('[') {
+        Some(v6) => match v6.split_once(']') {
+            Some((host, port)) if port.is_empty() || port.starts_with(':') => host,
+            _ => return false,
+        },
+        None => authority.split(':').next().unwrap_or_default(),
+    };
+    matches!(
+        host.to_ascii_lowercase().as_str(),
+        "127.0.0.1" | "::1" | "localhost"
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::loopback;
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn S30_only_loopback_hosts_are_accepted() {
+        for ok in [
+            "http://127.0.0.1:8080",
+            "http://127.0.0.1",
+            "http://localhost:1/x",
+            "https://LOCALHOST",
+            "http://[::1]:9",
+            "http://[::1]/path",
+        ] {
+            assert!(loopback(ok), "{ok}");
+        }
+        for bad in [
+            "https://api.github.com",
+            "http://127.0.0.1.example.com",
+            "http://127.0.0.1@example.com",
+            "http://localhost.example.com",
+            "http://[::2]:1",
+            "http://[::1]x",
+            "http://192.168.0.1",
+            "ftp://127.0.0.1",
+            "127.0.0.1:80",
+            "",
+        ] {
+            assert!(!loopback(bad), "{bad}");
+        }
+    }
+}
