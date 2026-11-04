@@ -1,0 +1,43 @@
+# Plugin model
+
+Status: agreed 2026-11-04. North star: `../concept.md` §3 and §4.
+
+## Decisions
+1. **Plugins request, the core decides.**
+   - No plugin writes knowledge or runs an Act directly.
+   - Plugins submit evidence, claims, proposals, questions and action requests.
+   - The core checks each one against vocabularies, scopes, levels and rules before recording or running it.
+2. **Kinds of plugin**
+
+| Kind | Does | Submits / receives |
+|---|---|---|
+| Connector | Reads a source | Evidence and coverage |
+| Extractor | Turns evidence into claims, deterministically or through an agent tool | Claims with justification (hypothesis unless observed) |
+| Vocabulary | Defines types, predicates and their language | Definitions |
+| Workflow | Runs a job over the knowledge | Proposals, questions, action requests |
+| Action provider | Exposes actions, each with its reach and reversibility | Executes Action runs when the core allows it |
+| Renderer | Shows views, takes the owner's input | Receives events; sends intents |
+| View | A query plus a layout for a renderer | Shareable |
+| Policy pack | Rules and level defaults | Can only lower levels or restrict, never grant Act |
+| Agent tool adapter | Lets any agent runtime do judgment | Structured output, validated against a schema |
+
+3. **Connector and Extractor are separate kinds.** Reading a source and interpreting it have different trust levels and evolve separately (swap the extractor, replay the evidence).
+4. **Every plugin declares a manifest:**
+   - identity: name, version, author;
+   - which kinds it provides;
+   - permissions: the scopes it reads, what it may submit, the actions it exposes;
+   - triggers;
+   - dependencies: the vocabularies it uses, and the *capabilities* it needs from an agent tool (never a named tool).
+5. **Permissions work like a phone app's.** The owner is asked at install. An update shows what changed in its permissions. The owner can revoke any permission at any time.
+6. **Quarantine.** A plugin that reads untrusted content (mail, chat, the web) can never hold action permissions.
+7. **Plugins talk only through the graph.**
+   - The core emits events: new evidence, a claim changed, a retraction, a coverage gap, a proposal decided.
+   - Workflows start from **triggers**: a schedule, on demand, or a graph event.
+   - No plugin or workflow calls another directly. Composition happens through events and claims.
+8. **Two graphs kept apart.** The execution graph (what runs, and when) is separate from the knowledge graph (what's known).
+9. **Measured by default.** Every plugin run is logged: cost, output, and the share of its output accepted or ignored. Usefulness is visible per plugin.
+10. **Agent tools are plugins.** Claude Code, Codex, a local model or anything else; none is special to the core.
+11. **Distribution.**
+    - There's a registry, and plugins install in one step.
+    - A starter pack bundles the standard vocabulary, common connectors and default workflows.
+    - How the registry is governed is open. See `../open-questions.md`.
