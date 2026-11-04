@@ -537,8 +537,9 @@ fn converse<S: Storage>(
 mod tests {
     use super::*;
 
+    /// evidence/R26: teardown kills the process group and releases every helper thread
     #[test]
-    fn S9j_teardown_kills_the_process_group_and_releases_every_helper_thread() {
+    fn teardown_kills_the_process_group_and_releases_every_helper_thread() {
         for finished in [false, true] {
             let mut command = Command::new("/bin/sh");
             // A background child shares the pipes with the connector; neither will exit.
@@ -563,8 +564,9 @@ mod tests {
         }
     }
 
+    /// evidence/R27: the group is signalled while the exited leader is still unreaped
     #[test]
-    fn S9k_the_group_is_signalled_while_the_exited_leader_is_still_unreaped() {
+    fn the_group_is_signalled_while_the_exited_leader_is_still_unreaped() {
         let mut command = Command::new("/bin/sh");
         // The leader exits at once; its background child keeps the pipes.
         command.args(["-c", "sleep 60 & exit 0"]);

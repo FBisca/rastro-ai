@@ -3,8 +3,9 @@ use rastro_core::{Scope, Source, Storage};
 use rastro_storage_sqlite::SqliteStorage;
 use rusqlite::Connection;
 
+/// evidence/R4: stored evidence rejects updates and deletes
 #[test]
-fn S3a_stored_evidence_rejects_updates_and_deletes() {
+fn stored_evidence_rejects_updates_and_deletes() {
     for legacy in [false, true] {
         let home = tempfile::tempdir().unwrap();
         let path = home.path().join("rastro.sqlite3");
@@ -52,8 +53,9 @@ fn S3a_stored_evidence_rejects_updates_and_deletes() {
     }
 }
 
+/// evidence/R5: migrations apply once in timestamp order and unknown ones are refused
 #[test]
-fn S3b_migrations_apply_once_in_timestamp_order_and_unknown_ones_are_refused() {
+fn migrations_apply_once_in_timestamp_order_and_unknown_ones_are_refused() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("rastro.sqlite3");
     let a = ("202611040001_a", "CREATE TABLE a (x)");
@@ -92,8 +94,9 @@ fn S3b_migrations_apply_once_in_timestamp_order_and_unknown_ones_are_refused() {
     assert_eq!(names(&connection).len(), 5);
 }
 
+/// evidence/R5: legacy user version maps to the migrations it meant
 #[test]
-fn S3b_legacy_user_version_maps_to_the_migrations_it_meant() {
+fn legacy_user_version_maps_to_the_migrations_it_meant() {
     let initial = include_str!("../migrations/202611041200_initial.sql");
     let guard = include_str!("../migrations/202611041500_evidence_insert_guard.sql");
     let legacy = |version: i64, sql: &[&str]| {

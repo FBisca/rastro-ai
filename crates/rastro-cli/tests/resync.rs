@@ -109,8 +109,9 @@ fn sync_with(env: &Env, bodies: &[(&str, &str)]) -> Value {
     env.json(&["sync", "project"])["result"]["runs"][0].clone()
 }
 
+/// evidence/R47: syncing again with nothing changed writes no evidence and links the run
 #[test]
-fn S17_syncing_again_with_nothing_changed_writes_no_evidence_and_links_the_run() {
+fn syncing_again_with_nothing_changed_writes_no_evidence_and_links_the_run() {
     let env = Env::new();
     env.add_source("project");
     let bodies = [
@@ -140,8 +141,9 @@ fn S17_syncing_again_with_nothing_changed_writes_no_evidence_and_links_the_run()
     assert!(human.contains("unchanged 2"), "{human}");
 }
 
+/// evidence/R48: a body changing and changing back leaves three observations
 #[test]
-fn S18_a_body_changing_and_changing_back_leaves_three_observations() {
+fn a_body_changing_and_changing_back_leaves_three_observations() {
     let env = Env::new();
     env.add_source("project");
     let at = "https://x/1";

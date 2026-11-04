@@ -259,8 +259,9 @@ mod tests {
         }
     }
 
+    /// evidence/R18: reader stops reading when the inbox is full
     #[test]
-    fn S9b_reader_stops_reading_when_the_inbox_is_full() {
+    fn reader_stops_reading_when_the_inbox_is_full() {
         let consumed = Arc::new(AtomicUsize::new(0));
         let tally = Tally::default();
         let inbox = read_lines(Endless(Arc::clone(&consumed)), 1024, &tally);
@@ -304,8 +305,9 @@ mod tests {
         }
     }
 
+    /// evidence/R29: one printer and a bounded queue serve many runs on a blocked sink
     #[test]
-    fn S9m_one_printer_and_a_bounded_queue_serve_many_runs_on_a_blocked_sink() {
+    fn one_printer_and_a_bounded_queue_serve_many_runs_on_a_blocked_sink() {
         let (release, blocked) = channel();
         let printer = Printer::with_sink(Box::new(Blocked(blocked)));
         let before = PRINTER_THREADS.load(Ordering::SeqCst);
