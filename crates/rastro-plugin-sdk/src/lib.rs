@@ -131,6 +131,11 @@ pub struct InitializeResult {
     pub manifest_id: String,
 }
 
+/// A field that is present, even as `null`, is `Some`; only an absent one is `None`.
+fn present<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Value>, D::Error> {
+    Value::deserialize(deserializer).map(Some)
+}
+
 /// `evidence.submit`. Every field is optional on the wire so the core, not the parser,
 /// decides what to reject. The core sets the capture time.
 #[derive(Clone, Debug, Default, Deserialize, Serialize)]
@@ -160,7 +165,12 @@ pub struct EvidenceSubmit {
     pub window: Option<Window>,
     /// The item or comment as the connector read it. Sent only when the binding says
     /// `keep_original`; the core stores it beside the observation.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
+    /// An explicit `null` is kept as `Some(Value::Null)`, distinct from an omitted field.
+    #[serde(
+        default,
+        deserialize_with = "present",
+        skip_serializing_if = "Option::is_none"
+    )]
     pub original: Option<Value>,
 }
 
