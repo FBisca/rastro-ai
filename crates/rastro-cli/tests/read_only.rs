@@ -331,9 +331,9 @@ impl Snapshot for InterleavedView<'_> {
         self.interleave();
         self.inner.coverage(source, all_windows)
     }
-    fn stored_pairs(&self) -> Result<Vec<rastro_core::Pair>> {
+    fn stored_pairs(&self, scopes: &[rastro_core::Scope]) -> Result<Vec<rastro_core::Pair>> {
         self.interleave();
-        self.inner.stored_pairs()
+        self.inner.stored_pairs(scopes)
     }
     fn search(
         &self,
@@ -345,9 +345,9 @@ impl Snapshot for InterleavedView<'_> {
         self.interleave();
         self.inner.search(query, limit, history, scopes)
     }
-    fn unfinished_runs(&self) -> Result<Vec<UnfinishedRun>> {
+    fn unfinished_runs(&self, scopes: &[rastro_core::Scope]) -> Result<Vec<UnfinishedRun>> {
         self.interleave();
-        self.inner.unfinished_runs()
+        self.inner.unfinished_runs(scopes)
     }
 }
 impl ReadStorage for Interleaved {

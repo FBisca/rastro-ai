@@ -60,8 +60,8 @@ fn run_operation(
         .decode(arguments)
         .map_err(|e| ErrorData::invalid_params(format!("invalid arguments: {e}"), None))?;
     let outcome = Locations::resolve().and_then(|locations| {
-        let mut reader = Rastro::open_read_only(locations, SqliteStorage::open_read_only)?;
-        reader.limit_scopes(scopes);
+        let mut reader =
+            Rastro::open_read_only_scoped(locations, SqliteStorage::open_read_only, scopes)?;
         request.run_read(&mut reader)
     });
     Ok(match outcome {

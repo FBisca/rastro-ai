@@ -421,7 +421,7 @@ impl View<'_> {
     }
 }
 impl Snapshot for View<'_> {
-    fn stored_pairs(&self) -> Result<Vec<Pair>> {
+    fn stored_pairs(&self, scopes: &[Scope]) -> Result<Vec<Pair>> {
         // A source row or a run names a pair: every window and every evidence row comes from
         // a run, so those legs would add nothing. The rule is the one last stored for the
         // source (a removed source keeps its row).
@@ -429,9 +429,12 @@ impl Snapshot for View<'_> {
             "SELECT p.source, p.scope, s.freshness_rule FROM (
                  SELECT name AS source, scope FROM sources
                  UNION SELECT source, scope FROM runs
-             ) p JOIN sources s ON s.name = p.source ORDER BY p.source, p.scope",
+             ) p JOIN sources s ON s.name = p.source
+             WHERE (?1 IS NULL OR p.scope IN (SELECT value FROM json_each(?1)))
+             ORDER BY p.source, p.scope",
         )?;
-        let rows = statement.query_map([], |row| {
+        let scopes = scope_parameter(scopes)?;
+        let rows = statement.query_map([scopes], |row| {
             Ok(Pair {
                 source: row.get(0)?,
                 scope: Scope(row.get(1)?),
@@ -511,6 +514,7 @@ impl Snapshot for View<'_> {
             windows,
         })
     }
+    /// Rank statistics span every scope in the global FTS corpus.
     fn search(
         &self,
         query: &str,
@@ -532,11 +536,7 @@ impl Snapshot for View<'_> {
             "SELECT highlight(evidence_fts, 0, char(1), char(2)) FROM evidence_fts
              WHERE evidence_fts MATCH ?1 AND rowid = ?2",
         )?;
-        let scopes = if scopes.is_empty() {
-            None
-        } else {
-            Some(serde_json::to_string(scopes)?)
-        };
+        let scopes = scope_parameter(scopes)?;
         let rows = statement.query_map(params![query, limit as i64, history, scopes], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
@@ -587,12 +587,14 @@ impl Snapshot for View<'_> {
         })
         .collect()
     }
-    fn unfinished_runs(&self) -> Result<Vec<UnfinishedRun>> {
+    fn unfinished_runs(&self, scopes: &[Scope]) -> Result<Vec<UnfinishedRun>> {
         let mut statement = self.0.prepare(
             "SELECT source, scope, window_start, window_end FROM runs
-             WHERE finished_at IS NULL AND window_start IS NOT NULL ORDER BY id",
+             WHERE finished_at IS NULL AND window_start IS NOT NULL
+             AND (?1 IS NULL OR scope IN (SELECT value FROM json_each(?1))) ORDER BY id",
         )?;
-        let rows = statement.query_map([], |row| {
+        let scopes = scope_parameter(scopes)?;
+        let rows = statement.query_map([scopes], |row| {
             Ok([
                 row.get::<_, String>(0)?,
                 row.get(1)?,
@@ -609,6 +611,15 @@ impl Snapshot for View<'_> {
             })
         })
         .collect()
+    }
+}
+
+/// A bound JSON allowlist, or NULL to allow every scope.
+fn scope_parameter(scopes: &[Scope]) -> Result<Option<String>> {
+    if scopes.is_empty() {
+        Ok(None)
+    } else {
+        Ok(Some(serde_json::to_string(scopes)?))
     }
 }
 
