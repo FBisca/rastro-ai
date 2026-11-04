@@ -251,7 +251,7 @@ impl Storage for SqliteStorage {
         }
         transaction.execute(
             "INSERT INTO evidence (source, scope, location, field, start, end, quote, captured_at,
-             source_updated_at, trust_class) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+             source_updated_at, trust_class, original) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
             params![
                 e.source,
                 e.scope.0,
@@ -262,7 +262,8 @@ impl Storage for SqliteStorage {
                 e.quote,
                 stamp(e.captured_at),
                 e.source_updated_at.map(stamp),
-                e.trust_class.as_str()
+                e.trust_class.as_str(),
+                e.original.as_ref().map(|o| o.to_string())
             ],
         )?;
         let id = transaction.last_insert_rowid();
@@ -366,7 +367,7 @@ impl Storage for SqliteStorage {
     fn search(&self, query: &str, limit: usize, history: bool) -> Result<Vec<Hit>> {
         let mut statement = self.connection.prepare(
             "SELECT e.id, e.source, e.scope, e.location, e.field, e.start as i64, e.end as i64, e.quote,
-             e.trust_class, e.captured_at, e.source_updated_at
+             e.trust_class, e.captured_at, e.source_updated_at, e.original
              FROM evidence_fts JOIN evidence e ON e.id = evidence_fts.rowid
              WHERE evidence_fts MATCH ?1
              AND (?3 OR e.id = (SELECT max(l.id) FROM evidence l WHERE l.source = e.source
@@ -385,6 +386,7 @@ impl Storage for SqliteStorage {
                 [row.get::<_, i64>(5)? as u64, row.get::<_, i64>(6)? as u64],
                 [row.get::<_, String>(7)?, row.get(8)?, row.get(9)?],
                 row.get::<_, Option<String>>(10)?,
+                row.get::<_, Option<String>>(11)?,
             ))
         })?;
         rows.map(|row| {
@@ -394,6 +396,7 @@ impl Storage for SqliteStorage {
                 [start, end],
                 [quote, trust, captured],
                 updated,
+                original,
             ) = row?;
             Ok(Hit {
                 id,
@@ -409,6 +412,9 @@ impl Storage for SqliteStorage {
                         .ok_or_else(|| anyhow::anyhow!("invalid trust class: {trust}"))?,
                     captured_at: parse_time(captured)?,
                     source_updated_at: updated.map(parse_time).transpose()?,
+                    original: original
+                        .map(|text| serde_json::from_str(&text))
+                        .transpose()?,
                 },
             })
         })

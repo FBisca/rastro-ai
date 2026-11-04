@@ -71,17 +71,24 @@ impl Env {
         value
     }
     fn add_source(&self, name: &str) {
+        self.add_source_with(name, &[]);
+    }
+    fn add_source_with(&self, name: &str, extra: &[&str]) {
         self.ok(&[
-            "source",
-            "add",
-            name,
-            "--connector",
-            "test",
-            "--repo",
-            "o/p",
-            "--scope",
-            "personal",
-        ]);
+            &[
+                "source",
+                "add",
+                name,
+                "--connector",
+                "test",
+                "--repo",
+                "o/p",
+                "--scope",
+                "personal",
+            ][..],
+            extra,
+        ]
+        .concat());
     }
     fn script(&self, steps: &[Value]) {
         let lines: Vec<_> = steps.iter().map(Value::to_string).collect();
@@ -479,4 +486,35 @@ fn control_characters_from_connectors_are_escaped_in_human_output() {
     ]);
     let failed = env.rastro(&["sync", "project"]);
     assert!(!failed.stdout.contains(&0x1b) && !failed.stderr.contains(&0x1b));
+}
+
+/// S25: the core keeps an original only for a source with the flag, whatever the connector sends
+#[test]
+fn S25_core_drops_an_original_from_a_source_without_the_flag() {
+    let original = json!({"id": 7, "body": "hello world", "extra": [1, 2]});
+    let script = run_script(vec![
+        with(
+            valid("https://github.com/o/p/issues/1", "hello world"),
+            "original",
+            original.clone(),
+        ),
+        complete(),
+    ]);
+    let plain = Env::new();
+    plain.add_source("project");
+    plain.script(&script);
+    plain.json(&["sync", "project"]);
+    assert_eq!(
+        plain.sql::<i64>("SELECT count(*) FROM evidence WHERE original IS NULL"),
+        1
+    );
+    let found = plain.json(&["search", "hello"]);
+    assert!(found["result"]["results"][0].get("original").is_none());
+
+    let keeping = Env::new();
+    keeping.add_source_with("project", &["--keep-original"]);
+    keeping.script(&script);
+    keeping.json(&["sync", "project"]);
+    let found = keeping.json(&["search", "hello"]);
+    assert_eq!(found["result"]["results"][0]["original"], original);
 }

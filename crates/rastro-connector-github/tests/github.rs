@@ -616,3 +616,105 @@ fn links_and_redirects_away_from_the_api_host_are_not_followed() {
         );
     }
 }
+
+/// S25: a source added with --keep-original stores each item or comment as read, and search returns it
+#[test]
+fn S25_keep_original_stores_the_item_or_comment_as_read() {
+    let fixture = Fixture::start(standard);
+    let env = Env::with_source_args(&fixture.base, &["--keep-original"]);
+    assert_eq!(sync(&env)["status"], "ok");
+    assert_eq!(
+        env.sql::<i64>("SELECT count(*) FROM evidence WHERE original IS NULL"),
+        0
+    );
+    let results = env.json(&["search", "slow"])["result"]["results"].clone();
+    let title = results
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["field"] == "/title")
+        .unwrap();
+    let item = issue(3, "Slow query", Some("it is slow"), false);
+    let original = &title["original"];
+    assert_eq!(original["number"], 3);
+    assert_eq!(original["body"], "it is slow");
+    assert_eq!(original["html_url"], item["html_url"]);
+    assert_eq!(original["labels"], item["labels"]);
+    let comment = env.json(&["search", "comment"])["result"]["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["location"] == "https://github.com/o/p/issues/3#issuecomment-30")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        comment["original"]["html_url"],
+        "https://github.com/o/p/issues/3#issuecomment-30"
+    );
+    assert!(comment["original"].get("title").is_none());
+    let human = env.run(&["search", "slow"]);
+    assert!(!String::from_utf8_lossy(&human.stdout).contains("html_url"));
+}
+
+/// S25: a source without the flag stores no original and search has no such field
+#[test]
+fn S25_without_the_flag_nothing_is_stored() {
+    let fixture = Fixture::start(standard);
+    let env = Env::new(&fixture.base);
+    assert_eq!(sync(&env)["status"], "ok");
+    assert_eq!(
+        env.sql::<i64>("SELECT count(*) FROM evidence WHERE original IS NOT NULL"),
+        0
+    );
+    let results = env.json(&["search", "slow"])["result"]["results"].clone();
+    assert!(!results.as_array().unwrap().is_empty());
+    assert!(results[0].get("original").is_none());
+}
+
+/// S25: the connector attaches originals only when the host says the source keeps them
+#[test]
+fn S25_connector_sends_originals_only_when_told() {
+    let fixture = Fixture::start(standard);
+    let sent = |keep: bool| -> Vec<Value> {
+        let mut child = std::process::Command::new(connector_binary())
+            .env_clear()
+            .env("GH_TOKEN", TOKEN)
+            .env("RASTRO_GITHUB_API_URL", &fixture.base)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let init = json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocol": "1.0", "manifest_id": "github", "run": {
+                "run_id": 1, "source": "x", "scope": "personal", "selector": {"repo": "o/p"},
+                "window": {"from": days_ago(30), "to": days_ago(-1)}, "keep_original": keep}}});
+        use std::io::{BufRead, Write};
+        writeln!(stdin, "{init}").unwrap();
+        let mut lines = std::io::BufReader::new(child.stdout.take().unwrap()).lines();
+        let mut evidence = vec![];
+        for line in lines.by_ref() {
+            let message: Value = serde_json::from_str(&line.unwrap()).unwrap();
+            if message["method"] == "evidence.submit" {
+                evidence.push(message["params"].clone());
+            }
+            if message["method"] == "run.finish" {
+                writeln!(
+                    stdin,
+                    "{}",
+                    json!({"jsonrpc": "2.0", "id": message["id"], "result": {}})
+                )
+                .unwrap();
+                break;
+            }
+        }
+        child.wait().unwrap();
+        evidence
+    };
+    let told = sent(true);
+    assert!(!told.is_empty());
+    assert!(told.iter().all(|e| e["original"].is_object()));
+    let not_told = sent(false);
+    assert!(!not_told.is_empty());
+    assert!(not_told.iter().all(|e| e.get("original").is_none()));
+}

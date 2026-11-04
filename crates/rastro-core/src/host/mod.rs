@@ -112,10 +112,17 @@ pub fn run<S: Storage>(
         scope: source.scope.0.clone(),
         selector: source.selector.clone(),
         window: window.clone(),
+        keep_original: source.keep_original,
     };
     let mut session = Session::default();
     let outcome = match plugin {
-        Some(plugin) => match Grant::new(&plugin.manifest, &source.name, &source.scope, &window) {
+        Some(plugin) => match Grant::new(
+            &plugin.manifest,
+            &source.name,
+            &source.scope,
+            &window,
+            source.keep_original,
+        ) {
             Some(grant) => drive(storage, plugin, &binding, &grant, &mut session),
             None => Ok(Err("forbidden")),
         },
