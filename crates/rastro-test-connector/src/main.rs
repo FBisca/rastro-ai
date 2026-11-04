@@ -8,6 +8,9 @@
 //! - `sleep` {ms}
 //! - `send_oversized` {bytes}: send a valid `evidence.submit` whose quote is that many bytes
 //! - `stderr` {text, repeat?}: write that line to stderr
+//! - `flood` {lines}: that many invalid `evidence.submit` lines, back to back
+//! - `send_bytes` {bytes}: those bytes as one line (may be invalid UTF-8)
+//! - `spawn_holder` {secs}: start a child that keeps the pipes open that long
 //! - `dump_env` {path}: write the environment, one NAME=value per line, to that file
 //! - `exit` {code?}: end the process at once
 //!
@@ -51,6 +54,18 @@ enum Step {
         text: String,
         #[serde(default = "one")]
         repeat: usize,
+    },
+    /// `lines` rejected-on-purpose `evidence.submit` lines, as fast as the pipe takes them.
+    Flood {
+        lines: usize,
+    },
+    /// Raw bytes (not necessarily UTF-8) as one line.
+    SendBytes {
+        bytes: Vec<u8>,
+    },
+    /// Starts a child that keeps this process's pipes open for `secs` seconds.
+    SpawnHolder {
+        secs: u64,
     },
     DumpEnv {
         path: String,
@@ -133,6 +148,18 @@ fn main() -> Result<()> {
                 for _ in 0..repeat {
                     writeln!(stderr, "{text}")?;
                 }
+            }
+            Step::Flood { lines } => {
+                for _ in 0..lines {
+                    transport
+                        .send_line(r#"{"jsonrpc":"2.0","method":"evidence.submit","params":{}}"#)?;
+                }
+            }
+            Step::SendBytes { bytes } => transport.send_bytes(&bytes)?,
+            Step::SpawnHolder { secs } => {
+                std::process::Command::new("sleep")
+                    .arg(secs.to_string())
+                    .spawn()?;
             }
             Step::DumpEnv { path } => {
                 let lines: Vec<_> = env::vars().map(|(k, v)| format!("{k}={v}")).collect();

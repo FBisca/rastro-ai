@@ -16,11 +16,10 @@ use std::{
     env,
     ffi::OsString,
     fs,
-    io::Write,
     path::{Path, PathBuf},
     process::{Command, Stdio},
     sync::mpsc::{Receiver, RecvTimeoutError},
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 mod io;
@@ -98,7 +97,12 @@ pub fn run<S: Storage>(
         None => (source.connector.clone(), String::new()),
     };
     let started_at = Utc::now();
-    let run_id = storage.start_run(source, (&plugin_id, &plugin_version), started_at)?;
+    let run_id = storage.start_run(
+        source,
+        (&plugin_id, &plugin_version),
+        started_at,
+        (from, to),
+    )?;
     let window = Window {
         from: stamp(from),
         to: stamp(to),
@@ -134,6 +138,7 @@ pub fn run<S: Storage>(
             |r| typed(Some(r)),
         )),
         Ok(Ok(_)) if reported.is_some() => reported,
+        Ok(Ok(_)) if coverage.is_none() => Some("protocol".into()),
         Ok(Ok(_)) => None,
     };
     let status = if reason.is_some() { "failed" } else { "ok" };
@@ -203,6 +208,10 @@ pub fn run<S: Storage>(
 struct Limits {
     max_line: usize,
     silence: Duration,
+    /// How long a connector may take to exit after `run.finish`.
+    shutdown: Duration,
+    /// Stderr lines relayed per run.
+    stderr_lines: usize,
 }
 impl Limits {
     fn from_env() -> Self {
@@ -218,6 +227,11 @@ impl Limits {
                 "RASTRO_HOST_SILENCE_MS",
                 DEFAULT_SILENCE.as_millis() as u64,
             )),
+            shutdown: Duration::from_millis(number(
+                "RASTRO_HOST_SHUTDOWN_MS",
+                DEFAULT_SHUTDOWN.as_millis() as u64,
+            )),
+            stderr_lines: number("RASTRO_HOST_STDERR_LINES", DEFAULT_STDERR_LINES as u64) as usize,
         }
     }
 }
@@ -225,6 +239,11 @@ impl Limits {
 pub const DEFAULT_MAX_LINE: usize = 1 << 20;
 /// How long a connector may stay silent before it is killed.
 pub const DEFAULT_SILENCE: Duration = Duration::from_secs(60);
+
+/// How long a connector may take to exit after `run.finish` before it is killed.
+pub const DEFAULT_SHUTDOWN: Duration = Duration::from_secs(5);
+/// How many stderr lines are relayed per run; the rest are counted and dropped.
+pub const DEFAULT_STDERR_LINES: usize = 1000;
 
 /// A reason a connector gives must be one of the typed ones; anything else means it broke
 /// the contract and is recorded as `protocol`.
@@ -275,39 +294,58 @@ fn drive<S: Storage>(
     let stdout = child.stdout.take().context("child stdout")?;
     let stderr = child.stderr.take().context("child stderr")?;
     let limits = Limits::from_env();
-    let relay = io::relay_stderr(stderr, plugin.manifest.id.clone());
+    let relayed = io::relay_stderr(stderr, plugin.manifest.id.clone(), limits.stderr_lines);
     let mut wire = Wire {
-        stdin,
+        jobs: io::write_lines(stdin),
         events: io::read_lines(stdout, limits.max_line),
-        silence: limits.silence,
+        deadline: limits.silence,
     };
     let outcome = converse(storage, &mut wire, plugin, binding, grant, session);
-    if !matches!(outcome, Ok(Ok(_))) {
+    // Closing the job queue closes stdin, which is how a well-behaved connector knows to exit.
+    drop(wire);
+    let deadline = Instant::now() + limits.shutdown;
+    let mut exited = matches!(outcome, Ok(Ok(_)));
+    while exited {
+        match child.try_wait() {
+            Ok(Some(_)) | Err(_) => break,
+            Ok(None) if Instant::now() >= deadline => exited = false,
+            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+        }
+    }
+    if !exited {
         let _ = child.kill();
     }
-    drop(wire.stdin);
     let _ = child.wait();
-    let _ = relay.join();
+    // A child of the connector may still hold the pipes: wait for the relay, but not forever.
+    let _ = relayed.recv_timeout(limits.shutdown);
     outcome
 }
 
-/// The two ends of the conversation: lines out, and bounded, timed lines in.
+/// The two ends of the conversation: lines out under a deadline, and bounded, timed lines in.
 struct Wire {
-    stdin: std::process::ChildStdin,
+    jobs: std::sync::mpsc::Sender<io::Job>,
     events: Receiver<io::Event>,
-    silence: Duration,
+    /// How long a write may take, and how long the connector may stay silent.
+    deadline: Duration,
 }
 impl Wire {
     fn send(&mut self, message: &Envelope) -> std::result::Result<(), &'static str> {
         let line = serde_json::to_string(message).map_err(|_| "protocol")?;
-        writeln!(self.stdin, "{line}")
-            .and_then(|()| self.stdin.flush())
-            .map_err(|_| "interrupted")
+        let (ack, acked) = std::sync::mpsc::sync_channel(1);
+        self.jobs.send((line, ack)).map_err(|_| "interrupted")?;
+        match acked.recv_timeout(self.deadline) {
+            Ok(Ok(())) => Ok(()),
+            Ok(Err(_)) | Err(RecvTimeoutError::Disconnected) => Err("interrupted"),
+            Err(RecvTimeoutError::Timeout) => Err("timeout"),
+        }
     }
     fn recv(&mut self) -> std::result::Result<Envelope, &'static str> {
-        match self.events.recv_timeout(self.silence) {
-            Ok(io::Event::Line(line)) => serde_json::from_str(&line).map_err(|_| "protocol"),
-            Ok(io::Event::TooLong) => Err("protocol"),
+        match self.events.recv_timeout(self.deadline) {
+            Ok(io::Event::Line(line)) => match serde_json::from_str::<Envelope>(&line) {
+                Ok(envelope) if envelope.jsonrpc == "2.0" => Ok(envelope),
+                _ => Err("protocol"),
+            },
+            Ok(io::Event::TooLong | io::Event::Invalid) => Err("protocol"),
             Ok(io::Event::Eof) | Err(RecvTimeoutError::Disconnected) => Err("interrupted"),
             Err(RecvTimeoutError::Timeout) => Err("timeout"),
         }
@@ -337,6 +375,9 @@ fn converse<S: Storage>(
     }
     step!(wire.send(&Envelope::request(1, INITIALIZE, init)?));
     let reply = step!(wire.recv());
+    if reply.id != Some(1.into()) {
+        return Ok(Err("protocol"));
+    }
     let Ok(init) = reply.result::<InitializeResult>() else {
         return Ok(Err("protocol"));
     };
@@ -377,6 +418,9 @@ fn converse<S: Storage>(
                 }
             }
             Some(RUN_FINISH) => {
+                if message.id.is_none() {
+                    return Ok(Err("protocol"));
+                }
                 let Ok(finish) = message.params::<RunFinish>() else {
                     return Ok(Err("protocol"));
                 };

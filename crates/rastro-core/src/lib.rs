@@ -243,6 +243,7 @@ pub trait Storage {
         source: &Source,
         plugin: (&str, &str),
         started_at: DateTime<Utc>,
+        window: (DateTime<Utc>, DateTime<Utc>),
     ) -> Result<i64>;
     /// Appends one observation and its search index entry in one transaction.
     fn append_evidence(&mut self, run_id: i64, evidence: &Evidence) -> Result<i64>;

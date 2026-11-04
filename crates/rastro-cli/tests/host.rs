@@ -66,6 +66,8 @@ impl Env {
             .env("RASTRO_TEST_SCRIPT", self.home.path().join("script.jsonl"))
             .env("RASTRO_HOST_SILENCE_MS", "600")
             .env("RASTRO_HOST_MAX_LINE", "4096")
+            .env("RASTRO_HOST_SHUTDOWN_MS", "300")
+            .env("RASTRO_HOST_STDERR_LINES", "50")
             .args(args);
         command
     }
@@ -90,6 +92,68 @@ impl Env {
     }
     fn sql<T: rusqlite::types::FromSql>(&self, query: &str) -> T {
         self.db().query_row(query, [], |row| row.get(0)).unwrap()
+    }
+    /// Runs `rastro sync project --json` and fails the test, killing it, if it takes longer than
+    /// `secs`. With `read_stderr` false its stderr is a pipe nobody reads.
+    fn sync_within(&self, secs: u64, read_stderr: bool) -> (Output, Value) {
+        use std::io::Read;
+        let mut command = self.command(&["sync", "project", "--json"]);
+        command
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped());
+        let mut child = command.spawn().unwrap();
+        let pid = child.id();
+        let mut stdout = child.stdout.take().unwrap();
+        let mut stderr = child.stderr.take().unwrap();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let mut out = Vec::new();
+            let mut err = Vec::new();
+            let reader = std::thread::spawn(move || {
+                stdout.read_to_end(&mut out).unwrap();
+                out
+            });
+            if read_stderr {
+                stderr.read_to_end(&mut err).unwrap();
+            }
+            let status = child.wait().unwrap();
+            let _ = sender.send(Output {
+                status,
+                stdout: reader.join().unwrap(),
+                stderr: err,
+            });
+            drop(stderr);
+        });
+        let output = match receiver.recv_timeout(std::time::Duration::from_secs(secs)) {
+            Ok(output) => output,
+            Err(_) => {
+                let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+                panic!("sync did not finish within {secs}s");
+            }
+        };
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let run = value["result"]["runs"][0].clone();
+        (output, run)
+    }
+    fn rastro_within(&self, args: &[&str], secs: u64) -> Output {
+        let child = self
+            .command(args)
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let pid = child.id();
+        let (sender, receiver) = std::sync::mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = sender.send(child.wait_with_output());
+        });
+        match receiver.recv_timeout(std::time::Duration::from_secs(secs)) {
+            Ok(output) => output.unwrap(),
+            Err(_) => {
+                let _ = Command::new("kill").args(["-9", &pid.to_string()]).status();
+                panic!("rastro did not finish within {secs}s");
+            }
+        }
     }
     /// Syncs and returns the run as JSON; the exit status is checked by the caller.
     fn sync(&self) -> (Output, Value) {
@@ -314,4 +378,197 @@ fn S11_typed_couldnt_look_reason_is_stored_and_never_empty() {
     let (_, run) = env.sync();
     assert_eq!(run["coverage"], "couldn't look");
     assert_eq!(env.sql::<String>("SELECT reason FROM coverage"), "protocol");
+}
+
+fn failed_with(run: &Value, reason: &str) {
+    assert_eq!(
+        (&run["status"], &run["reason"]),
+        (&json!("failed"), &json!(reason))
+    );
+}
+
+#[test]
+fn S9b_fast_stdout_is_held_in_bounded_memory_and_the_run_completes() {
+    let env = Env::new();
+    env.script(&[
+        init(),
+        json!({"do": "flood", "lines": 20000}),
+        complete(),
+        finish(),
+    ]);
+    let (output, run) = env.sync_within(20, true);
+    assert!(output.status.success());
+    assert_eq!(run["counts"]["rejected"], 20000);
+}
+
+#[test]
+fn S9c_connector_that_stops_reading_stdin_times_out() {
+    let env = Env::new();
+    // The binding in `initialize` is bigger than any pipe buffer.
+    env.ok(&[
+        "source",
+        "add",
+        "big",
+        "--connector",
+        "test",
+        "--repo",
+        &"r".repeat(120_000),
+        "--scope",
+        "personal",
+    ]);
+    env.script(&[json!({"do": "sleep", "ms": 20000})]);
+    let output = env.rastro_within(&["sync", "big", "--json"], 15);
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    failed_with(&value["result"]["runs"][0], "timeout");
+    assert!(!output.status.success());
+}
+
+#[test]
+fn S9d_connector_that_lingers_after_finish_is_killed_and_the_run_kept() {
+    for linger in [
+        json!({"do": "sleep", "ms": 20000}),
+        json!({"do": "spawn_holder", "secs": 4}),
+    ] {
+        let env = Env::new();
+        let mut script = vec![init(), complete(), finish(), linger];
+        if script[3]["do"] == "spawn_holder" {
+            script.push(json!({"do": "sleep", "ms": 20000}));
+        }
+        env.script(&script);
+        let (output, run) = env.sync_within(10, true);
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(run["status"], "ok");
+        assert_eq!(
+            env.sql::<i64>("SELECT count(*) FROM runs WHERE finished_at IS NULL"),
+            0
+        );
+    }
+}
+
+#[test]
+fn S9e_stderr_relay_drops_the_excess_and_never_blocks() {
+    let env = Env::new();
+    env.script(&[
+        init(),
+        json!({"do": "stderr", "text": "noisy", "repeat": 5000}),
+        complete(),
+        finish(),
+    ]);
+    let output = env.rastro(&["sync", "project"]);
+    assert!(output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let relayed = stderr.lines().filter(|l| l.contains("noisy")).count();
+    assert!((50..=60).contains(&relayed), "{relayed} lines relayed");
+    assert!(
+        stderr.contains("dropped 49"),
+        "no dropped notice: {}",
+        &stderr[stderr.len().saturating_sub(300)..]
+    );
+    // The core's own stderr is a pipe nobody reads: neither side may wait for it.
+    env.script(&[
+        init(),
+        json!({"do": "stderr", "text": "x".repeat(900), "repeat": 20000}),
+        complete(),
+        finish(),
+    ]);
+    let (_, run) = env.sync_within(15, false);
+    assert_eq!(run["status"], "ok");
+}
+
+#[test]
+fn S9f_invalid_utf8_or_a_bad_envelope_fails_with_protocol() {
+    let mut bad_version = evidence();
+    bad_version["jsonrpc"] = json!("1.0");
+    let mut no_method = evidence();
+    no_method.as_object_mut().unwrap().remove("method");
+    let mut invalid = serde_json::to_vec(&evidence()).unwrap();
+    invalid.extend([0xff, 0xfe]);
+    let finish_without_id = send(json!({"jsonrpc": "2.0", "method": "run.finish",
+        "params": {"status": "ok", "submitted": 0}}));
+    for line in [
+        json!({"do": "send_bytes", "bytes": invalid}),
+        send(bad_version),
+        send(no_method),
+        finish_without_id,
+    ] {
+        let env = Env::new();
+        env.script(&[init(), line, complete(), finish()]);
+        let (output, run) = env.sync_within(10, true);
+        assert!(!output.status.success());
+        failed_with(&run, "protocol");
+        assert_eq!(env.sql::<i64>("SELECT count(*) FROM evidence"), 0);
+        assert_eq!(env.sql::<String>("SELECT reason FROM coverage"), "protocol");
+    }
+}
+
+#[test]
+fn S10a_recovered_run_records_couldnt_look_for_its_window() {
+    let env = Env::new();
+    env.script(&[
+        init(),
+        json!({"do": "sleep", "ms": 3000}),
+        complete(),
+        finish(),
+    ]);
+    let mut crashing = env
+        .command(&["sync", "project"])
+        .env("RASTRO_HOST_SILENCE_MS", "10000")
+        .spawn()
+        .unwrap();
+    for _ in 0..100 {
+        if env.sql::<i64>("SELECT count(*) FROM runs") == 1 {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(50));
+    }
+    crashing.kill().unwrap();
+    crashing.wait().unwrap();
+    env.ok(&["coverage"]);
+    assert_eq!(
+        env.sql::<String>("SELECT status || ':' || reason FROM runs"),
+        "failed:interrupted"
+    );
+    assert_eq!(
+        env.sql::<String>(
+            "SELECT state || ':' || reason || ':' || source || ':' || scope FROM coverage"
+        ),
+        "couldn't look:interrupted:project:personal"
+    );
+    assert_eq!(
+        env.sql::<String>("SELECT coverage.window_start || coverage.window_end FROM coverage"),
+        env.sql::<String>("SELECT window_start || window_end FROM runs")
+    );
+    let covered: Value = serde_json::from_str(&env.ok(&["coverage", "project", "--json"])).unwrap();
+    assert_eq!(covered["result"]["coverage"][0]["state"], "couldn't look");
+}
+
+#[test]
+fn S11a_finish_without_coverage_fails_with_protocol() {
+    let env = Env::new();
+    env.script(&[init(), send(evidence()), finish()]);
+    let (output, run) = env.sync_within(10, true);
+    assert!(!output.status.success());
+    failed_with(&run, "protocol");
+    assert_eq!(run["coverage"], "couldn't look");
+    assert_eq!(env.sql::<String>("SELECT reason FROM coverage"), "protocol");
+}
+
+#[test]
+fn S11a_finish_with_only_rejected_coverage_reports_fails_with_protocol() {
+    let env = Env::new();
+    let forged = json!({"from": "1900-01-01T00:00:00Z", "to": "1900-02-01T00:00:00Z"});
+    let report = send(json!({"jsonrpc": "2.0", "method": "coverage.report",
+        "params": {"status": "complete", "window": forged}}));
+    env.script(&[init(), report.clone(), report, finish()]);
+    let (output, run) = env.sync_within(10, true);
+    assert!(!output.status.success());
+    failed_with(&run, "protocol");
+    assert_eq!(
+        env.sql::<String>("SELECT state || ':' || reason FROM coverage"),
+        "couldn't look:protocol"
+    );
 }
