@@ -2,7 +2,7 @@ use anyhow::Result;
 use chrono::{DateTime, SecondsFormat, Utc};
 use clap::{Parser, Subcommand};
 use rastro_core::{
-    Coverage, Locations, Rastro, Scope, Source, display_safe,
+    Coverage, CoverageWindow, Locations, Rastro, Scope, Source, display_safe,
     runs::{RunReport, SearchResults},
 };
 use rastro_storage_sqlite::SqliteStorage;
@@ -106,6 +106,27 @@ fn coverage_line(c: &Coverage) -> String {
     }
     line
 }
+fn window_line(w: &CoverageWindow) -> String {
+    let mut line = format!(
+        "  [{}, {}) | {} | Selection: {}",
+        stamp(w.from),
+        stamp(w.to),
+        w.state.as_str(),
+        display_safe(&w.selection)
+    );
+    if let Some(reason) = &w.reason {
+        line += &format!(" | Reason: {}", display_safe(reason));
+    }
+    if let Some(at) = w.retry_at {
+        line += &format!(" | Retry at: {}", stamp(at));
+    }
+    line
+}
+fn coverage_block(c: &Coverage) -> String {
+    let mut lines = vec![coverage_line(c)];
+    lines.extend(c.windows.iter().map(window_line));
+    lines.join("\n")
+}
 fn sync_line(run: &RunReport) -> String {
     let counts = &run.counts;
     let mut line = format!(
@@ -202,7 +223,7 @@ fn run(operation: Operation) -> Result<(Value, String)> {
         }
         Operation::Coverage { name } => {
             let coverage = rastro.coverage(name.as_deref())?;
-            let lines: Vec<_> = coverage.iter().map(coverage_line).collect();
+            let lines: Vec<_> = coverage.iter().map(coverage_block).collect();
             let human = if lines.is_empty() {
                 "No sources registered".into()
             } else {

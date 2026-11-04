@@ -211,6 +211,22 @@ pub struct Coverage {
     /// Why the latest attempt couldn't look, kept next to the last successful check.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
+    /// Every window the source was looked at, oldest first; empty in search answers.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub windows: Vec<CoverageWindow>,
+}
+/// One window `[from, to)` a run looked at, with what it found.
+#[derive(Clone, Debug, Serialize)]
+pub struct CoverageWindow {
+    pub from: DateTime<Utc>,
+    pub to: DateTime<Utc>,
+    pub state: CoverageState,
+    pub selection: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub retry_at: Option<DateTime<Utc>>,
+    pub checked_at: DateTime<Utc>,
 }
 
 /// One coverage row: what a run looked at, over the half-open window `[from, to)`.

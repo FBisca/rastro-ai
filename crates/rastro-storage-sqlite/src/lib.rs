@@ -1,8 +1,8 @@
 use anyhow::{Result, bail};
 use chrono::{DateTime, SecondsFormat, Utc};
 use rastro_core::{
-    Appended, CompleteCheck, Coverage, CoverageRecord, CoverageState, Evidence, Hit, RunEnd, Scope,
-    Source, Storage, TrustClass,
+    Appended, CompleteCheck, Coverage, CoverageRecord, CoverageState, CoverageWindow, Evidence,
+    Hit, RunEnd, Scope, Source, Storage, TrustClass,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
@@ -139,23 +139,52 @@ impl Storage for SqliteStorage {
         Ok(())
     }
     fn coverage(&self, source: &Source) -> Result<Coverage> {
-        let (state, reason): (Option<String>, Option<String>) = self
-            .connection
-            .query_row(
-                "SELECT state, reason FROM coverage WHERE source=?1 AND scope=?2
-                 ORDER BY id DESC LIMIT 1",
-                params![source.name, source.scope.0],
-                |row| Ok((Some(row.get(0)?), row.get(1)?)),
-            )
-            .optional()?
-            .unwrap_or((None, None));
-        let state = match state.as_deref() {
+        let mut statement = self.connection.prepare(
+            "SELECT window_start, window_end, state, selection, reason, retry_at, checked_at
+             FROM coverage WHERE source=?1 AND scope=?2 ORDER BY id",
+        )?;
+        let rows = statement.query_map(params![source.name, source.scope.0], |row| {
+            Ok((
+                [row.get::<_, String>(0)?, row.get(1)?],
+                [row.get::<_, String>(2)?, row.get(3)?],
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, String>(6)?,
+            ))
+        })?;
+        let mut windows = Vec::new();
+        for row in rows {
+            let ([from, to], [state, selection], reason, retry_at, checked_at) = row?;
+            let state = match state.as_str() {
+                "found" => CoverageState::Found,
+                "empty" => CoverageState::Empty,
+                "couldn't look" => CoverageState::CouldNotLook,
+                other => bail!("invalid coverage state: {other}"),
+            };
+            windows.push(CoverageWindow {
+                from: parse_time(from)?,
+                to: parse_time(to)?,
+                state,
+                selection,
+                reason,
+                retry_at: retry_at.map(parse_time).transpose()?,
+                checked_at: parse_time(checked_at)?,
+            });
+        }
+        // The latest attempt decides whether the source could be looked at; otherwise any
+        // complete window that found evidence makes the source "found", and it is "empty"
+        // only when every complete window was.
+        let state = match windows.last() {
             None => CoverageState::NeverLooked,
-            Some("found") => CoverageState::Found,
-            Some("empty") => CoverageState::Empty,
-            Some("couldn't look") => CoverageState::CouldNotLook,
-            Some(other) => bail!("invalid coverage state: {other}"),
+            Some(latest) if latest.state == CoverageState::CouldNotLook => {
+                CoverageState::CouldNotLook
+            }
+            Some(_) if windows.iter().any(|w| w.state == CoverageState::Found) => {
+                CoverageState::Found
+            }
+            Some(_) => CoverageState::Empty,
         };
+        let reason = windows.last().and_then(|w| w.reason.clone());
         Ok(Coverage {
             source: source.name.clone(),
             scope: source.scope.clone(),
@@ -163,6 +192,7 @@ impl Storage for SqliteStorage {
             last_checked: self.last_complete_check(source)?.map(|c| c.checked_at),
             fresh_until: None,
             reason,
+            windows,
         })
     }
     fn start_run(
