@@ -335,9 +335,15 @@ impl Snapshot for InterleavedView<'_> {
         self.interleave();
         self.inner.stored_pairs()
     }
-    fn search(&self, query: &str, limit: usize, history: bool) -> Result<Vec<rastro_core::Hit>> {
+    fn search(
+        &self,
+        query: &str,
+        limit: usize,
+        history: bool,
+        scopes: &[rastro_core::Scope],
+    ) -> Result<Vec<rastro_core::Hit>> {
         self.interleave();
-        self.inner.search(query, limit, history)
+        self.inner.search(query, limit, history, scopes)
     }
     fn unfinished_runs(&self) -> Result<Vec<UnfinishedRun>> {
         self.interleave();

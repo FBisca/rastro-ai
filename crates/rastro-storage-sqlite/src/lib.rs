@@ -395,7 +395,7 @@ impl Storage for SqliteStorage {
         Ok(indexed as usize)
     }
     fn search(&self, query: &str, limit: usize, history: bool) -> Result<Vec<Hit>> {
-        View(&self.connection).search(query, limit, history)
+        View(&self.connection).search(query, limit, history, &[])
     }
 }
 
@@ -511,12 +511,19 @@ impl Snapshot for View<'_> {
             windows,
         })
     }
-    fn search(&self, query: &str, limit: usize, history: bool) -> Result<Vec<Hit>> {
+    fn search(
+        &self,
+        query: &str,
+        limit: usize,
+        history: bool,
+        scopes: &[Scope],
+    ) -> Result<Vec<Hit>> {
         let mut statement = self.0.prepare(
             "SELECT e.id, e.source, e.scope, e.location, e.field, e.start as i64, e.end as i64, e.quote,
              e.trust_class, e.captured_at, e.source_updated_at, e.original
              FROM evidence_fts JOIN evidence e ON e.id = evidence_fts.rowid
              WHERE evidence_fts MATCH ?1
+             AND (?4 IS NULL OR e.scope IN (SELECT value FROM json_each(?4)))
              AND (?3 OR e.id = (SELECT max(l.id) FROM evidence l WHERE l.source = e.source
                   AND l.scope = e.scope AND l.location = e.location AND l.field = e.field))
              ORDER BY bm25(evidence_fts), e.id LIMIT ?2",
@@ -525,7 +532,12 @@ impl Snapshot for View<'_> {
             "SELECT highlight(evidence_fts, 0, char(1), char(2)) FROM evidence_fts
              WHERE evidence_fts MATCH ?1 AND rowid = ?2",
         )?;
-        let rows = statement.query_map(params![query, limit as i64, history], |row| {
+        let scopes = if scopes.is_empty() {
+            None
+        } else {
+            Some(serde_json::to_string(scopes)?)
+        };
+        let rows = statement.query_map(params![query, limit as i64, history, scopes], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
                 [

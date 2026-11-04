@@ -19,7 +19,7 @@ impl Snapshot for Fake {
     fn stored_pairs(&self) -> Result<Vec<rastro_core::Pair>> {
         Ok(vec![])
     }
-    fn search(&self, _: &str, _: usize, _: bool) -> Result<Vec<Hit>> {
+    fn search(&self, _: &str, _: usize, _: bool, _: &[Scope]) -> Result<Vec<Hit>> {
         Ok(self.0.clone())
     }
     fn unfinished_runs(&self) -> Result<Vec<UnfinishedRun>> {

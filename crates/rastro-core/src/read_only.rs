@@ -59,7 +59,14 @@ pub trait Snapshot {
     fn coverage(&self, pair: &Pair, all_windows: bool) -> Result<Coverage>;
     /// Every (source, scope) pair storage holds anything for, with its stored freshness rule.
     fn stored_pairs(&self) -> Result<Vec<Pair>>;
-    fn search(&self, query: &str, limit: usize, history: bool) -> Result<Vec<Hit>>;
+    /// Filters scopes before applying the limit; an empty set allows every scope.
+    fn search(
+        &self,
+        query: &str,
+        limit: usize,
+        history: bool,
+        scopes: &[Scope],
+    ) -> Result<Vec<Hit>>;
     /// Runs with no end and a window; recovery would turn each into "couldn't look: interrupted".
     fn unfinished_runs(&self) -> Result<Vec<UnfinishedRun>>;
 }
@@ -112,6 +119,7 @@ pub struct Reader<S> {
     locations: Locations,
     config: Config,
     storage: Option<S>,
+    scopes: Vec<Scope>,
 }
 
 impl<S: ReadStorage> Rastro<S> {
@@ -130,11 +138,17 @@ impl<S: ReadStorage> Rastro<S> {
             locations,
             config,
             storage,
+            scopes: Vec::new(),
         })
     }
 }
 
 impl<S: ReadStorage> Reader<S> {
+    /// Restricts search and coverage to these scopes. An empty set allows every scope.
+    pub fn limit_scopes(&mut self, scopes: Vec<Scope>) {
+        self.scopes = scopes;
+    }
+
     pub fn sources(&self) -> &[Source] {
         &self.config.sources
     }
@@ -144,9 +158,10 @@ impl<S: ReadStorage> Reader<S> {
             locations,
             config,
             storage,
+            scopes,
         } = self;
         snapshot(locations, storage, |view, unfinished| {
-            coverage_of(view, unfinished, &config.sources, name, all_windows)
+            coverage_of(view, unfinished, &config.sources, name, all_windows, scopes)
         })
     }
     /// Full-text search over evidence quotes, each hit with its source's coverage.
@@ -155,16 +170,17 @@ impl<S: ReadStorage> Reader<S> {
             locations,
             config,
             storage,
+            scopes,
         } = self;
         let query = search_query(text);
         snapshot(locations, storage, |view, unfinished| {
             let hits = match (&query, view) {
                 (Some(query), Some(view)) => {
-                    view.search(query, options.limit + 1, options.history)?
+                    view.search(query, options.limit + 1, options.history, scopes)?
                 }
                 _ => Vec::new(),
             };
-            let mut coverage = coverage_of(view, unfinished, &config.sources, None, false)?;
+            let mut coverage = coverage_of(view, unfinished, &config.sources, None, false, scopes)?;
             for answer in &mut coverage {
                 answer.windows.clear();
             }
@@ -213,13 +229,24 @@ pub(crate) fn coverage_of(
     config: &[Source],
     name: Option<&str>,
     all_windows: bool,
+    scopes: &[Scope],
 ) -> Result<Vec<Coverage>> {
     let now = crate::coverage::now()?;
     let stored = match view {
         Some(view) => view.stored_pairs()?,
         None => Vec::new(),
     };
-    crate::coverage::pairs(config, stored, name)?
+    // Filter both legs before resolving names: a hidden-only source is unknown here.
+    let config: Vec<_> = config
+        .iter()
+        .filter(|s| scopes.is_empty() || scopes.contains(&s.scope))
+        .cloned()
+        .collect();
+    let stored = stored
+        .into_iter()
+        .filter(|p| scopes.is_empty() || scopes.contains(&p.scope))
+        .collect();
+    crate::coverage::pairs(&config, stored, name)?
         .into_iter()
         .map(|(pair, registered)| {
             let mut coverage = match view {
