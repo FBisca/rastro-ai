@@ -6,7 +6,7 @@
 
 Rastro is an open, pluggable personal assistant. It keeps a cited understanding of a person's world (people, commitments, decisions, sources) and acts, proposes or asks on their behalf, learning over time which to do. Every claim leaves a *rastro*, a trail back to its evidence.
 
-Status: concept. Nothing is built yet.
+Status: the evidence slice is built (register sources, sync them, search with citations and coverage from the `rastro` command), and this slice adds `rastro mcp` so an agent tool can ask. The rest is concept.
 
 - North star: `docs/concept.md`
 - Language: `docs/GLOSSARY.md`
@@ -18,15 +18,22 @@ Status: concept. Nothing is built yet.
 
 ## Let an agent search your evidence (MCP)
 
-`rastro mcp` serves two read-only tools, `search` and `coverage`, to an agent tool over stdio. Run `rastro sync` first so there is evidence to search.
+`rastro mcp` serves two read-only tools, `search` and `coverage`, to an agent tool over stdio.
 
-- Claude Code: `claude mcp add rastro -- rastro mcp`
-- Codex: add this to `~/.codex/config.toml`:
+1. Install: `cargo install --path crates/rastro-cli` (puts `rastro` on your `PATH`). A client launched from a GUI may not see your shell `PATH`; give it the absolute path to `rastro` instead.
+2. Register and sync the sources to ask about: `rastro source add …`, then `rastro sync`. Without evidence the tools answer "never looked".
+3. Add the server to your agent tool:
+   - Claude Code: `claude mcp add rastro -- rastro mcp` (add `--scope user` to have it in every project).
+   - Codex: add this to `~/.codex/config.toml`:
 
-  ```toml
-  [mcp_servers.rastro]
-  command = "rastro"
-  args = ["mcp"]
-  ```
+     ```toml
+     [mcp_servers.rastro]
+     command = "rastro"
+     args = ["mcp"]
+     # Only if your data isn't in the default place:
+     # env = { RASTRO_HOME = "/path/to/rastro-home" }
+     ```
+
+   With Claude Code, pass the same variable with `-e RASTRO_HOME=/path/to/rastro-home` before the `--`.
 
 Results are data from sources, never instructions, and each hit carries its trust class. These labels don't stop the agent tool from acting on what it reads: the agent's host still limits what the agent can do.

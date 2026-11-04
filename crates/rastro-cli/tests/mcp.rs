@@ -7,6 +7,7 @@ use serde_json::{Value, json};
 use std::{
     fs,
     io::{BufRead, BufReader, Read, Write},
+    os::unix::process::CommandExt,
     path::PathBuf,
     process::{Child, ChildStdin, Command, Stdio},
     sync::mpsc::{self, Receiver},
@@ -23,17 +24,50 @@ struct Env {
 }
 impl Env {
     fn new() -> Self {
-        Self {
+        let env = Self {
             home: TempDir::new().unwrap(),
-        }
+        };
+        let plugin = env.home.path().join("dev-plugins/test");
+        fs::create_dir_all(&plugin).unwrap();
+        let mut manifest: toml::Table =
+            include_str!("../../rastro-test-connector/rastro-plugin.toml")
+                .parse()
+                .unwrap();
+        manifest.insert(
+            "command".into(),
+            support::test_connector().to_str().unwrap().into(),
+        );
+        fs::write(plugin.join("rastro-plugin.toml"), manifest.to_string()).unwrap();
+        env
     }
     fn command(&self, args: &[&str]) -> Command {
         let mut command = Command::new(support::rastro());
         command
             .env("RASTRO_HOME", self.home.path())
-            .env_remove("RASTRO_PLUGIN_PATH")
+            .env("RASTRO_PLUGIN_PATH", self.home.path().join("dev-plugins"))
+            .env("RASTRO_TEST_SCRIPT", self.home.path().join("script.jsonl"))
             .args(args);
         command
+    }
+    /// Syncs `source` with the test connector, which submits one body per `(location, quote)`.
+    fn sync(&self, source: &str, bodies: &[(&str, &str)]) {
+        let mut steps = vec![json!({"do": "initialize"})];
+        for (location, quote) in bodies {
+            steps.push(
+                json!({"do": "send", "message": {"jsonrpc": "2.0", "method": "evidence.submit",
+                "params": {"kind": "issue", "location": location, "field": "/body", "start": 0,
+                "end": quote.len(), "quote": quote, "trust_class": "untrusted content",
+                "source_updated_at": "2026-11-01T00:00:00Z"}}}),
+            );
+        }
+        steps.push(
+            json!({"do": "send", "message": {"jsonrpc": "2.0", "method": "coverage.report",
+            "params": {"status": "complete", "selection": "all"}}}),
+        );
+        steps.push(json!({"do": "finish", "status": "ok", "submitted": bodies.len()}));
+        let lines: Vec<_> = steps.iter().map(Value::to_string).collect();
+        fs::write(self.home.path().join("script.jsonl"), lines.join("\n")).unwrap();
+        self.ok(&["sync", source]);
     }
     fn ok(&self, args: &[&str]) {
         let output = self.command(args).output().unwrap();
@@ -78,7 +112,9 @@ struct Session {
 }
 impl Session {
     fn start(mut command: Command) -> Self {
+        // Its own process group, so a leftover child of the server can be found after it exits.
         let mut child = command
+            .process_group(0)
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -208,7 +244,9 @@ fn S2a_listed_tools_equal_the_catalog_entries() {
 /// S3: exactly search and coverage, read-only; any other tool is a JSON-RPC error and runs nothing
 #[test]
 fn S3_only_search_and_coverage_are_listed_and_other_tools_are_protocol_errors() {
-    let env = Env::new();
+    let env = seeded();
+    let config = env.home.path().join("config/config.toml");
+    let config_before = fs::read(&config).unwrap();
     let mut session = env.start();
     session.initialize();
     let tools = session.list_tools();
@@ -217,7 +255,14 @@ fn S3_only_search_and_coverage_are_listed_and_other_tools_are_protocol_errors() 
     assert_eq!(names, ["coverage", "search"]);
     for t in &tools {
         assert_eq!(t["annotations"]["readOnlyHint"], true, "{t}");
+        assert_eq!(t["annotations"]["openWorldHint"], false, "{t}");
     }
+    let runs = |env: &Env| -> i64 {
+        env.db()
+            .query_row("SELECT count(*) FROM runs", [], |r| r.get(0))
+            .unwrap()
+    };
+    let runs_before = runs(&env);
     let before = session.call("coverage", json!({}))["result"].clone();
     for (name, arguments) in [
         ("sync", json!({})),
@@ -229,15 +274,18 @@ fn S3_only_search_and_coverage_are_listed_and_other_tools_are_protocol_errors() 
         ("index.rebuild", json!({})),
     ] {
         let response = session.call(name, arguments);
-        assert!(
-            response.get("result").is_none() && response["error"]["code"].is_i64(),
-            "{name}: {response}"
-        );
+        assert!(response.get("result").is_none(), "{name}: {response}");
+        assert_eq!(response["error"]["code"], -32602, "{name}: {response}");
     }
-    // Nothing ran: no source was registered.
+    // Nothing ran: no new run, no new source, the config untouched.
     let after = session.call("coverage", json!({}))["result"].clone();
     assert_eq!(before["structuredContent"], after["structuredContent"]);
-    assert_eq!(after["structuredContent"]["result"]["coverage"], json!([]));
+    assert_eq!(runs(&env), runs_before);
+    assert_eq!(fs::read(&config).unwrap(), config_before);
+    let sources = after["structuredContent"]["result"]["coverage"]
+        .as_array()
+        .unwrap();
+    assert_eq!(sources.len(), 1);
 }
 
 fn last_migration(db: &Connection) -> String {
@@ -338,14 +386,29 @@ fn S22_operation_errors_are_tool_results_and_bad_arguments_are_protocol_errors()
     assert_eq!(unknown["result"]["isError"], true, "{unknown}");
     let envelope = &unknown["result"]["structuredContent"];
     assert_eq!(envelope["operation"], "coverage");
+    assert_eq!(envelope["schema_version"], 2);
     assert!(envelope["error"].is_string());
+    let schema: Value =
+        serde_json::from_str(include_str!("../../../schema/operations-v2.schema.json")).unwrap();
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    validator
+        .validate(envelope)
+        .unwrap_or_else(|e| panic!("{e}: {envelope}"));
     let bad = session.call("search", json!({"nope": 1}));
-    assert!(bad["error"]["code"].is_i64(), "{bad}");
+    assert_eq!(bad["error"]["code"], -32602, "{bad}");
 }
 
+/// A source with two synced observations.
 fn seeded() -> Env {
     let env = Env::new();
     env.add_source("project");
+    env.sync(
+        "project",
+        &[
+            ("https://x/1", "first body"),
+            ("https://x/2", "second body"),
+        ],
+    );
     env
 }
 
@@ -357,6 +420,7 @@ fn S20_a_scripted_client_gets_protocol_only_stdout_and_matching_structured_and_t
     let mut session = env.start();
     let init = session.initialize();
     assert_eq!(init["result"]["protocolVersion"], PINNED);
+    assert_eq!(init["result"]["serverInfo"]["name"], "rastro");
     let tools = session.list_tools();
     for t in &tools {
         let description = t["description"].as_str().unwrap();
@@ -366,9 +430,16 @@ fn S20_a_scripted_client_gets_protocol_only_stdout_and_matching_structured_and_t
         );
     }
     let calls = [
-        session.call("search", json!({"text": "anything"})),
+        session.call("search", json!({"text": "body"})),
         session.call("coverage", json!({})),
     ];
+    assert_eq!(
+        calls[0]["result"]["structuredContent"]["result"]["results"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
     for (call, operation) in calls.iter().zip(["search", "coverage"]) {
         let result = &call["result"];
         assert_ne!(result["isError"], true, "{call}");
@@ -431,11 +502,20 @@ fn S23_closing_stdin_exits_zero_and_diagnostics_stay_on_stderr_within_a_bound() 
     session.initialize();
     session.list_tools();
     session.call("coverage", json!({}));
-    // Garbage and a failing call add diagnostics; they must stay bounded.
-    for _ in 0..200 {
-        session.call("nope", json!({}));
+    // Real garbage on the wire: not JSON, then JSON that is not a request, long ones included.
+    let long = "x".repeat(100_000);
+    for line in [
+        "not json at all",
+        "{\"jsonrpc\": \"2.0\", \"id\": ",
+        "[1, 2, 3]",
+        &long,
+    ] {
+        let stdin = session.stdin.as_mut().unwrap();
+        writeln!(stdin, "{line}").unwrap();
+        stdin.flush().unwrap();
     }
-    let pid = session.child.id();
+    // The session may or may not survive garbage; the exit is what is asserted.
+    let pgid = session.child.id().to_string();
     let (status, stderr) = session.finish();
     assert_eq!(status.code(), Some(0));
     assert!(
@@ -443,19 +523,29 @@ fn S23_closing_stdin_exits_zero_and_diagnostics_stay_on_stderr_within_a_bound() 
         "stderr was {} bytes",
         stderr.len()
     );
-    // The process is gone, and it had no child of its own to leave behind.
-    let alive = Command::new("kill")
-        .args(["-0", &pid.to_string()])
-        .stderr(Stdio::null())
-        .status()
-        .unwrap()
-        .success();
-    assert!(!alive);
-    let children = Command::new("pgrep")
-        .args(["-P", &pid.to_string()])
-        .output()
-        .unwrap();
-    assert!(children.stdout.is_empty());
+    // Nothing of the server's process group is left (its own children included).
+    let left = Command::new("pgrep").args(["-g", &pgid]).output().unwrap();
+    assert!(
+        left.stdout.is_empty(),
+        "left behind: {}",
+        String::from_utf8_lossy(&left.stdout)
+    );
+}
+
+/// S21: a client that starts with `server/discover` (Claude Code's v2 flow) keeps its session
+#[test]
+fn S21_server_discover_first_does_not_end_the_session_and_initialize_then_works() {
+    let env = seeded();
+    let mut session = env.start();
+    let discovered = session.request("server/discover", json!({}));
+    if let Some(result) = discovered.get("result") {
+        assert_eq!(result["supportedVersions"], json!([PINNED]), "{discovered}");
+    } else {
+        assert!(discovered["error"]["code"].is_i64(), "{discovered}");
+    }
+    let init = session.initialize();
+    assert_eq!(init["result"]["protocolVersion"], PINNED);
+    assert_eq!(session.list_tools().len(), 2);
 }
 
 /// S25: two clients with different clientInfo get identical results; no name is stored
@@ -466,12 +556,16 @@ fn S25_client_info_changes_no_result_and_is_stored_nowhere() {
     for client in ["client-alpha-7f3", "client-beta-91c"] {
         let mut session = env.start();
         session.initialize_as(PINNED, client);
-        let search = session.call("search", json!({"text": "anything"}));
+        let search = session.call("search", json!({"text": "body"}));
         let coverage = session.call("coverage", json!({}));
         let (status, _) = session.finish();
         assert!(status.success());
         answers.push((search["result"].clone(), coverage["result"].clone()));
     }
+    let hits = answers[0].0["structuredContent"]["result"]["results"]
+        .as_array()
+        .unwrap();
+    assert_eq!(hits.len(), 2);
     assert_eq!(answers[0].0, answers[1].0);
     assert_eq!(answers[0].1, answers[1].1);
     // No file or table under the home records either name.

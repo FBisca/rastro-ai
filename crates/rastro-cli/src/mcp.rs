@@ -11,7 +11,7 @@ use rastro_storage_sqlite::SqliteStorage;
 use rmcp::{
     ErrorData, RoleServer, ServerHandler, ServiceExt,
     model::{
-        CallToolRequestParams, CallToolResponse, CallToolResult, ListToolsResult,
+        CallToolRequestParams, CallToolResponse, CallToolResult, Implementation, ListToolsResult,
         PaginatedRequestParams, ProtocolVersion, ServerCapabilities, ServerConfig, Tool,
         ToolAnnotations,
     },
@@ -37,8 +37,11 @@ fn tool(spec: &OperationSpec) -> Tool {
     let Value::Object(schema) = spec.input_schema() else {
         unreachable!("an input schema is an object")
     };
-    Tool::new(spec.name, spec.description(), schema)
-        .with_annotations(ToolAnnotations::new().read_only(spec.read_only))
+    Tool::new(spec.name, spec.description(), schema).with_annotations(
+        ToolAnnotations::new()
+            .read_only(spec.read_only)
+            .open_world(false),
+    )
 }
 
 /// The server: it holds nothing. Each call opens the store itself, and what a client says about
@@ -69,6 +72,7 @@ impl ServerHandler for Server {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
             .with_protocol_version(PINNED)
+            .with_server_info(Implementation::new("rastro", env!("CARGO_PKG_VERSION")))
     }
     fn supported_protocol_versions(&self) -> Cow<'static, [ProtocolVersion]> {
         Cow::Owned(vec![PINNED])
@@ -137,4 +141,19 @@ pub fn run() -> Result<()> {
     });
     runtime.shutdown_timeout(SHUTDOWN);
     served
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn bounded_cuts_multi_byte_text_to_the_limit_on_a_character_boundary() {
+        // 3-byte characters, with a prefix that puts the limit inside one.
+        let message = format!("e{}", "€".repeat(2000));
+        let cut = bounded(&message);
+        assert!(cut.len() <= STDERR_LIMIT && cut.len() > STDERR_LIMIT - 4);
+        assert!(std::str::from_utf8(cut.as_bytes()).is_ok());
+        assert_eq!(bounded("short"), "short");
+    }
 }
