@@ -18,6 +18,13 @@ use std::{
     io::{self, BufRead, Write},
 };
 
+/// Where an observation came from: when its item or comment was updated, and that item or comment.
+#[derive(Clone, Copy)]
+struct Origin<'a> {
+    updated: &'a str,
+    original: &'a Value,
+}
+
 const DEFAULT_API: &str = "https://api.github.com";
 /// GitHub's search API returns at most this many results per query.
 const SEARCH_CAP: u64 = 1000;
@@ -32,6 +39,8 @@ struct Run<'a, R, W> {
     seen: HashSet<u64>,
     submitted: u64,
     capped: bool,
+    /// The host said the source keeps originals: attach the raw item or comment.
+    keep_original: bool,
 }
 
 fn main() -> Result<()> {
@@ -109,6 +118,7 @@ fn sync<R: BufRead, W: Write>(
         seen: HashSet::new(),
         submitted: 0,
         capped: false,
+        keep_original: binding.keep_original,
     };
     let result = run.read_all(&binding.window.from, &binding.window.to);
     *submitted = run.submitted;
@@ -183,7 +193,10 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
             "/title",
             item["title"].as_str(),
             "untrusted content",
-            updated,
+            Origin {
+                updated,
+                original: item,
+            },
         )?;
         self.submit(
             kind,
@@ -191,7 +204,10 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
             "/body",
             item["body"].as_str(),
             "untrusted content",
-            updated,
+            Origin {
+                updated,
+                original: item,
+            },
         )?;
         self.submit(
             kind,
@@ -199,7 +215,10 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
             "/state",
             item["state"].as_str(),
             "structured",
-            updated,
+            Origin {
+                updated,
+                original: item,
+            },
         )?;
         for (key, name) in [("labels", "name"), ("assignees", "login")] {
             let all = item[key].as_array().map_or(&[][..], Vec::as_slice);
@@ -211,7 +230,10 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
                     &field,
                     entry[name].as_str(),
                     "structured",
-                    updated,
+                    Origin {
+                        updated,
+                        original: item,
+                    },
                 )?;
             }
         }
@@ -240,7 +262,10 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
                     "/body",
                     comment["body"].as_str(),
                     "untrusted content",
-                    updated,
+                    Origin {
+                        updated,
+                        original: comment,
+                    },
                 )?;
             }
             match page.next {
@@ -258,21 +283,23 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
         field: &str,
         text: Option<&str>,
         trust_class: &str,
-        source_updated_at: &str,
+        origin: Origin,
     ) -> Result<(), Failure> {
         let Some(text) = text.filter(|t| !t.is_empty()) else {
             return Ok(());
         };
-        Envelope::notification(
-            EVIDENCE_SUBMIT,
-            json!({
-                "kind": kind, "location": location, "field": field, "start": 0,
-                "end": text.len(), "quote": text, "trust_class": trust_class,
-                "source_updated_at": source_updated_at,
-            }),
-        )
-        .and_then(|m| self.transport.send(&m))
-        .map_err(|_| Failure::new("protocol"))?;
+        let Origin { updated, original } = origin;
+        let mut params = json!({
+            "kind": kind, "location": location, "field": field, "start": 0,
+            "end": text.len(), "quote": text, "trust_class": trust_class,
+            "source_updated_at": updated,
+        });
+        if self.keep_original {
+            params["original"] = original.clone();
+        }
+        Envelope::notification(EVIDENCE_SUBMIT, params)
+            .and_then(|m| self.transport.send(&m))
+            .map_err(|_| Failure::new("protocol"))?;
         self.submitted += 1;
         Ok(())
     }

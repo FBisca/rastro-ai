@@ -460,6 +460,10 @@
           ],
           "format": "date-time"
         },
+        "original": {
+          "type": "object",
+          "description": "The full item or comment the connector read. Present only for a source added with --keep-original."
+        },
         "coverage": {
           "oneOf": [
             {

@@ -174,6 +174,10 @@ pub struct Env {
 }
 impl Env {
     pub fn new(api: &str) -> Self {
+        Self::with_source_args(api, &[])
+    }
+    /// A home with source `x` added with these extra `source add` arguments.
+    pub fn with_source_args(api: &str, extra: &[&str]) -> Self {
         let env = Self {
             home: TempDir::new().unwrap(),
             tools: TempDir::new().unwrap(),
@@ -189,16 +193,20 @@ impl Env {
         );
         fs::write(plugin.join("rastro-plugin.toml"), manifest.to_string()).unwrap();
         env.ok(&[
-            "source",
-            "add",
-            "x",
-            "--connector",
-            "github",
-            "--repo",
-            "o/p",
-            "--scope",
-            "personal",
-        ]);
+            &[
+                "source",
+                "add",
+                "x",
+                "--connector",
+                "github",
+                "--repo",
+                "o/p",
+                "--scope",
+                "personal",
+            ][..],
+            extra,
+        ]
+        .concat());
         env
     }
     pub fn without_token(mut self) -> Self {
@@ -291,7 +299,7 @@ impl Env {
 }
 
 /// The connector under test, as a private copy no concurrent build can rewrite.
-fn connector_binary() -> PathBuf {
+pub fn connector_binary() -> PathBuf {
     static BINARY: OnceLock<PathBuf> = OnceLock::new();
     BINARY
         .get_or_init(|| {

@@ -42,6 +42,9 @@ pub struct Evidence {
     pub trust_class: TrustClass,
     pub captured_at: DateTime<Utc>,
     pub source_updated_at: Option<DateTime<Utc>>,
+    /// The full original, kept only for a source added with `--keep-original`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub original: Option<serde_json::Value>,
 }
 
 /// What storing a submission did; either way the run is linked to the row.
@@ -65,10 +68,17 @@ pub struct Grant {
     pub scope: Scope,
     pub kinds: BTreeSet<String>,
     pub window: Window,
+    pub keep_original: bool,
 }
 impl Grant {
     /// `None` when the manifest doesn't declare the source's scope.
-    pub fn new(manifest: &Manifest, source: &str, scope: &Scope, window: &Window) -> Option<Self> {
+    pub fn new(
+        manifest: &Manifest,
+        source: &str,
+        scope: &Scope,
+        window: &Window,
+        keep_original: bool,
+    ) -> Option<Self> {
         manifest
             .permissions
             .scopes
@@ -78,6 +88,7 @@ impl Grant {
                 scope: scope.clone(),
                 kinds: manifest.permissions.submit.iter().cloned().collect(),
                 window: window.clone(),
+                keep_original,
             })
     }
     /// A message may repeat the bound window, never name another.
@@ -150,5 +161,7 @@ pub fn validate(
         trust_class,
         captured_at,
         source_updated_at,
+        // A source without the flag keeps no original, whatever the connector sent.
+        original: submit.original.filter(|_| grant.keep_original),
     })
 }
