@@ -115,6 +115,10 @@ pub fn validate(
         .filter(|f| !f.is_empty())
         .ok_or("missing field")?;
     let (start, end) = submit.start.zip(submit.end).ok_or("missing span")?;
+    // The store keeps offsets as signed 64-bit integers.
+    if end > i64::MAX as u64 {
+        return Err("span offsets out of range".into());
+    }
     let quote = submit
         .quote
         .filter(|q| !q.is_empty())
