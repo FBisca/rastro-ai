@@ -144,6 +144,9 @@ pub fn validate(
     if end.checked_sub(start) != Some(quote.len() as u64) {
         return Err("quote length in UTF-8 bytes differs from end - start".into());
     }
+    if submit.original.as_ref().is_some_and(|o| !o.is_object()) && grant.keep_original {
+        return Err("original must be a JSON object".into());
+    }
     let trust_class = submit.trust_class.ok_or("missing trust class")?;
     let trust_class = TrustClass::parse(&trust_class).ok_or("unknown trust class")?;
     let source_updated_at = submit

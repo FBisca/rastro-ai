@@ -124,6 +124,7 @@ Roadmap slice 1 is the walking skeleton for M1. Slice 2 (agents query Rastro ove
 **Review of the whole slice**
 - **S24a** WHEN the live check runs under `--ignored` with only one of its variables set, or one empty, THEN it fails naming what is missing; with neither set it is skipped.
 - **S25** WHEN a source added with `--keep-original` syncs, THEN each new observation stores the full original beside its quoted span and `rastro search --json` returns it; a source without the flag stores none.
+- **S25a** WHEN a connector sends an original that isn't a JSON object for a source that keeps originals, THEN the core rejects that submission, stores no original, and `rastro search --json` stays schema-valid.
 - **S26** WHEN a source has more than one window, THEN `rastro coverage` lists each window `[from, to)` with its state, selection and, for "couldn't look", its retry time.
 - **S26a** WHEN a later sync over a quiet period finds nothing new, THEN `rastro coverage` and each search hit still answer "found" for the source, and the quiet window shows "empty" in its own row.
 - **S27** WHEN every submission in a run is rejected, THEN the window records "couldn't look: protocol", never "empty".
@@ -171,8 +172,9 @@ Roadmap slice 1 is the walking skeleton for M1. Slice 2 (agents query Rastro ove
 | T14 | CLI arguments read as OS strings, so non-UTF-8 input gets the usage error, never a panic | S23b | T13 | crates/rastro-cli/ | agent | COMPLETE (#16: converge pass, Codex re-review approve, CI green) |
 | T15 | Tests hold under load: deadlines only as tight as the scenario being tested, no flakes with several suites running at once | S9, S15a | T14 | crates/rastro-cli/tests/, crates/rastro-connector-github/tests/ | agent | COMPLETE (#17: converge pass, CI green; Codex review finding moved to T16) |
 | T16 | Each test process runs its own snapshot of the binaries, never a copy cached by size and time | S9, S15a | T15 | crates/rastro-cli/tests/, crates/rastro-connector-github/tests/ | agent | COMPLETE (#18) |
-| T17 | Keep the full original when the source opts in | S25 | none | crates/rastro-plugin-sdk/, crates/rastro-connector-github/, crates/rastro-storage-sqlite/, crates/rastro-core/, crates/rastro-cli/, schema/ | agent | TO-DO |
+| T17 | Keep the full original when the source opts in | S25 | none | crates/rastro-plugin-sdk/, crates/rastro-connector-github/, crates/rastro-storage-sqlite/, crates/rastro-core/, crates/rastro-cli/, schema/ | agent | COMPLETE (#22) |
 | T18 | Coverage per window; rejected submissions never make a window found or empty | S26, S26a, S27, S27a | none | crates/rastro-core/, crates/rastro-storage-sqlite/, crates/rastro-cli/, schema/ | agent | TO-DO |
 | T19 | A failed manifest check is a failed run, not an aborted sync; `not_installed` is a typed reason | S28, S29 | T18 | crates/rastro-core/, crates/rastro-plugin-sdk/, crates/rastro-cli/, docs/decisions/knowledge.md | agent | TO-DO |
 | T20 | Test-only overrides stay out of real use: loopback-only API override, debug-only clock and host limits | S30, S31 | T17, T19 | crates/rastro-core/, crates/rastro-connector-github/, crates/rastro-cli/ | agent | TO-DO |
-| T21 | The live check fails loudly when half-configured | S24a | none | crates/rastro-cli/tests/live.rs | agent | TO-DO |
+| T21 | The live check fails loudly when half-configured | S24a | none | crates/rastro-cli/tests/live.rs | agent | COMPLETE (#21) |
+| T22 | Review fix: an original must be a JSON object, or the submission is rejected | S25a | T17 | crates/rastro-core/, crates/rastro-cli/tests/, crates/rastro-test-connector/ | agent | TO-DO |

@@ -57,17 +57,13 @@ impl Env {
     fn json_failing(&self, args: &[&str]) -> Value {
         let output = self.rastro(&[args, &["--json"]].concat());
         assert!(!output.status.success());
-        serde_json::from_slice(&output.stdout).unwrap()
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        check_schema(&value);
+        value
     }
     fn json(&self, args: &[&str]) -> Value {
         let value: Value = serde_json::from_str(&self.ok(&[args, &["--json"]].concat())).unwrap();
-        let schema: Value =
-            serde_json::from_str(include_str!("../../../schema/operations-v1.schema.json"))
-                .unwrap();
-        jsonschema::validator_for(&schema)
-            .unwrap()
-            .validate(&value)
-            .unwrap_or_else(|e| panic!("{e}: {value}"));
+        check_schema(&value);
         value
     }
     fn add_source(&self, name: &str) {
@@ -100,6 +96,15 @@ impl Env {
             .query_row(query, [], |row| row.get(0))
             .unwrap()
     }
+}
+
+fn check_schema(value: &Value) {
+    let schema: Value =
+        serde_json::from_str(include_str!("../../../schema/operations-v1.schema.json")).unwrap();
+    jsonschema::validator_for(&schema)
+        .unwrap()
+        .validate(value)
+        .unwrap_or_else(|e| panic!("{e}: {value}"));
 }
 
 fn evidence(params: Value) -> Value {
@@ -517,4 +522,30 @@ fn S25_core_drops_an_original_from_a_source_without_the_flag() {
     keeping.json(&["sync", "project"]);
     let found = keeping.json(&["search", "hello"]);
     assert_eq!(found["result"]["results"][0]["original"], original);
+}
+
+/// S25a: an original that isn't a JSON object is rejected, nothing is stored, search stays schema-valid
+#[test]
+fn S25a_a_non_object_original_is_rejected_for_a_source_that_keeps_originals() {
+    for bad in [json!("not-an-object"), json!([1, 2]), json!(7), json!(true)] {
+        let env = Env::new();
+        env.add_source_with("project", &["--keep-original"]);
+        env.script(&run_script(vec![
+            with(
+                valid("https://github.com/o/p/issues/1", "hello world"),
+                "original",
+                bad.clone(),
+            ),
+            complete(),
+        ]));
+        let synced = env.json_failing(&["sync", "project"]);
+        let run = synced["result"]["runs"][0].clone();
+        assert_eq!(run["status"], "failed", "{bad}: {run}");
+        assert_eq!(run["reason"], "protocol", "{bad}: {run}");
+        assert_eq!(run["counts"]["rejected"], 1, "{bad}: {run}");
+        assert_eq!(run["counts"]["accepted"], 0, "{bad}: {run}");
+        assert_eq!(env.sql::<i64>("SELECT count(*) FROM evidence"), 0);
+        let found = env.json(&["search", "hello"]);
+        assert_eq!(found["result"]["results"], json!([]));
+    }
 }
