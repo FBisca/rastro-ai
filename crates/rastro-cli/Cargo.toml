@@ -12,6 +12,7 @@ anyhow.workspace = true
 chrono.workspace = true
 clap = { version = "4", features = ["derive"] }
 rastro-core = { path = "../rastro-core" }
+rastro-operations = { path = "../rastro-operations" }
 rastro-storage-sqlite = { path = "../rastro-storage-sqlite" }
 serde_json.workspace = true
 

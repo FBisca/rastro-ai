@@ -1,0 +1,786 @@
+{
+  "$defs": {
+    "Coverage": {
+      "properties": {
+        "fresh_until": {
+          "description": "Last complete check plus the freshness rule.",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "last_checked": {
+          "description": "When the source was last checked completely (found or empty).",
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reason": {
+          "description": "Why the latest attempt couldn't look, kept next to the last successful check.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "source": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/CoverageState"
+        },
+        "windows": {
+          "description": "Every window the source was looked at, oldest first; empty in search answers.",
+          "items": {
+            "$ref": "#/$defs/CoverageWindow"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "source",
+        "scope",
+        "state"
+      ],
+      "type": "object"
+    },
+    "CoverageState": {
+      "enum": [
+        "never looked",
+        "found",
+        "empty",
+        "couldn't look",
+        "unknown"
+      ],
+      "type": "string"
+    },
+    "CoverageWindow": {
+      "description": "One window `[from, to)` a run looked at, with what it found.",
+      "properties": {
+        "checked_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "from": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "retry_at": {
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "selection": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/CoverageState"
+        },
+        "to": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to",
+        "state",
+        "selection",
+        "checked_at"
+      ],
+      "type": "object"
+    },
+    "RunCounts": {
+      "properties": {
+        "accepted": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rejected": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "submitted": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unchanged": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "submitted",
+        "accepted",
+        "rejected",
+        "unchanged"
+      ],
+      "type": "object"
+    },
+    "RunReport": {
+      "properties": {
+        "counts": {
+          "$ref": "#/$defs/RunCounts"
+        },
+        "coverage": {
+          "$ref": "#/$defs/CoverageState"
+        },
+        "finished_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "plugin_id": {
+          "type": "string"
+        },
+        "plugin_version": {
+          "type": "string"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "run_id": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "started_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "status": {
+          "description": "`ok` or `failed`.",
+          "type": "string"
+        },
+        "window": {
+          "$ref": "#/$defs/RunWindow"
+        }
+      },
+      "required": [
+        "run_id",
+        "source",
+        "scope",
+        "plugin_id",
+        "plugin_version",
+        "status",
+        "started_at",
+        "finished_at",
+        "window",
+        "counts",
+        "coverage"
+      ],
+      "type": "object"
+    },
+    "RunWindow": {
+      "properties": {
+        "from": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "to": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    },
+    "Scope": {
+      "type": "string"
+    },
+    "SearchResult": {
+      "description": "A stored observation that matched a search.",
+      "properties": {
+        "captured_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "coverage": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/Coverage"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "end": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "field": {
+          "type": "string"
+        },
+        "id": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "location": {
+          "type": "string"
+        },
+        "original": {
+          "description": "The full original, kept only for a source added with `--keep-original`."
+        },
+        "quote": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "source": {
+          "type": "string"
+        },
+        "source_updated_at": {
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "trust_class": {
+          "$ref": "#/$defs/TrustClass"
+        }
+      },
+      "required": [
+        "id",
+        "source",
+        "scope",
+        "location",
+        "field",
+        "start",
+        "end",
+        "quote",
+        "trust_class",
+        "captured_at"
+      ],
+      "type": "object"
+    },
+    "Source": {
+      "properties": {
+        "connector": {
+          "type": "string"
+        },
+        "freshness_rule": {
+          "type": "string"
+        },
+        "keep_original": {
+          "type": "boolean"
+        },
+        "name": {
+          "type": "string"
+        },
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "selector": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "window_start": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "connector",
+        "selector",
+        "scope",
+        "freshness_rule",
+        "window_start",
+        "keep_original"
+      ],
+      "type": "object"
+    },
+    "TrustClass": {
+      "enum": [
+        "structured",
+        "unstructured",
+        "untrusted content"
+      ],
+      "type": "string"
+    }
+  },
+  "$id": "https://rastro.dev/schema/operations-v2.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "additionalProperties": false,
+  "description": "Every operation's input and result, and the envelope `--json` prints. Generated from the operation catalog; do not edit.",
+  "oneOf": [
+    {
+      "not": {
+        "required": [
+          "result"
+        ]
+      },
+      "required": [
+        "error"
+      ]
+    },
+    {
+      "not": {
+        "required": [
+          "error"
+        ]
+      },
+      "oneOf": [
+        {
+          "properties": {
+            "operation": {
+              "const": "source.add"
+            },
+            "result": {
+              "properties": {
+                "source": {
+                  "$ref": "#/$defs/Source"
+                }
+              },
+              "required": [
+                "source"
+              ],
+              "title": "SourceAddResult",
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "source.list"
+            },
+            "result": {
+              "properties": {
+                "sources": {
+                  "items": {
+                    "$ref": "#/$defs/Source"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "sources"
+              ],
+              "title": "SourceListResult",
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "coverage"
+            },
+            "result": {
+              "properties": {
+                "coverage": {
+                  "items": {
+                    "$ref": "#/$defs/Coverage"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "coverage"
+              ],
+              "title": "CoverageResult",
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "sync"
+            },
+            "result": {
+              "properties": {
+                "runs": {
+                  "items": {
+                    "$ref": "#/$defs/RunReport"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "runs"
+              ],
+              "title": "SyncResult",
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "search"
+            },
+            "result": {
+              "description": "Matches, plus the coverage of every source searched.",
+              "properties": {
+                "coverage": {
+                  "items": {
+                    "$ref": "#/$defs/Coverage"
+                  },
+                  "type": "array"
+                },
+                "query": {
+                  "type": "string"
+                },
+                "results": {
+                  "items": {
+                    "$ref": "#/$defs/SearchResult"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "query",
+                "results",
+                "coverage"
+              ],
+              "title": "SearchResponse",
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "index.rebuild"
+            },
+            "result": {
+              "properties": {
+                "indexed": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "indexed"
+              ],
+              "title": "IndexRebuildResult",
+              "type": "object"
+            }
+          }
+        }
+      ],
+      "required": [
+        "result"
+      ]
+    }
+  ],
+  "properties": {
+    "error": {
+      "minLength": 1,
+      "type": "string"
+    },
+    "operation": {
+      "enum": [
+        "source.add",
+        "source.list",
+        "coverage",
+        "sync",
+        "search",
+        "index.rebuild"
+      ]
+    },
+    "result": {
+      "type": "object"
+    },
+    "schema_version": {
+      "const": 2
+    }
+  },
+  "required": [
+    "schema_version",
+    "operation"
+  ],
+  "title": "Rastro operations v2",
+  "type": "object",
+  "x-operations": [
+    {
+      "description": "Register a source of evidence.",
+      "input": {
+        "description": "Register a source of evidence.",
+        "properties": {
+          "connector": {
+            "description": "Connector plugin that reads the source.",
+            "type": "string"
+          },
+          "freshness_rule": {
+            "default": "1h",
+            "description": "How long a check stays fresh, as a number and a unit (s, m, h, d).",
+            "type": "string"
+          },
+          "keep_original": {
+            "default": false,
+            "description": "Keep the full original of every observation.",
+            "type": "boolean"
+          },
+          "name": {
+            "description": "Name of the source.",
+            "type": "string"
+          },
+          "repo": {
+            "description": "Repository to read, as owner/repository.",
+            "type": "string"
+          },
+          "scope": {
+            "description": "Scope the source's evidence belongs to.",
+            "type": "string"
+          },
+          "window_start": {
+            "default": null,
+            "description": "Start of the first window to read, as an RFC 3339 time; default is 90 days ago.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "name",
+          "connector",
+          "repo",
+          "scope"
+        ],
+        "title": "SourceAddRequest",
+        "type": "object"
+      },
+      "name": "source.add",
+      "result": {
+        "properties": {
+          "source": {
+            "$ref": "#/$defs/Source"
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "title": "SourceAddResult",
+        "type": "object"
+      },
+      "surfaces": [
+        "cli"
+      ]
+    },
+    {
+      "description": "List the registered sources.",
+      "input": {
+        "description": "List the registered sources.",
+        "title": "SourceListRequest",
+        "type": "object"
+      },
+      "name": "source.list",
+      "result": {
+        "properties": {
+          "sources": {
+            "items": {
+              "$ref": "#/$defs/Source"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "sources"
+        ],
+        "title": "SourceListResult",
+        "type": "object"
+      },
+      "surfaces": [
+        "cli"
+      ]
+    },
+    {
+      "description": "Show what each source has been looked at, and how fresh that is.",
+      "input": {
+        "description": "Show what each source has been looked at, and how fresh that is.",
+        "properties": {
+          "name": {
+            "default": null,
+            "description": "Only this source; every source when omitted.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "CoverageRequest",
+        "type": "object"
+      },
+      "name": "coverage",
+      "result": {
+        "properties": {
+          "coverage": {
+            "items": {
+              "$ref": "#/$defs/Coverage"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "coverage"
+        ],
+        "title": "CoverageResult",
+        "type": "object"
+      },
+      "surfaces": [
+        "cli",
+        "mcp"
+      ]
+    },
+    {
+      "description": "Run the connector of one source, or of every source.",
+      "input": {
+        "description": "Run the connector of one source, or of every source.",
+        "properties": {
+          "name": {
+            "default": null,
+            "description": "Only this source; every source when omitted.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "title": "SyncRequest",
+        "type": "object"
+      },
+      "name": "sync",
+      "result": {
+        "properties": {
+          "runs": {
+            "items": {
+              "$ref": "#/$defs/RunReport"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs"
+        ],
+        "title": "SyncResult",
+        "type": "object"
+      },
+      "surfaces": [
+        "cli"
+      ]
+    },
+    {
+      "description": "Full-text search over evidence, each result cited.",
+      "input": {
+        "description": "Full-text search over evidence, each result cited.",
+        "properties": {
+          "history": {
+            "default": false,
+            "description": "Every observation, not only the latest at each location.",
+            "type": "boolean"
+          },
+          "text": {
+            "description": "Words to search for.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "SearchRequest",
+        "type": "object"
+      },
+      "name": "search",
+      "result": {
+        "description": "Matches, plus the coverage of every source searched.",
+        "properties": {
+          "coverage": {
+            "items": {
+              "$ref": "#/$defs/Coverage"
+            },
+            "type": "array"
+          },
+          "query": {
+            "type": "string"
+          },
+          "results": {
+            "items": {
+              "$ref": "#/$defs/SearchResult"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "query",
+          "results",
+          "coverage"
+        ],
+        "title": "SearchResponse",
+        "type": "object"
+      },
+      "surfaces": [
+        "cli",
+        "mcp"
+      ]
+    },
+    {
+      "description": "Rebuild the full-text index from the stored evidence.",
+      "input": {
+        "description": "Rebuild the full-text index from the stored evidence.",
+        "title": "IndexRebuildRequest",
+        "type": "object"
+      },
+      "name": "index.rebuild",
+      "result": {
+        "properties": {
+          "indexed": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "indexed"
+        ],
+        "title": "IndexRebuildResult",
+        "type": "object"
+      },
+      "surfaces": [
+        "cli"
+      ]
+    }
+  ]
+}

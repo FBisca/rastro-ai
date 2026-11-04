@@ -5,6 +5,7 @@ pub mod host;
 pub mod runs;
 use anyhow::{Context, Result, bail, ensure};
 use chrono::{DateTime, Duration, Utc};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, env, fs, io::Write, path::PathBuf};
 
@@ -23,10 +24,10 @@ pub(crate) fn test_override(name: &str) -> Option<String> {
 pub use evidence::{Appended, Evidence, Hit, TrustClass};
 pub use rastro_plugin_sdk::Counts;
 
-#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct Scope(pub String);
 
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
 pub struct Source {
     pub name: String,
     pub connector: String,
@@ -185,7 +186,7 @@ impl Config {
     }
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub enum CoverageState {
     #[serde(rename = "never looked")]
     NeverLooked,
@@ -209,7 +210,7 @@ impl CoverageState {
         }
     }
 }
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, JsonSchema, Serialize)]
 pub struct Coverage {
     pub source: String,
     pub scope: Scope,
@@ -224,11 +225,11 @@ pub struct Coverage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     /// Every window the source was looked at, oldest first; empty in search answers.
-    #[serde(skip_serializing_if = "Vec::is_empty")]
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub windows: Vec<CoverageWindow>,
 }
 /// One window `[from, to)` a run looked at, with what it found.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, JsonSchema, Serialize)]
 pub struct CoverageWindow {
     pub from: DateTime<Utc>,
     pub to: DateTime<Utc>,

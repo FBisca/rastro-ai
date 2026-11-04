@@ -2,10 +2,11 @@
 use crate::Scope;
 use chrono::{DateTime, Utc};
 use rastro_plugin_sdk::{EvidenceSubmit, Manifest, Window};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub enum TrustClass {
     #[serde(rename = "structured")]
     Structured,
@@ -30,7 +31,7 @@ impl TrustClass {
 }
 
 /// One observation of one field at one location: a half-open UTF-8 byte span and its quote.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, JsonSchema, Serialize)]
 pub struct Evidence {
     pub source: String,
     pub scope: Scope,
@@ -55,7 +56,7 @@ pub enum Appended {
 }
 
 /// A stored observation that matched a search.
-#[derive(Clone, Debug, Serialize)]
+#[derive(Clone, Debug, JsonSchema, Serialize)]
 pub struct Hit {
     pub id: i64,
     #[serde(flatten)]

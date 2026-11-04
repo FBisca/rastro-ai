@@ -1,0 +1,13 @@
+[package]
+name = "rastro-operations"
+version.workspace = true
+edition.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+chrono.workspace = true
+clap = { version = "4", features = ["derive"] }
+rastro-core = { path = "../rastro-core" }
+schemars.workspace = true
+serde.workspace = true
+serde_json.workspace = true
