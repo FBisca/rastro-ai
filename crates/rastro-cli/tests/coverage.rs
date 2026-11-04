@@ -619,6 +619,115 @@ fn S27a_some_rejected_submissions_keep_the_accepted_evidence_but_the_window_is_c
 }
 
 #[test]
+fn S28_a_connector_that_isnt_installed_is_couldnt_look_not_installed_a_published_reason() {
+    let env = Env::new();
+    env.add_source("project");
+    fs::remove_dir_all(env.home.path().join("dev-plugins/test")).unwrap();
+    let (ok, value) = env.json_any(&["sync", "project"], None);
+    assert!(!ok);
+    let run = &value["result"]["runs"][0];
+    assert_eq!(
+        (&run["status"], &run["reason"]),
+        (&json!("failed"), &json!("not_installed"))
+    );
+    let listed = windows(&env);
+    assert_eq!(listed[0]["state"], "couldn't look");
+    assert_eq!(listed[0]["reason"], "not_installed");
+    // It is a published typed reason: documented, and accepted when a connector reports it.
+    let decisions = include_str!("../../../docs/decisions/knowledge.md");
+    let published = decisions.lines().find(|l| l.starts_with("18.")).unwrap();
+    assert!(published.contains("`not_installed`"), "{published}");
+    let env = Env::new();
+    env.add_source("project");
+    let (_, run) = raw_sync(
+        &env,
+        vec![report(
+            json!({"status": "couldnt_look", "reason": "not_installed"}),
+        )],
+    );
+    assert_eq!(run["reason"], "not_installed", "{run}");
+}
+
+#[test]
+fn S29_a_manifest_that_fails_its_check_is_a_failed_run_and_other_sources_still_run() {
+    type Edit = fn(&mut toml::Table);
+    let edits: [(&str, Edit); 3] = [
+        ("protocol major", |m| {
+            m.insert("protocol".into(), 2.into());
+        }),
+        ("not a connector", |m| {
+            m.insert("kinds".into(), vec![toml::Value::from("extractor")].into());
+        }),
+        ("holds actions", |m| {
+            m["permissions"]
+                .as_table_mut()
+                .unwrap()
+                .insert("actions".into(), vec![toml::Value::from("post")].into());
+        }),
+    ];
+    for (label, edit) in edits {
+        let env = Env::new();
+        // A second connector whose manifest fails its check.
+        let bad = env.home.path().join("dev-plugins/bad");
+        fs::create_dir_all(&bad).unwrap();
+        let mut manifest: toml::Table =
+            include_str!("../../rastro-test-connector/rastro-plugin.toml")
+                .parse()
+                .unwrap();
+        manifest.insert("id".into(), "bad".into());
+        edit(&mut manifest);
+        fs::write(bad.join("rastro-plugin.toml"), manifest.to_string()).unwrap();
+        env.ok(&[
+            "source",
+            "add",
+            "broken",
+            "--connector",
+            "bad",
+            "--repo",
+            "o/p",
+            "--scope",
+            "personal",
+        ]);
+        env.add_source("project");
+        env.script(&[
+            json!({"do": "initialize"}),
+            json!({"do": "send", "message": submit("https://x/1", "kept body")}),
+            json!({"do": "send", "message": report(json!({"status": "complete", "selection": "all"}))}),
+            json!({"do": "finish", "status": "ok", "submitted": 1}),
+        ]);
+        let (ok, value) = env.json_any(&["sync"], None);
+        assert!(!ok, "{label}");
+        let runs = value["result"]["runs"].as_array().unwrap();
+        assert_eq!(runs.len(), 2, "{label}: {value}");
+        let broken = runs.iter().find(|r| r["source"] == "broken").unwrap();
+        assert_eq!(
+            (&broken["status"], &broken["reason"], &broken["coverage"]),
+            (
+                &json!("failed"),
+                &json!("protocol"),
+                &json!("couldn't look")
+            ),
+            "{label}"
+        );
+        let other = runs.iter().find(|r| r["source"] == "project").unwrap();
+        assert_eq!(other["status"], "ok", "{label}: {other}");
+        assert_eq!(
+            env.sql::<i64>("SELECT count(*) FROM evidence"),
+            1,
+            "{label}"
+        );
+        assert_eq!(
+            env.sql::<String>(
+                "SELECT state || ':' || reason FROM coverage WHERE source = 'broken'"
+            ),
+            "couldn't look:protocol",
+            "{label}"
+        );
+        assert_eq!(env.sql::<i64>("SELECT count(*) FROM runs"), 2, "{label}");
+    }
+}
+
+#[test]
 fn S27b_a_rejected_submission_wins_over_a_reported_failure_or_a_failed_finish() {
     let bad = json!({"jsonrpc": "2.0", "method": "evidence.submit", "params": {"kind": "issue"}});
     let reported = report(json!({"status": "couldnt_look", "reason": "rate_limited",
