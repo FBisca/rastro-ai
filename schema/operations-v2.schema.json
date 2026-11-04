@@ -1,5 +1,37 @@
 {
   "$defs": {
+    "Counts": {
+      "additionalProperties": false,
+      "properties": {
+        "accepted": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rejected": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "submitted": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "unchanged": {
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "submitted",
+        "accepted",
+        "rejected",
+        "unchanged"
+      ],
+      "type": "object"
+    },
     "Coverage": {
       "additionalProperties": false,
       "properties": {
@@ -151,43 +183,11 @@
       ],
       "type": "object"
     },
-    "RunCounts": {
-      "additionalProperties": false,
-      "properties": {
-        "accepted": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "rejected": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "submitted": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        },
-        "unchanged": {
-          "format": "uint64",
-          "minimum": 0,
-          "type": "integer"
-        }
-      },
-      "required": [
-        "submitted",
-        "accepted",
-        "rejected",
-        "unchanged"
-      ],
-      "type": "object"
-    },
     "RunReport": {
       "additionalProperties": false,
       "properties": {
         "counts": {
-          "$ref": "#/$defs/RunCounts"
+          "$ref": "#/$defs/Counts"
         },
         "coverage": {
           "$ref": "#/$defs/CoverageState"
@@ -231,7 +231,7 @@
           "type": "string"
         },
         "window": {
-          "$ref": "#/$defs/RunWindow"
+          "$ref": "#/$defs/Window"
         }
       },
       "required": [
@@ -247,24 +247,6 @@
         "window",
         "counts",
         "coverage"
-      ],
-      "type": "object"
-    },
-    "RunWindow": {
-      "additionalProperties": false,
-      "properties": {
-        "from": {
-          "format": "date-time",
-          "type": "string"
-        },
-        "to": {
-          "format": "date-time",
-          "type": "string"
-        }
-      },
-      "required": [
-        "from",
-        "to"
       ],
       "type": "object"
     },
@@ -408,6 +390,25 @@
         "untrusted content"
       ],
       "type": "string"
+    },
+    "Window": {
+      "additionalProperties": false,
+      "description": "Half-open window `[from, to)` of RFC 3339 timestamps.",
+      "properties": {
+        "from": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "to": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
     }
   },
   "$id": "https://rastro.dev/schema/operations-v2.schema.json",

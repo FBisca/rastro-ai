@@ -20,9 +20,7 @@ pub struct RunReport {
     pub reason: Option<String>,
     pub started_at: DateTime<Utc>,
     pub finished_at: DateTime<Utc>,
-    #[schemars(with = "RunWindow")]
     pub window: Window,
-    #[schemars(with = "RunCounts")]
     pub counts: Counts,
     pub coverage: CoverageState,
 }
@@ -92,20 +90,3 @@ impl<S: Storage> Rastro<S> {
 }
 
 pub use crate::search::{SearchResult, SearchResults};
-
-// Schema of `rastro_plugin_sdk::Window`, which the SDK does not derive; keep in step with it.
-#[derive(JsonSchema)]
-#[allow(dead_code)]
-struct RunWindow {
-    from: DateTime<Utc>,
-    to: DateTime<Utc>,
-}
-// Schema of `rastro_plugin_sdk::Counts`, which the SDK does not derive.
-#[derive(JsonSchema)]
-#[allow(dead_code)]
-struct RunCounts {
-    submitted: u64,
-    accepted: u64,
-    rejected: u64,
-    unchanged: u64,
-}
