@@ -284,12 +284,7 @@ impl Request {
                 indexed: rastro.rebuild_index()?,
             }),
             Self::Search(request) => {
-                let options = SearchOptions {
-                    history: request.history,
-                    limit: request.limit.0,
-                    full: request.full,
-                };
-                let found = rastro.search(&request.text, &options)?;
+                let found = rastro.search(&request.text, &request.options())?;
                 Response::Search(SearchResponse {
                     query: request.text,
                     results: found.results,
@@ -298,5 +293,16 @@ impl Request {
                 })
             }
         })
+    }
+}
+
+impl SearchRequest {
+    /// The core search options this request asks for.
+    pub(crate) fn options(&self) -> SearchOptions {
+        SearchOptions {
+            history: self.history,
+            limit: self.limit.0,
+            full: self.full,
+        }
     }
 }
