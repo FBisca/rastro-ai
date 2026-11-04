@@ -123,8 +123,9 @@ fn not_utf8() -> std::ffi::OsString {
     std::ffi::OsString::from_vec(vec![0xff, 0xfe])
 }
 
+/// evidence/R59: half configured or malformed live variables fail naming them
 #[test]
-fn S24a_half_configured_or_malformed_live_variables_fail_naming_them() {
+fn half_configured_or_malformed_live_variables_fail_naming_them() {
     let os = |s: &str| Some(std::ffi::OsString::from(s));
     assert_eq!(live_config(None, None), Ok(None));
     assert_eq!(
