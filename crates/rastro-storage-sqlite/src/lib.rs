@@ -2,10 +2,13 @@ use anyhow::{Result, bail};
 use chrono::{DateTime, SecondsFormat, Utc};
 use rastro_core::{
     Appended, CompleteCheck, Coverage, CoverageRecord, CoverageState, CoverageWindow, Evidence,
-    Hit, RunEnd, Scope, Source, Storage, TrustClass,
+    Hit, ReadStorage, Refusal, RunEnd, Scope, Snapshot, Source, Storage, TrustClass, UnfinishedRun,
 };
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::path::Path;
+
+/// How long a connection waits on another process's lock before giving up.
+const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 
 /// What `PRAGMA user_version` 1 and 2 meant, before migrations were tracked by name. Frozen.
 const LEGACY: [&str; 2] = ["202611041200_initial", "202611041500_evidence_insert_guard"];
@@ -58,6 +61,16 @@ impl SqliteStorage {
         let _file = rastro_core::files::private_file(path)?;
         let mut connection = Connection::open(path)?;
         connection.execute_batch("PRAGMA foreign_keys = ON;")?;
+        connection.busy_timeout(BUSY_TIMEOUT)?;
+        // WAL lets a read-only process read while this one writes. It sticks to the file, so
+        // this is a no-op once set; an older database switches on its next writing open. If
+        // the file can't switch (say, a filesystem without shared memory) the open still
+        // works, says so on stderr, and the next writing open tries again.
+        let mode: String =
+            connection.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
+        if !mode.eq_ignore_ascii_case("wal") {
+            eprintln!("rastro: database stays in {mode} mode; reads may wait for a sync");
+        }
         let mut migrations = migrations.to_vec();
         migrations.sort_by_key(|(name, _)| *name);
         let transaction =
@@ -113,6 +126,86 @@ impl SqliteStorage {
         }
         Ok(Self { connection })
     }
+    /// Opens an existing database for reading only: the database file is never created and
+    /// nothing is migrated. `None` when there is no database file. (SQLite may still create
+    /// the `-wal`/`-shm` side files of a WAL database; where it can't, the read is refused
+    /// as `Refusal::NotReadable`.)
+    pub fn open_read_only(path: &Path) -> Result<Option<Self>> {
+        if !path.try_exists()? {
+            return Ok(None);
+        }
+        let connection = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        connection.busy_timeout(BUSY_TIMEOUT)?;
+        connection.execute_batch("PRAGMA foreign_keys = ON;")?;
+        Ok(Some(Self { connection }))
+    }
+}
+/// Reads through one connection; for a read-only open, inside one transaction.
+struct View<'a>(&'a Connection);
+
+impl ReadStorage for SqliteStorage {
+    fn read<T>(&mut self, work: impl FnOnce(&dyn Snapshot) -> Result<T>) -> Result<T> {
+        // A deferred transaction pins its snapshot at the first read, which is the migration
+        // check below, so everything `work` reads is as of that moment.
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Deferred)
+            .map_err(unreadable)?;
+        check_migrations(&transaction, &MIGRATIONS).map_err(unreadable)?;
+        work(&View(&transaction))
+    }
+}
+/// A read that failed because SQLite needed to write (to create the WAL side files) becomes a
+/// typed refusal; anything else passes through.
+fn unreadable(error: impl Into<anyhow::Error>) -> anyhow::Error {
+    let error = error.into();
+    let why = match error.downcast_ref::<rusqlite::Error>() {
+        Some(rusqlite::Error::SqliteFailure(failure, _))
+            if matches!(
+                failure.code,
+                rusqlite::ErrorCode::ReadOnly | rusqlite::ErrorCode::CannotOpen
+            ) =>
+        {
+            error.to_string()
+        }
+        _ => return error,
+    };
+    Refusal::NotReadable(why).into()
+}
+/// Refuses a database that is behind this build (pending) or ahead of it (unknown).
+fn check_migrations(connection: &Connection, known: &[(&str, &str)]) -> Result<()> {
+    let tracked: bool = connection.query_row(
+        "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE name = 'schema_migrations')",
+        [],
+        |row| row.get(0),
+    )?;
+    let applied: Vec<String> = if tracked {
+        connection
+            .prepare("SELECT name FROM schema_migrations")?
+            .query_map([], |row| row.get(0))?
+            .collect::<Result<_, _>>()?
+    } else {
+        Vec::new()
+    };
+    if let Some(unknown) = applied
+        .iter()
+        .find(|name| !known.iter().any(|(k, _)| k == name))
+    {
+        return Err(Refusal::UnknownMigration(unknown.clone()).into());
+    }
+    let mut pending: Vec<String> = known
+        .iter()
+        .filter(|(name, _)| !applied.iter().any(|a| a == name))
+        .map(|(name, _)| name.to_string())
+        .collect();
+    pending.sort();
+    if !pending.is_empty() {
+        return Err(Refusal::PendingMigrations(pending).into());
+    }
+    Ok(())
 }
 fn mark(connection: &Connection, name: &str) -> Result<()> {
     connection.execute(
@@ -139,61 +232,7 @@ impl Storage for SqliteStorage {
         Ok(())
     }
     fn coverage(&self, source: &Source) -> Result<Coverage> {
-        let mut statement = self.connection.prepare(
-            "SELECT window_start, window_end, state, selection, reason, retry_at, checked_at
-             FROM coverage WHERE source=?1 AND scope=?2 ORDER BY id",
-        )?;
-        let rows = statement.query_map(params![source.name, source.scope.0], |row| {
-            Ok((
-                [row.get::<_, String>(0)?, row.get(1)?],
-                [row.get::<_, String>(2)?, row.get(3)?],
-                row.get::<_, Option<String>>(4)?,
-                row.get::<_, Option<String>>(5)?,
-                row.get::<_, String>(6)?,
-            ))
-        })?;
-        let mut windows = Vec::new();
-        for row in rows {
-            let ([from, to], [state, selection], reason, retry_at, checked_at) = row?;
-            let state = match state.as_str() {
-                "found" => CoverageState::Found,
-                "empty" => CoverageState::Empty,
-                "couldn't look" => CoverageState::CouldNotLook,
-                other => bail!("invalid coverage state: {other}"),
-            };
-            windows.push(CoverageWindow {
-                from: parse_time(from)?,
-                to: parse_time(to)?,
-                state,
-                selection,
-                reason,
-                retry_at: retry_at.map(parse_time).transpose()?,
-                checked_at: parse_time(checked_at)?,
-            });
-        }
-        // The latest attempt decides whether the source could be looked at; otherwise any
-        // complete window that found evidence makes the source "found", and it is "empty"
-        // only when every complete window was.
-        let state = match windows.last() {
-            None => CoverageState::NeverLooked,
-            Some(latest) if latest.state == CoverageState::CouldNotLook => {
-                CoverageState::CouldNotLook
-            }
-            Some(_) if windows.iter().any(|w| w.state == CoverageState::Found) => {
-                CoverageState::Found
-            }
-            Some(_) => CoverageState::Empty,
-        };
-        let reason = windows.last().and_then(|w| w.reason.clone());
-        Ok(Coverage {
-            source: source.name.clone(),
-            scope: source.scope.clone(),
-            state,
-            last_checked: self.last_complete_check(source)?.map(|c| c.checked_at),
-            fresh_until: None,
-            reason,
-            windows,
-        })
+        View(&self.connection).coverage(source)
     }
     fn start_run(
         &mut self,
@@ -315,23 +354,7 @@ impl Storage for SqliteStorage {
         Ok(())
     }
     fn last_complete_check(&self, source: &Source) -> Result<Option<CompleteCheck>> {
-        let row: Option<(String, String)> = self
-            .connection
-            .query_row(
-                "SELECT window_end, checked_at FROM coverage
-                 WHERE source=?1 AND scope=?2 AND state IN ('found', 'empty')
-                 ORDER BY id DESC LIMIT 1",
-                params![source.name, source.scope.0],
-                |row| Ok((row.get(0)?, row.get(1)?)),
-            )
-            .optional()?;
-        row.map(|(end, at)| {
-            Ok(CompleteCheck {
-                window_end: parse_time(end)?,
-                checked_at: parse_time(at)?,
-            })
-        })
-        .transpose()
+        View(&self.connection).last_complete_check(source)
     }
     fn interrupt_unfinished_runs(&mut self, at: DateTime<Utc>) -> Result<usize> {
         let transaction = self.connection.transaction()?;
@@ -365,7 +388,91 @@ impl Storage for SqliteStorage {
         Ok(indexed as usize)
     }
     fn search(&self, query: &str, limit: usize, history: bool) -> Result<Vec<Hit>> {
-        let mut statement = self.connection.prepare(
+        View(&self.connection).search(query, limit, history)
+    }
+}
+
+impl View<'_> {
+    fn last_complete_check(&self, source: &Source) -> Result<Option<CompleteCheck>> {
+        let row: Option<(String, String)> = self
+            .0
+            .query_row(
+                "SELECT window_end, checked_at FROM coverage
+                 WHERE source=?1 AND scope=?2 AND state IN ('found', 'empty')
+                 ORDER BY id DESC LIMIT 1",
+                params![source.name, source.scope.0],
+                |row| Ok((row.get(0)?, row.get(1)?)),
+            )
+            .optional()?;
+        row.map(|(end, at)| {
+            Ok(CompleteCheck {
+                window_end: parse_time(end)?,
+                checked_at: parse_time(at)?,
+            })
+        })
+        .transpose()
+    }
+}
+impl Snapshot for View<'_> {
+    fn coverage(&self, source: &Source) -> Result<Coverage> {
+        let mut statement = self.0.prepare(
+            "SELECT window_start, window_end, state, selection, reason, retry_at, checked_at
+             FROM coverage WHERE source=?1 AND scope=?2 ORDER BY id",
+        )?;
+        let rows = statement.query_map(params![source.name, source.scope.0], |row| {
+            Ok((
+                [row.get::<_, String>(0)?, row.get(1)?],
+                [row.get::<_, String>(2)?, row.get(3)?],
+                row.get::<_, Option<String>>(4)?,
+                row.get::<_, Option<String>>(5)?,
+                row.get::<_, String>(6)?,
+            ))
+        })?;
+        let mut windows = Vec::new();
+        for row in rows {
+            let ([from, to], [state, selection], reason, retry_at, checked_at) = row?;
+            let state = match state.as_str() {
+                "found" => CoverageState::Found,
+                "empty" => CoverageState::Empty,
+                "couldn't look" => CoverageState::CouldNotLook,
+                other => bail!("invalid coverage state: {other}"),
+            };
+            windows.push(CoverageWindow {
+                from: parse_time(from)?,
+                to: parse_time(to)?,
+                state,
+                selection,
+                reason,
+                retry_at: retry_at.map(parse_time).transpose()?,
+                checked_at: parse_time(checked_at)?,
+            });
+        }
+        // The latest attempt decides whether the source could be looked at; otherwise any
+        // complete window that found evidence makes the source "found", and it is "empty"
+        // only when every complete window was.
+        let state = match windows.last() {
+            None => CoverageState::NeverLooked,
+            Some(latest) if latest.state == CoverageState::CouldNotLook => {
+                CoverageState::CouldNotLook
+            }
+            Some(_) if windows.iter().any(|w| w.state == CoverageState::Found) => {
+                CoverageState::Found
+            }
+            Some(_) => CoverageState::Empty,
+        };
+        let reason = windows.last().and_then(|w| w.reason.clone());
+        Ok(Coverage {
+            source: source.name.clone(),
+            scope: source.scope.clone(),
+            state,
+            last_checked: self.last_complete_check(source)?.map(|c| c.checked_at),
+            fresh_until: None,
+            reason,
+            windows,
+        })
+    }
+    fn search(&self, query: &str, limit: usize, history: bool) -> Result<Vec<Hit>> {
+        let mut statement = self.0.prepare(
             "SELECT e.id, e.source, e.scope, e.location, e.field, e.start as i64, e.end as i64, e.quote,
              e.trust_class, e.captured_at, e.source_updated_at, e.original
              FROM evidence_fts JOIN evidence e ON e.id = evidence_fts.rowid
@@ -416,6 +523,29 @@ impl Storage for SqliteStorage {
                         .map(|text| serde_json::from_str(&text))
                         .transpose()?,
                 },
+            })
+        })
+        .collect()
+    }
+    fn unfinished_runs(&self) -> Result<Vec<UnfinishedRun>> {
+        let mut statement = self.0.prepare(
+            "SELECT source, scope, window_start, window_end FROM runs
+             WHERE finished_at IS NULL AND window_start IS NOT NULL ORDER BY id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok([
+                row.get::<_, String>(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+            ])
+        })?;
+        rows.map(|row| {
+            let [source, scope, from, to] = row?;
+            Ok(UnfinishedRun {
+                source,
+                scope: Scope(scope),
+                window: (parse_time(from)?, parse_time(to)?),
             })
         })
         .collect()

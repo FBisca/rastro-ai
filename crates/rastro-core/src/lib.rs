@@ -2,8 +2,9 @@ pub mod coverage;
 pub mod evidence;
 pub mod files;
 pub mod host;
+pub mod read_only;
 pub mod runs;
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Duration, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -23,6 +24,17 @@ pub(crate) fn test_override(name: &str) -> Option<String> {
 
 pub use evidence::{Appended, Evidence, Hit, TrustClass};
 pub use rastro_plugin_sdk::Counts;
+pub use read_only::{ReadStorage, Reader, Refusal, Snapshot, UnfinishedRun};
+
+/// A command named a source that isn't configured.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct UnknownSource(pub String);
+impl std::fmt::Display for UnknownSource {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "unknown source: {}", self.0)
+    }
+}
+impl std::error::Error for UnknownSource {}
 
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct Scope(#[schemars(length(min = 1))] pub String);
@@ -313,8 +325,19 @@ impl<S: Storage> Rastro<S> {
         // A run still unfinished while no sync holds the lock was left by a crashed core.
         files::private_directory(&locations.data)?;
         let sync = files::private_file(&locations.sync_lock())?;
-        if sync.try_lock().is_ok() {
-            storage.interrupt_unfinished_runs(Utc::now())?;
+        // Readers hold the lock shared for a moment; wait them out (briefly) so recovery isn't
+        // skipped. A live sync holds it exclusively, and `sync` recovers once it has the lock.
+        for attempt in 0..50 {
+            if sync.try_lock().is_ok() {
+                storage.interrupt_unfinished_runs(Utc::now())?;
+                break;
+            }
+            if attempt == 49 || sync.try_lock_shared().is_err() {
+                break;
+            }
+            // Only shared holders: nobody is writing. Let go and try again.
+            sync.unlock()?;
+            std::thread::sleep(std::time::Duration::from_millis(10));
         }
         drop(sync);
         Ok(Self {
@@ -353,7 +376,7 @@ impl<S: Storage> Rastro<S> {
         if sources.is_empty()
             && let Some(name) = name
         {
-            bail!("unknown source: {name}");
+            return Err(UnknownSource(name.into()).into());
         }
         sources
             .into_iter()

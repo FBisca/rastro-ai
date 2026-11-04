@@ -1,6 +1,6 @@
 //! Runs: one execution of a connector for a source, and the log it leaves.
 use crate::{Counts, CoverageState, Rastro, Source, Storage, files, host};
-use anyhow::{Result, bail};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rastro_plugin_sdk::Window;
 use schemars::JsonSchema;
@@ -39,11 +39,15 @@ impl<S: Storage> Rastro<S> {
         if sources.is_empty()
             && let Some(name) = name
         {
-            bail!("unknown source: {name}");
+            return Err(crate::UnknownSource(name.into()).into());
         }
         files::private_directory(&self.locations.data)?;
         let lock = files::private_file(&self.locations.sync_lock())?;
         lock.lock()?;
+        // Holding the lock exclusively proves no other sync is live, so a run still unfinished
+        // was left by a crash. Record it now, before this sync's own runs, so the latest
+        // attempt stays the latest.
+        self.storage.interrupt_unfinished_runs(Utc::now())?;
         let mut reports = Vec::new();
         for source in &sources {
             let plugin = host::discover(&self.locations, &source.connector);
@@ -70,38 +74,49 @@ impl<S: Storage> Rastro<S> {
 
     /// Full-text search over evidence quotes, each hit with its source's coverage.
     pub fn search(&self, text: &str, history: bool) -> Result<SearchResults> {
-        let terms: Vec<_> = text
-            .split_whitespace()
-            .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
-            .collect();
-        let hits = if terms.is_empty() {
-            Vec::new()
-        } else {
-            self.storage.search(&terms.join(" "), 50, history)?
+        let hits = match search_query(text) {
+            Some(query) => self.storage.search(&query, SEARCH_LIMIT, history)?,
+            None => Vec::new(),
         };
         let mut coverage = self.coverage(None)?;
         // A search names each source's answer; the window rows belong to `coverage`.
         for answer in &mut coverage {
             answer.windows.clear();
         }
-        let results = hits
-            .into_iter()
-            .map(|hit| {
-                let covering = coverage
-                    .iter()
-                    .position(|c| c.source == hit.evidence.source);
-                (hit, covering)
-            })
-            .collect::<Vec<_>>();
-        let results = results
-            .into_iter()
-            .map(|(hit, covering)| SearchResult {
+        Ok(assemble_search(hits, coverage))
+    }
+}
+
+/// Most hits one search returns.
+pub(crate) const SEARCH_LIMIT: usize = 50;
+
+/// The FTS5 query for free text: each word quoted whole; `None` when there is no word.
+pub(crate) fn search_query(text: &str) -> Option<String> {
+    let terms: Vec<_> = text
+        .split_whitespace()
+        .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
+        .collect();
+    (!terms.is_empty()).then(|| terms.join(" "))
+}
+
+/// Pairs each hit with its source's coverage.
+pub(crate) fn assemble_search(
+    hits: Vec<crate::Hit>,
+    coverage: Vec<crate::Coverage>,
+) -> SearchResults {
+    let results = hits
+        .into_iter()
+        .map(|hit| {
+            let covering = coverage
+                .iter()
+                .position(|c| c.source == hit.evidence.source);
+            SearchResult {
                 hit,
                 coverage: covering.map(|i| coverage[i].clone()),
-            })
-            .collect();
-        Ok(SearchResults { results, coverage })
-    }
+            }
+        })
+        .collect();
+    SearchResults { results, coverage }
 }
 
 #[derive(Debug, JsonSchema, Serialize)]
