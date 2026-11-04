@@ -38,6 +38,12 @@ impl Env {
             "command".into(),
             support::test_connector().to_str().unwrap().into(),
         );
+        manifest["permissions"]["scopes"] = toml::Value::Array(
+            ["personal", "work", "health"]
+                .into_iter()
+                .map(|s| s.into())
+                .collect(),
+        );
         fs::write(plugin.join("rastro-plugin.toml"), manifest.to_string()).unwrap();
         env
     }
@@ -74,11 +80,16 @@ impl Env {
         let output = self.command(args).output().unwrap();
         assert!(
             output.status.success(),
-            "{}",
+            "{args:?}: {}: {}: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
     }
     fn add_source(&self, name: &str) {
+        self.add_scoped_source(name, "personal");
+    }
+    fn add_scoped_source(&self, name: &str, scope: &str) {
         self.ok(&[
             "source",
             "add",
@@ -88,7 +99,7 @@ impl Env {
             "--repo",
             "o/p",
             "--scope",
-            "personal",
+            scope,
         ]);
     }
     fn database(&self) -> PathBuf {
@@ -1098,4 +1109,352 @@ fn S26_a_scripted_client_gets_a_cited_answer_a_true_no_match_and_stale_reads_unk
     }
     let (status, _) = session.finish();
     assert!(status.success());
+}
+
+/// S14: excluded matches cannot consume the limit or leak through coverage.
+#[test]
+fn S14_personal_search_filters_before_the_limit_and_hides_other_coverage() {
+    let env = Env::new();
+    env.add_scoped_source("private-office", "work");
+    let locations: Vec<_> = (0..60).map(|n| format!("https://office/{n}")).collect();
+    let bodies: Vec<_> = locations.iter().map(|s| (s.as_str(), "body")).collect();
+    env.sync("private-office", &bodies);
+    env.add_source("project");
+    env.sync(
+        "project",
+        &[
+            ("https://x/1", "body"),
+            ("https://x/2", "body"),
+            ("https://x/3", "body"),
+        ],
+    );
+    env.db()
+        .execute(
+            "UPDATE coverage SET reason = 'office-secret' WHERE scope = 'work'",
+            [],
+        )
+        .unwrap();
+    let counts: Vec<(String, i64)> = env.db().prepare(
+        "SELECT e.scope, count(*) FROM evidence_fts JOIN evidence e ON e.id = evidence_fts.rowid
+         WHERE evidence_fts MATCH 'body' GROUP BY e.scope ORDER BY e.scope",
+    ).unwrap().query_map([], |row| Ok((row.get(0)?, row.get(1)?)))
+        .unwrap().collect::<rusqlite::Result<_>>().unwrap();
+    assert_eq!(counts, [("personal".into(), 3), ("work".into(), 60)]);
+    let mut unscoped = env.start();
+    unscoped.initialize();
+    let answer = unscoped.call("search", json!({"text": "body", "limit": 50}));
+    let result = &ok_result(&answer["result"])["result"];
+    assert_eq!(result["results"].as_array().unwrap().len(), 50);
+    assert_eq!(result["truncated"], true);
+    let mut session = Session::start(env.command(&["mcp", "--scope", "personal"]));
+    session.initialize();
+    for arguments in [
+        json!({"text": "body"}),
+        json!({"text": "body", "history": true, "full": true, "limit": 50}),
+    ] {
+        let answer = session.call("search", arguments);
+        let result = &ok_result(&answer["result"])["result"];
+        let hits = result["results"].as_array().unwrap();
+        assert_eq!(hits.len(), 3, "{answer}");
+        assert_eq!(result["truncated"], false);
+        assert!(hits.iter().all(|h| h["scope"] == "personal"));
+        let coverage = result["coverage"].as_array().unwrap();
+        assert_eq!(coverage.len(), 1);
+        assert_eq!(coverage[0]["windows_total"], 1);
+        for hidden in ["work", "private-office", "office-secret"] {
+            assert!(!answer.to_string().contains(hidden), "{answer}");
+        }
+    }
+}
+
+/// S14: filter configured and historical pairs before answering coverage or resolving names.
+#[test]
+fn S14_coverage_filters_pairs_counts_reasons_and_hidden_only_names() {
+    let env = seeded();
+    env.add_scoped_source("private-office", "work");
+    env.sync("private-office", &[("https://office/1", "body")]);
+    env.add_scoped_source("never-office", "work");
+    // The same source name now has a configured work pair and a historical personal pair.
+    let path = env.home.path().join("config/config.toml");
+    let mut config: toml::Table = fs::read_to_string(&path).unwrap().parse().unwrap();
+    config["sources"].as_array_mut().unwrap()[0]["scope"] = "work".into();
+    fs::write(path, config.to_string()).unwrap();
+    env.db()
+        .execute(
+            "UPDATE coverage SET reason = 'office-secret' WHERE scope = 'work'",
+            [],
+        )
+        .unwrap();
+    let mut session = Session::start(env.command(&["mcp", "--scope", "personal"]));
+    session.initialize();
+    for args in [
+        json!({}),
+        json!({"all_windows": true}),
+        json!({"name": "project"}),
+    ] {
+        let answer = session.call("coverage", args);
+        let pairs = ok_result(&answer["result"])["result"]["coverage"]
+            .as_array()
+            .unwrap();
+        assert_eq!(pairs.len(), 1, "{answer}");
+        assert_eq!(pairs[0]["source"], "project");
+        assert_eq!(pairs[0]["scope"], "personal");
+        assert_eq!(pairs[0]["registered"], false);
+        assert_eq!(pairs[0]["windows_total"], 1);
+        assert_eq!(pairs[0]["windows"].as_array().unwrap().len(), 1);
+        for hidden in ["work", "private-office", "never-office", "office-secret"] {
+            assert!(!answer.to_string().contains(hidden), "{answer}");
+        }
+    }
+    for name in ["private-office", "never-office", "absent"] {
+        let answer = session.call("coverage", json!({"name": name}));
+        assert!(answer.get("error").is_none(), "{answer}");
+        assert_eq!(answer["result"]["isError"], true);
+        assert_eq!(
+            answer["result"]["structuredContent"]["error"],
+            format!("unknown source: {name}")
+        );
+    }
+    for text in ["no-match", ""] {
+        let answer = session.call("search", json!({"text": text}));
+        let result = &ok_result(&answer["result"])["result"];
+        assert_eq!(result["results"], json!([]));
+        assert_eq!(result["coverage"].as_array().unwrap().len(), 1);
+        assert_eq!(result["coverage"][0]["scope"], "personal");
+        assert!(!answer.to_string().contains("office-secret"));
+    }
+    let mut empty = Session::start(env.command(&["mcp", "--scope", "unknown-scope"]));
+    empty.initialize();
+    let answer = empty.call("coverage", json!({}));
+    assert_eq!(
+        ok_result(&answer["result"])["result"]["coverage"],
+        json!([])
+    );
+    let answer = empty.call("search", json!({"text": "body"}));
+    let result = &ok_result(&answer["result"])["result"];
+    assert_eq!(result["results"], json!([]));
+    assert_eq!(result["coverage"], json!([]));
+    assert_eq!(result["truncated"], false);
+}
+
+/// S14/S14a: launch scopes form a union; omission allows every scope.
+#[test]
+fn S14a_no_flag_allows_every_scope_and_repeatable_flags_allow_the_union() {
+    let env = seeded();
+    env.add_scoped_source("office", "work");
+    env.sync("office", &[("https://office/1", "body")]);
+    env.add_scoped_source("clinic", "health");
+    env.sync("clinic", &[("https://clinic/1", "body")]);
+    for (args, expected) in [
+        (vec!["mcp"], vec!["health", "personal", "work"]),
+        (
+            vec![
+                "mcp", "--scope", "personal", "--scope", "work", "--scope", "personal",
+            ],
+            vec!["personal", "work"],
+        ),
+    ] {
+        let mut session = Session::start(env.command(&args));
+        session.initialize();
+        for (tool, arguments, field) in [
+            ("search", json!({"text": "body"}), "results"),
+            ("coverage", json!({}), "coverage"),
+        ] {
+            let answer = session.call(tool, arguments);
+            let rows = answer["result"]["structuredContent"]["result"][field]
+                .as_array()
+                .unwrap();
+            let mut scopes: Vec<_> = rows.iter().map(|r| r["scope"].as_str().unwrap()).collect();
+            scopes.sort();
+            scopes.dedup();
+            assert_eq!(scopes, expected, "{answer}");
+        }
+    }
+}
+
+/// S14a: scope is launch configuration, never a tool argument or a CLI read flag.
+#[test]
+fn S14a_scope_tool_arguments_return_exact_invalid_params_code() {
+    let env = seeded();
+    for args in [vec!["mcp"], vec!["mcp", "--scope", "personal"]] {
+        let mut session = Session::start(env.command(&args));
+        session.initialize();
+        for (name, arguments) in [
+            ("search", json!({"text": "body", "scope": "work"})),
+            ("coverage", json!({"scope": "work"})),
+        ] {
+            let answer = session.call(name, arguments);
+            assert_eq!(answer["error"]["code"], -32602, "{answer}");
+            assert!(answer.get("result").is_none(), "{answer}");
+        }
+    }
+    for args in [
+        vec!["search", "body", "--scope", "personal"],
+        vec!["coverage", "--scope", "personal"],
+    ] {
+        let output = env.command(&args).output().unwrap();
+        assert_eq!(output.status.code(), Some(2));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("unexpected argument '--scope'"));
+    }
+}
+
+/// S14: a hidden invalid source cannot leak through scoped config diagnostics.
+#[test]
+fn S14_scoped_config_errors_hide_names_in_both_tools() {
+    let env = seeded();
+    env.add_scoped_source("office-secret", "work");
+    let mut scoped = Session::start(env.command(&["mcp", "--scope", "personal"]));
+    scoped.initialize();
+    let mut unscoped = env.start();
+    unscoped.initialize();
+    let path = env.home.path().join("config/config.toml");
+    let mut config: toml::Table = fs::read_to_string(&path).unwrap().parse().unwrap();
+    let sources = config["sources"].as_array_mut().unwrap();
+    sources.push(sources[1].clone());
+    fs::write(&path, config.to_string()).unwrap();
+    for (name, arguments) in [("coverage", json!({})), ("search", json!({"text": "body"}))] {
+        let answer = scoped.call(name, arguments.clone());
+        assert_eq!(
+            tool_error(&answer, name),
+            "the config can't be read; run `rastro source list` on the command line for details"
+        );
+        assert!(!answer.to_string().contains("office-secret"), "{answer}");
+        let unscoped_answer = unscoped.call(name, arguments);
+        assert_eq!(
+            tool_error(&unscoped_answer, name),
+            "duplicate source: office-secret"
+        );
+    }
+    let cli = env.command(&["source", "list"]).output().unwrap();
+    assert!(!cli.status.success());
+    assert!(String::from_utf8_lossy(&cli.stderr).contains("duplicate source: office-secret"));
+}
+
+/// S14: only the allowed pair of a source with old and current scopes covers its hits.
+#[test]
+fn S14_search_pairs_each_hit_with_only_its_allowed_scope_coverage() {
+    let env = seeded();
+    let path = env.home.path().join("config/config.toml");
+    let mut config: toml::Table = fs::read_to_string(&path).unwrap().parse().unwrap();
+    config["sources"].as_array_mut().unwrap()[0]["scope"] = "work".into();
+    fs::write(path, config.to_string()).unwrap();
+    env.sync(
+        "project",
+        &[("https://x/1", "work body"), ("https://x/2", "work body")],
+    );
+    let mut unscoped = env.start();
+    unscoped.initialize();
+    let answer = unscoped.call("search", json!({"text": "body"}));
+    assert_eq!(
+        ok_result(&answer["result"])["result"]["results"]
+            .as_array()
+            .unwrap()
+            .len(),
+        4
+    );
+    for (scope, registered) in [("personal", false), ("work", true)] {
+        let mut session = Session::start(env.command(&["mcp", "--scope", scope]));
+        session.initialize();
+        for history in [false, true] {
+            let answer = session.call("search", json!({"text": "body", "history": history}));
+            let result = &ok_result(&answer["result"])["result"];
+            let hits = result["results"].as_array().unwrap();
+            assert_eq!(hits.len(), 2, "{answer}");
+            assert_eq!(result["truncated"], false);
+            let coverage = result["coverage"].as_array().unwrap();
+            assert_eq!(coverage.len(), 1);
+            assert_eq!(coverage[0]["source"], "project");
+            assert_eq!(coverage[0]["scope"], scope);
+            assert_eq!(coverage[0]["registered"], registered);
+            assert_eq!(coverage[0]["windows_total"], 1);
+            for hit in hits {
+                assert_eq!(hit["scope"], scope);
+                assert_eq!(hit["coverage"], coverage[0]);
+            }
+        }
+        let answer = session.call("coverage", json!({"all_windows": true}));
+        let coverage = ok_result(&answer["result"])["result"]["coverage"]
+            .as_array()
+            .unwrap();
+        assert_eq!(coverage.len(), 1);
+        assert_eq!(coverage[0]["scope"], scope);
+        assert_eq!(coverage[0]["registered"], registered);
+        assert_eq!(coverage[0]["windows_total"], 1);
+    }
+}
+
+/// S14: hidden unfinished runs never add interrupted windows to scoped coverage.
+#[test]
+fn S14_hidden_unfinished_runs_are_neither_loaded_nor_counted() {
+    let env = seeded();
+    env.add_scoped_source("office-secret", "work");
+    let mut scoped = Session::start(env.command(&["mcp", "--scope", "personal"]));
+    scoped.initialize();
+    let mut unscoped = env.start();
+    unscoped.initialize();
+    // Insert after both launches so startup recovery does not finish these runs.
+    let db = env.db();
+    for (source, scope) in [
+        ("office-secret", "work"),
+        ("project", "work"),
+        ("project", "personal"),
+    ] {
+        db.execute(
+            "INSERT INTO runs (source, scope, plugin_id, plugin_version, started_at, status,
+             window_start, window_end) VALUES (?1, ?2, 'test', '0.1.0',
+             '2026-11-04T00:00:00.000Z', 'running', '2026-11-01T00:00:00.000Z',
+             '2026-11-04T00:00:00.000Z')",
+            [source, scope],
+        )
+        .unwrap();
+    }
+    let answer = unscoped.call("coverage", json!({"all_windows": true}));
+    let coverage = ok_result(&answer["result"])["result"]["coverage"]
+        .as_array()
+        .unwrap();
+    assert_eq!(coverage.len(), 3);
+    assert_eq!(
+        coverage
+            .iter()
+            .map(|c| c["windows_total"].as_u64().unwrap())
+            .sum::<u64>(),
+        4
+    );
+    assert!(coverage.iter().all(|c| c["reason"] == "interrupted"));
+    // Exercise the public storage snapshot: hidden rows must never leave SQL.
+    let mut storage = rastro_storage_sqlite::SqliteStorage::open_read_only(&env.database())
+        .unwrap()
+        .unwrap();
+    rastro_core::ReadStorage::read(&mut storage, |view| {
+        let scopes = [rastro_core::Scope("personal".into())];
+        let pairs = view.stored_pairs(&scopes)?;
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(pairs[0].source, "project");
+        assert_eq!(pairs[0].scope.0, "personal");
+        let unfinished = view.unfinished_runs(&scopes)?;
+        assert_eq!(unfinished.len(), 1);
+        assert_eq!(unfinished[0].scope.0, "personal");
+        assert_eq!(view.stored_pairs(&[])?.len(), 3);
+        assert_eq!(view.unfinished_runs(&[])?.len(), 3);
+        Ok(())
+    })
+    .unwrap();
+    // A malformed hidden timestamp would fail decoding if that row were loaded.
+    db.execute("UPDATE runs SET window_start = 'office-secret-invalid-time' WHERE scope = 'work' AND finished_at IS NULL", []).unwrap();
+    for (name, args) in [
+        ("coverage", json!({"all_windows": true})),
+        ("search", json!({"text": "body"})),
+    ] {
+        let answer = scoped.call(name, args);
+        assert_ne!(answer["result"]["isError"], true, "{answer}");
+        let coverage = ok_result(&answer["result"])["result"]["coverage"]
+            .as_array()
+            .unwrap();
+        assert_eq!(coverage.len(), 1);
+        assert_eq!(coverage[0]["scope"], "personal");
+        assert_eq!(coverage[0]["windows_total"], 2);
+        assert_eq!(coverage[0]["reason"], "interrupted");
+        assert!(!answer.to_string().contains("office-secret"));
+        assert!(!answer.to_string().contains("work"));
+    }
 }

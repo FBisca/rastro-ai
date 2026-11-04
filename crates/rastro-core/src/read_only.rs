@@ -7,7 +7,7 @@ use crate::search::{SearchOptions, SearchResults, assemble_search, search_query}
 use crate::{
     Config, Coverage, CoverageState, CoverageWindow, Hit, Locations, Pair, Rastro, Scope, Source,
 };
-use anyhow::Result;
+use anyhow::{Result, anyhow};
 use chrono::{DateTime, Utc};
 use std::{
     fs::{File, TryLockError},
@@ -57,11 +57,20 @@ pub struct UnfinishedRun {
 pub trait Snapshot {
     /// What storage recorded for the source, before the freshness rule is applied.
     fn coverage(&self, pair: &Pair, all_windows: bool) -> Result<Coverage>;
-    /// Every (source, scope) pair storage holds anything for, with its stored freshness rule.
-    fn stored_pairs(&self) -> Result<Vec<Pair>>;
-    fn search(&self, query: &str, limit: usize, history: bool) -> Result<Vec<Hit>>;
+    /// Allowed (source, scope) pairs storage holds anything for, with stored freshness rules.
+    /// An empty scope set allows every scope. Filter before loading rows.
+    fn stored_pairs(&self, scopes: &[Scope]) -> Result<Vec<Pair>>;
+    /// Filters scopes before applying the limit; an empty set allows every scope.
+    fn search(
+        &self,
+        query: &str,
+        limit: usize,
+        history: bool,
+        scopes: &[Scope],
+    ) -> Result<Vec<Hit>>;
     /// Runs with no end and a window; recovery would turn each into "couldn't look: interrupted".
-    fn unfinished_runs(&self) -> Result<Vec<UnfinishedRun>>;
+    /// An empty scope set allows every scope. Filter before loading rows.
+    fn unfinished_runs(&self, scopes: &[Scope]) -> Result<Vec<UnfinishedRun>>;
 }
 /// Storage opened read-only.
 pub trait ReadStorage {
@@ -112,6 +121,7 @@ pub struct Reader<S> {
     locations: Locations,
     config: Config,
     storage: Option<S>,
+    scopes: Vec<Scope>,
 }
 
 impl<S: ReadStorage> Rastro<S> {
@@ -122,14 +132,31 @@ impl<S: ReadStorage> Rastro<S> {
         locations: Locations,
         open_storage: impl FnOnce(&Path) -> Result<Option<S>>,
     ) -> Result<Reader<S>> {
+        Self::open_read_only_scoped(locations, open_storage, Vec::new())
+    }
+
+    /// Opens with an owner's launch scopes. An empty set allows every scope. Config errors
+    /// are redacted when scoped because validation may name sources outside those scopes.
+    pub fn open_read_only_scoped(
+        locations: Locations,
+        open_storage: impl FnOnce(&Path) -> Result<Option<S>>,
+        scopes: Vec<Scope>,
+    ) -> Result<Reader<S>> {
         let lock = locations.shared_config_lock()?;
-        let config = Config::load(&locations)?;
+        let config = Config::load(&locations).map_err(|error| {
+            if scopes.is_empty() {
+                error
+            } else {
+                anyhow!("the config can't be read; run `rastro source list` on the command line for details")
+            }
+        })?;
         drop(lock);
         let storage = open_storage(&locations.database())?;
         Ok(Reader {
             locations,
             config,
             storage,
+            scopes,
         })
     }
 }
@@ -144,9 +171,10 @@ impl<S: ReadStorage> Reader<S> {
             locations,
             config,
             storage,
+            scopes,
         } = self;
-        snapshot(locations, storage, |view, unfinished| {
-            coverage_of(view, unfinished, &config.sources, name, all_windows)
+        snapshot(locations, storage, scopes, |view, unfinished| {
+            coverage_of(view, unfinished, &config.sources, name, all_windows, scopes)
         })
     }
     /// Full-text search over evidence quotes, each hit with its source's coverage.
@@ -155,16 +183,17 @@ impl<S: ReadStorage> Reader<S> {
             locations,
             config,
             storage,
+            scopes,
         } = self;
         let query = search_query(text);
-        snapshot(locations, storage, |view, unfinished| {
+        snapshot(locations, storage, scopes, |view, unfinished| {
             let hits = match (&query, view) {
                 (Some(query), Some(view)) => {
-                    view.search(query, options.limit + 1, options.history)?
+                    view.search(query, options.limit + 1, options.history, scopes)?
                 }
                 _ => Vec::new(),
             };
-            let mut coverage = coverage_of(view, unfinished, &config.sources, None, false)?;
+            let mut coverage = coverage_of(view, unfinished, &config.sources, None, false, scopes)?;
             for answer in &mut coverage {
                 answer.windows.clear();
             }
@@ -176,6 +205,7 @@ impl<S: ReadStorage> Reader<S> {
 fn snapshot<S: ReadStorage, T>(
     locations: &Locations,
     storage: &mut Option<S>,
+    scopes: &[Scope],
     work: impl FnOnce(Option<&dyn Snapshot>, &[UnfinishedRun]) -> Result<T>,
 ) -> Result<T> {
     let Some(storage) = storage else {
@@ -201,7 +231,7 @@ fn snapshot<S: ReadStorage, T>(
         let unfinished = if live {
             Vec::new()
         } else {
-            view.unfinished_runs()?
+            view.unfinished_runs(scopes)?
         };
         work(Some(view), &unfinished)
     })
@@ -213,13 +243,20 @@ pub(crate) fn coverage_of(
     config: &[Source],
     name: Option<&str>,
     all_windows: bool,
+    scopes: &[Scope],
 ) -> Result<Vec<Coverage>> {
     let now = crate::coverage::now()?;
     let stored = match view {
-        Some(view) => view.stored_pairs()?,
+        Some(view) => view.stored_pairs(scopes)?,
         None => Vec::new(),
     };
-    crate::coverage::pairs(config, stored, name)?
+    // Filter both legs before resolving names: a hidden-only source is unknown here.
+    let config: Vec<_> = config
+        .iter()
+        .filter(|s| scopes.is_empty() || scopes.contains(&s.scope))
+        .cloned()
+        .collect();
+    crate::coverage::pairs(&config, stored, name)?
         .into_iter()
         .map(|(pair, registered)| {
             let mut coverage = match view {

@@ -2,7 +2,7 @@
 //! offers the catalog's MCP operations, and opens the store read-only for every call. tokio and
 //! rmcp live in this module only; the core stays synchronous and runs through `spawn_blocking`.
 use anyhow::{Context, Result};
-use rastro_core::{Locations, Rastro};
+use rastro_core::{Locations, Rastro, Scope};
 use rastro_operations::{
     catalog::{self, OperationSpec, Surface},
     envelope,
@@ -44,20 +44,24 @@ fn tool(spec: &OperationSpec) -> Tool {
     )
 }
 
-/// The server: it holds nothing. Each call opens the store itself, and what a client says about
+/// The server holds the owner's launch scopes. Each call opens the store itself, and what a client says about
 /// itself is never read.
-struct Server;
+struct Server {
+    scopes: Vec<Scope>,
+}
 
 /// What one tool call does, off the async runtime: open read-only, run, wrap the envelope.
 fn run_operation(
     spec: &'static OperationSpec,
     arguments: Value,
+    scopes: Vec<Scope>,
 ) -> Result<CallToolResult, ErrorData> {
     let request = spec
         .decode(arguments)
         .map_err(|e| ErrorData::invalid_params(format!("invalid arguments: {e}"), None))?;
     let outcome = Locations::resolve().and_then(|locations| {
-        let mut reader = Rastro::open_read_only(locations, SqliteStorage::open_read_only)?;
+        let mut reader =
+            Rastro::open_read_only_scoped(locations, SqliteStorage::open_read_only, scopes)?;
         request.run_read(&mut reader)
     });
     Ok(match outcome {
@@ -95,7 +99,8 @@ impl ServerHandler for Server {
                 ErrorData::invalid_params(format!("unknown tool: {}", request.name), None)
             })?;
         let arguments = Value::Object(request.arguments.unwrap_or_default());
-        let result = tokio::task::spawn_blocking(move || run_operation(spec, arguments))
+        let scopes = self.scopes.clone();
+        let result = tokio::task::spawn_blocking(move || run_operation(spec, arguments, scopes))
             .await
             .map_err(|e| ErrorData::internal_error(format!("the call failed: {e}"), None))??;
         Ok(result.into())
@@ -115,7 +120,7 @@ pub fn bounded(message: &str) -> &str {
 }
 
 /// Runs the server until the client closes stdin.
-pub fn run() -> Result<()> {
+pub fn run(scopes: Vec<String>) -> Result<()> {
     // The normal writing open, once: migrations, source projection, recovery, WAL. An unknown
     // newer migration fails here, before a byte is written to stdout.
     {
@@ -129,7 +134,10 @@ pub fn run() -> Result<()> {
         .build()
         .context("starting the async runtime")?;
     let served = runtime.block_on(async {
-        match Server.serve(rmcp::transport::stdio()).await {
+        let server = Server {
+            scopes: scopes.into_iter().map(Scope).collect(),
+        };
+        match server.serve(rmcp::transport::stdio()).await {
             Ok(running) => {
                 running.waiting().await.context("serving")?;
                 Ok(())

@@ -29,7 +29,11 @@ enum Command {
     #[command(flatten)]
     Operation(Request),
     /// Serve search and coverage to an MCP client over stdio.
-    Mcp,
+    Mcp {
+        /// Only expose these scopes; repeat to allow more than one.
+        #[arg(long = "scope")]
+        scopes: Vec<String>,
+    },
 }
 fn stamp(time: DateTime<Utc>) -> String {
     time.to_rfc3339_opts(SecondsFormat::Millis, true)
@@ -188,7 +192,7 @@ fn parse() -> (Cli, &'static str) {
         Ok(cli) => {
             let operation = match &cli.command {
                 Command::Operation(request) => request.name(),
-                Command::Mcp => "mcp",
+                Command::Mcp { .. } => "mcp",
             };
             (cli, operation)
         }
@@ -219,7 +223,7 @@ fn main() {
     let (cli, operation) = parse();
     let request = match cli.command {
         Command::Operation(request) => request,
-        Command::Mcp => match mcp::run() {
+        Command::Mcp { scopes } => match mcp::run(scopes) {
             Ok(()) => return,
             Err(error) => {
                 eprintln!("error: {}", mcp::bounded(&format!("{error:#}")));

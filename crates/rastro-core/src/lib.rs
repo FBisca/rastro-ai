@@ -421,7 +421,14 @@ impl<S: Storage> Rastro<S> {
     }
     pub fn coverage(&self, name: Option<&str>, all_windows: bool) -> Result<Vec<Coverage>> {
         self.storage.snapshot(|view| {
-            read_only::coverage_of(Some(view), &[], &self.config.sources, name, all_windows)
+            read_only::coverage_of(
+                Some(view),
+                &[],
+                &self.config.sources,
+                name,
+                all_windows,
+                &[],
+            )
         })
     }
 }
