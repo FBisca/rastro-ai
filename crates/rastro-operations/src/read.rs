@@ -10,7 +10,7 @@ impl Request {
     pub fn run_read<S: ReadStorage>(self, reader: &mut Reader<S>) -> Result<Response> {
         Ok(match self {
             Self::Coverage(request) => Response::Coverage(CoverageResult {
-                coverage: reader.coverage(request.name.as_deref())?,
+                coverage: reader.coverage(request.name.as_deref(), request.all_windows)?,
             }),
             Self::Search(request) => {
                 let found = reader.search(&request.text, request.history)?;
