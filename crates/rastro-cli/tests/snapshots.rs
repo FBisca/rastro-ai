@@ -3,7 +3,7 @@ mod support;
 
 use std::fs;
 
-/// evidence/R6: test support, the snapshot of a binary is the current build
+/// evidence/R45: a snapshot of a binary is the current build
 #[test]
 fn snapshot_is_the_current_build() {
     let dir = tempfile::tempdir().unwrap();
