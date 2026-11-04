@@ -549,3 +549,34 @@ fn S25a_a_non_object_original_is_rejected_for_a_source_that_keeps_originals() {
         assert_eq!(found["result"]["results"], json!([]));
     }
 }
+
+/// S25b: an explicit null original is rejected for a source that keeps originals; omitted is fine
+#[test]
+fn S25b_a_null_original_is_rejected_but_an_omitted_one_is_accepted() {
+    let message = || valid("https://github.com/o/p/issues/1", "hello world");
+    let env = Env::new();
+    env.add_source_with("project", &["--keep-original"]);
+    env.script(&run_script(vec![
+        with(message(), "original", Value::Null),
+        complete(),
+    ]));
+    let run = env.json_failing(&["sync", "project"])["result"]["runs"][0].clone();
+    assert_eq!(run["reason"], "protocol", "{run}");
+    assert_eq!(run["counts"]["rejected"], 1, "{run}");
+    assert_eq!(env.sql::<i64>("SELECT count(*) FROM evidence"), 0);
+
+    let omitted = Env::new();
+    omitted.add_source_with("project", &["--keep-original"]);
+    omitted.script(&run_script(vec![message(), complete()]));
+    let run = omitted.json(&["sync", "project"])["result"]["runs"][0].clone();
+    assert_eq!(run["counts"]["accepted"], 1, "{run}");
+
+    let plain = Env::new();
+    plain.add_source("project");
+    plain.script(&run_script(vec![
+        with(message(), "original", Value::Null),
+        complete(),
+    ]));
+    let run = plain.json(&["sync", "project"])["result"]["runs"][0].clone();
+    assert_eq!(run["counts"]["accepted"], 1, "{run}");
+}
