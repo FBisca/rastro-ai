@@ -467,13 +467,20 @@ fn an_argument_that_is_not_utf8_never_panics() {
 }
 
 fn raw_sync(env: &Env, messages: Vec<Value>) -> (bool, Value) {
+    raw_sync_finishing(
+        env,
+        messages,
+        json!({"do": "finish", "status": "ok", "submitted": 0}),
+    )
+}
+fn raw_sync_finishing(env: &Env, messages: Vec<Value>, finish: Value) -> (bool, Value) {
     let mut steps = vec![json!({"do": "initialize"})];
     steps.extend(
         messages
             .into_iter()
             .map(|m| json!({"do": "send", "message": m})),
     );
-    steps.push(json!({"do": "finish", "status": "ok", "submitted": 0}));
+    steps.push(finish);
     env.script(&steps);
     let (ok, value) = env.json_any(&["sync", "project"], None);
     (ok, value["result"]["runs"][0].clone())
@@ -609,4 +616,44 @@ fn S27a_some_rejected_submissions_keep_the_accepted_evidence_but_the_window_is_c
     // The window did not complete, so the next sync reads it again.
     let again = sync_with(&env, &[("https://x/1", "kept body")]);
     assert_eq!(again["window"]["from"], listed[0]["from"]);
+}
+
+#[test]
+fn S27b_a_rejected_submission_wins_over_a_reported_failure_or_a_failed_finish() {
+    let bad = json!({"jsonrpc": "2.0", "method": "evidence.submit", "params": {"kind": "issue"}});
+    let reported = report(json!({"status": "couldnt_look", "reason": "rate_limited",
+        "retry_at": "2030-01-01T00:00:00Z", "selection": "all"}));
+    let complete = report(json!({"status": "complete", "selection": "all"}));
+    let ok_finish = json!({"do": "finish", "status": "ok", "submitted": 2});
+    let auth_finish = json!({"do": "finish", "status": "failed", "reason": "auth", "submitted": 2});
+    for (coverage, finish, label) in [
+        (reported.clone(), ok_finish.clone(), "reported rate limit"),
+        (complete.clone(), auth_finish.clone(), "failed finish"),
+        (reported, auth_finish, "both"),
+    ] {
+        let env = Env::new();
+        env.add_source("project");
+        let (ok, run) = raw_sync_finishing(
+            &env,
+            vec![submit("https://x/1", "kept body"), bad.clone(), coverage],
+            finish,
+        );
+        assert!(!ok, "{label}");
+        assert_eq!(run["reason"], "protocol", "{label}: {run}");
+        assert_eq!(run["counts"]["accepted"], 1, "{label}");
+        assert_eq!(run["counts"]["rejected"], 1, "{label}");
+        assert_eq!(
+            env.sql::<i64>("SELECT count(*) FROM evidence"),
+            1,
+            "{label}"
+        );
+        let listed = windows(&env);
+        assert_eq!(listed[0]["state"], "couldn't look", "{label}");
+        assert_eq!(listed[0]["reason"], "protocol", "{label}");
+        // The retry time belonged to a reason that no longer explains the window.
+        assert!(listed[0].get("retry_at").is_none(), "{label}: {listed:?}");
+        // A couldn't-look window does not advance the next sync's start.
+        let again = sync_with(&env, &[("https://x/1", "kept body")]);
+        assert_eq!(again["window"]["from"], listed[0]["from"], "{label}");
+    }
 }
