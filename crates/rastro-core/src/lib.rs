@@ -31,7 +31,8 @@ pub use search::{
     SearchResults,
 };
 
-/// A command named a source that isn't configured.
+/// A command named a source that is unknown: for `coverage`, one neither in the config nor in
+/// storage.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UnknownSource(pub String);
 impl std::fmt::Display for UnknownSource {
@@ -72,14 +73,7 @@ impl Source {
     }
     /// The freshness rule as a duration; `validate` guarantees the shape.
     pub fn freshness(&self) -> Duration {
-        let (number, unit) = self.freshness_rule.split_at(self.freshness_rule.len() - 1);
-        let n: i64 = number.parse().unwrap_or(0);
-        match unit {
-            "s" => Duration::seconds(n),
-            "m" => Duration::minutes(n),
-            "h" => Duration::hours(n),
-            _ => Duration::days(n),
-        }
+        parse_freshness(&self.freshness_rule)
     }
     pub fn validate(&self) -> Result<()> {
         ensure!(
@@ -230,10 +224,55 @@ impl CoverageState {
         }
     }
 }
+/// A freshness rule as a duration. Stored rows are input, so a malformed rule (empty,
+/// multi-byte, unknown unit) reads as zero: the pair is stale and answers "unknown".
+fn parse_freshness(rule: &str) -> Duration {
+    let Some(unit) = rule.chars().last() else {
+        return Duration::zero();
+    };
+    let Ok(n) = rule[..rule.len() - unit.len_utf8()].parse::<i64>() else {
+        return Duration::zero();
+    };
+    match unit {
+        's' => Duration::seconds(n),
+        'm' => Duration::minutes(n),
+        'h' => Duration::hours(n),
+        'd' => Duration::days(n),
+        _ => Duration::zero(),
+    }
+}
+/// What coverage is kept for: a source name in one scope, with the freshness rule that
+/// judges it. A pair comes from the config or, once removed from it, from storage alone.
+/// A pair no longer in the config takes the source's current freshness rule, the one stored
+/// by name: a removed source keeps its last rule, and an old scope of a source takes the rule
+/// the source has now.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Pair {
+    pub source: String,
+    pub scope: Scope,
+    pub freshness_rule: String,
+}
+impl Pair {
+    pub fn freshness(&self) -> Duration {
+        parse_freshness(&self.freshness_rule)
+    }
+}
+impl From<&Source> for Pair {
+    fn from(source: &Source) -> Self {
+        Self {
+            source: source.name.clone(),
+            scope: source.scope.clone(),
+            freshness_rule: source.freshness_rule.clone(),
+        }
+    }
+}
 #[derive(Clone, Debug, JsonSchema, Serialize)]
 pub struct Coverage {
     pub source: String,
     pub scope: Scope,
+    /// Whether the source is in the config in this scope. A removed source, or one whose
+    /// scope changed, keeps the coverage its stored windows give, with `registered: false`.
+    pub registered: bool,
     pub state: CoverageState,
     /// When the source was last checked completely (found or empty).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -299,7 +338,9 @@ pub trait Storage {
     fn project_sources(&mut self, sources: &[Source]) -> Result<()>;
     /// The state is judged over every window; `all_windows` lists them all, otherwise only
     /// the newest `COVERAGE_WINDOWS_SHOWN`.
-    fn coverage(&self, source: &Source, all_windows: bool) -> Result<Coverage>;
+    /// Runs `work` against one read snapshot, so the pairs and every answer in it agree even
+    /// when a sync in another process commits meanwhile.
+    fn snapshot<T>(&self, work: impl FnOnce(&dyn Snapshot) -> Result<T>) -> Result<T>;
     fn start_run(
         &mut self,
         source: &Source,
@@ -379,27 +420,9 @@ impl<S: Storage> Rastro<S> {
         &self.config.sources
     }
     pub fn coverage(&self, name: Option<&str>, all_windows: bool) -> Result<Vec<Coverage>> {
-        let sources: Vec<_> = self
-            .config
-            .sources
-            .iter()
-            .filter(|s| name.is_none_or(|n| s.name == n))
-            .collect();
-        if sources.is_empty()
-            && let Some(name) = name
-        {
-            return Err(UnknownSource(name.into()).into());
-        }
-        sources
-            .into_iter()
-            .map(|s| self.source_coverage(s, all_windows))
-            .collect()
-    }
-    fn source_coverage(&self, source: &Source, all_windows: bool) -> Result<Coverage> {
-        Ok(self
-            .storage
-            .coverage(source, all_windows)?
-            .judged(source.freshness(), coverage::now()?))
+        self.storage.snapshot(|view| {
+            read_only::coverage_of(Some(view), &[], &self.config.sources, name, all_windows)
+        })
     }
 }
 

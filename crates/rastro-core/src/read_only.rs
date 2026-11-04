@@ -3,10 +3,9 @@
 //! Each open reads the config fresh under a shared lock and runs no migration, projection or
 //! recovery. Each answer is computed inside one read transaction, so the hits and the coverage
 //! in it come from the same snapshot.
-use crate::UnknownSource;
 use crate::search::{SearchOptions, SearchResults, assemble_search, search_query};
 use crate::{
-    Config, Coverage, CoverageState, CoverageWindow, Hit, Locations, Rastro, Scope, Source,
+    Config, Coverage, CoverageState, CoverageWindow, Hit, Locations, Pair, Rastro, Scope, Source,
 };
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -57,7 +56,9 @@ pub struct UnfinishedRun {
 /// What storage can answer inside one read transaction.
 pub trait Snapshot {
     /// What storage recorded for the source, before the freshness rule is applied.
-    fn coverage(&self, source: &Source, all_windows: bool) -> Result<Coverage>;
+    fn coverage(&self, pair: &Pair, all_windows: bool) -> Result<Coverage>;
+    /// Every (source, scope) pair storage holds anything for, with its stored freshness rule.
+    fn stored_pairs(&self) -> Result<Vec<Pair>>;
     fn search(&self, query: &str, limit: usize, history: bool) -> Result<Vec<Hit>>;
     /// Runs with no end and a window; recovery would turn each into "couldn't look: interrupted".
     fn unfinished_runs(&self) -> Result<Vec<UnfinishedRun>>;
@@ -144,9 +145,8 @@ impl<S: ReadStorage> Reader<S> {
             config,
             storage,
         } = self;
-        let sources = select(config, name)?;
         snapshot(locations, storage, |view, unfinished| {
-            coverage_of(view, unfinished, &sources, all_windows)
+            coverage_of(view, unfinished, &config.sources, name, all_windows)
         })
     }
     /// Full-text search over evidence quotes, each hit with its source's coverage.
@@ -156,7 +156,6 @@ impl<S: ReadStorage> Reader<S> {
             config,
             storage,
         } = self;
-        let sources = select(config, None)?;
         let query = search_query(text);
         snapshot(locations, storage, |view, unfinished| {
             let hits = match (&query, view) {
@@ -165,7 +164,7 @@ impl<S: ReadStorage> Reader<S> {
                 }
                 _ => Vec::new(),
             };
-            let mut coverage = coverage_of(view, unfinished, &sources, false)?;
+            let mut coverage = coverage_of(view, unfinished, &config.sources, None, false)?;
             for answer in &mut coverage {
                 answer.windows.clear();
             }
@@ -208,35 +207,27 @@ fn snapshot<S: ReadStorage, T>(
     })
 }
 
-fn select<'a>(config: &'a Config, name: Option<&str>) -> Result<Vec<&'a Source>> {
-    let sources: Vec<_> = config
-        .sources
-        .iter()
-        .filter(|s| name.is_none_or(|n| s.name == n))
-        .collect();
-    if sources.is_empty()
-        && let Some(name) = name
-    {
-        return Err(UnknownSource(name.into()).into());
-    }
-    Ok(sources)
-}
-
-fn coverage_of(
+pub(crate) fn coverage_of(
     view: Option<&dyn Snapshot>,
     unfinished: &[UnfinishedRun],
-    sources: &[&Source],
+    config: &[Source],
+    name: Option<&str>,
     all_windows: bool,
 ) -> Result<Vec<Coverage>> {
     let now = crate::coverage::now()?;
-    sources
-        .iter()
-        .map(|source| {
+    let stored = match view {
+        Some(view) => view.stored_pairs()?,
+        None => Vec::new(),
+    };
+    crate::coverage::pairs(config, stored, name)?
+        .into_iter()
+        .map(|(pair, registered)| {
             let mut coverage = match view {
-                Some(view) => view.coverage(source, all_windows)?,
+                Some(view) => view.coverage(&pair, all_windows)?,
                 None => Coverage {
-                    source: source.name.clone(),
-                    scope: source.scope.clone(),
+                    source: pair.source.clone(),
+                    scope: pair.scope.clone(),
+                    registered,
                     state: CoverageState::NeverLooked,
                     last_checked: None,
                     fresh_until: None,
@@ -245,10 +236,11 @@ fn coverage_of(
                     windows: Vec::new(),
                 },
             };
+            coverage.registered = registered;
             // What startup recovery would record, computed instead of written.
             for run in unfinished
                 .iter()
-                .filter(|r| r.source == source.name && r.scope == source.scope)
+                .filter(|r| r.source == pair.source && r.scope == pair.scope)
             {
                 coverage.windows_total += 1;
                 coverage.windows.insert(
@@ -269,7 +261,7 @@ fn coverage_of(
             if !all_windows {
                 coverage.windows.truncate(crate::COVERAGE_WINDOWS_SHOWN);
             }
-            Ok(coverage.judged(source.freshness(), now))
+            Ok(coverage.judged(pair.freshness(), now))
         })
         .collect()
 }

@@ -905,3 +905,125 @@ fn S12_the_only_found_window_older_than_the_newest_ten_still_answers_found() {
     }
     assert_eq!(hit["result"]["coverage"][0]["state"], "found");
 }
+
+fn edit_sources(env: &Env, edit: impl FnOnce(&mut Vec<toml::Value>)) {
+    let path = env.home.path().join("config/config.toml");
+    let mut config: toml::Table = fs::read_to_string(&path).unwrap().parse().unwrap();
+    let sources = config
+        .get_mut("sources")
+        .and_then(toml::Value::as_array_mut)
+        .unwrap();
+    edit(sources);
+    fs::write(path, config.to_string()).unwrap();
+}
+fn all_coverage(env: &Env, now: Option<&str>) -> Vec<Value> {
+    let (ok, value) = env.json_any(&["coverage"], now);
+    assert!(ok, "{value}");
+    value["result"]["coverage"].as_array().unwrap().clone()
+}
+
+/// knowledge/21: a removed source's hits and entry carry its stored coverage, registered false
+#[test]
+fn S13_a_removed_source_keeps_its_stored_coverage_marked_unregistered_until_it_goes_unknown() {
+    let env = Env::new();
+    synced_once(&env);
+    edit_sources(&env, |sources| sources.clear());
+    let entries = all_coverage(&env, None);
+    assert_eq!(entries.len(), 1, "{entries:?}");
+    assert_eq!(entries[0]["source"], "project");
+    assert_eq!(entries[0]["state"], "found");
+    assert_eq!(entries[0]["registered"], false);
+    assert_eq!(entries[0]["windows_total"], 1);
+    let named = env.json(&["coverage", "project"]);
+    assert_eq!(named["result"]["coverage"][0]["registered"], false);
+    let hits = env.json(&["search", "body"]);
+    let results = hits["result"]["results"].as_array().unwrap();
+    assert_eq!(results.len(), 2);
+    for hit in results {
+        assert_eq!(hit["coverage"]["state"], "found", "{hit}");
+        assert_eq!(hit["coverage"]["registered"], false, "{hit}");
+    }
+    // Past its freshness rule the stored windows no longer vouch for it.
+    let later = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
+    let stale = all_coverage(&env, Some(&later));
+    assert_eq!(stale[0]["state"], "unknown");
+    assert_eq!(stale[0]["registered"], false);
+    let (_, hits) = env.json_any(&["search", "body"], Some(&later));
+    assert_eq!(hits["result"]["results"][0]["coverage"]["state"], "unknown");
+    let human = env.ok(&["coverage"]);
+    assert!(
+        human.contains("project") && human.contains("Not in config"),
+        "{human}"
+    );
+}
+
+/// knowledge/21: a removed source that never synced is listed as never looked, unregistered
+#[test]
+fn S13a_a_removed_source_that_never_synced_is_never_looked_and_unregistered() {
+    let env = Env::new();
+    env.add_source("project");
+    env.add_source("other");
+    edit_sources(&env, |sources| {
+        sources.retain(|s| s["name"].as_str() == Some("other"))
+    });
+    let entries = all_coverage(&env, None);
+    let by_name = |name: &str| {
+        entries
+            .iter()
+            .find(|e| e["source"] == name)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(entries.len(), 2, "{entries:?}");
+    assert_eq!(by_name("other")["registered"], true);
+    assert_eq!(by_name("project")["state"], "never looked");
+    assert_eq!(by_name("project")["registered"], false);
+    assert_eq!(by_name("project")["windows_total"], 0);
+}
+
+/// knowledge/21: a changed scope leaves the old pair's coverage on its hits, unregistered
+#[test]
+fn S13b_hits_under_the_old_scope_carry_the_old_pairs_coverage_and_new_ones_the_new() {
+    let env = Env::with_manifest(|manifest| {
+        manifest["permissions"]["scopes"] = json_scopes();
+    });
+    synced_once(&env);
+    edit_sources(&env, |sources| {
+        sources[0]["scope"] = "work".into();
+    });
+    // The writing path projects the new scope; sync once under it.
+    let run = sync_with(&env, &[("https://x/3", "third body")]);
+    assert_eq!(run["coverage"], "found", "{run}");
+    let entries = all_coverage(&env, None);
+    assert_eq!(entries.len(), 2, "{entries:?}");
+    let pair = |scope: &str| {
+        entries
+            .iter()
+            .find(|e| e["scope"] == scope)
+            .unwrap_or_else(|| panic!("no {scope}: {entries:?}"))
+            .clone()
+    };
+    assert_eq!(pair("personal")["registered"], false);
+    assert_eq!(pair("personal")["state"], "found");
+    assert_eq!(pair("work")["registered"], true);
+    let hits = env.json(&["search", "body"]);
+    let results = hits["result"]["results"].as_array().unwrap();
+    assert_eq!(results.len(), 3, "{results:?}");
+    for hit in results {
+        let scope = hit["scope"].as_str().unwrap();
+        assert_eq!(hit["coverage"]["scope"], scope, "{hit}");
+        assert_eq!(hit["coverage"]["registered"], scope == "work", "{hit}");
+        assert_eq!(hit["coverage"]["state"], "found", "{hit}");
+    }
+    // Hours on, the old pair goes stale under the source's rule; so does the new one.
+    let later = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
+    let (_, aged) = env.json_any(&["search", "body"], Some(&later));
+    for hit in aged["result"]["results"].as_array().unwrap() {
+        assert_eq!(hit["coverage"]["state"], "unknown", "{hit}");
+    }
+    // A name in neither config nor storage is unknown while storage holds other pairs.
+    assert!(!env.rastro(&["coverage", "nosuch"]).status.success());
+}
+fn json_scopes() -> toml::Value {
+    toml::Value::Array(vec!["personal".into(), "work".into()])
+}

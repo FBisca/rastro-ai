@@ -1,5 +1,5 @@
 //! Coverage answers: what a source's last attempts let the core claim, and for how long.
-use crate::{Coverage, CoverageState};
+use crate::{Coverage, CoverageState, Pair, Source, UnknownSource};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
 
@@ -15,6 +15,31 @@ fn now_from(knob: Option<String>) -> Result<DateTime<Utc>> {
         }
         _ => Ok(Utc::now()),
     }
+}
+
+/// The pairs coverage answers for, each with whether it is in the config: the configured
+/// sources first, then the pairs only storage knows. `name` narrows to one source.
+pub(crate) fn pairs(
+    config: &[Source],
+    stored: Vec<Pair>,
+    name: Option<&str>,
+) -> Result<Vec<(Pair, bool)>> {
+    let mut pairs: Vec<(Pair, bool)> = config.iter().map(|s| (Pair::from(s), true)).collect();
+    for pair in stored {
+        if !pairs
+            .iter()
+            .any(|(p, _)| p.source == pair.source && p.scope == pair.scope)
+        {
+            pairs.push((pair, false));
+        }
+    }
+    pairs.retain(|(p, _)| name.is_none_or(|n| p.source == n));
+    if pairs.is_empty()
+        && let Some(name) = name
+    {
+        return Err(UnknownSource(name.into()).into());
+    }
+    Ok(pairs)
 }
 
 impl Coverage {
