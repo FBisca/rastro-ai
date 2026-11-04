@@ -65,7 +65,8 @@ pub trait Snapshot {
 /// Storage opened read-only.
 pub trait ReadStorage {
     /// Runs `work` against one snapshot. Refuses (see [`Refusal`]) a database that needs
-    /// migrating or is newer than this build.
+    /// migrating or is newer than this build. The snapshot must be pinned (the first read
+    /// done) before `work` runs: the caller drops its `sync.lock` guard inside `work`.
     fn read<T>(&mut self, work: impl FnOnce(&dyn Snapshot) -> Result<T>) -> Result<T>;
 }
 
@@ -192,6 +193,8 @@ fn snapshot<S: ReadStorage, T>(
                 false
             }
             // No lock file when the call began: a sync may have created and taken it since.
+            // Accepted race: a whole sync that creates the file, starts its run before the pin
+            // and releases before this probe reads as interrupted; negligible.
             Sync::Idle(None) => matches!(Sync::probe(locations)?, Sync::Live),
         };
         let unfinished = if live {
