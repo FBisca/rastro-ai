@@ -129,6 +129,10 @@ impl Locations {
     pub fn plugins(&self) -> PathBuf {
         self.config.join("plugins")
     }
+    /// Held for as long as a sync runs, so a starting core can tell a crashed run from a live one.
+    pub fn sync_lock(&self) -> PathBuf {
+        self.data.join("sync.lock")
+    }
     pub fn config_file(&self) -> PathBuf {
         self.config.join("config.toml")
     }
@@ -246,6 +250,9 @@ pub trait Storage {
     fn finish_run(&mut self, run_id: i64, end: &RunEnd) -> Result<()>;
     fn last_complete_check(&self, source: &Source) -> Result<Option<CompleteCheck>>;
     fn search(&self, query: &str, limit: usize) -> Result<Vec<Hit>>;
+    /// Marks every run that never finished as failed with reason `interrupted`.
+    /// Returns how many it marked.
+    fn interrupt_unfinished_runs(&mut self, at: DateTime<Utc>) -> Result<usize>;
 }
 
 pub struct Rastro<S> {
@@ -258,6 +265,13 @@ impl<S: Storage> Rastro<S> {
         let _lock = locations.config_lock()?;
         let config = Config::load(&locations)?;
         storage.project_sources(&config.sources)?;
+        // A run still unfinished while no sync holds the lock was left by a crashed core.
+        files::private_directory(&locations.data)?;
+        let sync = files::private_file(&locations.sync_lock())?;
+        if sync.try_lock().is_ok() {
+            storage.interrupt_unfinished_runs(Utc::now())?;
+        }
+        drop(sync);
         Ok(Self {
             locations,
             config,

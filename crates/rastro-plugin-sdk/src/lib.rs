@@ -15,6 +15,20 @@ pub const EVIDENCE_SUBMIT: &str = "evidence.submit";
 pub const COVERAGE_REPORT: &str = "coverage.report";
 pub const RUN_FINISH: &str = "run.finish";
 
+/// Why a connector couldn't look (decisions/knowledge.md §18). Anything else it reports is
+/// recorded as `protocol`.
+pub const COULDNT_LOOK_REASONS: [&str; 9] = [
+    "auth",
+    "forbidden",
+    "not_found_or_hidden",
+    "rate_limited",
+    "network",
+    "timeout",
+    "protocol",
+    "interrupted",
+    "storage",
+];
+
 pub fn major(version: &str) -> &str {
     version.split('.').next().unwrap_or(version)
 }
@@ -179,6 +193,7 @@ pub struct Permissions {
     pub actions: Vec<String>,
     /// Environment variables the plugin needs (for example `GH_TOKEN`). It starts with a
     /// cleared environment plus the basics (`PATH`, `HOME`, `TMPDIR`, `LANG`, `LC_*`).
+    #[serde(default)]
     pub env: Vec<String>,
 }
 /// `rastro-plugin.toml`. A request: the source's grant can only narrow it.
