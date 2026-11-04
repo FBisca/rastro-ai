@@ -239,10 +239,15 @@ pub struct Coverage {
     /// Why the latest attempt couldn't look, kept next to the last successful check.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    /// Every window the source was looked at, oldest first; empty in search answers.
+    /// How many windows the source has been looked at over: every window, listed or not.
+    /// Search answers (per source and per hit) carry it too, with `windows` left empty.
+    pub windows_total: usize,
+    /// The newest windows the source was looked at, newest first (all of them when asked for). Empty in search answers.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub windows: Vec<CoverageWindow>,
 }
+/// How many windows `coverage` lists per source unless asked for every one.
+pub const COVERAGE_WINDOWS_SHOWN: usize = 10;
 /// One window `[from, to)` a run looked at, with what it found.
 #[derive(Clone, Debug, JsonSchema, Serialize)]
 pub struct CoverageWindow {
@@ -287,7 +292,9 @@ pub struct CompleteCheck {
 pub trait Storage {
     /// Config is authoritative; retain historical source rows referenced by evidence.
     fn project_sources(&mut self, sources: &[Source]) -> Result<()>;
-    fn coverage(&self, source: &Source) -> Result<Coverage>;
+    /// The state is judged over every window; `all_windows` lists them all, otherwise only
+    /// the newest `COVERAGE_WINDOWS_SHOWN`.
+    fn coverage(&self, source: &Source, all_windows: bool) -> Result<Coverage>;
     fn start_run(
         &mut self,
         source: &Source,
@@ -366,7 +373,7 @@ impl<S: Storage> Rastro<S> {
     pub fn sources(&self) -> &[Source] {
         &self.config.sources
     }
-    pub fn coverage(&self, name: Option<&str>) -> Result<Vec<Coverage>> {
+    pub fn coverage(&self, name: Option<&str>, all_windows: bool) -> Result<Vec<Coverage>> {
         let sources: Vec<_> = self
             .config
             .sources
@@ -380,13 +387,13 @@ impl<S: Storage> Rastro<S> {
         }
         sources
             .into_iter()
-            .map(|s| self.source_coverage(s))
+            .map(|s| self.source_coverage(s, all_windows))
             .collect()
     }
-    fn source_coverage(&self, source: &Source) -> Result<Coverage> {
+    fn source_coverage(&self, source: &Source, all_windows: bool) -> Result<Coverage> {
         Ok(self
             .storage
-            .coverage(source)?
+            .coverage(source, all_windows)?
             .judged(source.freshness(), coverage::now()?))
     }
 }

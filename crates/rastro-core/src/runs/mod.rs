@@ -78,7 +78,7 @@ impl<S: Storage> Rastro<S> {
             Some(query) => self.storage.search(&query, SEARCH_LIMIT, history)?,
             None => Vec::new(),
         };
-        let mut coverage = self.coverage(None)?;
+        let mut coverage = self.coverage(None, false)?;
         // A search names each source's answer; the window rows belong to `coverage`.
         for answer in &mut coverage {
             answer.windows.clear();
