@@ -43,7 +43,11 @@ pub fn discover(
     for root in roots {
         let mut candidates = vec![root.clone()];
         if let Ok(entries) = fs::read_dir(&root) {
-            candidates.extend(entries.flatten().map(|e| e.path()));
+            // Directory order differs between file systems; sorted, the same manifest wins
+            // and the same diagnostics appear everywhere.
+            let mut found: Vec<_> = entries.flatten().map(|e| e.path()).collect();
+            found.sort();
+            candidates.extend(found);
         }
         for dir in candidates {
             let Ok(text) = fs::read_to_string(dir.join("rastro-plugin.toml")) else {
