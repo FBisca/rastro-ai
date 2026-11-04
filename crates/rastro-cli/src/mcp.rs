@@ -144,11 +144,12 @@ pub fn run() -> Result<()> {
 }
 
 #[cfg(test)]
+#[allow(non_snake_case)]
 mod tests {
     use super::*;
 
     #[test]
-    fn bounded_cuts_multi_byte_text_to_the_limit_on_a_character_boundary() {
+    fn S23_bounded_cuts_multi_byte_text_to_the_limit_on_a_character_boundary() {
         // 3-byte characters, with a prefix that puts the limit inside one.
         let message = format!("e{}", "€".repeat(2000));
         let cut = bounded(&message);
