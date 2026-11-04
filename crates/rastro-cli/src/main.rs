@@ -7,6 +7,7 @@ use rastro_core::{
 };
 use rastro_storage_sqlite::SqliteStorage;
 use serde_json::{Value, json};
+use std::ffi::OsString;
 
 #[derive(Parser)]
 #[command(name = "rastro", version)]
@@ -239,9 +240,15 @@ fn run(operation: Operation) -> Result<(Value, String)> {
     }
 }
 /// The operation a command line names, read without clap so a usage error can still say which.
-fn named_operation(args: &[String]) -> Option<&'static str> {
-    let mut words = args.iter().skip(1).filter(|a| !a.starts_with('-'));
-    match (words.next()?.as_str(), words.next().map(String::as_str)) {
+fn named_operation(args: &[OsString]) -> Option<&'static str> {
+    let mut words = args
+        .iter()
+        .skip(1)
+        .filter(|a| !a.as_encoded_bytes().starts_with(b"-"));
+    match (
+        words.next()?.to_str()?,
+        words.next().and_then(|w| w.to_str()),
+    ) {
         ("source", Some("add")) => Some("source.add"),
         ("source", Some("list")) => Some("source.list"),
         ("coverage", _) => Some("coverage"),
@@ -252,7 +259,7 @@ fn named_operation(args: &[String]) -> Option<&'static str> {
     }
 }
 fn parse() -> (Cli, &'static str) {
-    let args: Vec<String> = std::env::args().collect();
+    let args: Vec<OsString> = std::env::args_os().collect();
     match Cli::try_parse_from(&args) {
         Ok(cli) => {
             let operation = cli.command.name();
