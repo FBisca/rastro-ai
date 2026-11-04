@@ -125,10 +125,12 @@ Roadmap slice 1 is the walking skeleton for M1. Slice 2 (agents query Rastro ove
 - **S24a** WHEN the live check runs under `--ignored` with only one of its variables set, or one empty, THEN it fails naming what is missing; with neither set it is skipped.
 - **S25** WHEN a source added with `--keep-original` syncs, THEN each new observation stores the full original beside its quoted span and `rastro search --json` returns it; a source without the flag stores none.
 - **S25a** WHEN a connector sends an original that isn't a JSON object for a source that keeps originals, THEN the core rejects that submission, stores no original, and `rastro search --json` stays schema-valid.
+- **S25b** WHEN a connector sends `"original": null` for a source that keeps originals, THEN the core rejects that submission like any other non-object original; an omitted original is still accepted.
 - **S26** WHEN a source has more than one window, THEN `rastro coverage` lists each window `[from, to)` with its state, selection and, for "couldn't look", its retry time.
 - **S26a** WHEN a later sync over a quiet period finds nothing new, THEN `rastro coverage` and each search hit still answer "found" for the source, and the quiet window shows "empty" in its own row.
 - **S27** WHEN every submission in a run is rejected, THEN the window records "couldn't look: protocol", never "empty".
 - **S27a** WHEN some submissions in a run are rejected, THEN the accepted evidence is stored and the window records "couldn't look: protocol", not "found".
+- **S27b** WHEN a run has a rejected submission and also a connector-reported failure or a failed finish, THEN the window records "couldn't look: protocol" and the accepted evidence is kept.
 - **S28** WHEN a source's connector isn't installed, THEN coverage records "couldn't look: not_installed", and `not_installed` is one of the published typed reasons.
 - **S29** WHEN a source's manifest fails its check, THEN a failed run with "couldn't look: protocol" is recorded and any other source in the same sync still runs.
 - **S30** WHEN the GitHub API base URL override names a host that isn't loopback, THEN the connector sends no request and coverage records "couldn't look: protocol".
@@ -173,8 +175,10 @@ Roadmap slice 1 is the walking skeleton for M1. Slice 2 (agents query Rastro ove
 | T15 | Tests hold under load: deadlines only as tight as the scenario being tested, no flakes with several suites running at once | S9, S15a | T14 | crates/rastro-cli/tests/, crates/rastro-connector-github/tests/ | agent | COMPLETE (#17: converge pass, CI green; Codex review finding moved to T16) |
 | T16 | Each test process runs its own snapshot of the binaries, never a copy cached by size and time | S9, S15a | T15 | crates/rastro-cli/tests/, crates/rastro-connector-github/tests/ | agent | COMPLETE (#18) |
 | T17 | Keep the full original when the source opts in | S25 | none | crates/rastro-plugin-sdk/, crates/rastro-connector-github/, crates/rastro-storage-sqlite/, crates/rastro-core/, crates/rastro-cli/, schema/ | agent | COMPLETE (#22) |
-| T18 | Coverage per window; rejected submissions never make a window found or empty | S26, S26a, S27, S27a | none | crates/rastro-core/, crates/rastro-storage-sqlite/, crates/rastro-cli/, schema/ | agent | TO-DO |
+| T18 | Coverage per window; rejected submissions never make a window found or empty | S26, S26a, S27, S27a | none | crates/rastro-core/, crates/rastro-storage-sqlite/, crates/rastro-cli/, schema/ | agent | COMPLETE (#23) |
 | T19 | A failed manifest check is a failed run, not an aborted sync; `not_installed` is a typed reason | S28, S29 | T18 | crates/rastro-core/, crates/rastro-plugin-sdk/, crates/rastro-cli/, docs/decisions/knowledge.md | agent | TO-DO |
 | T20 | Test-only overrides stay out of real use: loopback-only API override, debug-only clock and host limits | S30, S31 | T17, T19 | crates/rastro-core/, crates/rastro-connector-github/, crates/rastro-cli/ | agent | TO-DO |
 | T21 | The live check fails loudly when half-configured | S24a | none | crates/rastro-cli/tests/live.rs | agent | COMPLETE (#21) |
-| T22 | Review fix: an original must be a JSON object, or the submission is rejected | S25a | T17 | crates/rastro-core/, crates/rastro-cli/tests/, crates/rastro-test-connector/ | agent | TO-DO |
+| T22 | Review fix: an original must be a JSON object, or the submission is rejected | S25a | T17 | crates/rastro-core/, crates/rastro-cli/tests/, crates/rastro-test-connector/ | agent | COMPLETE (#24) |
+| T23 | Review fix: a rejected submission makes the window "couldn't look: protocol" whatever else failed | S27b | T18 | crates/rastro-core/, crates/rastro-cli/tests/, crates/rastro-test-connector/ | agent | TO-DO |
+| T24 | Review fix: an explicit null original is rejected for a source that keeps originals | S25b | T22 | crates/rastro-plugin-sdk/, crates/rastro-core/, crates/rastro-cli/tests/, crates/rastro-test-connector/ | agent | TO-DO |
