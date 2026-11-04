@@ -70,38 +70,46 @@ impl<S: Storage> Rastro<S> {
 
     /// Full-text search over evidence quotes, each hit with its source's coverage.
     pub fn search(&self, text: &str, history: bool) -> Result<SearchResults> {
-        let terms: Vec<_> = text
-            .split_whitespace()
-            .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
-            .collect();
-        let hits = if terms.is_empty() {
-            Vec::new()
-        } else {
-            self.storage.search(&terms.join(" "), 50, history)?
+        let hits = match search_query(text) {
+            Some(query) => self.storage.search(&query, 50, history)?,
+            None => Vec::new(),
         };
         let mut coverage = self.coverage(None)?;
         // A search names each source's answer; the window rows belong to `coverage`.
         for answer in &mut coverage {
             answer.windows.clear();
         }
-        let results = hits
-            .into_iter()
-            .map(|hit| {
-                let covering = coverage
-                    .iter()
-                    .position(|c| c.source == hit.evidence.source);
-                (hit, covering)
-            })
-            .collect::<Vec<_>>();
-        let results = results
-            .into_iter()
-            .map(|(hit, covering)| SearchResult {
+        Ok(assemble_search(hits, coverage))
+    }
+}
+
+/// The FTS5 query for free text: each word quoted whole; `None` when there is no word.
+pub(crate) fn search_query(text: &str) -> Option<String> {
+    let terms: Vec<_> = text
+        .split_whitespace()
+        .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
+        .collect();
+    (!terms.is_empty()).then(|| terms.join(" "))
+}
+
+/// Pairs each hit with its source's coverage.
+pub(crate) fn assemble_search(
+    hits: Vec<crate::Hit>,
+    coverage: Vec<crate::Coverage>,
+) -> SearchResults {
+    let results = hits
+        .into_iter()
+        .map(|hit| {
+            let covering = coverage
+                .iter()
+                .position(|c| c.source == hit.evidence.source);
+            SearchResult {
                 hit,
                 coverage: covering.map(|i| coverage[i].clone()),
-            })
-            .collect();
-        Ok(SearchResults { results, coverage })
-    }
+            }
+        })
+        .collect();
+    SearchResults { results, coverage }
 }
 
 #[derive(Debug, JsonSchema, Serialize)]

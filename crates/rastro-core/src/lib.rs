@@ -2,6 +2,7 @@ pub mod coverage;
 pub mod evidence;
 pub mod files;
 pub mod host;
+pub mod read_only;
 pub mod runs;
 use anyhow::{Context, Result, bail, ensure};
 use chrono::{DateTime, Duration, Utc};
@@ -23,6 +24,7 @@ pub(crate) fn test_override(name: &str) -> Option<String> {
 
 pub use evidence::{Appended, Evidence, Hit, TrustClass};
 pub use rastro_plugin_sdk::Counts;
+pub use read_only::{ReadStorage, Reader, Refusal, Snapshot, UnfinishedRun};
 
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct Scope(#[schemars(length(min = 1))] pub String);
