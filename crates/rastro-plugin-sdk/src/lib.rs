@@ -1,6 +1,7 @@
 //! Protocol and manifest types shared by the core and connectors (ADR 0003, ADR 0004).
 //! Depends on nothing from the core.
 use anyhow::{Context, Result};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::{
@@ -102,9 +103,11 @@ impl Envelope {
 }
 
 /// Half-open window `[from, to)` of RFC 3339 timestamps.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
 pub struct Window {
+    #[schemars(extend("format" = "date-time"))]
     pub from: String,
+    #[schemars(extend("format" = "date-time"))]
     pub to: String,
 }
 /// What the core binds a run to. Evidence and coverage inherit all of it.
@@ -208,7 +211,7 @@ pub struct RunFinish {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
 }
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct Counts {
     pub submitted: u64,
     pub accepted: u64,
