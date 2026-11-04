@@ -7,6 +7,9 @@ use rastro_core::{
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::path::Path;
 
+/// How long a connection waits on another process's lock before giving up.
+const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
+
 /// What `PRAGMA user_version` 1 and 2 meant, before migrations were tracked by name. Frozen.
 const LEGACY: [&str; 2] = ["202611041200_initial", "202611041500_evidence_insert_guard"];
 
@@ -58,11 +61,16 @@ impl SqliteStorage {
         let _file = rastro_core::files::private_file(path)?;
         let mut connection = Connection::open(path)?;
         connection.execute_batch("PRAGMA foreign_keys = ON;")?;
+        connection.busy_timeout(BUSY_TIMEOUT)?;
         // WAL lets a read-only process read while this one writes. It sticks to the file, so
-        // this is a no-op once set; an older database switches on its next writing open.
-        connection.query_row("PRAGMA journal_mode = WAL", [], |row| {
-            row.get::<_, String>(0)
-        })?;
+        // this is a no-op once set; an older database switches on its next writing open. If
+        // the file can't switch (say, a filesystem without shared memory) the open still
+        // works, says so on stderr, and the next writing open tries again.
+        let mode: String =
+            connection.query_row("PRAGMA journal_mode = WAL", [], |row| row.get(0))?;
+        if !mode.eq_ignore_ascii_case("wal") {
+            eprintln!("rastro: database stays in {mode} mode; reads may wait for a sync");
+        }
         let mut migrations = migrations.to_vec();
         migrations.sort_by_key(|(name, _)| *name);
         let transaction =
@@ -118,16 +126,19 @@ impl SqliteStorage {
         }
         Ok(Self { connection })
     }
-    /// Opens an existing database for reading only: no file is created, nothing migrated.
-    /// `None` when there is no database file.
+    /// Opens an existing database for reading only: the database file is never created and
+    /// nothing is migrated. `None` when there is no database file. (SQLite may still create
+    /// the `-wal`/`-shm` side files of a WAL database; where it can't, the read is refused
+    /// as `Refusal::NotReadable`.)
     pub fn open_read_only(path: &Path) -> Result<Option<Self>> {
-        if !path.exists() {
+        if !path.try_exists()? {
             return Ok(None);
         }
         let connection = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
+        connection.busy_timeout(BUSY_TIMEOUT)?;
         connection.execute_batch("PRAGMA foreign_keys = ON;")?;
         Ok(Some(Self { connection }))
     }
@@ -141,10 +152,28 @@ impl ReadStorage for SqliteStorage {
         // check below, so everything `work` reads is as of that moment.
         let transaction = self
             .connection
-            .transaction_with_behavior(rusqlite::TransactionBehavior::Deferred)?;
-        check_migrations(&transaction, &MIGRATIONS)?;
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Deferred)
+            .map_err(unreadable)?;
+        check_migrations(&transaction, &MIGRATIONS).map_err(unreadable)?;
         work(&View(&transaction))
     }
+}
+/// A read that failed because SQLite needed to write (to create the WAL side files) becomes a
+/// typed refusal; anything else passes through.
+fn unreadable(error: impl Into<anyhow::Error>) -> anyhow::Error {
+    let error = error.into();
+    let why = match error.downcast_ref::<rusqlite::Error>() {
+        Some(rusqlite::Error::SqliteFailure(failure, _))
+            if matches!(
+                failure.code,
+                rusqlite::ErrorCode::ReadOnly | rusqlite::ErrorCode::CannotOpen
+            ) =>
+        {
+            error.to_string()
+        }
+        _ => return error,
+    };
+    Refusal::NotReadable(why).into()
 }
 /// Refuses a database that is behind this build (pending) or ahead of it (unknown).
 fn check_migrations(connection: &Connection, known: &[(&str, &str)]) -> Result<()> {

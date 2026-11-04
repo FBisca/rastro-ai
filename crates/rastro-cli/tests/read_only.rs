@@ -257,8 +257,9 @@ fn S17_calls_during_a_sync_in_another_process_answer_without_a_lock_error() {
         .spawn()
         .unwrap();
     // Wait until the sync's run is open: its row exists and it holds sync.lock.
+    let mut started = false;
     for _ in 0..200 {
-        if env
+        started = env
             .db()
             .query_row(
                 "SELECT count(*) FROM runs WHERE finished_at IS NULL",
@@ -266,12 +267,16 @@ fn S17_calls_during_a_sync_in_another_process_answer_without_a_lock_error() {
                 |r| r.get::<_, i64>(0),
             )
             .unwrap()
-            == 1
-        {
+            == 1;
+        if started {
             break;
         }
         std::thread::sleep(Duration::from_millis(50));
     }
+    assert!(
+        started,
+        "the sync never started, so nothing ran concurrently"
+    );
     for _ in 0..5 {
         let locations = env.locations();
         let (hits, coverage) = within(move || {
@@ -560,4 +565,52 @@ fn S19a_a_pending_or_unknown_migration_is_refused_with_a_typed_error() {
         )
         .unwrap();
     assert!(matches!(refusal(&env), Refusal::UnknownMigration(n) if n == "299912312359_future"));
+}
+
+/// surfaces/S18: a reader holding sync.lock when a sync starts doesn't leave a crashed run behind
+#[test]
+fn S18_a_sync_starting_beside_a_reader_still_recovers_the_crashed_run_before_its_own() {
+    let env = synced();
+    unfinished_run(&env);
+    let holder = fs::File::open(env.home.path().join("data/sync.lock")).unwrap();
+    holder.lock_shared().unwrap();
+    // Let go after the writing open has given up waiting, so the sync can take the lock.
+    let release = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(1500));
+        drop(holder);
+    });
+    let output = env.sync("project", &[("https://x/3", "third body")], 0);
+    release.join().unwrap();
+    assert!(output.status.success());
+    let runs = |env: &Env| -> Vec<String> {
+        env.db()
+            .prepare("SELECT status || ':' || coalesce(reason, '') FROM runs ORDER BY id")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    assert_eq!(runs(&env), ["ok:", "failed:interrupted", "ok:"]);
+    // The recovered window sorts before the later success, so the latest attempt decides.
+    let states: Vec<String> = env
+        .db()
+        .prepare("SELECT state FROM coverage ORDER BY id")
+        .unwrap()
+        .query_map([], |r| r.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(
+        states.last().map(String::as_str),
+        Some("found"),
+        "{states:?}"
+    );
+    assert_eq!(
+        only(env.reader().coverage(None).unwrap()).state,
+        CoverageState::Found
+    );
+    let human = env.ok(&["coverage"]);
+    // The overall line says found; the interrupted window stays listed as history.
+    assert!(human.contains("Coverage: found"), "{human}");
 }

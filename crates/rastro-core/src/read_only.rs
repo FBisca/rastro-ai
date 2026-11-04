@@ -3,11 +3,12 @@
 //! Each open reads the config fresh under a shared lock and runs no migration, projection or
 //! recovery. Each answer is computed inside one read transaction, so the hits and the coverage
 //! in it come from the same snapshot.
-use crate::runs::{SearchResults, assemble_search, search_query};
+use crate::UnknownSource;
+use crate::runs::{SEARCH_LIMIT, SearchResults, assemble_search, search_query};
 use crate::{
     Config, Coverage, CoverageState, CoverageWindow, Hit, Locations, Rastro, Scope, Source,
 };
-use anyhow::{Result, bail};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use std::{
     fs::{File, TryLockError},
@@ -19,6 +20,9 @@ use std::{
 /// newer build. Callers recover it with `downcast_ref` on the `anyhow::Error`.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub enum Refusal {
+    /// The database can't be read without writing (a WAL database whose `-wal`/`-shm` files
+    /// are missing, in a directory that can't be written). A writing open fixes it.
+    NotReadable(String),
     /// Migrations this build knows that the database lacks; a writing open applies them.
     PendingMigrations(Vec<String>),
     /// A migration the database holds that this build doesn't know.
@@ -32,6 +36,7 @@ impl std::fmt::Display for Refusal {
                 "database has pending migrations ({}); run a rastro command that writes first",
                 names.join(", ")
             ),
+            Self::NotReadable(why) => write!(f, "database can't be read read-only: {why}"),
             Self::UnknownMigration(name) => write!(
                 f,
                 "database has migration {name}, which this version of rastro doesn't know"
@@ -67,8 +72,8 @@ pub trait ReadStorage {
 /// Whether a sync is running now.
 enum Sync {
     /// No sync holds `sync.lock`; the guard (if the file exists) keeps one from starting
-    /// while this call reads.
-    Idle(#[allow(dead_code)] Option<File>),
+    /// until the snapshot is pinned.
+    Idle(Option<File>),
     Live,
 }
 impl Sync {
@@ -154,7 +159,7 @@ impl<S: ReadStorage> Reader<S> {
         let query = search_query(text);
         snapshot(locations, storage, |view, unfinished| {
             let hits = match (&query, view) {
-                (Some(query), Some(view)) => view.search(query, 50, history)?,
+                (Some(query), Some(view)) => view.search(query, SEARCH_LIMIT, history)?,
                 _ => Vec::new(),
             };
             let mut coverage = coverage_of(view, unfinished, &sources)?;
@@ -178,9 +183,21 @@ fn snapshot<S: ReadStorage, T>(
     // an unfinished run seen in the snapshot belongs to no live sync.
     let sync = Sync::probe(locations)?;
     storage.read(|view| {
-        let unfinished = match &sync {
-            Sync::Idle(_) => view.unfinished_runs()?,
-            Sync::Live => Vec::new(),
+        // The snapshot is pinned: the lock has done its job (no sync started before the pin),
+        // so let go, and a waiting sync isn't kept out by overlapping readers.
+        let live = match sync {
+            Sync::Live => true,
+            Sync::Idle(Some(guard)) => {
+                drop(guard);
+                false
+            }
+            // No lock file when the call began: a sync may have created and taken it since.
+            Sync::Idle(None) => matches!(Sync::probe(locations)?, Sync::Live),
+        };
+        let unfinished = if live {
+            Vec::new()
+        } else {
+            view.unfinished_runs()?
         };
         work(Some(view), &unfinished)
     })
@@ -195,7 +212,7 @@ fn select<'a>(config: &'a Config, name: Option<&str>) -> Result<Vec<&'a Source>>
     if sources.is_empty()
         && let Some(name) = name
     {
-        bail!("unknown source: {name}");
+        return Err(UnknownSource(name.into()).into());
     }
     Ok(sources)
 }

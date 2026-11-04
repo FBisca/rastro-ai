@@ -1,6 +1,6 @@
 //! Runs: one execution of a connector for a source, and the log it leaves.
 use crate::{Counts, CoverageState, Rastro, Source, Storage, files, host};
-use anyhow::{Result, bail};
+use anyhow::Result;
 use chrono::{DateTime, Utc};
 use rastro_plugin_sdk::Window;
 use schemars::JsonSchema;
@@ -39,11 +39,15 @@ impl<S: Storage> Rastro<S> {
         if sources.is_empty()
             && let Some(name) = name
         {
-            bail!("unknown source: {name}");
+            return Err(crate::UnknownSource(name.into()).into());
         }
         files::private_directory(&self.locations.data)?;
         let lock = files::private_file(&self.locations.sync_lock())?;
         lock.lock()?;
+        // Holding the lock exclusively proves no other sync is live, so a run still unfinished
+        // was left by a crash. Record it now, before this sync's own runs, so the latest
+        // attempt stays the latest.
+        self.storage.interrupt_unfinished_runs(Utc::now())?;
         let mut reports = Vec::new();
         for source in &sources {
             let plugin = host::discover(&self.locations, &source.connector);
@@ -71,7 +75,7 @@ impl<S: Storage> Rastro<S> {
     /// Full-text search over evidence quotes, each hit with its source's coverage.
     pub fn search(&self, text: &str, history: bool) -> Result<SearchResults> {
         let hits = match search_query(text) {
-            Some(query) => self.storage.search(&query, 50, history)?,
+            Some(query) => self.storage.search(&query, SEARCH_LIMIT, history)?,
             None => Vec::new(),
         };
         let mut coverage = self.coverage(None)?;
@@ -82,6 +86,9 @@ impl<S: Storage> Rastro<S> {
         Ok(assemble_search(hits, coverage))
     }
 }
+
+/// Most hits one search returns.
+pub(crate) const SEARCH_LIMIT: usize = 50;
 
 /// The FTS5 query for free text: each word quoted whole; `None` when there is no word.
 pub(crate) fn search_query(text: &str) -> Option<String> {
