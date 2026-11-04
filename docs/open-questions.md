@@ -11,5 +11,4 @@ Questions parked during the 2026-11-04 concept session. Each one moves into its 
 | 5 | How shared claims get accepted (rule, trust index, other) | `decisions/sharing.md` | The owner's explicit acceptance is decided; the mechanism isn't |
 | 6 | Bot-authored comments (deploy previews, CI bots): skip them, tag them, or keep them as evidence? | `decisions/knowledge.md` | Seen in the first real sync: they pollute search. Needs the author recorded first (7) |
 | 7 | Record an item's or comment's author as structured evidence? | `decisions/knowledge.md` | Today only state, labels and assignees are |
-| 8 | Should a search hit show the matched region instead of the field's start? | `decisions/surfaces.md` | The span covers the whole field, so long bodies hide why they matched |
-| 9 | `rastro source remove`: config only, or does its evidence go too? | `decisions/knowledge.md` | Evidence is insert-only; forgetting is slice 14. Hits of a removed source must still state their coverage |
+| 9 | `rastro source remove`: config only, or does its evidence go too? | `decisions/knowledge.md` | Evidence is insert-only; forgetting is slice 14. How hits of a removed source state their coverage is decided (`decisions/knowledge.md` §21); the command itself is open |
