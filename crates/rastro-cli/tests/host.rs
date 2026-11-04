@@ -556,3 +556,19 @@ fn S11a_finish_without_coverage_fails_with_protocol() {
     assert_eq!(run["coverage"], "couldn't look");
     assert_eq!(env.sql::<String>("SELECT reason FROM coverage"), "protocol");
 }
+
+#[test]
+fn S11a_finish_with_only_rejected_coverage_reports_fails_with_protocol() {
+    let env = Env::new();
+    let forged = json!({"from": "1900-01-01T00:00:00Z", "to": "1900-02-01T00:00:00Z"});
+    let report = send(json!({"jsonrpc": "2.0", "method": "coverage.report",
+        "params": {"status": "complete", "window": forged}}));
+    env.script(&[init(), report.clone(), report, finish()]);
+    let (output, run) = env.sync_within(10, true);
+    assert!(!output.status.success());
+    failed_with(&run, "protocol");
+    assert_eq!(
+        env.sql::<String>("SELECT state || ':' || reason FROM coverage"),
+        "couldn't look:protocol"
+    );
+}

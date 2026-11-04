@@ -406,8 +406,14 @@ fn S6a_a_window_other_than_the_bound_one_is_rejected() {
         with(valid("https://x/1", "hello"), "window", forged),
         report,
     ]));
-    let synced = env.json(&["sync", "project"]);
+    let output = env.rastro(&["sync", "project", "--json"]);
+    assert!(!output.status.success());
+    let synced: Value = serde_json::from_slice(&output.stdout).unwrap();
     let run = &synced["result"]["runs"][0];
+    assert_eq!(
+        (&run["status"], &run["reason"]),
+        (&json!("failed"), &json!("protocol"))
+    );
     assert_eq!(
         run["counts"],
         json!({"submitted": 1, "accepted": 0, "rejected": 1, "unchanged": 0})

@@ -82,8 +82,6 @@ fn stamp(time: DateTime<Utc>) -> String {
 struct Session {
     counts: Counts,
     coverage: Option<CoverageReport>,
-    /// A coverage report arrived, even one the core refused.
-    reported: bool,
 }
 
 /// Runs one connector over `[from, to)` and records the run and its coverage.
@@ -124,11 +122,7 @@ pub fn run<S: Storage>(
         },
         None => Ok(Err("not_installed")),
     };
-    let Session {
-        counts,
-        coverage,
-        reported: session_reported,
-    } = session;
+    let Session { counts, coverage } = session;
     let reported = coverage.as_ref().and_then(|c| {
         (c.status == CoverageStatus::CouldntLook).then(|| typed(c.reason.as_deref()))
     });
@@ -144,7 +138,7 @@ pub fn run<S: Storage>(
             |r| typed(Some(r)),
         )),
         Ok(Ok(_)) if reported.is_some() => reported,
-        Ok(Ok(_)) if !session_reported => Some("protocol".into()),
+        Ok(Ok(_)) if coverage.is_none() => Some("protocol".into()),
         Ok(Ok(_)) => None,
     };
     let status = if reason.is_some() { "failed" } else { "ok" };
@@ -411,7 +405,6 @@ fn converse<S: Storage>(
                 }
             }
             Some(COVERAGE_REPORT) => {
-                session.reported = true;
                 let Ok(report) = message.params::<CoverageReport>() else {
                     return Ok(Err("protocol"));
                 };
