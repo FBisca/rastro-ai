@@ -34,6 +34,7 @@ impl Client {
         let agent = ureq::Agent::config_builder()
             .http_status_as_error(false)
             .max_redirects(0)
+            .max_redirects_will_error(false)
             .timeout_global(Some(Duration::from_secs(30)))
             .build()
             .into();
@@ -72,6 +73,7 @@ impl Client {
             .call()
             .map_err(|error| match error {
                 ureq::Error::Timeout(_) => Failure::new("timeout"),
+                ureq::Error::TooManyRedirects => Failure::new("protocol"),
                 _ => Failure::new("network"),
             })?;
         let status = response.status().as_u16();
@@ -99,6 +101,7 @@ impl Client {
                     },
                 ),
                 404 => Failure::new("not_found_or_hidden"),
+                300..=399 => Failure::new("protocol"),
                 _ => Failure::new("network"),
             });
         }
@@ -117,9 +120,13 @@ fn rate_limit(header: &dyn Fn(&str) -> Option<String>) -> Option<Option<String>>
     if let Some(seconds) = header("retry-after").and_then(|v| v.parse::<i64>().ok()) {
         return Some(Some(at(Utc::now() + chrono::Duration::seconds(seconds))));
     }
-    let reset = header("x-ratelimit-reset").and_then(|v| v.parse::<i64>().ok());
-    (reset.is_some() || header("x-ratelimit-remaining").as_deref() == Some("0"))
-        .then(|| reset.and_then(|r| DateTime::from_timestamp(r, 0)).map(at))
+    // The primary limit is spent when `x-ratelimit-remaining` is 0; `reset` alone isn't a signal.
+    (header("x-ratelimit-remaining").as_deref() == Some("0")).then(|| {
+        header("x-ratelimit-reset")
+            .and_then(|v| v.parse::<i64>().ok())
+            .and_then(|r| DateTime::from_timestamp(r, 0))
+            .map(at)
+    })
 }
 
 fn next_link(link: &str) -> Option<String> {
