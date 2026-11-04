@@ -18,7 +18,7 @@ The core spawns each plugin as a child process and talks JSON-RPC 2.0 over its s
 - Evidence already accepted stays. Coverage for the window becomes "couldn't look", never "empty".
 - An unfinished run left by a crashed core is marked `interrupted` the next time the core starts.
 
-Amended 2026-11-04: a crashed run is marked `interrupted` at the next writing open with no live sync, or when the next sync takes `sync.lock`, before its own runs. Status stays accepted.
+Amended 2026-11-04: a crashed run is marked `interrupted` at the next writing open that gets `sync.lock` exclusively within its retry, otherwise when the next sync takes `sync.lock`, before its own runs. Status stays accepted.
 
 ## Considered options
 - **gRPC or another binary RPC:** typed, but heavier for contributors writing an afternoon plugin.
