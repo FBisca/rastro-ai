@@ -323,14 +323,11 @@ impl Storage for SqliteStorage {
     }
     fn rebuild_index(&mut self) -> Result<usize> {
         let transaction = self.connection.transaction()?;
-        // The same definition the full-text migration creates; the index is a projection.
-        transaction.execute_batch(
-            "DROP TABLE IF EXISTS evidence_fts;
-             CREATE VIRTUAL TABLE evidence_fts USING fts5(
-                 quote, content='evidence', content_rowid='id',
-                 tokenize='porter unicode61 remove_diacritics 2');
-             INSERT INTO evidence_fts(evidence_fts) VALUES('rebuild');",
-        )?;
+        // The full-text migration is the one definition of the index; run it again.
+        transaction.execute_batch("DROP TABLE IF EXISTS evidence_fts")?;
+        transaction.execute_batch(include_str!(
+            "../migrations/202611041700_evidence_full_text_index.sql"
+        ))?;
         let indexed: i64 =
             transaction.query_row("SELECT count(*) FROM evidence", [], |row| row.get(0))?;
         transaction.commit()?;

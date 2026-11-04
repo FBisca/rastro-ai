@@ -325,3 +325,121 @@ fn S23_every_command_validates_against_the_operation_schema_on_success_and_failu
         assert!(value["error"].is_string(), "{value}");
     }
 }
+
+#[test]
+fn S23a_arguments_that_do_not_parse_give_a_schema_valid_error_with_json() {
+    let env = Env::new();
+    let cases: [(&[&str], &str); 5] = [
+        (&["search"], "search"),
+        (
+            &[
+                "source",
+                "add",
+                "project",
+                "--connector",
+                "test",
+                "--repo",
+                "o/p",
+            ],
+            "source.add",
+        ),
+        (&["index", "rebuild", "unexpected"], "index.rebuild"),
+        (&["sync", "a", "b"], "sync"),
+        (&["coverage", "a", "b"], "coverage"),
+    ];
+    for (args, operation) in cases {
+        for json_first in [false, true] {
+            let mut full: Vec<&str> = args.to_vec();
+            if json_first {
+                full.insert(0, "--json");
+            } else {
+                full.push("--json");
+            }
+            let output = env.rastro(&full);
+            assert_eq!(output.status.code(), Some(2), "{full:?}");
+            let value: Value =
+                serde_json::from_slice(&output.stdout).unwrap_or_else(|e| panic!("{full:?}: {e}"));
+            validate(&value);
+            assert_eq!(value["operation"], operation, "{full:?}");
+            assert!(
+                value["error"].as_str().unwrap().starts_with("usage:"),
+                "{value}"
+            );
+        }
+        // Without --json the plain parser output stays as it was.
+        let plain = env.rastro(args);
+        assert_eq!(plain.status.code(), Some(2));
+        assert!(plain.stdout.is_empty());
+    }
+    for args in [
+        &["--help", "--json"][..],
+        &["search", "--help", "--json"],
+        &["--version", "--json"],
+    ] {
+        let output = env.rastro(args);
+        assert!(output.status.success(), "{args:?}");
+        assert!(!output.stdout.is_empty());
+        assert!(serde_json::from_slice::<Value>(&output.stdout).is_err());
+    }
+    assert!(env.rastro(&["--version"]).status.success());
+}
+
+#[test]
+fn S22a_a_rebuilt_index_behaves_like_a_freshly_migrated_one() {
+    let bodies: [&[(&str, &str)]; 3] = [
+        &[
+            ("https://x/1", "running café"),
+            ("https://x/2", "other thing"),
+        ],
+        &[("https://x/1", "runs naïve cafés")],
+        &[("https://x/1", "running café")],
+    ];
+    let build = || {
+        let env = Env::new();
+        env.add_source("project");
+        for round in bodies {
+            sync_with(&env, round);
+        }
+        env
+    };
+    let fresh = build();
+    let rebuilt = build();
+    Connection::open(rebuilt.home.path().join("data/rastro.sqlite3"))
+        .unwrap()
+        .execute_batch("DROP TABLE evidence_fts")
+        .unwrap();
+    rebuilt.json(&["index", "rebuild"]);
+    let definition = "SELECT sql FROM sqlite_master WHERE name = 'evidence_fts'";
+    assert_eq!(
+        fresh.sql::<String>(definition),
+        rebuilt.sql::<String>(definition)
+    );
+    let cited = |env: &Env, args: &[&str]| -> Vec<(i64, String, String, String)> {
+        env.json(args)["result"]["results"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| {
+                (
+                    r["id"].as_i64().unwrap(),
+                    r["location"].as_str().unwrap().into(),
+                    r["field"].as_str().unwrap().into(),
+                    r["quote"].as_str().unwrap().into(),
+                )
+            })
+            .collect()
+    };
+    for query in ["run", "cafe", "naive", "café", "thing", "absent"] {
+        for history in [false, true] {
+            let mut args = vec!["search", query];
+            if history {
+                args.push("--history");
+            }
+            assert_eq!(cited(&fresh, &args), cited(&rebuilt, &args), "{args:?}");
+        }
+    }
+    // The queries are not vacuous: stemming, diacritics and the latest-only rule all bite.
+    assert_eq!(cited(&rebuilt, &["search", "run"]).len(), 1);
+    assert_eq!(cited(&rebuilt, &["search", "cafe", "--history"]).len(), 3);
+    assert_eq!(cited(&rebuilt, &["search", "naive"]).len(), 0);
+}
