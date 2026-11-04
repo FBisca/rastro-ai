@@ -172,11 +172,11 @@ fn a_body_changing_and_changing_back_leaves_three_observations() {
             })
             .collect()
     };
-    let latest = env.json(&["search", "body"]);
+    let latest = env.json(&["search", "body", "--full"]);
     assert_eq!(rows(&latest), [(3, "alpha body".to_string())]);
-    let old = env.json(&["search", "beta"]);
+    let old = env.json(&["search", "beta", "--full"]);
     assert!(rows(&old).is_empty(), "{old}");
-    let history = env.json(&["search", "body", "--history"]);
+    let history = env.json(&["search", "body", "--history", "--full"]);
     assert_eq!(
         rows(&history),
         [
@@ -185,6 +185,6 @@ fn a_body_changing_and_changing_back_leaves_three_observations() {
             (3, "alpha body".to_string())
         ]
     );
-    let human = env.ok(&["search", "beta", "--history"]);
+    let human = env.ok(&["search", "beta", "--history", "--full"]);
     assert!(human.contains("beta body"), "{human}");
 }

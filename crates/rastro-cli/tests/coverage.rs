@@ -437,7 +437,7 @@ fn a_rebuilt_index_behaves_like_a_freshly_migrated_one() {
     };
     for query in ["run", "cafe", "naive", "café", "thing", "absent"] {
         for history in [false, true] {
-            let mut args = vec!["search", query];
+            let mut args = vec!["search", query, "--full"];
             if history {
                 args.push("--history");
             }
@@ -445,9 +445,12 @@ fn a_rebuilt_index_behaves_like_a_freshly_migrated_one() {
         }
     }
     // The queries are not vacuous: stemming, diacritics and the latest-only rule all bite.
-    assert_eq!(cited(&rebuilt, &["search", "run"]).len(), 1);
-    assert_eq!(cited(&rebuilt, &["search", "cafe", "--history"]).len(), 3);
-    assert_eq!(cited(&rebuilt, &["search", "naive"]).len(), 0);
+    assert_eq!(cited(&rebuilt, &["search", "run", "--full"]).len(), 1);
+    assert_eq!(
+        cited(&rebuilt, &["search", "cafe", "--history", "--full"]).len(),
+        3
+    );
+    assert_eq!(cited(&rebuilt, &["search", "naive", "--full"]).len(), 0);
 }
 
 /// evidence/R56: an argument that is not utf8 never panics

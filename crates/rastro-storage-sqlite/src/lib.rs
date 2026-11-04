@@ -489,7 +489,8 @@ impl Snapshot for View<'_> {
     fn search(&self, query: &str, limit: usize, history: bool) -> Result<Vec<Hit>> {
         let mut statement = self.0.prepare(
             "SELECT e.id, e.source, e.scope, e.location, e.field, e.start as i64, e.end as i64, e.quote,
-             e.trust_class, e.captured_at, e.source_updated_at, e.original
+             e.trust_class, e.captured_at, e.source_updated_at, e.original,
+             highlight(evidence_fts, 0, char(1), char(2))
              FROM evidence_fts JOIN evidence e ON e.id = evidence_fts.rowid
              WHERE evidence_fts MATCH ?1
              AND (?3 OR e.id = (SELECT max(l.id) FROM evidence l WHERE l.source = e.source
@@ -509,6 +510,7 @@ impl Snapshot for View<'_> {
                 [row.get::<_, String>(7)?, row.get(8)?, row.get(9)?],
                 row.get::<_, Option<String>>(10)?,
                 row.get::<_, Option<String>>(11)?,
+                row.get::<_, String>(12)?,
             ))
         })?;
         rows.map(|row| {
@@ -519,9 +521,12 @@ impl Snapshot for View<'_> {
                 [quote, trust, captured],
                 updated,
                 original,
+                marked,
             ) = row?;
+            let matched = first_match(&quote, &marked);
             Ok(Hit {
                 id,
+                matched,
                 evidence: Evidence {
                     source,
                     scope: Scope(scope),
@@ -565,4 +570,21 @@ impl Snapshot for View<'_> {
         })
         .collect()
     }
+}
+
+/// Byte range in `quote` of the first match, from the index's own `highlight()` of it: the
+/// tokenizer (stemming, diacritic folding) decides what matched, and markers say where. `None`
+/// when the quote holds a marker byte itself, or the marked text isn't the quote with markers
+/// added, since the markers can't then be trusted.
+fn first_match(quote: &str, marked: &str) -> Option<(usize, usize)> {
+    const OPEN: char = '\u{1}';
+    const CLOSE: char = '\u{2}';
+    if quote.contains([OPEN, CLOSE]) || marked.replace([OPEN, CLOSE], "") != quote {
+        return None;
+    }
+    let start = marked.find(OPEN)?;
+    let end = start + OPEN.len_utf8() + marked[start + 1..].find(CLOSE)?;
+    // No marker precedes the first, so `start` is already an offset in the quote; the open
+    // marker sits between `start` and the text.
+    Some((start, end - OPEN.len_utf8()))
 }

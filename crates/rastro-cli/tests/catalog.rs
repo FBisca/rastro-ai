@@ -44,7 +44,12 @@ fn S2_help_lists_exactly_what_the_catalog_defines() {
                 && !default.is_null()
             {
                 assert!(
-                    help.contains(&format!("[default: {}]", default.as_str().unwrap_or(""))),
+                    help.contains(&format!(
+                        "[default: {}]",
+                        default
+                            .as_str()
+                            .map_or_else(|| default.to_string(), String::from)
+                    )),
                     "{name}: default of {} missing in {help}",
                     input.name
                 );

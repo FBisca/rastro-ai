@@ -4,7 +4,7 @@
 //! recovery. Each answer is computed inside one read transaction, so the hits and the coverage
 //! in it come from the same snapshot.
 use crate::UnknownSource;
-use crate::runs::{SEARCH_LIMIT, SearchResults, assemble_search, search_query};
+use crate::search::{SearchOptions, SearchResults, assemble_search, search_query};
 use crate::{
     Config, Coverage, CoverageState, CoverageWindow, Hit, Locations, Rastro, Scope, Source,
 };
@@ -150,7 +150,7 @@ impl<S: ReadStorage> Reader<S> {
         })
     }
     /// Full-text search over evidence quotes, each hit with its source's coverage.
-    pub fn search(&mut self, text: &str, history: bool) -> Result<SearchResults> {
+    pub fn search(&mut self, text: &str, options: &SearchOptions) -> Result<SearchResults> {
         let Self {
             locations,
             config,
@@ -160,14 +160,16 @@ impl<S: ReadStorage> Reader<S> {
         let query = search_query(text);
         snapshot(locations, storage, |view, unfinished| {
             let hits = match (&query, view) {
-                (Some(query), Some(view)) => view.search(query, SEARCH_LIMIT, history)?,
+                (Some(query), Some(view)) => {
+                    view.search(query, options.limit + 1, options.history)?
+                }
                 _ => Vec::new(),
             };
             let mut coverage = coverage_of(view, unfinished, &sources, false)?;
             for answer in &mut coverage {
                 answer.windows.clear();
             }
-            Ok(assemble_search(hits, coverage))
+            Ok(assemble_search(hits, coverage, options))
         })
     }
 }

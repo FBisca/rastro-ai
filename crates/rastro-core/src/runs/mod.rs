@@ -1,4 +1,5 @@
 //! Runs: one execution of a connector for a source, and the log it leaves.
+use crate::search::{SearchOptions, assemble_search, search_query};
 use crate::{Counts, CoverageState, Rastro, Source, Storage, files, host};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
@@ -73,9 +74,12 @@ impl<S: Storage> Rastro<S> {
     }
 
     /// Full-text search over evidence quotes, each hit with its source's coverage.
-    pub fn search(&self, text: &str, history: bool) -> Result<SearchResults> {
+    pub fn search(&self, text: &str, options: &SearchOptions) -> Result<SearchResults> {
         let hits = match search_query(text) {
-            Some(query) => self.storage.search(&query, SEARCH_LIMIT, history)?,
+            // One more than asked for, to learn whether the answer was cut.
+            Some(query) => self
+                .storage
+                .search(&query, options.limit + 1, options.history)?,
             None => Vec::new(),
         };
         let mut coverage = self.coverage(None, false)?;
@@ -83,54 +87,11 @@ impl<S: Storage> Rastro<S> {
         for answer in &mut coverage {
             answer.windows.clear();
         }
-        Ok(assemble_search(hits, coverage))
+        Ok(assemble_search(hits, coverage, options))
     }
 }
 
-/// Most hits one search returns.
-pub(crate) const SEARCH_LIMIT: usize = 50;
-
-/// The FTS5 query for free text: each word quoted whole; `None` when there is no word.
-pub(crate) fn search_query(text: &str) -> Option<String> {
-    let terms: Vec<_> = text
-        .split_whitespace()
-        .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
-        .collect();
-    (!terms.is_empty()).then(|| terms.join(" "))
-}
-
-/// Pairs each hit with its source's coverage.
-pub(crate) fn assemble_search(
-    hits: Vec<crate::Hit>,
-    coverage: Vec<crate::Coverage>,
-) -> SearchResults {
-    let results = hits
-        .into_iter()
-        .map(|hit| {
-            let covering = coverage
-                .iter()
-                .position(|c| c.source == hit.evidence.source);
-            SearchResult {
-                hit,
-                coverage: covering.map(|i| coverage[i].clone()),
-            }
-        })
-        .collect();
-    SearchResults { results, coverage }
-}
-
-#[derive(Debug, JsonSchema, Serialize)]
-pub struct SearchResult {
-    #[serde(flatten)]
-    pub hit: crate::Hit,
-    pub coverage: Option<crate::Coverage>,
-}
-/// Matches, plus the coverage of every source searched, so an empty answer says what it covered.
-#[derive(Debug, JsonSchema, Serialize)]
-pub struct SearchResults {
-    pub results: Vec<SearchResult>,
-    pub coverage: Vec<crate::Coverage>,
-}
+pub use crate::search::{SearchResult, SearchResults};
 
 // Schema of `rastro_plugin_sdk::Window`, which the SDK does not derive; keep in step with it.
 #[derive(JsonSchema)]

@@ -66,7 +66,7 @@ fn only_owner_involved_items_become_evidence() {
     );
     assert_eq!(comments.len(), 4);
     assert!(fixture.requests().iter().all(|r| !r.path.contains("/9/")));
-    let found = env.json(&["search", "slow"]);
+    let found = env.json(&["search", "slow", "--full"]);
     assert_eq!(
         found["result"]["results"][0]["location"],
         "https://github.com/o/p/issues/3"
@@ -114,7 +114,7 @@ fn each_field_is_its_own_cited_observation() {
         ["bug", "structured"].map(String::from)
     );
     assert_eq!(row("/assignees/0/login")[0][2], "me");
-    let result = &env.json(&["search", "slow"])["result"]["results"][0];
+    let result = &env.json(&["search", "slow", "--full"])["result"]["results"][0];
     assert_eq!(result["field"], "/title");
     assert_eq!(result["end"], 10);
 }
@@ -396,7 +396,7 @@ fn spans_are_utf8_bytes_and_the_quote_equals_them() {
         ),
         env.sql::<i64>("SELECT count(*) FROM evidence"),
     );
-    let found = &env.json(&["search", "wörld"])["result"]["results"][0];
+    let found = &env.json(&["search", "wörld", "--full"])["result"]["results"][0];
     assert_eq!(found["quote"], text);
     assert_eq!(found["end"], text.len());
 }
@@ -643,7 +643,7 @@ fn keep_original_stores_the_item_or_comment_as_read() {
         env.sql::<i64>("SELECT count(*) FROM evidence WHERE original IS NULL"),
         0
     );
-    let results = env.json(&["search", "slow"])["result"]["results"].clone();
+    let results = env.json(&["search", "slow", "--full"])["result"]["results"].clone();
     let title = results
         .as_array()
         .unwrap()
@@ -656,7 +656,7 @@ fn keep_original_stores_the_item_or_comment_as_read() {
     assert_eq!(original["body"], "it is slow");
     assert_eq!(original["html_url"], item["html_url"]);
     assert_eq!(original["labels"], item["labels"]);
-    let comment = env.json(&["search", "comment"])["result"]["results"]
+    let comment = env.json(&["search", "comment", "--full"])["result"]["results"]
         .as_array()
         .unwrap()
         .iter()
@@ -683,7 +683,7 @@ fn without_the_flag_nothing_is_stored() {
         env.sql::<i64>("SELECT count(*) FROM evidence WHERE original IS NOT NULL"),
         0
     );
-    let results = env.json(&["search", "slow"])["result"]["results"].clone();
+    let results = env.json(&["search", "slow", "--full"])["result"]["results"].clone();
     assert!(!results.as_array().unwrap().is_empty());
     assert!(results[0].get("original").is_none());
 }

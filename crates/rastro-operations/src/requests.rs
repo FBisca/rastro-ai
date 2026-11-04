@@ -3,9 +3,11 @@
 use crate::{catalog::Surface, results::*};
 use anyhow::Result;
 use clap::{Args, Subcommand};
-use rastro_core::{Rastro, Scope, Source, Storage};
+use rastro_core::{
+    DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT, Rastro, Scope, SearchOptions, Source, Storage,
+};
 use schemars::JsonSchema;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 /// Freshness rule of a source added without `--freshness-rule`.
 pub const DEFAULT_FRESHNESS_RULE: &str = "1h";
@@ -130,6 +132,51 @@ pub struct SearchRequest {
     #[arg(long)]
     #[serde(default)]
     pub history: bool,
+    /// Most hits to return, from 1 to 50; the result says when more matched.
+    #[arg(long, default_value_t = Limit::default(), value_parser = parse_limit)]
+    #[serde(default)]
+    pub limit: Limit,
+    /// Return the whole quote and the original on each hit, not only the excerpt.
+    #[arg(long)]
+    #[serde(default)]
+    pub full: bool,
+}
+
+/// A search's hit limit: a whole number from 1 to 50.
+#[derive(Clone, Copy, Debug, Deserialize, JsonSchema, Serialize)]
+#[serde(try_from = "u64", into = "u64")]
+#[schemars(with = "u8", inline, extend("minimum" = 1, "maximum" = 50))]
+pub struct Limit(usize);
+impl Default for Limit {
+    fn default() -> Self {
+        Self(DEFAULT_SEARCH_LIMIT)
+    }
+}
+impl TryFrom<u64> for Limit {
+    type Error = String;
+    fn try_from(n: u64) -> Result<Self, String> {
+        usize::try_from(n)
+            .ok()
+            .filter(|n| (1..=MAX_SEARCH_LIMIT).contains(n))
+            .map(Self)
+            .ok_or_else(|| format!("limit must be a whole number from 1 to {MAX_SEARCH_LIMIT}"))
+    }
+}
+impl From<Limit> for u64 {
+    fn from(limit: Limit) -> u64 {
+        limit.0 as u64
+    }
+}
+impl std::fmt::Display for Limit {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.0.fmt(f)
+    }
+}
+fn parse_limit(text: &str) -> Result<Limit, String> {
+    let n: u64 = text
+        .parse()
+        .map_err(|_| format!("`{text}` is not a whole number"))?;
+    Limit::try_from(n)
 }
 impl Operation for SearchRequest {
     const NAME: &'static str = "search";
@@ -237,10 +284,16 @@ impl Request {
                 indexed: rastro.rebuild_index()?,
             }),
             Self::Search(request) => {
-                let found = rastro.search(&request.text, request.history)?;
+                let options = SearchOptions {
+                    history: request.history,
+                    limit: request.limit.0,
+                    full: request.full,
+                };
+                let found = rastro.search(&request.text, &options)?;
                 Response::Search(SearchResponse {
                     query: request.text,
                     results: found.results,
+                    truncated: found.truncated,
                     coverage: found.coverage,
                 })
             }

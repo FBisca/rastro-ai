@@ -1,7 +1,10 @@
 use anyhow::Result;
 use chrono::{DateTime, SecondsFormat, Utc};
 use clap::Parser;
-use rastro_core::{Coverage, CoverageWindow, Locations, Rastro, display_safe, runs::RunReport};
+use rastro_core::{
+    Coverage, CoverageWindow, Locations, MAX_SEARCH_LIMIT, Rastro, display_escaped, display_safe,
+    runs::RunReport,
+};
 use rastro_operations::{Request, Response, catalog, envelope, results::SearchResponse};
 use rastro_storage_sqlite::SqliteStorage;
 use std::ffi::OsString;
@@ -105,11 +108,20 @@ fn search_text(text: &str, found: &SearchResponse) -> String {
         .results
         .iter()
         .map(|r| {
-            let e = &r.hit.evidence;
+            // The whole quote when `--full` asked for it; else the excerpt, with … where cut.
+            let shown = match &r.quote {
+                Some(quote) => display_escaped(quote),
+                None => format!(
+                    "{}{}{}",
+                    if r.matched.clipped_before { "…" } else { "" },
+                    display_safe(&r.matched.text),
+                    if r.matched.clipped_after { "…" } else { "" }
+                ),
+            };
             let mut block = format!(
-                "\"{}\"\n  Link: {} | Field: {} | Span: [{}, {}) | Captured: {} | Trust class: {} | Scope: {} | Source: {}",
-                display_safe(&e.quote), display_safe(&e.location), display_safe(&e.field), e.start, e.end, stamp(e.captured_at),
-                e.trust_class.as_str(), e.scope.0, e.source
+                "\"{shown}\"\n  Link: {} | Field: {} | Span: [{}, {}) | Captured: {} | Trust class: {} | Scope: {} | Source: {}",
+                display_safe(&r.location), display_safe(&r.field), r.start, r.end, stamp(r.captured_at),
+                r.trust_class.as_str(), r.scope.0, r.source
             );
             if let Some(c) = &r.coverage {
                 block += &format!("\n  Coverage: {}", coverage_line(c));
@@ -117,7 +129,14 @@ fn search_text(text: &str, found: &SearchResponse) -> String {
             block
         })
         .collect();
-    blocks.join("\n")
+    let mut text = blocks.join("\n");
+    if found.truncated {
+        text += &format!(
+            "\nMore evidence matches than the {} shown; raise --limit (at most {MAX_SEARCH_LIMIT}) or narrow the query",
+            found.results.len()
+        );
+    }
+    text
 }
 /// The result of an operation, its human form, and whether it succeeded.
 type Outcome = (Response, String);
