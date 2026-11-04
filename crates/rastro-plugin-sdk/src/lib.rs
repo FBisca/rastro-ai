@@ -114,6 +114,10 @@ pub struct RunBinding {
     pub scope: String,
     pub selector: BTreeMap<String, String>,
     pub window: Window,
+    /// The source opted in to keeping the full original: send each observation's `original`.
+    /// Without it the core drops any original.
+    #[serde(default)]
+    pub keep_original: bool,
 }
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct InitializeParams {
@@ -154,6 +158,10 @@ pub struct EvidenceSubmit {
     /// Inherited from the binding; a different one is rejected.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub window: Option<Window>,
+    /// The item or comment as the connector read it. Sent only when the binding says
+    /// `keep_original`; the core stores it beside the observation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub original: Option<Value>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
