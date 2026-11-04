@@ -1,3 +1,5 @@
+![Rastro: an open, pluggable personal assistant with evidence-backed memory](docs/assets/rastro-header.jpg)
+
 # Rastro
 
 *The trail behind everything your assistant knows.*
