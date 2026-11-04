@@ -470,13 +470,21 @@ fn more_than_1000_results_or_incomplete_results_is_result_cap() {
     }
 }
 
+/// When a rate-limited sync should retry.
+enum Retry {
+    /// At this epoch second.
+    At(i64),
+    /// This many seconds after the reply.
+    After(i64),
+}
+
 /// evidence/R42: only primary or secondary limit signals make a 403 rate limited
 #[test]
 fn only_primary_or_secondary_limit_signals_make_a_403_rate_limited() {
     let reset = Utc::now().timestamp() + 600;
     let reset_text = reset.to_string();
-    // (headers, expected reason, accepted retry_at range as epoch seconds)
-    type Case<'a> = (Vec<(&'a str, String)>, &'a str, Option<(i64, i64)>);
+    // (headers, expected reason, expected retry_at)
+    type Case<'a> = (Vec<(&'a str, String)>, &'a str, Option<Retry>);
     let cases: Vec<Case> = vec![
         (
             vec![
@@ -484,12 +492,12 @@ fn only_primary_or_secondary_limit_signals_make_a_403_rate_limited() {
                 ("x-ratelimit-reset", reset_text.clone()),
             ],
             "rate_limited",
-            Some((reset, reset)),
+            Some(Retry::At(reset)),
         ),
         (
             vec![("retry-after", "30".into())],
             "rate_limited",
-            Some((Utc::now().timestamp() + 25, Utc::now().timestamp() + 40)),
+            Some(Retry::After(30)),
         ),
         (
             vec![
@@ -510,10 +518,17 @@ fn only_primary_or_secondary_limit_signals_make_a_403_rate_limited() {
                 })
         });
         let env = Env::new(&fixture.base);
+        let before = Utc::now().timestamp();
         sync(&env);
+        let after = Utc::now().timestamp();
         assert_eq!(env.sql::<String>("SELECT reason FROM coverage"), reason);
         let retry_at: Option<String> = env.sql("SELECT retry_at FROM coverage");
-        match retry {
+        // Retry-After counts from the reply, which lands during this case's sync.
+        let bounds = retry.map(|retry| match retry {
+            Retry::At(at) => (at, at),
+            Retry::After(secs) => (before + secs - 1, after + secs + 1),
+        });
+        match bounds {
             Some((low, high)) => {
                 let at = retry_at
                     .unwrap()
