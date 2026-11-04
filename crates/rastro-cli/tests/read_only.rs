@@ -3,8 +3,8 @@
 mod support;
 use anyhow::Result;
 use rastro_core::{
-    Coverage, CoverageState, Locations, Rastro, ReadStorage, Reader, Refusal, Snapshot,
-    UnfinishedRun,
+    Coverage, CoverageState, Locations, Rastro, ReadStorage, Reader, Refusal, SearchOptions,
+    Snapshot, UnfinishedRun,
 };
 use rastro_storage_sqlite::SqliteStorage;
 use rusqlite::Connection;
@@ -216,7 +216,7 @@ fn S16_search_and_coverage_change_no_row_and_take_no_exclusive_config_lock() {
     let (hits, coverage) = within(move || {
         let mut reader = Rastro::open_read_only(locations, SqliteStorage::open_read_only).unwrap();
         (
-            reader.search("body", false).unwrap(),
+            reader.search("body", &SearchOptions::default()).unwrap(),
             reader.coverage(None, false).unwrap(),
         )
     });
@@ -290,7 +290,7 @@ fn S17_calls_during_a_sync_in_another_process_answer_without_a_lock_error() {
             let mut reader =
                 Rastro::open_read_only(locations, SqliteStorage::open_read_only).unwrap();
             (
-                reader.search("body", false).unwrap(),
+                reader.search("body", &SearchOptions::default()).unwrap(),
                 reader.coverage(None, false).unwrap(),
             )
         });
@@ -300,7 +300,14 @@ fn S17_calls_during_a_sync_in_another_process_answer_without_a_lock_error() {
         assert_eq!(only(coverage).state, CoverageState::Found);
     }
     assert!(sync.wait().unwrap().success());
-    assert_eq!(env.reader().search("body", false).unwrap().results.len(), 3);
+    assert_eq!(
+        env.reader()
+            .search("body", &SearchOptions::default())
+            .unwrap()
+            .results
+            .len(),
+        3
+    );
 }
 
 /// A storage whose snapshot lets another writer commit right after the snapshot is taken.
@@ -418,7 +425,7 @@ fn S17_hits_and_coverage_in_one_answer_come_from_the_same_snapshot() {
         between: Some(Box::new(write_another_sync)),
     };
     let mut reader = Rastro::open_read_only(env.locations(), move |_| Ok(Some(storage))).unwrap();
-    let answer = reader.search("body", false).unwrap();
+    let answer = reader.search("body", &SearchOptions::default()).unwrap();
     assert_eq!(
         answer.results.len(),
         2,
@@ -426,7 +433,10 @@ fn S17_hits_and_coverage_in_one_answer_come_from_the_same_snapshot() {
     );
     assert_eq!(only(answer.coverage).last_checked, old);
     // The next call sees what committed.
-    let next = env.reader().search("body", false).unwrap();
+    let next = env
+        .reader()
+        .search("body", &SearchOptions::default())
+        .unwrap();
     assert_eq!(next.results.len(), 3);
     assert_ne!(only(next.coverage).last_checked, old);
 }
@@ -446,7 +456,10 @@ fn S17a_a_source_added_after_the_last_call_appears_in_the_next() {
     assert_eq!(names(&env), ["project"]);
     env.add_source("later");
     assert_eq!(names(&env), ["project", "later"]);
-    let answer = env.reader().search("nothing-matches", false).unwrap();
+    let answer = env
+        .reader()
+        .search("nothing-matches", &SearchOptions::default())
+        .unwrap();
     assert_eq!(answer.coverage.len(), 2);
 }
 
@@ -480,7 +493,10 @@ fn S18_an_unfinished_run_with_no_live_sync_reads_unknown_interrupted_without_wri
     let after = only(env.reader().coverage(None, false).unwrap());
     assert_eq!(after.state, CoverageState::Unknown, "{after:?}");
     assert_eq!(after.reason.as_deref(), Some("interrupted"));
-    let searched = env.reader().search("anything", false).unwrap();
+    let searched = env
+        .reader()
+        .search("anything", &SearchOptions::default())
+        .unwrap();
     assert_eq!(
         only(searched.coverage).reason.as_deref(),
         Some("interrupted")
@@ -508,7 +524,7 @@ fn S19_a_missing_database_answers_from_config_and_creates_no_file() {
             .iter()
             .all(|c| c.state == CoverageState::NeverLooked && c.windows.is_empty())
     );
-    let answer = reader.search("body", false).unwrap();
+    let answer = reader.search("body", &SearchOptions::default()).unwrap();
     assert!(answer.results.is_empty());
     assert_eq!(answer.coverage.len(), 2);
     assert!(
@@ -534,7 +550,13 @@ fn S19_a_read_with_no_config_and_no_database_creates_nothing() {
     };
     let mut reader = Rastro::open_read_only(locations, SqliteStorage::open_read_only).unwrap();
     assert!(reader.coverage(None, false).unwrap().is_empty());
-    assert!(reader.search("x", false).unwrap().results.is_empty());
+    assert!(
+        reader
+            .search("x", &SearchOptions::default())
+            .unwrap()
+            .results
+            .is_empty()
+    );
     assert_eq!(fs::read_dir(home.path()).unwrap().count(), 0);
 }
 
@@ -545,7 +567,9 @@ fn S19a_a_pending_or_unknown_migration_is_refused_with_a_typed_error() {
     let refusal = |env: &Env| -> Refusal {
         let mut reader = env.reader();
         let error = reader.coverage(None, false).unwrap_err();
-        let search = reader.search("body", false).unwrap_err();
+        let search = reader
+            .search("body", &SearchOptions::default())
+            .unwrap_err();
         assert!(search.downcast_ref::<Refusal>().is_some());
         error.downcast::<Refusal>().unwrap()
     };
@@ -690,7 +714,7 @@ fn S12_the_reader_answers_found_when_the_only_found_window_is_outside_the_newest
         only(reader.coverage(None, false).unwrap()).state,
         CoverageState::Found
     );
-    let hits = reader.search("body", false).unwrap();
+    let hits = reader.search("body", &SearchOptions::default()).unwrap();
     assert_eq!(hits.results.len(), 2);
     assert!(
         hits.results

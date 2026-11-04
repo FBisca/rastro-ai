@@ -13,10 +13,11 @@ impl Request {
                 coverage: reader.coverage(request.name.as_deref(), request.all_windows)?,
             }),
             Self::Search(request) => {
-                let found = reader.search(&request.text, request.history)?;
+                let found = reader.search(&request.text, &request.options())?;
                 Response::Search(SearchResponse {
                     query: request.text,
                     results: found.results,
+                    truncated: found.truncated,
                     coverage: found.coverage,
                 })
             }

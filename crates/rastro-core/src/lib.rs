@@ -4,6 +4,7 @@ pub mod files;
 pub mod host;
 pub mod read_only;
 pub mod runs;
+pub mod search;
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Duration, Utc};
 use schemars::JsonSchema;
@@ -25,6 +26,10 @@ pub(crate) fn test_override(name: &str) -> Option<String> {
 pub use evidence::{Appended, Evidence, Hit, TrustClass};
 pub use rastro_plugin_sdk::Counts;
 pub use read_only::{ReadStorage, Reader, Refusal, Snapshot, UnfinishedRun};
+pub use search::{
+    DEFAULT_SEARCH_LIMIT, EXCERPT_BYTES, MAX_SEARCH_LIMIT, Match, SearchOptions, SearchResult,
+    SearchResults,
+};
 
 /// A command named a source that isn't configured.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -407,11 +412,22 @@ pub fn display_safe(text: &str) -> String {
             out.push('…');
             break;
         }
-        if c.is_control() {
-            out.extend(c.escape_default());
-        } else {
-            out.push(c);
-        }
+        push_escaped(&mut out, c);
     }
     out
+}
+
+/// Connector-supplied text made safe for a terminal, whole: control characters escaped, no clip.
+pub fn display_escaped(text: &str) -> String {
+    let mut out = String::new();
+    text.chars().for_each(|c| push_escaped(&mut out, c));
+    out
+}
+
+fn push_escaped(out: &mut String, c: char) {
+    if c.is_control() {
+        out.extend(c.escape_default());
+    } else {
+        out.push(c);
+    }
 }

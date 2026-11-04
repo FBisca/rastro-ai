@@ -60,11 +60,13 @@ pub enum Appended {
 }
 
 /// A stored observation that matched a search.
-#[derive(Clone, Debug, JsonSchema, Serialize)]
+#[derive(Clone, Debug)]
 pub struct Hit {
     pub id: i64,
-    #[serde(flatten)]
     pub evidence: Evidence,
+    /// Byte range in `evidence.quote` of the first word the index matched, when storage could
+    /// place it.
+    pub matched: Option<(usize, usize)>,
 }
 
 /// What a source may submit: the manifest narrowed by the source, bound to its scope.

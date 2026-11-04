@@ -296,7 +296,7 @@ fn search_results_carry_the_citation_and_coverage() {
     ] {
         assert!(human.contains(expected), "missing {expected}: {human}");
     }
-    let found = env.json(&["search", "quick"]);
+    let found = env.json(&["search", "quick", "--full"]);
     assert_eq!(found["operation"], "search");
     let hit = &found["result"]["results"][0];
     assert_eq!(hit["quote"], "the quick brown fox");
@@ -482,7 +482,7 @@ fn control_characters_from_connectors_are_escaped_in_human_output() {
     let human = env.ok(&["search", "fox"]);
     assert!(!human.contains('\u{1b}'), "{human:?}");
     assert!(human.contains("\\u{1b}[31mred"), "{human}");
-    let exact = env.json(&["search", "fox"]);
+    let exact = env.json(&["search", "fox", "--full"]);
     assert_eq!(exact["result"]["results"][0]["quote"], format!("fox {esc}"));
     env.script(&[
         json!({"do": "initialize"}),
@@ -521,7 +521,7 @@ fn core_drops_an_original_from_a_source_without_the_flag() {
     keeping.add_source_with("project", &["--keep-original"]);
     keeping.script(&script);
     keeping.json(&["sync", "project"]);
-    let found = keeping.json(&["search", "hello"]);
+    let found = keeping.json(&["search", "hello", "--full"]);
     assert_eq!(found["result"]["results"][0]["original"], original);
 }
 

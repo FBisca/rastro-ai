@@ -1,9 +1,6 @@
 //! Result types: what each operation returns, serialised into the envelope's `result`.
 use crate::{envelope, requests::*};
-use rastro_core::{
-    Coverage, Source,
-    runs::{RunReport, SearchResult},
-};
+use rastro_core::{Coverage, Source, runs::RunReport, search::SearchResult};
 use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::Value;
@@ -29,6 +26,8 @@ pub struct SyncResult {
 pub struct SearchResponse {
     pub query: String,
     pub results: Vec<SearchResult>,
+    /// More hits matched than `limit` allowed.
+    pub truncated: bool,
     pub coverage: Vec<Coverage>,
 }
 #[derive(Debug, JsonSchema, Serialize)]
@@ -102,6 +101,7 @@ mod tests {
             Response::Search(SearchResponse {
                 query: String::new(),
                 results: vec![],
+                truncated: false,
                 coverage: vec![],
             }),
             Response::IndexRebuild(IndexRebuildResult { indexed: 0 }),

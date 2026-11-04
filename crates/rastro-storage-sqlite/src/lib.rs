@@ -496,6 +496,10 @@ impl Snapshot for View<'_> {
                   AND l.scope = e.scope AND l.location = e.location AND l.field = e.field))
              ORDER BY bm25(evidence_fts), e.id LIMIT ?2",
         )?;
+        let mut highlight = self.0.prepare(
+            "SELECT highlight(evidence_fts, 0, char(1), char(2)) FROM evidence_fts
+             WHERE evidence_fts MATCH ?1 AND rowid = ?2",
+        )?;
         let rows = statement.query_map(params![query, limit as i64, history], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
@@ -520,8 +524,12 @@ impl Snapshot for View<'_> {
                 updated,
                 original,
             ) = row?;
+            // Only the rows kept pay for highlighting (it re-tokenizes the quote).
+            let marked: String = highlight.query_row(params![query, id], |row| row.get(0))?;
+            let matched = first_match(&quote, &marked);
             Ok(Hit {
                 id,
+                matched,
                 evidence: Evidence {
                     source,
                     scope: Scope(scope),
@@ -565,4 +573,21 @@ impl Snapshot for View<'_> {
         })
         .collect()
     }
+}
+
+/// Byte range in `quote` of the first match, from the index's own `highlight()` of it: the
+/// tokenizer (stemming, diacritic folding) decides what matched, and markers say where. `None`
+/// when the quote holds a marker byte itself, or the marked text isn't the quote with markers
+/// added, since the markers can't then be trusted.
+fn first_match(quote: &str, marked: &str) -> Option<(usize, usize)> {
+    const OPEN: char = '\u{1}';
+    const CLOSE: char = '\u{2}';
+    if quote.contains([OPEN, CLOSE]) || marked.replace([OPEN, CLOSE], "") != quote {
+        return None;
+    }
+    let start = marked.find(OPEN)?;
+    let end = start + OPEN.len_utf8() + marked[start + 1..].find(CLOSE)?;
+    // No marker precedes the first, so `start` is already an offset in the quote; the open
+    // marker sits between `start` and the text.
+    Some((start, end - OPEN.len_utf8()))
 }
