@@ -29,3 +29,5 @@ Status stays accepted. Roadmap slice 2 adds a reader that runs beside a sync (`0
   - a database holding a migration this binary doesn't know, or a pending one, is refused.
 - **Unfinished runs.** A read that finds an unfinished run while no sync holds `sync.lock` answers "unknown: interrupted" for that source and writes nothing; startup recovery stays on the writing open. A live sync's unfinished run doesn't change the answer.
 - **A missing database** answers from config (every source "never looked") and no file is created.
+- **Locking.** A reader takes `sync.lock` shared and holds it only until its snapshot is pinned. A missing `sync.lock` is probed again after the pin. The writing open retries `try_lock` briefly while only readers hold the lock, and skips recovery while a sync is live.
+- **Files.** The read-only open never creates the database file. SQLite may create `-wal` and `-shm` beside it; where it can't, the read is refused as not readable.

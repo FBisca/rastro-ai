@@ -567,9 +567,10 @@ fn S19a_a_pending_or_unknown_migration_is_refused_with_a_typed_error() {
     assert!(matches!(refusal(&env), Refusal::UnknownMigration(n) if n == "299912312359_future"));
 }
 
-/// surfaces/S18: a reader holding sync.lock when a sync starts doesn't leave a crashed run behind
+/// surfaces/S18a: a sync that takes sync.lock marks a never-finished run interrupted before its own,
+/// even when a reader blocked the startup recovery
 #[test]
-fn S18_a_sync_starting_beside_a_reader_still_recovers_the_crashed_run_before_its_own() {
+fn S18a_a_sync_starting_beside_a_reader_still_recovers_the_crashed_run_before_its_own() {
     let env = synced();
     unfinished_run(&env);
     let holder = fs::File::open(env.home.path().join("data/sync.lock")).unwrap();
