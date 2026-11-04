@@ -23,4 +23,11 @@ Status: agreed 2026-11-04. North star: `../concept.md` §5.
    - `propose(action)`, `ask(question)`, `submit(claim)`
 6. **Platforms.** macOS and Linux are required; Windows is wanted.
 7. **Future surfaces** (a native app, editor integrations, someone else's agent) drive the same library.
-8. **Implementation language: Rust for the core** (decided by the owner 2026-11-04). Plugins run as separate processes over a versioned, language-neutral protocol, so contributors can write them in any language. Agent tools are driven as child processes, the way `hc` drives them. This follows Codex's recommendation, which noted the main risk: a reliable plugin host costs more to build than calling functions in one process.
+8. **Implementation language and process model:** see `../adr/0001-rust-core-out-of-process-plugins.md`.
+
+## Added 2026-11-04 (roadmap slice 1)
+9. **Every CLI command has `--json` output** from the versioned operation schema the MCP server will reuse. A failed `sync` exits non-zero.
+10. **Data location:**
+    - `RASTRO_HOME` overrides both directories (data in `$RASTRO_HOME/data`, config in `$RASTRO_HOME/config/config.toml`);
+    - otherwise `XDG_DATA_HOME` and `XDG_CONFIG_HOME`;
+    - otherwise `~/.local/share/rastro` and `~/.config/rastro`, on macOS and Linux alike.

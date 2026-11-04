@@ -41,3 +41,7 @@ Status: agreed 2026-11-04. North star: `../concept.md` §3 and §4.
     - There's a registry, and plugins install in one step.
     - A starter pack bundles the standard vocabulary, common connectors and default workflows.
     - How the registry is governed is open. See `../open-questions.md`.
+
+## Added 2026-11-04 (roadmap slice 1)
+12. **The manifest declares; grants narrow.** Registering a source grants a subset of the manifest and binds its scope. The core rejects anything outside the grant. Format: `../adr/0004-plugin-manifest-and-grants.md`.
+13. **A connector that reads untrusted content uses only fixed read operations.** Nothing it reads can choose what it calls. Running it as a child process is not a sandbox, and Rastro doesn't claim OS isolation.
