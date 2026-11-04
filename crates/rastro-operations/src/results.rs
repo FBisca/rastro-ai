@@ -1,5 +1,6 @@
 //! Result types: what each operation returns, serialised into the envelope's `result`.
-use crate::{envelope, requests::*};
+pub use crate::catalog::Response;
+use crate::envelope;
 use rastro_core::{Coverage, Source, runs::RunReport, search::SearchResult};
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -35,40 +36,7 @@ pub struct IndexRebuildResult {
     pub indexed: usize,
 }
 
-/// What an operation returned.
-#[derive(Debug)]
-pub enum Response {
-    SourceAdd(SourceAddResult),
-    SourceList(SourceListResult),
-    Coverage(CoverageResult),
-    Sync(SyncResult),
-    Search(SearchResponse),
-    IndexRebuild(IndexRebuildResult),
-}
-
 impl Response {
-    pub fn operation(&self) -> &'static str {
-        match self {
-            Self::SourceAdd(_) => SourceAddRequest::NAME,
-            Self::SourceList(_) => SourceListRequest::NAME,
-            Self::Coverage(_) => CoverageRequest::NAME,
-            Self::Sync(_) => SyncRequest::NAME,
-            Self::Search(_) => SearchRequest::NAME,
-            Self::IndexRebuild(_) => IndexRebuildRequest::NAME,
-        }
-    }
-    /// The `result` member of the envelope.
-    pub fn result(&self) -> Value {
-        match self {
-            Self::SourceAdd(r) => serde_json::to_value(r),
-            Self::SourceList(r) => serde_json::to_value(r),
-            Self::Coverage(r) => serde_json::to_value(r),
-            Self::Sync(r) => serde_json::to_value(r),
-            Self::Search(r) => serde_json::to_value(r),
-            Self::IndexRebuild(r) => serde_json::to_value(r),
-        }
-        .expect("results serialise")
-    }
     pub fn envelope(&self) -> Value {
         envelope::success(self.operation(), &self.result())
     }
