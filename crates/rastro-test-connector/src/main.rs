@@ -14,8 +14,8 @@
 //! - `spawn_holder` {secs, pid_file?}: start a child that keeps the pipes open that long
 //! - `dump_env` {path}: write the environment, one NAME=value per line, to that file
 //! - `fixture` {name}: send a canned `evidence.submit`; `injection` is an issue body that holds
-//!   instruction-like text, with its original
-//!   `without_source_updated_at` is an issue body with no source update timestamp
+//!   instruction-like text, with its original; `without_source_updated_at` is an issue body
+//!   with no source update timestamp
 //! - `exit` {code?}: end the process at once
 //!
 //! Without a script it initializes, reports complete coverage and finishes.
