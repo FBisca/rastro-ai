@@ -817,7 +817,7 @@
           },
           "limit": {
             "default": 20,
-            "description": "Most hits to return, a whole number from 1 to 50 written without a decimal point (20.0 is refused); the result says when more matched.",
+            "description": "Most hits to return, a whole number from 1 to 50 (in JSON, 20.0 counts as 20; the command line takes plain digits); the result says when more matched.",
             "format": "uint8",
             "maximum": 50,
             "minimum": 1,
