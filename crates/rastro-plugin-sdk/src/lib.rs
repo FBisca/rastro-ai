@@ -245,6 +245,13 @@ impl<R: BufRead, W: Write> Transport<R, W> {
         self.writer.flush()?;
         Ok(())
     }
+    /// Sends bytes as-is plus a newline, for connectors that need to send invalid UTF-8 on purpose.
+    pub fn send_bytes(&mut self, bytes: &[u8]) -> Result<()> {
+        self.writer.write_all(bytes)?;
+        self.writer.write_all(b"\n")?;
+        self.writer.flush()?;
+        Ok(())
+    }
     pub fn into_writer(self) -> W {
         self.writer
     }

@@ -12,7 +12,7 @@ const LEGACY: [&str; 2] = ["202611041200_initial", "202611041500_evidence_insert
 
 /// `(name, sql)`, named `YYYYMMDDHHmm_<what>` so migrations from different branches
 /// order by time. Never edit one that has shipped; add a new one.
-const MIGRATIONS: [(&str, &str); 3] = [
+const MIGRATIONS: [(&str, &str); 4] = [
     (
         "202611041200_initial",
         include_str!("../migrations/202611041200_initial.sql"),
@@ -24,6 +24,10 @@ const MIGRATIONS: [(&str, &str); 3] = [
     (
         "202611041700_evidence_full_text_index",
         include_str!("../migrations/202611041700_evidence_full_text_index.sql"),
+    ),
+    (
+        "202611050900_run_window",
+        include_str!("../migrations/202611050900_run_window.sql"),
     ),
 ];
 
@@ -159,16 +163,19 @@ impl Storage for SqliteStorage {
         source: &Source,
         plugin: (&str, &str),
         started_at: DateTime<Utc>,
+        window: (DateTime<Utc>, DateTime<Utc>),
     ) -> Result<i64> {
         self.connection.execute(
-            "INSERT INTO runs (source, scope, plugin_id, plugin_version, started_at, status)
-             VALUES (?1, ?2, ?3, ?4, ?5, 'running')",
+            "INSERT INTO runs (source, scope, plugin_id, plugin_version, started_at, status,
+             window_start, window_end) VALUES (?1, ?2, ?3, ?4, ?5, 'running', ?6, ?7)",
             params![
                 source.name,
                 source.scope.0,
                 plugin.0,
                 plugin.1,
-                stamp(started_at)
+                stamp(started_at),
+                stamp(window.0),
+                stamp(window.1)
             ],
         )?;
         Ok(self.connection.last_insert_rowid())
@@ -255,11 +262,23 @@ impl Storage for SqliteStorage {
         .transpose()
     }
     fn interrupt_unfinished_runs(&mut self, at: DateTime<Utc>) -> Result<usize> {
-        Ok(self.connection.execute(
+        let transaction = self.connection.transaction()?;
+        let at = stamp(at);
+        // The window each lost run was bound to is "couldn't look: interrupted".
+        transaction.execute(
+            "INSERT INTO coverage (run_id, source, scope, window_start, window_end, selection,
+             state, reason, checked_at)
+             SELECT id, source, scope, window_start, window_end, 'all', 'couldn''t look',
+             'interrupted', ?1 FROM runs WHERE finished_at IS NULL AND window_start IS NOT NULL",
+            [&at],
+        )?;
+        let marked = transaction.execute(
             "UPDATE runs SET status='failed', reason='interrupted', finished_at=?1
              WHERE finished_at IS NULL",
-            [stamp(at)],
-        )?)
+            [&at],
+        )?;
+        transaction.commit()?;
+        Ok(marked)
     }
     fn search(&self, query: &str, limit: usize) -> Result<Vec<Hit>> {
         let mut statement = self.connection.prepare(
