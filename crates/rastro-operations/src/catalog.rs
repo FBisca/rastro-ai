@@ -1,7 +1,8 @@
 //! The catalog: one entry per operation.
 use crate::requests::*;
 use clap::{Args, Command};
-use schemars::JsonSchema;
+use schemars::{JsonSchema, Schema, generate::SchemaSettings, transform::RecursiveTransform};
+use serde::de::DeserializeOwned;
 use serde_json::Value;
 
 /// Where an operation is offered.
@@ -27,6 +28,9 @@ pub struct OperationSpec {
     pub(crate) input: fn() -> Value,
     pub(crate) output: fn() -> Value,
     pub(crate) command: fn() -> Command,
+    decode: fn(Value) -> serde_json::Result<Request>,
+    /// Whether the operation only reads.
+    pub read_only: bool,
 }
 
 /// One input of an operation.
@@ -38,19 +42,66 @@ pub struct Input {
     pub positional: bool,
 }
 
-fn root<T: JsonSchema>() -> Value {
+/// Objects in a result are closed: a key the type doesn't emit is not valid. Keys that may be
+/// left out are not nullable, because the types never print `null` for them.
+fn close_objects(schema: &mut Schema) {
+    let Some(object) = schema.as_object_mut() else {
+        return;
+    };
+    if !object.contains_key("properties") {
+        return;
+    }
+    object
+        .entry("additionalProperties")
+        .or_insert(Value::Bool(false));
+    let required: Vec<String> = object
+        .get("required")
+        .and_then(Value::as_array)
+        .map(|r| {
+            r.iter()
+                .filter_map(|v| v.as_str().map(String::from))
+                .collect()
+        })
+        .unwrap_or_default();
+    if let Some(Value::Object(properties)) = object.get_mut("properties") {
+        for (name, property) in properties {
+            if required.contains(name) {
+                continue;
+            }
+            if let Some(Value::Array(types)) = property.get_mut("type") {
+                types.retain(|t| t != "null");
+                if types.len() == 1 {
+                    property["type"] = types[0].clone();
+                }
+            }
+        }
+    }
+}
+/// A request, as the surfaces accept it.
+fn input_root<T: JsonSchema>() -> Value {
     schemars::schema_for!(T).to_value()
+}
+/// A result, as the code prints it.
+fn output_root<T: JsonSchema>() -> Value {
+    SchemaSettings::draft2020_12()
+        .for_serialize()
+        .with_transform(RecursiveTransform(close_objects))
+        .into_generator()
+        .into_root_schema_for::<T>()
+        .to_value()
 }
 fn command<T: Args>(name: &'static str) -> Command {
     T::augment_args(Command::new(name))
 }
-const fn spec<T: Operation + Args + JsonSchema>() -> OperationSpec {
+const fn spec<T: Operation + Args + JsonSchema + DeserializeOwned>() -> OperationSpec {
     OperationSpec {
         name: T::NAME,
         surfaces: T::SURFACES,
-        input: root::<T>,
-        output: root::<T::Output>,
+        input: input_root::<T>,
+        output: output_root::<T::Output>,
         command: || command::<T>(T::NAME),
+        decode: |arguments| serde_json::from_value::<T>(arguments).map(T::into_request),
+        read_only: T::READ_ONLY,
     }
 }
 
@@ -90,6 +141,10 @@ impl OperationSpec {
     }
     pub fn output_schema(&self) -> Value {
         (self.output)()
+    }
+    /// The request these JSON arguments make; unknown or missing arguments are an error.
+    pub fn decode(&self, arguments: Value) -> serde_json::Result<Request> {
+        (self.decode)(arguments)
     }
     pub fn exposed_on(&self, surface: Surface) -> bool {
         self.surfaces.contains(&surface)

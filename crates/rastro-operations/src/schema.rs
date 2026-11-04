@@ -20,7 +20,15 @@ fn absorb(root: Value, definitions: &mut Map<String, Value>) -> Value {
     let mut root = root;
     let object = root.as_object_mut().expect("object schema");
     if let Some(Value::Object(defs)) = object.remove("$defs") {
-        definitions.extend(defs);
+        for (name, definition) in defs {
+            let kept = definitions
+                .entry(name.clone())
+                .or_insert_with(|| definition.clone());
+            assert_eq!(
+                *kept, definition,
+                "two operations define `{name}` differently"
+            );
+        }
     }
     object.remove("$schema");
     root

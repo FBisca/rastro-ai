@@ -25,14 +25,17 @@ pub use evidence::{Appended, Evidence, Hit, TrustClass};
 pub use rastro_plugin_sdk::Counts;
 
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-pub struct Scope(pub String);
+pub struct Scope(#[schemars(length(min = 1))] pub String);
 
 #[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
 pub struct Source {
+    #[schemars(length(min = 1))]
     pub name: String,
+    #[schemars(length(min = 1))]
     pub connector: String,
     pub selector: BTreeMap<String, String>,
     pub scope: Scope,
+    #[schemars(regex(pattern = "^[0-9]+[smhd]$"))]
     pub freshness_rule: String,
     pub window_start: DateTime<Utc>,
     pub keep_original: bool,
@@ -225,7 +228,7 @@ pub struct Coverage {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     /// Every window the source was looked at, oldest first; empty in search answers.
-    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub windows: Vec<CoverageWindow>,
 }
 /// One window `[from, to)` a run looked at, with what it found.
@@ -233,6 +236,8 @@ pub struct Coverage {
 pub struct CoverageWindow {
     pub from: DateTime<Utc>,
     pub to: DateTime<Utc>,
+    /// A window records what a run saw, never "never looked" or "unknown".
+    #[schemars(extend("enum" = ["found", "empty", "couldn't look"]))]
     pub state: CoverageState,
     pub selection: String,
     #[serde(skip_serializing_if = "Option::is_none")]

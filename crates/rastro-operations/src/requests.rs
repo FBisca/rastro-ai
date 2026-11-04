@@ -14,7 +14,10 @@ pub const DEFAULT_FRESHNESS_RULE: &str = "1h";
 pub trait Operation {
     const NAME: &'static str;
     const SURFACES: &'static [Surface];
+    /// True when the operation changes nothing.
+    const READ_ONLY: bool;
     type Output: JsonSchema + serde::Serialize;
+    fn into_request(self) -> Request;
 }
 
 fn default_freshness_rule() -> String {
@@ -23,6 +26,7 @@ fn default_freshness_rule() -> String {
 
 /// Register a source of evidence.
 #[derive(Args, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SourceAddRequest {
     /// Name of the source.
     pub name: String,
@@ -52,19 +56,33 @@ impl Operation for SourceAddRequest {
     const NAME: &'static str = "source.add";
     const SURFACES: &'static [Surface] = &[Surface::Cli];
     type Output = SourceAddResult;
+    const READ_ONLY: bool = false;
+    fn into_request(self) -> Request {
+        Request::Source {
+            command: SourceRequest::Add(self),
+        }
+    }
 }
 
 /// List the registered sources.
 #[derive(Args, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SourceListRequest {}
 impl Operation for SourceListRequest {
     const NAME: &'static str = "source.list";
     const SURFACES: &'static [Surface] = &[Surface::Cli];
     type Output = SourceListResult;
+    const READ_ONLY: bool = true;
+    fn into_request(self) -> Request {
+        Request::Source {
+            command: SourceRequest::List(self),
+        }
+    }
 }
 
 /// Show what each source has been looked at, and how fresh that is.
 #[derive(Args, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct CoverageRequest {
     /// Only this source; every source when omitted.
     #[serde(default)]
@@ -74,10 +92,15 @@ impl Operation for CoverageRequest {
     const NAME: &'static str = "coverage";
     const SURFACES: &'static [Surface] = &[Surface::Cli, Surface::Mcp];
     type Output = CoverageResult;
+    const READ_ONLY: bool = true;
+    fn into_request(self) -> Request {
+        Request::Coverage(self)
+    }
 }
 
 /// Run the connector of one source, or of every source.
 #[derive(Args, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SyncRequest {
     /// Only this source; every source when omitted.
     #[serde(default)]
@@ -87,10 +110,15 @@ impl Operation for SyncRequest {
     const NAME: &'static str = "sync";
     const SURFACES: &'static [Surface] = &[Surface::Cli];
     type Output = SyncResult;
+    const READ_ONLY: bool = false;
+    fn into_request(self) -> Request {
+        Request::Sync(self)
+    }
 }
 
 /// Full-text search over evidence, each result cited.
 #[derive(Args, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct SearchRequest {
     /// Words to search for.
     pub text: String,
@@ -103,15 +131,26 @@ impl Operation for SearchRequest {
     const NAME: &'static str = "search";
     const SURFACES: &'static [Surface] = &[Surface::Cli, Surface::Mcp];
     type Output = SearchResponse;
+    const READ_ONLY: bool = true;
+    fn into_request(self) -> Request {
+        Request::Search(self)
+    }
 }
 
 /// Rebuild the full-text index from the stored evidence.
 #[derive(Args, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct IndexRebuildRequest {}
 impl Operation for IndexRebuildRequest {
     const NAME: &'static str = "index.rebuild";
     const SURFACES: &'static [Surface] = &[Surface::Cli];
     type Output = IndexRebuildResult;
+    const READ_ONLY: bool = false;
+    fn into_request(self) -> Request {
+        Request::Index {
+            command: IndexRequest::Rebuild(self),
+        }
+    }
 }
 
 #[derive(Subcommand, Debug)]
@@ -124,7 +163,7 @@ pub enum IndexRequest {
     Rebuild(IndexRebuildRequest),
 }
 
-/// A parsed command line: one request per operation.
+// A parsed command line: one request per operation.
 #[derive(Subcommand, Debug)]
 pub enum Request {
     /// Register and list sources.
@@ -160,7 +199,7 @@ impl Request {
         }
     }
 
-    /// Opens the store and runs the operation.
+    /// Runs the operation against an open store.
     pub fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<Response> {
         Ok(match self {
             Self::Source {

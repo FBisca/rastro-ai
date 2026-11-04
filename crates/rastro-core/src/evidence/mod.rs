@@ -35,16 +35,20 @@ impl TrustClass {
 pub struct Evidence {
     pub source: String,
     pub scope: Scope,
+    #[schemars(length(min = 1))]
     pub location: String,
+    #[schemars(length(min = 1))]
     pub field: String,
     pub start: u64,
     pub end: u64,
+    #[schemars(length(min = 1))]
     pub quote: String,
     pub trust_class: TrustClass,
     pub captured_at: DateTime<Utc>,
     pub source_updated_at: Option<DateTime<Utc>>,
     /// The full original, kept only for a source added with `--keep-original`.
     #[serde(skip_serializing_if = "Option::is_none")]
+    #[schemars(with = "Option<serde_json::Map<String, serde_json::Value>>")]
     pub original: Option<serde_json::Value>,
 }
 

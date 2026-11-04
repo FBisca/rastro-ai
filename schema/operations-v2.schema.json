@@ -1,29 +1,21 @@
 {
   "$defs": {
     "Coverage": {
+      "additionalProperties": false,
       "properties": {
         "fresh_until": {
           "description": "Last complete check plus the freshness rule.",
           "format": "date-time",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "last_checked": {
           "description": "When the source was last checked completely (found or empty).",
           "format": "date-time",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "reason": {
           "description": "Why the latest attempt couldn't look, kept next to the last successful check.",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "scope": {
           "$ref": "#/$defs/Scope"
@@ -60,6 +52,7 @@
       "type": "string"
     },
     "CoverageWindow": {
+      "additionalProperties": false,
       "description": "One window `[from, to)` a run looked at, with what it found.",
       "properties": {
         "checked_at": {
@@ -71,23 +64,23 @@
           "type": "string"
         },
         "reason": {
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "retry_at": {
           "format": "date-time",
-          "type": [
-            "string",
-            "null"
-          ]
+          "type": "string"
         },
         "selection": {
           "type": "string"
         },
         "state": {
-          "$ref": "#/$defs/CoverageState"
+          "$ref": "#/$defs/CoverageState",
+          "description": "A window records what a run saw, never \"never looked\" or \"unknown\".",
+          "enum": [
+            "found",
+            "empty",
+            "couldn't look"
+          ]
         },
         "to": {
           "format": "date-time",
@@ -104,6 +97,7 @@
       "type": "object"
     },
     "RunCounts": {
+      "additionalProperties": false,
       "properties": {
         "accepted": {
           "format": "uint64",
@@ -135,6 +129,7 @@
       "type": "object"
     },
     "RunReport": {
+      "additionalProperties": false,
       "properties": {
         "counts": {
           "$ref": "#/$defs/RunCounts"
@@ -174,6 +169,10 @@
         },
         "status": {
           "description": "`ok` or `failed`.",
+          "enum": [
+            "ok",
+            "failed"
+          ],
           "type": "string"
         },
         "window": {
@@ -187,6 +186,7 @@
         "plugin_id",
         "plugin_version",
         "status",
+        "reason",
         "started_at",
         "finished_at",
         "window",
@@ -196,6 +196,7 @@
       "type": "object"
     },
     "RunWindow": {
+      "additionalProperties": false,
       "properties": {
         "from": {
           "format": "date-time",
@@ -213,9 +214,11 @@
       "type": "object"
     },
     "Scope": {
+      "minLength": 1,
       "type": "string"
     },
     "SearchResult": {
+      "additionalProperties": false,
       "description": "A stored observation that matched a search.",
       "properties": {
         "captured_at": {
@@ -238,6 +241,7 @@
           "type": "integer"
         },
         "field": {
+          "minLength": 1,
           "type": "string"
         },
         "id": {
@@ -245,12 +249,16 @@
           "type": "integer"
         },
         "location": {
+          "minLength": 1,
           "type": "string"
         },
         "original": {
-          "description": "The full original, kept only for a source added with `--keep-original`."
+          "additionalProperties": true,
+          "description": "The full original, kept only for a source added with `--keep-original`.",
+          "type": "object"
         },
         "quote": {
+          "minLength": 1,
           "type": "string"
         },
         "scope": {
@@ -285,22 +293,28 @@
         "end",
         "quote",
         "trust_class",
-        "captured_at"
+        "captured_at",
+        "source_updated_at",
+        "coverage"
       ],
       "type": "object"
     },
     "Source": {
+      "additionalProperties": false,
       "properties": {
         "connector": {
+          "minLength": 1,
           "type": "string"
         },
         "freshness_rule": {
+          "pattern": "^[0-9]+[smhd]$",
           "type": "string"
         },
         "keep_original": {
           "type": "boolean"
         },
         "name": {
+          "minLength": 1,
           "type": "string"
         },
         "scope": {
@@ -365,6 +379,7 @@
               "const": "source.add"
             },
             "result": {
+              "additionalProperties": false,
               "properties": {
                 "source": {
                   "$ref": "#/$defs/Source"
@@ -384,6 +399,7 @@
               "const": "source.list"
             },
             "result": {
+              "additionalProperties": false,
               "properties": {
                 "sources": {
                   "items": {
@@ -406,6 +422,7 @@
               "const": "coverage"
             },
             "result": {
+              "additionalProperties": false,
               "properties": {
                 "coverage": {
                   "items": {
@@ -428,6 +445,7 @@
               "const": "sync"
             },
             "result": {
+              "additionalProperties": false,
               "properties": {
                 "runs": {
                   "items": {
@@ -450,6 +468,7 @@
               "const": "search"
             },
             "result": {
+              "additionalProperties": false,
               "description": "Matches, plus the coverage of every source searched.",
               "properties": {
                 "coverage": {
@@ -484,6 +503,7 @@
               "const": "index.rebuild"
             },
             "result": {
+              "additionalProperties": false,
               "properties": {
                 "indexed": {
                   "format": "uint",
@@ -537,6 +557,7 @@
     {
       "description": "Register a source of evidence.",
       "input": {
+        "additionalProperties": false,
         "description": "Register a source of evidence.",
         "properties": {
           "connector": {
@@ -585,6 +606,7 @@
       },
       "name": "source.add",
       "result": {
+        "additionalProperties": false,
         "properties": {
           "source": {
             "$ref": "#/$defs/Source"
@@ -603,12 +625,14 @@
     {
       "description": "List the registered sources.",
       "input": {
+        "additionalProperties": false,
         "description": "List the registered sources.",
         "title": "SourceListRequest",
         "type": "object"
       },
       "name": "source.list",
       "result": {
+        "additionalProperties": false,
         "properties": {
           "sources": {
             "items": {
@@ -630,6 +654,7 @@
     {
       "description": "Show what each source has been looked at, and how fresh that is.",
       "input": {
+        "additionalProperties": false,
         "description": "Show what each source has been looked at, and how fresh that is.",
         "properties": {
           "name": {
@@ -646,6 +671,7 @@
       },
       "name": "coverage",
       "result": {
+        "additionalProperties": false,
         "properties": {
           "coverage": {
             "items": {
@@ -668,6 +694,7 @@
     {
       "description": "Run the connector of one source, or of every source.",
       "input": {
+        "additionalProperties": false,
         "description": "Run the connector of one source, or of every source.",
         "properties": {
           "name": {
@@ -684,6 +711,7 @@
       },
       "name": "sync",
       "result": {
+        "additionalProperties": false,
         "properties": {
           "runs": {
             "items": {
@@ -705,6 +733,7 @@
     {
       "description": "Full-text search over evidence, each result cited.",
       "input": {
+        "additionalProperties": false,
         "description": "Full-text search over evidence, each result cited.",
         "properties": {
           "history": {
@@ -725,6 +754,7 @@
       },
       "name": "search",
       "result": {
+        "additionalProperties": false,
         "description": "Matches, plus the coverage of every source searched.",
         "properties": {
           "coverage": {
@@ -759,12 +789,14 @@
     {
       "description": "Rebuild the full-text index from the stored evidence.",
       "input": {
+        "additionalProperties": false,
         "description": "Rebuild the full-text index from the stored evidence.",
         "title": "IndexRebuildRequest",
         "type": "object"
       },
       "name": "index.rebuild",
       "result": {
+        "additionalProperties": false,
         "properties": {
           "indexed": {
             "format": "uint",

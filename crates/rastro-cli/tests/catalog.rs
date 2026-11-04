@@ -50,19 +50,43 @@ fn S2_help_lists_exactly_what_the_catalog_defines() {
                 );
             }
         }
-        // no option beyond the catalog's, `--json`, `--help` and `--version`
-        let listed: Vec<_> = help
+        // options: exactly the catalog's, besides `--json`, `--help` and `--version`
+        let mut listed: Vec<_> = help
             .lines()
             .filter_map(|l| l.trim_start().strip_prefix("--"))
             .map(|l| l.split([' ', ',']).next().unwrap().to_string())
             .filter(|f| !["json", "help", "version"].contains(&f.as_str()))
             .collect();
-        let expected: Vec<_> = inputs
+        let mut expected: Vec<_> = inputs
             .iter()
             .filter(|i| !i.positional)
             .map(|i| i.name.replace('_', "-"))
             .collect();
+        listed.sort();
+        expected.sort();
         assert_eq!(listed, expected, "{name}: {help}");
+        // positionals: exactly the catalog's
+        let mut shown: Vec<_> = help
+            .lines()
+            .skip_while(|l| *l != "Arguments:")
+            .skip(1)
+            .take_while(|l| !l.is_empty())
+            .map(|l| {
+                l.split_whitespace()
+                    .next()
+                    .unwrap()
+                    .trim_matches(['<', '>', '[', ']'])
+                    .to_lowercase()
+            })
+            .collect();
+        let mut positional: Vec<_> = inputs
+            .iter()
+            .filter(|i| i.positional)
+            .map(|i| i.name.clone())
+            .collect();
+        shown.sort();
+        positional.sort();
+        assert_eq!(shown, positional, "{name}: {help}");
     }
 }
 
@@ -106,6 +130,75 @@ fn S5_every_envelope_is_version_2_and_schema_valid() {
             .validate(&value)
             .unwrap_or_else(|e| panic!("{args:?}: {e}: {value}"));
     }
+    // the schema is strict: extra keys, missing keys and wrong values all fail
+    let bad = |value: Value, why: &str| {
+        assert!(
+            validator.validate(&value).is_err(),
+            "accepted: {why}: {value}"
+        );
+    };
+    let envelope = |operation: &str, result: Value| serde_json::json!({"schema_version": 2, "operation": operation, "result": result});
+    bad(
+        envelope(
+            "index.rebuild",
+            serde_json::json!({"indexed": 0, "junk": 1}),
+        ),
+        "extra key",
+    );
+    bad(
+        envelope("index.rebuild", serde_json::json!({})),
+        "missing key",
+    );
+    bad(
+        envelope(
+            "coverage",
+            serde_json::json!({"coverage": [{"source": "a", "scope": "w", "state": "found", "junk": 1}]}),
+        ),
+        "extra key in coverage",
+    );
+    let run = |status: &str| {
+        serde_json::json!({"run_id": 1, "source": "a", "scope": "w", "plugin_id": "p",
+        "plugin_version": "1", "status": status, "reason": null,
+        "started_at": "2026-11-01T00:00:00Z", "finished_at": "2026-11-01T00:00:00Z",
+        "window": {"from": "2026-11-01T00:00:00Z", "to": "2026-11-01T00:00:00Z"},
+        "counts": {"submitted": 0, "accepted": 0, "rejected": 0, "unchanged": 0},
+        "coverage": "found"})
+    };
+    let good = envelope("sync", serde_json::json!({"runs": [run("ok")]}));
+    validator.validate(&good).unwrap();
+    bad(
+        envelope("sync", serde_json::json!({"runs": [run("exploded")]})),
+        "bad status",
+    );
+    let window = |state: &str| {
+        serde_json::json!({"from": "2026-11-01T00:00:00Z", "to": "2026-11-01T00:00:00Z",
+        "state": state, "selection": "all", "checked_at": "2026-11-01T00:00:00Z"})
+    };
+    let covering = |w: Value| {
+        envelope(
+            "coverage",
+            serde_json::json!({"coverage": [{"source": "a", "scope": "w", "state": "found", "windows": [w]}]}),
+        )
+    };
+    validator.validate(&covering(window("found"))).unwrap();
+    bad(
+        covering(window("unknown")),
+        "window state outside its three",
+    );
+    bad(
+        envelope(
+            "source.list",
+            serde_json::json!({"sources": [{"name": "", "connector": "github", "selector": {}, "scope": "w", "freshness_rule": "1h", "window_start": "2026-11-01T00:00:00Z", "keep_original": false}]}),
+        ),
+        "empty name",
+    );
+    bad(
+        envelope(
+            "source.list",
+            serde_json::json!({"sources": [{"name": "a", "connector": "github", "selector": {}, "scope": "w", "freshness_rule": "soon", "window_start": "2026-11-01T00:00:00Z", "keep_original": false}]}),
+        ),
+        "bad freshness rule",
+    );
     // v1 stays exactly as it was
     let v1 = include_bytes!("../../../schema/operations-v1.schema.json");
     let hash = v1.iter().fold(0xcbf29ce484222325u64, |h, b| {

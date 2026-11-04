@@ -7,8 +7,13 @@ use rastro_storage_sqlite::SqliteStorage;
 use std::ffi::OsString;
 
 #[derive(Parser)]
-#[command(name = "rastro", version)]
+#[command(
+    name = "rastro",
+    version,
+    about = "Collect evidence from sources and search it, each result cited"
+)]
 struct Cli {
+    /// Print the result as a JSON envelope.
     #[arg(long, global = true)]
     json: bool,
     #[command(subcommand)]

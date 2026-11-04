@@ -14,6 +14,7 @@ pub struct RunReport {
     pub plugin_id: String,
     pub plugin_version: String,
     /// `ok` or `failed`.
+    #[schemars(extend("enum" = ["ok", "failed"]))]
     pub status: String,
     pub reason: Option<String>,
     pub started_at: DateTime<Utc>,
@@ -116,7 +117,7 @@ pub struct SearchResults {
     pub coverage: Vec<crate::Coverage>,
 }
 
-// Schema of `rastro_plugin_sdk::Window`, which the SDK does not derive.
+// Schema of `rastro_plugin_sdk::Window`, which the SDK does not derive; keep in step with it.
 #[derive(JsonSchema)]
 #[allow(dead_code)]
 struct RunWindow {
