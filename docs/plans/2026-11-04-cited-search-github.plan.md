@@ -38,6 +38,8 @@ Roadmap slice 1 is the walking skeleton for M1. Slice 2 (agents query Rastro ove
 | D13 | Raw content: pointer + quoted span by default; `--keep-original` opt-in | Full original by default | Owner's choice per source | knowledge §3, §16 |
 | D14 | Re-observation: unchanged → link the run, changed → append; search shows the latest observation per location, `--history` shows all | Upsert | Evidence never changes | ADR 0005 |
 | D15 | The connector calls GitHub's REST API directly: token from `GH_TOKEN` or `gh auth token`, base URL overridable for tests, only fixed GET endpoints | Shelling out to `gh api` with built arguments | Fixed read operations; testable against a fixture server | plugins §13 |
+| D17 | CI: GitHub Actions on `ubuntu-latest` and `macos-latest` running `cargo fmt --all --check`, `cargo clippy --workspace --all-targets -- -D warnings`, `cargo test --workspace`; toolchain pinned in `rust-toolchain.toml` | No CI until later | A ticket is COMPLETE only with green CI; macOS and Linux are required | surfaces §6; orchestrate gate |
+| D18 | Rust test names carry the scenario ID in upper case (`fn S1_source_add_lists_the_source()`), with `#![allow(non_snake_case)]` at the top of each test file | Lower-case `s1_` names | The converge gate matches IDs case-sensitively | orchestrate gate |
 | D16 | Cargo workspace: `rastro-core` (lib), `rastro-storage-sqlite` (lib), `rastro-cli` (bin `rastro`), `rastro-connector-github` (bin), `rastro-plugin-sdk` (lib: protocol types shared by connectors) | One crate | Library first; plugins depend on protocol types, never on the core | ADR 0001; Codex review |
 
 ## Scenarios
@@ -100,7 +102,7 @@ Roadmap slice 1 is the walking skeleton for M1. Slice 2 (agents query Rastro ove
 ## Tickets
 | # | What it delivers | Satisfies | Blocked by | Paths | Owner | Status |
 |---|---|---|---|---|---|---|
-| T1 | Workspace, `rastro-core` config/location, SQLite store with migrations, `rastro source add/list`, `rastro coverage` "never looked", `--json` schema skeleton | S1–S3 | none | Cargo.toml, Cargo.lock, crates/rastro-core/, crates/rastro-storage-sqlite/, crates/rastro-cli/, schema/, tests/cli/ | agent | TO-DO |
+| T1 | Workspace, CI, `rastro-core` config/location, SQLite store with migrations, `rastro source add/list`, `rastro coverage` "never looked", `--json` schema skeleton | S1–S3 | none | Cargo.toml, Cargo.lock, rust-toolchain.toml, .gitignore, .github/workflows/, crates/rastro-core/, crates/rastro-storage-sqlite/, crates/rastro-cli/, schema/, tests/cli/ | agent | TO-DO |
 | T2 | Plugin SDK + host: spawn, handshake, `evidence.submit`/`coverage.report`/`run.finish`, validation, run log, scripted test connector; basic `rastro search` with citations | S4, S4a, S5, S6, S19, S20 | T1 | crates/rastro-plugin-sdk/, crates/rastro-core/, crates/rastro-storage-sqlite/, crates/rastro-cli/, schema/, tests/ | agent | TO-DO |
 | T3 | Host hardening: version and manifest mismatch, crash, malformed or oversized lines, timeouts, interrupted-run recovery, typed "couldn't look" | S7–S11 | T2 | crates/rastro-core/src/host/, crates/rastro-core/src/runs/, tests/host/, tests/fixtures/scripted-connector/ | agent | TO-DO |
 | T4 | GitHub connector: involvement queries, pagination, comment reads, span mapping, trust classes, auth and rate-limit failures, fixture server | S12–S16 | T2 | crates/rastro-connector-github/, tests/github/ | agent | TO-DO |
