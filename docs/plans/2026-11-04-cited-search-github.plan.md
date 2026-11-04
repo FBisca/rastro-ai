@@ -131,7 +131,6 @@ Roadmap slice 1 is the walking skeleton for M1. Slice 2 (agents query Rastro ove
 - **S27** WHEN every submission in a run is rejected, THEN the window records "couldn't look: protocol", never "empty".
 - **S27a** WHEN some submissions in a run are rejected, THEN the accepted evidence is stored and the window records "couldn't look: protocol", not "found".
 - **S27b** WHEN a run has a rejected submission and also a connector-reported failure or a failed finish, THEN the window records "couldn't look: protocol" and the accepted evidence is kept.
-- **S27c** WHEN a coverage test compares two timestamps, THEN it compares instants, so `…01.000Z` and `…01Z` are equal and the test never flakes on formatting.
 - **S28** WHEN a source's connector isn't installed, THEN coverage records "couldn't look: not_installed", and `not_installed` is one of the published typed reasons.
 - **S29** WHEN a source's manifest fails its check, THEN a failed run with "couldn't look: protocol" is recorded and any other source in the same sync still runs.
 - **S30** WHEN the GitHub API base URL override names a host that isn't loopback, THEN the connector sends no request and coverage records "couldn't look: protocol".
@@ -183,4 +182,4 @@ Roadmap slice 1 is the walking skeleton for M1. Slice 2 (agents query Rastro ove
 | T22 | Review fix: an original must be a JSON object, or the submission is rejected | S25a | T17 | crates/rastro-core/, crates/rastro-cli/tests/, crates/rastro-test-connector/ | agent | COMPLETE (#24) |
 | T23 | Review fix: a rejected submission makes the window "couldn't look: protocol" whatever else failed | S27b | T18 | crates/rastro-core/, crates/rastro-cli/tests/, crates/rastro-test-connector/ | agent | COMPLETE (#26) |
 | T24 | Review fix: an explicit null original is rejected for a source that keeps originals | S25b | T22 | crates/rastro-plugin-sdk/, crates/rastro-core/, crates/rastro-cli/tests/, crates/rastro-test-connector/ | agent | COMPLETE (#25) |
-| T25 | Review fix: the rejection-precedence test compares instants, not timestamp strings | S27c | T23 | crates/rastro-cli/tests/ | agent | TO-DO |
+| T25 | Review fix: the rejection-precedence test compares instants, not timestamp strings | S27b | T23 | crates/rastro-cli/tests/ | agent | TO-DO |
