@@ -21,20 +21,23 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod extract;
 mod io;
+pub use extract::extract;
 
 pub struct Plugin {
     pub manifest: Manifest,
     pub dir: PathBuf,
 }
 
-/// Finds the manifest whose `id` is the source's connector, under `<config>/plugins` and
+/// Finds the manifest whose `id` is `id` and that provides `kind`, under `<config>/plugins` and
 /// the directories of `RASTRO_PLUGIN_PATH`. Each root may be a plugin directory or hold some.
 /// `Err` carries the typed reason the run will fail with: `not_installed` when no manifest
 /// matches, `protocol` when the matching one fails its check.
 pub fn discover(
     locations: &Locations,
-    connector: &str,
+    id: &str,
+    kind: &str,
 ) -> std::result::Result<Plugin, &'static str> {
     let mut roots = vec![locations.plugins()];
     if let Some(path) = env::var_os("RASTRO_PLUGIN_PATH") {
@@ -54,9 +57,9 @@ pub fn discover(
                 continue;
             };
             match Manifest::parse(&text) {
-                Ok(manifest) if manifest.id == connector => {
-                    return check(manifest, dir).map_err(|error| {
-                        eprintln!("plugin {connector} fails its check: {error:#}");
+                Ok(manifest) if manifest.id == id => {
+                    return check(manifest, dir, kind).map_err(|error| {
+                        eprintln!("plugin {id} fails its check: {error:#}");
                         "protocol"
                     });
                 }
@@ -86,7 +89,7 @@ fn parse_diagnostic(dir: &Path, text: &str, error: &anyhow::Error) -> String {
     format!("{}: invalid rastro-plugin.toml{at}", file.display())
 }
 
-fn check(manifest: Manifest, dir: PathBuf) -> Result<Plugin> {
+fn check(manifest: Manifest, dir: PathBuf, kind: &str) -> Result<Plugin> {
     if major(PROTOCOL_VERSION) != manifest.protocol.to_string() {
         bail!(
             "plugin {} speaks protocol {}",
@@ -94,11 +97,11 @@ fn check(manifest: Manifest, dir: PathBuf) -> Result<Plugin> {
             manifest.protocol
         );
     }
-    if !manifest.kinds.iter().any(|k| k == "connector") {
-        bail!("plugin {} is not a connector", manifest.id);
+    if !manifest.kinds.iter().any(|k| k == kind) {
+        bail!("plugin {} is not a {kind}", manifest.id);
     }
     if !manifest.permissions.actions.is_empty() {
-        bail!("a connector can't hold actions (plugin {})", manifest.id);
+        bail!("a {kind} can't hold actions (plugin {})", manifest.id);
     }
     Ok(Plugin { manifest, dir })
 }
@@ -242,6 +245,7 @@ pub fn run<S: Storage>(
         window,
         counts,
         coverage: state,
+        extraction: None,
     })
 }
 
@@ -254,6 +258,10 @@ struct Limits {
     shutdown: Duration,
     /// Stderr lines relayed per run.
     stderr_lines: usize,
+    /// Claims an extractor run may submit; unset, it scales with the evidence delivered.
+    max_claims: Option<usize>,
+    /// How long an extractor run may take in all.
+    extraction_time: Duration,
 }
 impl Limits {
     fn from_env() -> Self {
@@ -274,6 +282,11 @@ impl Limits {
                 DEFAULT_SHUTDOWN.as_millis() as u64,
             )),
             stderr_lines: number("RASTRO_HOST_STDERR_LINES", DEFAULT_STDERR_LINES as u64) as usize,
+            max_claims: knob("RASTRO_HOST_MAX_CLAIMS").and_then(|v| v.parse().ok()),
+            extraction_time: Duration::from_millis(number(
+                "RASTRO_HOST_EXTRACTION_MS",
+                DEFAULT_EXTRACTION_TIME.as_millis() as u64,
+            )),
         }
     }
 }
@@ -286,6 +299,8 @@ pub const DEFAULT_SILENCE: Duration = Duration::from_secs(60);
 pub const DEFAULT_SHUTDOWN: Duration = Duration::from_secs(5);
 /// How many stderr lines are relayed per run; the rest are counted and dropped.
 pub const DEFAULT_STDERR_LINES: usize = 1000;
+/// How long an extractor run may take in all, however chatty it is.
+pub const DEFAULT_EXTRACTION_TIME: Duration = Duration::from_secs(600);
 
 /// A reason a connector gives must be one of the typed ones; anything else means it broke
 /// the contract and is recorded as `protocol`.
@@ -483,6 +498,25 @@ impl Wire {
             Err(RecvTimeoutError::Timeout) => Err("timeout"),
         }
     }
+    /// Queues a line without waiting for it to be written, so the host can read the plugin's
+    /// answers while it is still taking input. A failed write shows up as end of input.
+    fn post(&mut self, message: &Envelope) -> std::result::Result<(), &'static str> {
+        let line = serde_json::to_string(message).map_err(|_| "protocol")?;
+        let (ack, _) = std::sync::mpsc::sync_channel(1);
+        self.jobs.send((line, ack)).map_err(|_| "interrupted")
+    }
+    /// `recv`, but never past `end`: a plugin that keeps talking still runs out of time.
+    fn recv_by(&mut self, end: Instant) -> std::result::Result<Envelope, &'static str> {
+        let left = end.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err("timeout");
+        }
+        let silence = self.deadline;
+        self.deadline = silence.min(left);
+        let message = self.recv();
+        self.deadline = silence;
+        message
+    }
     fn recv(&mut self) -> std::result::Result<Envelope, &'static str> {
         match self.events.recv_timeout(self.deadline) {
             Ok(io::Event::Line(line)) => match serde_json::from_str::<Envelope>(&line) {
@@ -494,6 +528,27 @@ impl Wire {
             Err(RecvTimeoutError::Timeout) => Err("timeout"),
         }
     }
+}
+
+/// Sends `initialize` and checks the answer names our protocol major and the manifest.
+fn handshake(
+    wire: &mut Wire,
+    plugin: &Plugin,
+    init: impl serde::Serialize,
+) -> Result<std::result::Result<(), &'static str>> {
+    if let Err(reason) = wire.send(&Envelope::request(1, INITIALIZE, init)?) {
+        return Ok(Err(reason));
+    }
+    let reply = match wire.recv() {
+        Ok(reply) => reply,
+        Err(reason) => return Ok(Err(reason)),
+    };
+    let agreed = reply.id == Some(1.into())
+        && reply.result::<InitializeResult>().is_ok_and(|init| {
+            major(&init.protocol) == major(PROTOCOL_VERSION)
+                && init.manifest_id == plugin.manifest.id
+        });
+    Ok(if agreed { Ok(()) } else { Err("protocol") })
 }
 
 fn converse<S: Storage>(
@@ -518,17 +573,7 @@ fn converse<S: Storage>(
             }
         };
     }
-    step!(wire.send(&Envelope::request(1, INITIALIZE, init)?));
-    let reply = step!(wire.recv());
-    if reply.id != Some(1.into()) {
-        return Ok(Err("protocol"));
-    }
-    let Ok(init) = reply.result::<InitializeResult>() else {
-        return Ok(Err("protocol"));
-    };
-    if major(&init.protocol) != major(PROTOCOL_VERSION) || init.manifest_id != plugin.manifest.id {
-        return Ok(Err("protocol"));
-    }
+    step!(handshake(wire, plugin, init)?);
     loop {
         let message = step!(wire.recv());
         match message.method.as_deref() {
@@ -605,6 +650,10 @@ mod tests {
             ),
             (7, Duration::from_millis(7), Duration::from_millis(7), 7)
         );
+        assert_eq!(
+            (tuned.max_claims, tuned.extraction_time),
+            (Some(7), Duration::from_millis(7))
+        );
         let release = everything(false);
         assert_eq!(
             (
@@ -620,6 +669,10 @@ mod tests {
                 DEFAULT_STDERR_LINES
             )
         );
+        assert_eq!(
+            (release.max_claims, release.extraction_time),
+            (None, DEFAULT_EXTRACTION_TIME)
+        );
     }
 
     /// evidence/R26: teardown kills the process group and releases every helper thread
@@ -634,6 +687,8 @@ mod tests {
                 silence: Duration::from_secs(1),
                 shutdown: Duration::from_millis(200),
                 stderr_lines: 10,
+                max_claims: None,
+                extraction_time: Duration::from_secs(5),
             };
             let connector = Connector::launch(command, "test", limits).unwrap();
             let tally = connector.teardown(finished);
@@ -660,6 +715,8 @@ mod tests {
             silence: Duration::from_secs(1),
             shutdown: Duration::from_secs(5),
             stderr_lines: 10,
+            max_claims: None,
+            extraction_time: Duration::from_secs(5),
         };
         let connector = Connector::launch(command, "test", limits).unwrap();
         let mut state = String::new();

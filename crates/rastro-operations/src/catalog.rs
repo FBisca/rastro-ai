@@ -248,6 +248,9 @@ operations! {
     Search(SearchRequest => SearchResponse) {
         slot: 4, name: "search", surfaces: [Cli, Mcp], read_only: true, reader: run_read
     }
+    Why(WhyRequest => WhyResult) {
+        slot: 6, name: "why", surfaces: [Cli], read_only: true
+    }
 }
 
 pub fn find(name: &str) -> Option<&'static OperationSpec> {

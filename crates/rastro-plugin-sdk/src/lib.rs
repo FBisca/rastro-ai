@@ -1,4 +1,5 @@
-//! Protocol and manifest types shared by the core and connectors (ADR 0003, ADR 0004).
+//! Protocol and manifest types shared by the core and its plugins (ADR 0003, ADR 0004,
+//! ADR 0008).
 //! Depends on nothing from the core.
 use anyhow::{Context, Result};
 use schemars::JsonSchema;
@@ -15,6 +16,8 @@ pub const INITIALIZE: &str = "initialize";
 pub const EVIDENCE_SUBMIT: &str = "evidence.submit";
 pub const COVERAGE_REPORT: &str = "coverage.report";
 pub const RUN_FINISH: &str = "run.finish";
+pub const EVIDENCE_BATCH: &str = "evidence.batch";
+pub const CLAIM_SUBMIT: &str = "claim.submit";
 
 /// Why a connector couldn't look (decisions/knowledge.md §18). Anything else it reports is
 /// recorded as `protocol`.
@@ -135,6 +138,103 @@ pub struct InitializeResult {
     pub manifest_id: String,
 }
 
+/// What a plugin is asked to do in a run. An `initialize` without one is a connector's.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Role {
+    #[default]
+    Connector,
+    Extractor,
+}
+/// One (source, scope) pair whose evidence an extractor run may read.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SourceScope {
+    pub source: String,
+    pub scope: String,
+}
+/// What the core binds an extractor run to.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ExtractionBinding {
+    pub run_id: i64,
+    pub extractor_version: String,
+    pub pairs: Vec<SourceScope>,
+}
+/// `initialize` for the extractor role.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ExtractorInitializeParams {
+    pub protocol: String,
+    pub manifest_id: String,
+    pub role: Role,
+    pub run: ExtractionBinding,
+}
+/// A field and a half-open UTF-8 byte range in it, with the quoted text.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Span {
+    pub field: String,
+    pub start: u64,
+    pub end: u64,
+    pub quote: String,
+}
+/// One stored observation sent to an extractor.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct BatchItem {
+    pub evidence_id: i64,
+    pub source: String,
+    pub scope: String,
+    pub location: String,
+    pub span: Span,
+    pub captured_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_updated_at: Option<String>,
+    pub trust_class: String,
+}
+/// `evidence.batch` (core to extractor), in (`captured_at`, evidence id) order. After the one
+/// marked `last` the extractor sends `run.finish`.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct EvidenceBatch {
+    pub items: Vec<BatchItem>,
+    pub last: bool,
+}
+/// An entity named by its canonical identifier, with its type.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct EntityRef {
+    pub identifier: String,
+    #[serde(rename = "type")]
+    pub entity_type: String,
+}
+/// What a claim says about its subject: another entity or a typed literal.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum ClaimObject {
+    Entity {
+        identifier: String,
+        #[serde(rename = "type")]
+        entity_type: String,
+    },
+    Literal {
+        value: String,
+        datatype: String,
+    },
+}
+/// Where in a delivered observation a claim is supported: its field and a byte range inside
+/// that observation's span.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct SupportRef {
+    pub evidence_id: i64,
+    pub field: String,
+    pub start: u64,
+    pub end: u64,
+}
+/// `claim.submit` (extractor to core). The core validates every part (ADR 0008).
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ClaimSubmit {
+    pub subject: EntityRef,
+    pub predicate: String,
+    pub object: ClaimObject,
+    pub extraction_rule: String,
+    pub supports: Vec<SupportRef>,
+}
+
 /// A field that is present, even as `null`, is `Some`; only an absent one is `None`.
 fn present<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<Value>, D::Error> {
     Value::deserialize(deserializer).map(Some)
@@ -203,7 +303,7 @@ pub struct CoverageReport {
     pub window: Option<Window>,
 }
 
-/// `run.finish` request: the plugin's own view. The core's counts are the authority.
+/// `run.finish` request: the plugin's own view (items, or claims for an extractor). The core's counts are the authority.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct RunFinish {
     pub status: String,
@@ -232,6 +332,12 @@ pub struct Permissions {
     #[serde(default)]
     pub env: Vec<String>,
 }
+/// An extraction rule an extractor declares; only deterministic ones may yield observed claims.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ExtractionRule {
+    pub id: String,
+    pub deterministic: bool,
+}
 /// `rastro-plugin.toml`. A request: the source's grant can only narrow it.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Manifest {
@@ -244,11 +350,42 @@ pub struct Manifest {
     pub command: String,
     pub permissions: Permissions,
     pub triggers: Vec<String>,
+    /// Vocabularies (namespaces) an extractor uses.
     pub dependencies: Vec<String>,
+    #[serde(default)]
+    pub extraction_rules: Vec<ExtractionRule>,
+    /// Path, relative to the plugin directory, of the vocabulary this package provides.
+    #[serde(default)]
+    pub vocabulary: Option<String>,
+    /// On a connector: the extractor bound by default to its sources.
+    #[serde(default)]
+    pub default_extractor: Option<String>,
 }
 impl Manifest {
     pub fn parse(text: &str) -> Result<Self> {
         toml::from_str(text).context("invalid rastro-plugin.toml")
+    }
+}
+
+/// A vocabulary file: one namespace's entity types and predicates.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Vocabulary {
+    pub namespace: String,
+    pub version: String,
+    pub types: Vec<String>,
+    pub predicates: Vec<Predicate>,
+}
+/// A predicate: the subject types it applies to, and the object types or literal datatypes
+/// it takes.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Predicate {
+    pub id: String,
+    pub domain: Vec<String>,
+    pub range: Vec<String>,
+}
+impl Vocabulary {
+    pub fn parse(text: &str) -> Result<Self> {
+        toml::from_str(text).context("invalid vocabulary")
     }
 }
 

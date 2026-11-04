@@ -1,9 +1,10 @@
 use anyhow::{Result, bail};
 use chrono::{DateTime, SecondsFormat, Utc};
+use rastro_core::claims::{Checkpoint, ClaimView, Entity, Object, ObservedClaim, SupportView, Why};
 use rastro_core::{
-    Appended, COVERAGE_WINDOWS_SHOWN, CompleteCheck, Coverage, CoverageRecord, CoverageState,
-    CoverageWindow, Evidence, Hit, Pair, ReadStorage, Refusal, RunEnd, Scope, Snapshot, Source,
-    Storage, TrustClass, UnfinishedRun,
+    Appended, COVERAGE_WINDOWS_SHOWN, CompleteCheck, Counts, Coverage, CoverageRecord,
+    CoverageState, CoverageWindow, Evidence, Hit, Pair, ReadStorage, Refusal, RunEnd, Scope,
+    Snapshot, Source, Storage, TrustClass, UnfinishedRun,
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::path::Path;
@@ -16,7 +17,7 @@ const LEGACY: [&str; 2] = ["202611041200_initial", "202611041500_evidence_insert
 
 /// `(name, sql)`, named `YYYYMMDDHHmm_<what>` so migrations from different branches
 /// order by time. Never edit one that has shipped; add a new one.
-const MIGRATIONS: [(&str, &str); 6] = [
+const MIGRATIONS: [(&str, &str); 7] = [
     (
         "202611041200_initial",
         include_str!("../migrations/202611041200_initial.sql"),
@@ -40,6 +41,10 @@ const MIGRATIONS: [(&str, &str); 6] = [
     (
         "202611051300_coverage_pair_indexes",
         include_str!("../migrations/202611051300_coverage_pair_indexes.sql"),
+    ),
+    (
+        "202611061000_claims_projection",
+        include_str!("../migrations/202611061000_claims_projection.sql"),
     ),
 ];
 
@@ -295,6 +300,17 @@ impl Storage for SqliteStorage {
             transaction.commit()?;
             return Ok(Appended::Unchanged(id));
         }
+        // Capture times never go backwards within a pair, so id order is replay order and an
+        // extraction checkpoint can't skip an observation appended under an earlier clock.
+        let floor: Option<String> = transaction.query_row(
+            "SELECT max(captured_at) FROM evidence WHERE source = ?1 AND scope = ?2",
+            params![e.source, e.scope.0],
+            |row| row.get(0),
+        )?;
+        let captured_at = match floor.map(parse_time).transpose()? {
+            Some(floor) if floor > e.captured_at => floor,
+            _ => e.captured_at,
+        };
         transaction.execute(
             "INSERT INTO evidence (source, scope, location, field, start, end, quote, captured_at,
              source_updated_at, trust_class, original) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
@@ -306,7 +322,7 @@ impl Storage for SqliteStorage {
                 e.start as i64,
                 e.end as i64,
                 e.quote,
-                stamp(e.captured_at),
+                stamp(captured_at),
                 e.source_updated_at.map(stamp),
                 e.trust_class.as_str(),
                 e.original.as_ref().map(|o| o.to_string())
@@ -371,7 +387,8 @@ impl Storage for SqliteStorage {
             "INSERT INTO coverage (run_id, source, scope, window_start, window_end, selection,
              state, reason, checked_at)
              SELECT id, source, scope, window_start, window_end, 'all', 'couldn''t look',
-             'interrupted', ?1 FROM runs WHERE finished_at IS NULL AND window_start IS NOT NULL",
+             'interrupted', ?1 FROM runs
+             WHERE finished_at IS NULL AND window_start IS NOT NULL AND role = 'connector'",
             [&at],
         )?;
         let marked = transaction.execute(
@@ -397,9 +414,324 @@ impl Storage for SqliteStorage {
     fn search(&self, query: &str, limit: usize, history: bool) -> Result<Vec<Hit>> {
         View(&self.connection).search(query, limit, history, &[])
     }
+    fn bind_extractor(&mut self, source: &str, extractor: Option<&str>) -> Result<()> {
+        self.connection.execute(
+            "UPDATE sources SET extractor = ?2 WHERE name = ?1",
+            params![source, extractor],
+        )?;
+        Ok(())
+    }
+    fn start_extraction(
+        &mut self,
+        source: &Source,
+        plugin: (&str, &str),
+        started_at: DateTime<Utc>,
+    ) -> Result<i64> {
+        self.connection.execute(
+            "INSERT INTO runs (source, scope, plugin_id, plugin_version, started_at, status, role)
+             VALUES (?1, ?2, ?3, ?4, ?5, 'running', 'extractor')",
+            params![
+                source.name,
+                source.scope.0,
+                plugin.0,
+                plugin.1,
+                stamp(started_at)
+            ],
+        )?;
+        Ok(self.connection.last_insert_rowid())
+    }
+    fn pending_evidence(
+        &self,
+        extractor: (&str, &str),
+        source: &Source,
+    ) -> Result<Vec<(i64, Evidence)>> {
+        let mut statement = self.connection.prepare(
+            "SELECT e.id, e.location, e.field, e.start, e.end, e.quote, e.trust_class,
+             e.captured_at, e.source_updated_at FROM evidence e
+             LEFT JOIN extraction_checkpoint c ON c.extractor = ?3 AND c.extractor_version = ?4
+                 AND c.source = e.source AND c.scope = e.scope
+             WHERE e.source = ?1 AND e.scope = ?2 AND (c.source IS NULL
+                 OR (e.captured_at, e.id) > (c.last_captured_at, c.last_evidence_id))
+             ORDER BY e.captured_at, e.id",
+        )?;
+        let rows = statement.query_map(
+            params![source.name, source.scope.0, extractor.0, extractor.1],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    [row.get::<_, String>(1)?, row.get(2)?],
+                    [row.get::<_, i64>(3)? as u64, row.get::<_, i64>(4)? as u64],
+                    [row.get::<_, String>(5)?, row.get(6)?, row.get(7)?],
+                    row.get::<_, Option<String>>(8)?,
+                ))
+            },
+        )?;
+        rows.map(|row| {
+            let (id, [location, field], [start, end], [quote, trust, captured], updated) = row?;
+            let evidence = Evidence {
+                source: source.name.clone(),
+                scope: source.scope.clone(),
+                location,
+                field,
+                start,
+                end,
+                quote,
+                trust_class: trust_class(&trust)?,
+                captured_at: parse_time(captured)?,
+                source_updated_at: updated.map(parse_time).transpose()?,
+                original: None,
+            };
+            Ok((id, evidence))
+        })
+        .collect()
+    }
+    fn record_claims(
+        &mut self,
+        run_id: i64,
+        extractor: (&str, &str),
+        claims: &[ObservedClaim],
+        checkpoint: Option<&Checkpoint>,
+    ) -> Result<Counts> {
+        let transaction = self.connection.transaction()?;
+        let mut counts = Counts::default();
+        for claim in claims {
+            let mut entities = vec![claim.subject.clone()];
+            let (object_entity, object_value, object_datatype) = match &claim.object {
+                Object::Entity {
+                    id,
+                    identifier,
+                    entity_type,
+                } => {
+                    entities.push(Entity::new(identifier.clone(), entity_type.clone()));
+                    (Some(id), None, None)
+                }
+                Object::Literal { value, datatype } => (None, Some(value), Some(datatype)),
+            };
+            // One identifier is one entity of one type; a claim naming it as another is refused.
+            let mut clash = false;
+            for entity in &entities {
+                let stored: Option<String> = transaction
+                    .query_row(
+                        "SELECT type FROM entity WHERE id = ?1",
+                        [&entity.id],
+                        |row| row.get(0),
+                    )
+                    .optional()?;
+                clash |= stored.is_some_and(|t| t != entity.entity_type);
+            }
+            if clash {
+                counts.rejected += 1;
+                continue;
+            }
+            for entity in &entities {
+                transaction.execute(
+                    "INSERT OR IGNORE INTO entity (id, type, identifier) VALUES (?1, ?2, ?3)",
+                    params![entity.id, entity.entity_type, entity.identifier],
+                )?;
+                transaction.execute(
+                    "INSERT OR IGNORE INTO alias (entity_id, alias, kind)
+                     VALUES (?1, ?2, 'canonical')",
+                    params![entity.id, entity.identifier],
+                )?;
+            }
+            transaction.execute(
+                "INSERT OR IGNORE INTO claim (id, subject, predicate, object_entity, object_value,
+                 object_datatype, status, revision) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'observed', '')",
+                params![
+                    claim.id,
+                    claim.subject.id,
+                    claim.predicate,
+                    object_entity,
+                    object_value,
+                    object_datatype
+                ],
+            )?;
+            let mut added = 0;
+            for s in &claim.supports {
+                added += transaction.execute(
+                    "INSERT OR IGNORE INTO claim_support (claim_id, evidence_id, field, start, end,
+                     extraction_rule, extractor, extractor_version, run_id)
+                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                    params![
+                        claim.id,
+                        s.evidence_id,
+                        s.field,
+                        s.start as i64,
+                        s.end as i64,
+                        s.extraction_rule,
+                        extractor.0,
+                        extractor.1,
+                        run_id
+                    ],
+                )?;
+            }
+            if added == 0 {
+                counts.unchanged += 1;
+                continue;
+            }
+            counts.accepted += 1;
+            let current: Vec<rastro_core::claims::Support> = transaction
+                .prepare(
+                    "SELECT evidence_id, field, start, end, extraction_rule FROM claim_support
+                     WHERE claim_id = ?1 AND current = 1",
+                )?
+                .query_map([&claim.id], |row| {
+                    Ok(rastro_core::claims::Support {
+                        evidence_id: row.get(0)?,
+                        field: row.get(1)?,
+                        start: row.get::<_, i64>(2)? as u64,
+                        end: row.get::<_, i64>(3)? as u64,
+                        extraction_rule: row.get(4)?,
+                    })
+                })?
+                .collect::<Result<_, _>>()?;
+            transaction.execute(
+                "UPDATE claim SET status = 'observed', revision = ?2 WHERE id = ?1",
+                params![
+                    claim.id,
+                    rastro_core::claims::revision("observed", &current)
+                ],
+            )?;
+        }
+        if let Some(c) = checkpoint {
+            transaction.execute(
+                "INSERT INTO extraction_checkpoint (extractor, extractor_version, source, scope,
+                 last_captured_at, last_evidence_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
+                 ON CONFLICT DO UPDATE SET last_captured_at = excluded.last_captured_at,
+                 last_evidence_id = excluded.last_evidence_id",
+                params![
+                    c.extractor,
+                    c.extractor_version,
+                    c.source,
+                    c.scope.0,
+                    stamp(c.last.0),
+                    c.last.1
+                ],
+            )?;
+        }
+        transaction.commit()?;
+        Ok(counts)
+    }
+    fn why(&self, claim: &str) -> Result<Option<Why>> {
+        View(&self.connection).why(claim)
+    }
+}
+
+fn trust_class(text: &str) -> Result<TrustClass> {
+    TrustClass::parse(text).ok_or_else(|| anyhow::anyhow!("invalid trust class: {text}"))
 }
 
 impl View<'_> {
+    fn why(&self, claim: &str) -> Result<Option<Why>> {
+        let found = self
+            .0
+            .query_row(
+                "SELECT c.id, c.predicate, c.status, c.revision, s.identifier, s.type,
+                 o.identifier, o.type, c.object_value, c.object_datatype
+                 FROM claim c JOIN entity s ON s.id = c.subject
+                 LEFT JOIN entity o ON o.id = c.object_entity WHERE c.id = ?1",
+                [claim],
+                |row| {
+                    let text = |i| row.get::<_, Option<String>>(i);
+                    Ok((
+                        [
+                            row.get::<_, String>(0)?,
+                            row.get(1)?,
+                            row.get(2)?,
+                            row.get(3)?,
+                        ],
+                        [row.get::<_, String>(4)?, row.get(5)?],
+                        [text(6)?, text(7)?, text(8)?, text(9)?],
+                    ))
+                },
+            )
+            .optional()?;
+        let Some(([id, predicate, status, revision], [subject, subject_type], object)) = found
+        else {
+            return Ok(None);
+        };
+        let object = match object {
+            [Some(identifier), Some(entity_type), None, None] => {
+                let Entity { id, .. } = Entity::new(identifier.clone(), entity_type.clone());
+                Object::Entity {
+                    id,
+                    identifier,
+                    entity_type,
+                }
+            }
+            [None, None, Some(value), Some(datatype)] => Object::Literal { value, datatype },
+            _ => bail!("claim {id} has no object"),
+        };
+        let mut statement = self.0.prepare(
+            "SELECT e.id, e.source, e.scope, e.location, s.field, s.start, s.end, e.start,
+             e.quote, e.trust_class, e.captured_at, e.source_updated_at, s.extraction_rule,
+             s.extractor, s.extractor_version
+             FROM claim_support s JOIN evidence e ON e.id = s.evidence_id
+             WHERE s.claim_id = ?1 ORDER BY e.captured_at, e.id",
+        )?;
+        let rows = statement.query_map([&id], |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                [
+                    row.get::<_, String>(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ],
+                [
+                    row.get::<_, i64>(5)? as u64,
+                    row.get::<_, i64>(6)? as u64,
+                    row.get::<_, i64>(7)? as u64,
+                ],
+                [row.get::<_, String>(8)?, row.get(9)?, row.get(10)?],
+                row.get::<_, Option<String>>(11)?,
+                [row.get::<_, String>(12)?, row.get(13)?, row.get(14)?],
+            ))
+        })?;
+        let supports = rows
+            .map(|row| {
+                let (
+                    evidence_id,
+                    [source, scope, location, field],
+                    [start, end, from],
+                    [quote, trust, captured],
+                    updated,
+                    [extraction_rule, extractor, extractor_version],
+                ) = row?;
+                let quote = quote
+                    .get((start - from) as usize..(end - from) as usize)
+                    .unwrap_or_default()
+                    .to_string();
+                Ok(SupportView {
+                    evidence_id,
+                    source,
+                    scope: Scope(scope),
+                    location,
+                    field,
+                    start,
+                    end,
+                    quote,
+                    trust_class: trust_class(&trust)?,
+                    captured_at: parse_time(captured)?,
+                    source_updated_at: updated.map(parse_time).transpose()?,
+                    extraction_rule,
+                    extractor,
+                    extractor_version,
+                })
+            })
+            .collect::<Result<_>>()?;
+        Ok(Some(Why {
+            claim: ClaimView {
+                id,
+                subject: Entity::new(subject, subject_type),
+                predicate,
+                object,
+                status,
+                revision,
+            },
+            supports,
+        }))
+    }
     fn last_complete_check(&self, name: &str, scope: &Scope) -> Result<Option<CompleteCheck>> {
         let row: Option<(String, String)> = self
             .0
@@ -590,7 +922,7 @@ impl Snapshot for View<'_> {
     fn unfinished_runs(&self, scopes: &[Scope]) -> Result<Vec<UnfinishedRun>> {
         let mut statement = self.0.prepare(
             "SELECT source, scope, window_start, window_end FROM runs
-             WHERE finished_at IS NULL AND window_start IS NOT NULL
+             WHERE finished_at IS NULL AND window_start IS NOT NULL AND role = 'connector'
              AND (?1 IS NULL OR scope IN (SELECT value FROM json_each(?1))) ORDER BY id",
         )?;
         let scopes = scope_parameter(scopes)?;

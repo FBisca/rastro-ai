@@ -12,3 +12,4 @@ tempfile = "3"
 rastro-plugin-sdk = { path = "../rastro-plugin-sdk" }
 serde_json.workspace = true
 schemars.workspace = true
+sha2 = "0.10"
