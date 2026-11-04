@@ -112,6 +112,7 @@ Roadmap slice 1 is the walking skeleton for M1. Slice 2 (agents query Rastro ove
 - **S19** WHEN `rastro search "x"` matches, THEN each result shows the quote, the link, the span, the capture time, the trust class, the scope, and the source's coverage and freshness.
 - **S20** WHEN a search matches nothing, THEN the output says so and states the coverage of each source searched.
 - **S21** WHEN a source's last complete check is older than its freshness rule, or its latest attempt failed, THEN `rastro coverage` answers "unknown", and still shows the last successful check and the failure reason.
+- **S21a** WHEN `rastro coverage` reports a last-checked time that falls on a whole second, THEN its human output and `--json` name the same instant.
 - **S22** WHEN the full-text index is dropped and `rastro index rebuild` runs, THEN the same search returns the same results with their citations intact.
 - **S22a** WHEN the index is rebuilt, THEN it behaves like a freshly migrated one: the same stemming and diacritics matches, and the same latest and history results.
 - **S23** WHEN any command runs with `--json`, THEN its output validates against the versioned operation schema.
@@ -176,10 +177,11 @@ Roadmap slice 1 is the walking skeleton for M1. Slice 2 (agents query Rastro ove
 | T16 | Each test process runs its own snapshot of the binaries, never a copy cached by size and time | S9, S15a | T15 | crates/rastro-cli/tests/, crates/rastro-connector-github/tests/ | agent | COMPLETE (#18) |
 | T17 | Keep the full original when the source opts in | S25 | none | crates/rastro-plugin-sdk/, crates/rastro-connector-github/, crates/rastro-storage-sqlite/, crates/rastro-core/, crates/rastro-cli/, schema/ | agent | COMPLETE (#22) |
 | T18 | Coverage per window; rejected submissions never make a window found or empty | S26, S26a, S27, S27a | none | crates/rastro-core/, crates/rastro-storage-sqlite/, crates/rastro-cli/, schema/ | agent | COMPLETE (#23) |
-| T19 | A failed manifest check is a failed run, not an aborted sync; `not_installed` is a typed reason | S28, S29 | T18 | crates/rastro-core/, crates/rastro-plugin-sdk/, crates/rastro-cli/, docs/decisions/knowledge.md | agent | TO-DO |
+| T19 | A failed manifest check is a failed run, not an aborted sync; `not_installed` is a typed reason | S28, S29 | T18 | crates/rastro-core/, crates/rastro-plugin-sdk/, crates/rastro-cli/, docs/decisions/knowledge.md | agent | COMPLETE (#27) |
 | T20 | Test-only overrides stay out of real use: loopback-only API override, debug-only clock and host limits | S30, S31 | T17, T19 | crates/rastro-core/, crates/rastro-connector-github/, crates/rastro-cli/ | agent | TO-DO |
 | T21 | The live check fails loudly when half-configured | S24a | none | crates/rastro-cli/tests/live.rs | agent | COMPLETE (#21) |
 | T22 | Review fix: an original must be a JSON object, or the submission is rejected | S25a | T17 | crates/rastro-core/, crates/rastro-cli/tests/, crates/rastro-test-connector/ | agent | COMPLETE (#24) |
 | T23 | Review fix: a rejected submission makes the window "couldn't look: protocol" whatever else failed | S27b | T18 | crates/rastro-core/, crates/rastro-cli/tests/, crates/rastro-test-connector/ | agent | COMPLETE (#26) |
 | T24 | Review fix: an explicit null original is rejected for a source that keeps originals | S25b | T22 | crates/rastro-plugin-sdk/, crates/rastro-core/, crates/rastro-cli/tests/, crates/rastro-test-connector/ | agent | COMPLETE (#25) |
-| T25 | Review fix: the rejection-precedence test compares instants, not timestamp strings | S27b | T23 | crates/rastro-cli/tests/ | agent | TO-DO |
+| T25 | Review fix: the rejection-precedence test compares instants, not timestamp strings | S27b | T23 | crates/rastro-cli/tests/ | agent | COMPLETE (#28) |
+| T26 | Review fix: the coverage test matches its human timestamp by instant, not by string | S21a | T25 | crates/rastro-cli/tests/ | agent | TO-DO |
