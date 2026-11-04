@@ -239,10 +239,10 @@ pub struct Coverage {
     /// Why the latest attempt couldn't look, kept next to the last successful check.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    /// How many windows the source has been looked at over, listed or not.
+    /// How many windows the source has been looked at over: every window, listed or not.
+    /// Search answers (per source and per hit) carry it too, with `windows` left empty.
     pub windows_total: usize,
-    /// The newest windows the source was looked at, newest first (all of them when asked
-    /// for); empty in search answers.
+    /// The newest windows the source was looked at, newest first (all of them when asked for). Empty in search answers.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub windows: Vec<CoverageWindow>,
 }

@@ -233,7 +233,10 @@ impl Storage for SqliteStorage {
         Ok(())
     }
     fn coverage(&self, source: &Source, all_windows: bool) -> Result<Coverage> {
-        View(&self.connection).coverage(source, all_windows)
+        // One read transaction: the totals, the state and the listing come from one snapshot,
+        // even when a sync in another process commits meanwhile.
+        let snapshot = self.connection.unchecked_transaction()?;
+        View(&snapshot).coverage(source, all_windows)
     }
     fn start_run(
         &mut self,

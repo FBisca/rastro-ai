@@ -100,6 +100,13 @@ impl Env {
     fn db(&self) -> Connection {
         Connection::open(self.database()).unwrap()
     }
+    /// The first source's coverage as the writing path answers it, from `--json`.
+    fn json_coverage(&self) -> Value {
+        let output = self.rastro(&["coverage", "--json"]);
+        assert!(output.status.success());
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        value["result"]["coverage"][0].clone()
+    }
     fn reader(&self) -> Reader<SqliteStorage> {
         Rastro::open_read_only(self.locations(), SqliteStorage::open_read_only).unwrap()
     }
@@ -661,4 +668,42 @@ fn S12_the_reader_answers_found_when_the_only_found_window_is_outside_the_newest
             .iter()
             .all(|h| h.coverage.as_ref().unwrap().state == CoverageState::Found)
     );
+}
+
+/// evidence/R63: an interrupted run beside more than ten windows is the newest, counted, capped
+#[test]
+fn S11_an_interrupted_run_is_the_newest_window_counted_and_capped_like_its_recovery() {
+    let env = found_then_quiet(11);
+    unfinished_run(&env);
+    let read = only(env.reader().coverage(None, false).unwrap());
+    assert_eq!(read.windows_total, 13);
+    assert_eq!(read.windows.len(), 10);
+    assert_eq!(read.windows[0].state, CoverageState::CouldNotLook);
+    assert_eq!(read.windows[0].reason.as_deref(), Some("interrupted"));
+    assert_eq!(read.state, CoverageState::Unknown);
+    // The writing open recovers the run, then answers the same total and order.
+    let written = env.json_coverage();
+    assert_eq!(written["windows_total"], 13);
+    let shape = |states: Vec<(String, Option<String>)>| states;
+    let from_read = shape(
+        read.windows
+            .iter()
+            .map(|w| (w.state.as_str().to_string(), w.reason.clone()))
+            .collect(),
+    );
+    let from_written = shape(
+        written["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| {
+                (
+                    w["state"].as_str().unwrap().to_string(),
+                    w.get("reason").map(|r| r.as_str().unwrap().to_string()),
+                )
+            })
+            .collect(),
+    );
+    assert_eq!(from_read, from_written);
+    assert_eq!(written["state"], "unknown");
 }

@@ -895,6 +895,10 @@ fn S12_the_only_found_window_older_than_the_newest_ten_still_answers_found() {
     );
     assert_eq!(source["state"], "found");
     let hit = env.json(&["search", "body"]);
-    assert_eq!(hit["result"]["results"][0]["coverage"]["state"], "found");
+    let hits = hit["result"]["results"].as_array().unwrap();
+    assert!(!hits.is_empty());
+    for h in hits {
+        assert_eq!(h["coverage"]["state"], "found", "{h}");
+    }
     assert_eq!(hit["result"]["coverage"][0]["state"], "found");
 }

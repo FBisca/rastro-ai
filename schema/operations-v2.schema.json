@@ -27,14 +27,14 @@
           "$ref": "#/$defs/CoverageState"
         },
         "windows": {
-          "description": "The newest windows the source was looked at, newest first (all of them when asked\nfor); empty in search answers.",
+          "description": "The newest windows the source was looked at, newest first (all of them when asked for). Empty in search answers.",
           "items": {
             "$ref": "#/$defs/CoverageWindow"
           },
           "type": "array"
         },
         "windows_total": {
-          "description": "How many windows the source has been looked at over, listed or not.",
+          "description": "How many windows the source has been looked at over: every window, listed or not.\nSearch answers (per source and per hit) carry it too, with `windows` left empty.",
           "format": "uint",
           "minimum": 0,
           "type": "integer"
