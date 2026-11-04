@@ -14,7 +14,9 @@ clap = { version = "4", features = ["derive"] }
 rastro-core = { path = "../rastro-core" }
 rastro-operations = { path = "../rastro-operations" }
 rastro-storage-sqlite = { path = "../rastro-storage-sqlite" }
+rmcp = { version = "3.8.0", default-features = false, features = ["server", "transport-io"] }
 serde_json.workspace = true
+tokio = { version = "1.54.1", features = ["rt-multi-thread", "macros", "io-std", "time"] }
 
 [dev-dependencies]
 tempfile = "3"

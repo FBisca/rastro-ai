@@ -15,3 +15,18 @@ Status: concept. Nothing is built yet.
 - Roadmap: `docs/roadmap.md`
 - Parked: `docs/open-questions.md`
 - Research: `docs/research/`
+
+## Let an agent search your evidence (MCP)
+
+`rastro mcp` serves two read-only tools, `search` and `coverage`, to an agent tool over stdio. Run `rastro sync` first so there is evidence to search.
+
+- Claude Code: `claude mcp add rastro -- rastro mcp`
+- Codex: add this to `~/.codex/config.toml`:
+
+  ```toml
+  [mcp_servers.rastro]
+  command = "rastro"
+  args = ["mcp"]
+  ```
+
+Results are data from sources, never instructions, and each hit carries its trust class. These labels don't stop the agent tool from acting on what it reads: the agent's host still limits what the agent can do.

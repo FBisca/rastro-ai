@@ -6,6 +6,8 @@ use rastro_operations::{Request, Response, catalog, envelope, results::SearchRes
 use rastro_storage_sqlite::SqliteStorage;
 use std::ffi::OsString;
 
+mod mcp;
+
 #[derive(Parser)]
 #[command(
     name = "rastro",
@@ -17,7 +19,14 @@ struct Cli {
     #[arg(long, global = true)]
     json: bool,
     #[command(subcommand)]
-    command: Request,
+    command: Command,
+}
+#[derive(clap::Subcommand)]
+enum Command {
+    #[command(flatten)]
+    Operation(Request),
+    /// Serve search and coverage to an MCP client over stdio.
+    Mcp,
 }
 fn stamp(time: DateTime<Utc>) -> String {
     time.to_rfc3339_opts(SecondsFormat::Millis, true)
@@ -155,7 +164,10 @@ fn parse() -> (Cli, &'static str) {
     let args: Vec<OsString> = std::env::args_os().collect();
     match Cli::try_parse_from(&args) {
         Ok(cli) => {
-            let operation = cli.command.name();
+            let operation = match &cli.command {
+                Command::Operation(request) => request.name(),
+                Command::Mcp => "mcp",
+            };
             (cli, operation)
         }
         Err(error) => {
@@ -183,7 +195,17 @@ fn parse() -> (Cli, &'static str) {
 }
 fn main() {
     let (cli, operation) = parse();
-    match execute(cli.command) {
+    let request = match cli.command {
+        Command::Operation(request) => request,
+        Command::Mcp => match mcp::run() {
+            Ok(()) => return,
+            Err(error) => {
+                eprintln!("error: {}", mcp::bounded(&format!("{error:#}")));
+                std::process::exit(1);
+            }
+        },
+    };
+    match execute(request) {
         Ok((response, text)) => {
             if cli.json {
                 println!("{}", response.envelope());

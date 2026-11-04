@@ -3,6 +3,7 @@
 //! and dispatches through it; the committed schema is generated from it.
 pub mod catalog;
 pub mod envelope;
+pub mod read;
 pub mod requests;
 pub mod results;
 pub mod schema;
