@@ -1,8 +1,8 @@
 use anyhow::{Result, bail};
 use chrono::{DateTime, SecondsFormat, Utc};
 use rastro_core::{
-    CompleteCheck, Coverage, CoverageRecord, CoverageState, Evidence, Hit, RunEnd, Scope, Source,
-    Storage, TrustClass,
+    Appended, CompleteCheck, Coverage, CoverageRecord, CoverageState, Evidence, Hit, RunEnd, Scope,
+    Source, Storage, TrustClass,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
@@ -12,7 +12,7 @@ const LEGACY: [&str; 2] = ["202611041200_initial", "202611041500_evidence_insert
 
 /// `(name, sql)`, named `YYYYMMDDHHmm_<what>` so migrations from different branches
 /// order by time. Never edit one that has shipped; add a new one.
-const MIGRATIONS: [(&str, &str); 4] = [
+const MIGRATIONS: [(&str, &str); 5] = [
     (
         "202611041200_initial",
         include_str!("../migrations/202611041200_initial.sql"),
@@ -28,6 +28,10 @@ const MIGRATIONS: [(&str, &str); 4] = [
     (
         "202611050900_run_window",
         include_str!("../migrations/202611050900_run_window.sql"),
+    ),
+    (
+        "202611051100_run_evidence",
+        include_str!("../migrations/202611051100_run_evidence.sql"),
     ),
 ];
 
@@ -180,8 +184,38 @@ impl Storage for SqliteStorage {
         )?;
         Ok(self.connection.last_insert_rowid())
     }
-    fn append_evidence(&mut self, _run_id: i64, e: &Evidence) -> Result<i64> {
+    fn append_evidence(&mut self, run_id: i64, e: &Evidence) -> Result<Appended> {
         let transaction = self.connection.transaction()?;
+        // The latest observation of this field at this location; identical content is linked,
+        // never rewritten.
+        let latest: Option<(i64, u64, u64, String, String)> = transaction
+            .query_row(
+                "SELECT id, start, end, quote, trust_class FROM evidence
+                 WHERE source=?1 AND scope=?2 AND location=?3 AND field=?4
+                 ORDER BY id DESC LIMIT 1",
+                params![e.source, e.scope.0, e.location, e.field],
+                |row| {
+                    Ok((
+                        row.get(0)?,
+                        row.get::<_, i64>(1)? as u64,
+                        row.get::<_, i64>(2)? as u64,
+                        row.get(3)?,
+                        row.get(4)?,
+                    ))
+                },
+            )
+            .optional()?;
+        if let Some((id, start, end, quote, trust)) = latest
+            && (start, end, &quote, trust.as_str())
+                == (e.start, e.end, &e.quote, e.trust_class.as_str())
+        {
+            transaction.execute(
+                "INSERT OR IGNORE INTO run_evidence (run_id, evidence_id) VALUES (?1, ?2)",
+                params![run_id, id],
+            )?;
+            transaction.commit()?;
+            return Ok(Appended::Unchanged(id));
+        }
         transaction.execute(
             "INSERT INTO evidence (source, scope, location, field, start, end, quote, captured_at,
              source_updated_at, trust_class) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
@@ -203,8 +237,12 @@ impl Storage for SqliteStorage {
             "INSERT INTO evidence_fts (rowid, quote) VALUES (?1, ?2)",
             params![id, e.quote],
         )?;
+        transaction.execute(
+            "INSERT INTO run_evidence (run_id, evidence_id) VALUES (?1, ?2)",
+            params![run_id, id],
+        )?;
         transaction.commit()?;
-        Ok(id)
+        Ok(Appended::New(id))
     }
     fn record_coverage(&mut self, r: &CoverageRecord) -> Result<()> {
         self.connection.execute(
@@ -280,14 +318,17 @@ impl Storage for SqliteStorage {
         transaction.commit()?;
         Ok(marked)
     }
-    fn search(&self, query: &str, limit: usize) -> Result<Vec<Hit>> {
+    fn search(&self, query: &str, limit: usize, history: bool) -> Result<Vec<Hit>> {
         let mut statement = self.connection.prepare(
             "SELECT e.id, e.source, e.scope, e.location, e.field, e.start as i64, e.end as i64, e.quote,
              e.trust_class, e.captured_at, e.source_updated_at
              FROM evidence_fts JOIN evidence e ON e.id = evidence_fts.rowid
-             WHERE evidence_fts MATCH ?1 ORDER BY bm25(evidence_fts), e.id LIMIT ?2",
+             WHERE evidence_fts MATCH ?1
+             AND (?3 OR e.id = (SELECT max(l.id) FROM evidence l WHERE l.source = e.source
+                  AND l.scope = e.scope AND l.location = e.location AND l.field = e.field))
+             ORDER BY bm25(evidence_fts), e.id LIMIT ?2",
         )?;
-        let rows = statement.query_map(params![query, limit as i64], |row| {
+        let rows = statement.query_map(params![query, limit as i64, history], |row| {
             Ok((
                 row.get::<_, i64>(0)?,
                 [

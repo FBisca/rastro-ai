@@ -44,6 +44,13 @@ pub struct Evidence {
     pub source_updated_at: Option<DateTime<Utc>>,
 }
 
+/// What storing a submission did; either way the run is linked to the row.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum Appended {
+    New(i64),
+    Unchanged(i64),
+}
+
 /// A stored observation that matched a search.
 #[derive(Clone, Debug, Serialize)]
 pub struct Hit {

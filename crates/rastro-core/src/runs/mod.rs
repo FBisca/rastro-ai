@@ -60,7 +60,7 @@ impl<S: Storage> Rastro<S> {
     }
 
     /// Full-text search over evidence quotes, each hit with its source's coverage.
-    pub fn search(&self, text: &str) -> Result<SearchResults> {
+    pub fn search(&self, text: &str, history: bool) -> Result<SearchResults> {
         let terms: Vec<_> = text
             .split_whitespace()
             .map(|t| format!("\"{}\"", t.replace('"', "\"\"")))
@@ -68,7 +68,7 @@ impl<S: Storage> Rastro<S> {
         let hits = if terms.is_empty() {
             Vec::new()
         } else {
-            self.storage.search(&terms.join(" "), 50)?
+            self.storage.search(&terms.join(" "), 50, history)?
         };
         let coverage = self.coverage(None)?;
         let results = hits

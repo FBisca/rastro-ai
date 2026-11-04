@@ -742,3 +742,23 @@ fn S9m_many_syncs_with_blocked_stderr_finish_without_piling_up_printers() {
     assert_eq!(value["result"]["runs"].as_array().unwrap().len(), 5);
     assert!(started.elapsed().as_secs() < 10);
 }
+
+#[test]
+fn S9l_a_storage_failure_under_blocked_stderr_fails_the_run_with_storage_without_hanging() {
+    let mut env = Env::new();
+    env.vars.push(("RASTRO_HOST_STDERR_LINES", "100000".into()));
+    // The search index is gone, so appending an accepted observation fails inside the store.
+    env.db().execute_batch("DROP TABLE evidence_fts").unwrap();
+    env.script(&[
+        init(),
+        json!({"do": "stderr", "text": "x".repeat(900), "repeat": 20000}),
+        send(evidence()),
+        complete(),
+        finish(),
+    ]);
+    let (output, run) = env.sync_within(15, false);
+    assert!(!output.status.success());
+    assert_eq!(run["status"], "failed");
+    assert_eq!(run["reason"], "storage");
+    assert_eq!(env.sql::<i64>("SELECT count(*) FROM evidence"), 0);
+}

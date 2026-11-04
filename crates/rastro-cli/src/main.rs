@@ -32,6 +32,9 @@ enum Operation {
     /// Full-text search over evidence, each result cited.
     Search {
         text: String,
+        /// Every observation, not only the latest at each location.
+        #[arg(long)]
+        history: bool,
     },
 }
 #[derive(Subcommand)]
@@ -197,8 +200,8 @@ fn run(operation: Operation) -> Result<(Value, String)> {
             };
             Ok((json!({"runs": runs}), human))
         }
-        Operation::Search { text } => {
-            let found = rastro.search(&text)?;
+        Operation::Search { text, history } => {
+            let found = rastro.search(&text, history)?;
             let human = search_text(&text, &found);
             Ok((
                 json!({"query": text, "results": found.results, "coverage": found.coverage}),

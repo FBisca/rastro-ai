@@ -2,7 +2,7 @@
 //! Sequential and happy-path first; hardening against crashes and silence builds on `drive`.
 use crate::evidence::{Grant, validate};
 use crate::runs::RunReport;
-use crate::{Counts, CoverageRecord, CoverageState, Locations, RunEnd, Source, Storage};
+use crate::{Appended, Counts, CoverageRecord, CoverageState, Locations, RunEnd, Source, Storage};
 use anyhow::{Result, bail};
 use chrono::{DateTime, SecondsFormat, Utc};
 use rastro_plugin_sdk::{
@@ -141,7 +141,7 @@ pub fn run<S: Storage>(
     // The connector reports completeness; the core decides found or empty.
     let (state, coverage_reason, retry_at, selection) = match coverage {
         Some(report) if reason.is_none() => {
-            let state = if counts.accepted > 0 {
+            let state = if counts.accepted + counts.unchanged > 0 {
                 CoverageState::Found
             } else {
                 CoverageState::Empty
@@ -493,10 +493,10 @@ fn converse<S: Storage>(
                     .map_err(|error| format!("{error:#}"))
                     .and_then(|submit| validate(submit, grant, Utc::now()));
                 match checked {
-                    Ok(evidence) => {
-                        storage.append_evidence(binding.run_id, &evidence)?;
-                        session.counts.accepted += 1;
-                    }
+                    Ok(evidence) => match storage.append_evidence(binding.run_id, &evidence)? {
+                        Appended::New(_) => session.counts.accepted += 1,
+                        Appended::Unchanged(_) => session.counts.unchanged += 1,
+                    },
                     Err(why) => {
                         relay.line(&format!("rejected evidence: {why}"));
                         session.counts.rejected += 1;

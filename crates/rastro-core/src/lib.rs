@@ -7,7 +7,7 @@ use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
 use std::{collections::BTreeMap, env, fs, io::Write, path::PathBuf};
 
-pub use evidence::{Evidence, Hit, TrustClass};
+pub use evidence::{Appended, Evidence, Hit, TrustClass};
 pub use rastro_plugin_sdk::Counts;
 
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -245,12 +245,15 @@ pub trait Storage {
         started_at: DateTime<Utc>,
         window: (DateTime<Utc>, DateTime<Utc>),
     ) -> Result<i64>;
-    /// Appends one observation and its search index entry in one transaction.
-    fn append_evidence(&mut self, run_id: i64, evidence: &Evidence) -> Result<i64>;
+    /// Records what a run observed in one transaction: an observation identical to the latest
+    /// one at its location and field is linked to the run, any other is appended (with its
+    /// search index entry) and linked. Nothing stored is ever rewritten.
+    fn append_evidence(&mut self, run_id: i64, evidence: &Evidence) -> Result<Appended>;
     fn record_coverage(&mut self, record: &CoverageRecord) -> Result<()>;
     fn finish_run(&mut self, run_id: i64, end: &RunEnd) -> Result<()>;
     fn last_complete_check(&self, source: &Source) -> Result<Option<CompleteCheck>>;
-    fn search(&self, query: &str, limit: usize) -> Result<Vec<Hit>>;
+    /// Matches, one per location and field (the latest observation) unless `history` is set.
+    fn search(&self, query: &str, limit: usize, history: bool) -> Result<Vec<Hit>>;
     /// Marks every run that never finished as failed with reason `interrupted`.
     /// Returns how many it marked.
     fn interrupt_unfinished_runs(&mut self, at: DateTime<Utc>) -> Result<usize>;

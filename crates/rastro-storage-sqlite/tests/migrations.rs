@@ -48,7 +48,7 @@ fn S3a_stored_evidence_rejects_updates_and_deletes() {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 4);
+        assert_eq!(version, 5);
     }
 }
 
@@ -89,7 +89,7 @@ fn S3b_migrations_apply_once_in_timestamp_order_and_unknown_ones_are_refused() {
         .unwrap();
     connection.pragma_update(None, "user_version", 1).unwrap();
     SqliteStorage::open(&legacy).unwrap();
-    assert_eq!(names(&connection).len(), 4);
+    assert_eq!(names(&connection).len(), 5);
 }
 
 #[test]
