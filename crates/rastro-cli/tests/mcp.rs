@@ -475,7 +475,7 @@ fn S20_a_scripted_client_gets_protocol_only_stdout_and_matching_structured_and_t
     );
     for (call, operation) in calls.iter().zip(["search", "coverage"]) {
         let result = &call["result"];
-        ok_result(&result);
+        ok_result(result);
         let structured = &result["structuredContent"];
         assert_eq!(structured["schema_version"], 2);
         assert_eq!(structured["operation"], operation);
@@ -962,10 +962,10 @@ fn S24_an_injection_body_comes_back_verbatim_and_nothing_runs_or_changes() {
         std::thread::spawn(move || {
             let mut samples = 0;
             while !stop.load(std::sync::atomic::Ordering::Relaxed) {
-                assert_eq!(
-                    group_members(&pgid),
-                    [pgid.clone()],
-                    "the server ran a process"
+                let members = group_members(&pgid);
+                assert!(
+                    members.len() == 1 && members[0] == pgid,
+                    "the server ran a process: {members:?}"
                 );
                 samples += 1;
             }
