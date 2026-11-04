@@ -59,6 +59,11 @@ impl<S: Storage> Rastro<S> {
         Ok(reports)
     }
 
+    /// Rebuilds the search index from the stored evidence.
+    pub fn rebuild_index(&mut self) -> Result<usize> {
+        self.storage.rebuild_index()
+    }
+
     /// Full-text search over evidence quotes, each hit with its source's coverage.
     pub fn search(&self, text: &str, history: bool) -> Result<SearchResults> {
         let terms: Vec<_> = text

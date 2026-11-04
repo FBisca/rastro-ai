@@ -1,3 +1,4 @@
+pub mod coverage;
 pub mod evidence;
 pub mod files;
 pub mod host;
@@ -207,6 +208,9 @@ pub struct Coverage {
     /// Last complete check plus the freshness rule.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fresh_until: Option<DateTime<Utc>>,
+    /// Why the latest attempt couldn't look, kept next to the last successful check.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
 }
 
 /// One coverage row: what a run looked at, over the half-open window `[from, to)`.
@@ -254,6 +258,9 @@ pub trait Storage {
     fn last_complete_check(&self, source: &Source) -> Result<Option<CompleteCheck>>;
     /// Matches, one per location and field (the latest observation) unless `history` is set.
     fn search(&self, query: &str, limit: usize, history: bool) -> Result<Vec<Hit>>;
+    /// Drops and rebuilds the full-text index from the stored evidence; returns how many
+    /// observations it indexed. Evidence itself is untouched.
+    fn rebuild_index(&mut self) -> Result<usize>;
     /// Marks every run that never finished as failed with reason `interrupted`.
     /// Returns how many it marked.
     fn interrupt_unfinished_runs(&mut self, at: DateTime<Utc>) -> Result<usize>;
@@ -320,9 +327,10 @@ impl<S: Storage> Rastro<S> {
             .collect()
     }
     fn source_coverage(&self, source: &Source) -> Result<Coverage> {
-        let mut coverage = self.storage.coverage(source)?;
-        coverage.fresh_until = coverage.last_checked.map(|at| at + source.freshness());
-        Ok(coverage)
+        Ok(self
+            .storage
+            .coverage(source)?
+            .judged(source.freshness(), coverage::now()?))
     }
 }
 

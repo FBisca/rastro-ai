@@ -166,22 +166,39 @@ fn S18_a_body_changing_and_changing_back_leaves_three_observations() {
         assert_eq!(run["counts"]["accepted"], 1, "{run}");
     }
     assert_eq!(env.sql::<i64>("SELECT count(*) FROM evidence"), 3);
-    let quotes = |found: &Value| -> Vec<String> {
+    // Whatever the capture times say, the latest observation is the last one appended.
+    let db = Connection::open(env.home.path().join("data/rastro.sqlite3")).unwrap();
+    db.execute_batch(
+        "DROP TRIGGER evidence_no_update;
+         UPDATE evidence SET captured_at = '2026-11-05T00:00:00.000Z';",
+    )
+    .unwrap();
+    let rows = |found: &Value| -> Vec<(i64, String)> {
         found["result"]["results"]
             .as_array()
             .unwrap()
             .iter()
-            .map(|r| r["quote"].as_str().unwrap().to_string())
+            .map(|r| {
+                (
+                    r["id"].as_i64().unwrap(),
+                    r["quote"].as_str().unwrap().into(),
+                )
+            })
             .collect()
     };
     let latest = env.json(&["search", "body"]);
-    assert_eq!(quotes(&latest), ["alpha body"]);
+    assert_eq!(rows(&latest), [(3, "alpha body".to_string())]);
     let old = env.json(&["search", "beta"]);
-    assert!(quotes(&old).is_empty(), "{old}");
+    assert!(rows(&old).is_empty(), "{old}");
     let history = env.json(&["search", "body", "--history"]);
-    let mut all = quotes(&history);
-    all.sort();
-    assert_eq!(all, ["alpha body", "alpha body", "beta body"]);
+    assert_eq!(
+        rows(&history),
+        [
+            (1, "alpha body".to_string()),
+            (2, "beta body".to_string()),
+            (3, "alpha body".to_string())
+        ]
+    );
     let human = env.ok(&["search", "beta", "--history"]);
     assert!(human.contains("beta body"), "{human}");
 }

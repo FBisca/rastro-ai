@@ -157,10 +157,9 @@ fn S14_rate_limit_mid_run_keeps_completed_pages_and_is_not_found() {
         env.sql::<i64>("SELECT count(*) FROM evidence WHERE field = '/title'"),
         1
     );
-    assert_eq!(
-        env.json(&["coverage", "x"])["result"]["coverage"][0]["state"],
-        "couldn't look"
-    );
+    let covered = env.json(&["coverage", "x"]);
+    assert_eq!(covered["result"]["coverage"][0]["state"], "unknown");
+    assert_eq!(covered["result"]["coverage"][0]["reason"], "rate_limited");
 }
 
 #[test]

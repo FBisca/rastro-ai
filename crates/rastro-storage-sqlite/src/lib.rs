@@ -139,14 +139,16 @@ impl Storage for SqliteStorage {
         Ok(())
     }
     fn coverage(&self, source: &Source) -> Result<Coverage> {
-        let state: Option<String> = self
+        let (state, reason): (Option<String>, Option<String>) = self
             .connection
             .query_row(
-                "SELECT state FROM coverage WHERE source=?1 AND scope=?2 ORDER BY id DESC LIMIT 1",
+                "SELECT state, reason FROM coverage WHERE source=?1 AND scope=?2
+                 ORDER BY id DESC LIMIT 1",
                 params![source.name, source.scope.0],
-                |row| row.get(0),
+                |row| Ok((Some(row.get(0)?), row.get(1)?)),
             )
-            .optional()?;
+            .optional()?
+            .unwrap_or((None, None));
         let state = match state.as_deref() {
             None => CoverageState::NeverLooked,
             Some("found") => CoverageState::Found,
@@ -160,6 +162,7 @@ impl Storage for SqliteStorage {
             state,
             last_checked: self.last_complete_check(source)?.map(|c| c.checked_at),
             fresh_until: None,
+            reason,
         })
     }
     fn start_run(
@@ -317,6 +320,21 @@ impl Storage for SqliteStorage {
         )?;
         transaction.commit()?;
         Ok(marked)
+    }
+    fn rebuild_index(&mut self) -> Result<usize> {
+        let transaction = self.connection.transaction()?;
+        // The same definition the full-text migration creates; the index is a projection.
+        transaction.execute_batch(
+            "DROP TABLE IF EXISTS evidence_fts;
+             CREATE VIRTUAL TABLE evidence_fts USING fts5(
+                 quote, content='evidence', content_rowid='id',
+                 tokenize='porter unicode61 remove_diacritics 2');
+             INSERT INTO evidence_fts(evidence_fts) VALUES('rebuild');",
+        )?;
+        let indexed: i64 =
+            transaction.query_row("SELECT count(*) FROM evidence", [], |row| row.get(0))?;
+        transaction.commit()?;
+        Ok(indexed as usize)
     }
     fn search(&self, query: &str, limit: usize, history: bool) -> Result<Vec<Hit>> {
         let mut statement = self.connection.prepare(
