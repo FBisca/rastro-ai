@@ -1,0 +1,56 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://rastro.dev/schema/operations-v1.schema.json",
+  "title": "Rastro operation results v1",
+  "type": "object",
+  "required": ["schema_version", "operation"],
+  "properties": {
+    "schema_version": {"const": 1},
+    "operation": {"enum": ["source.add", "source.list", "coverage"]},
+    "error": {"type": "string", "minLength": 1},
+    "result": {"type": "object"}
+  },
+  "additionalProperties": false,
+  "oneOf": [
+    {"required": ["error"], "not": {"required": ["result"]}},
+    {
+      "required": ["result"], "not": {"required": ["error"]},
+      "oneOf": [
+        {"properties": {"operation": {"const": "source.add"}, "result": {
+          "type": "object", "required": ["source"], "additionalProperties": false,
+          "properties": {"source": {"$ref": "#/$defs/source"}}
+        }}},
+        {"properties": {"operation": {"const": "source.list"}, "result": {
+          "type": "object", "required": ["sources"], "additionalProperties": false,
+          "properties": {"sources": {"type": "array", "items": {"$ref": "#/$defs/source"}}}
+        }}},
+        {"properties": {"operation": {"const": "coverage"}, "result": {
+          "type": "object", "required": ["coverage"], "additionalProperties": false,
+          "properties": {"coverage": {"type": "array", "items": {"$ref": "#/$defs/coverage"}}}
+        }}}
+      ]
+    }
+  ],
+  "$defs": {
+    "source": {
+      "type": "object", "additionalProperties": false,
+      "required": ["name", "connector", "selector", "scope", "freshness_rule", "window_start", "keep_original"],
+      "properties": {
+        "name": {"type": "string", "minLength": 1},
+        "connector": {"type": "string", "minLength": 1},
+        "selector": {"type": "object", "additionalProperties": {"type": "string"}},
+        "scope": {"type": "string", "minLength": 1},
+        "freshness_rule": {"type": "string", "pattern": "^[0-9]+[smhd]$"},
+        "window_start": {"type": "string", "format": "date-time"},
+        "keep_original": {"type": "boolean"}
+      }
+    },
+    "coverage": {
+      "type": "object", "additionalProperties": false, "required": ["source", "scope", "state"],
+      "properties": {
+        "source": {"type": "string"}, "scope": {"type": "string"},
+        "state": {"enum": ["never looked", "found", "empty", "couldn't look", "unknown"]}
+      }
+    }
+  }
+}
