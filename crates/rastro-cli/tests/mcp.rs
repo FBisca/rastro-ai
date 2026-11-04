@@ -328,9 +328,9 @@ fn S15a_the_refused_launch_prints_nothing_on_stdout() {
     assert!(stderr.contains("299912312359_future"), "{stderr}");
 }
 
-/// An operation error is a tool result with the error envelope; bad arguments are a protocol error
+/// S22: an operation error is a tool result with the error envelope; bad arguments are a protocol error
 #[test]
-fn operation_errors_are_tool_results_and_bad_arguments_are_protocol_errors() {
+fn S22_operation_errors_are_tool_results_and_bad_arguments_are_protocol_errors() {
     let env = seeded();
     let mut session = env.start();
     session.initialize();
