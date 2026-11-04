@@ -27,3 +27,10 @@ Status: agreed 2026-11-04. North star: `../concept.md` §1 and §4. Core terms: 
 7. **Overlaps** (two plugins defining the same concept) are resolved by a mapping claim that the owner or a maintainer confirms, never silently.
 8. **The owner's personal language** (nicknames, "the CFO", internal IDs) is aliases and claims in their graph, not vocabulary.
 9. **The core glossary** (`../GLOSSARY.md`) is the product's ubiquitous language and is protected like the core.
+
+## Added 2026-11-04 (roadmap slice 3)
+Architecture: `../adr/0008-extractor-role-and-protocol.md`.
+10. **The `code` vocabulary ships in the GitHub extractor package,** as a file its manifest names and its `dependencies` list. Each predicate carries §5's definition fields, an evidence requirement, domain and range, freshness (the source's), authority (the newer comparable observation, `knowledge.md` §26) and sensitivity.
+11. **Predicates this slice:** `code:state` (`open` or `closed` exactly as the source defines it, so a merged pull request is `closed`), `code:author`, `code:in_repository`. Labels, assignees, merged, comment parent, review requested and mentions wait.
+12. **Types:** `code:Account` for a GitHub user, `code:Bot` for a bot, `code:Repository`, `code:PullRequest`, `code:Issue`, `code:Comment`. Nothing is typed `Person` (§2): an account type doesn't prove a human. Slice 4 links accounts to Persons.
+13. **Cardinality is per subject and observation context,** not global. Contradictions are kept as conflicts (`knowledge.md` §26), never rejected as cardinality violations.
