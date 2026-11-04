@@ -17,7 +17,7 @@ pub const RUN_FINISH: &str = "run.finish";
 
 /// Why a connector couldn't look (decisions/knowledge.md §18). Anything else it reports is
 /// recorded as `protocol`.
-pub const COULDNT_LOOK_REASONS: [&str; 9] = [
+pub const COULDNT_LOOK_REASONS: [&str; 10] = [
     "auth",
     "forbidden",
     "not_found_or_hidden",
@@ -27,6 +27,7 @@ pub const COULDNT_LOOK_REASONS: [&str; 9] = [
     "protocol",
     "interrupted",
     "storage",
+    "result_cap",
 ];
 
 pub fn major(version: &str) -> &str {
