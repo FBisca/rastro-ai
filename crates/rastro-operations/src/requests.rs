@@ -132,7 +132,7 @@ pub struct SearchRequest {
     #[arg(long)]
     #[serde(default)]
     pub history: bool,
-    /// Most hits to return, from 1 to 50; the result says when more matched.
+    /// Most hits to return, a whole number from 1 to 50 written without a decimal point (20.0 is refused); the result says when more matched.
     #[arg(long, default_value_t = Limit::default(), value_parser = parse_limit, allow_hyphen_values = true)]
     #[serde(default)]
     pub limit: Limit,
