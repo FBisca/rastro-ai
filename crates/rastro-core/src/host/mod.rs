@@ -57,11 +57,29 @@ pub fn discover(
                     });
                 }
                 Ok(_) => {}
-                Err(error) => eprintln!("skipping {}: {error:#}", dir.display()),
+                Err(error) => eprintln!("skipping {}", parse_diagnostic(&dir, &text, &error)),
             }
         }
     }
     Err("not_installed")
+}
+
+/// Where a manifest failed to parse, without quoting any of it: its text can hold values
+/// the owner would not want echoed to a terminal or a log.
+fn parse_diagnostic(dir: &Path, text: &str, error: &anyhow::Error) -> String {
+    let file = dir.join("rastro-plugin.toml");
+    let at = error
+        .chain()
+        .find_map(|cause| cause.downcast_ref::<toml::de::Error>())
+        .and_then(|e| e.span())
+        .map(|span| {
+            let before = text.get(..span.start).unwrap_or_default();
+            let line = before.matches('\n').count() + 1;
+            let column = before.rsplit('\n').next().map_or(0, |l| l.chars().count()) + 1;
+            format!(" at line {line}, column {column}")
+        })
+        .unwrap_or_default();
+    format!("{}: invalid rastro-plugin.toml{at}", file.display())
 }
 
 fn check(manifest: Manifest, dir: PathBuf) -> Result<Plugin> {
@@ -235,12 +253,12 @@ struct Limits {
 }
 impl Limits {
     fn from_env() -> Self {
-        let number = |key: &str, default: u64| {
-            env::var(key)
-                .ok()
-                .and_then(|v| v.parse().ok())
-                .unwrap_or(default)
-        };
+        Self::with(crate::test_override)
+    }
+    /// `knob` yields a test-only override, or `None` where this build ignores them.
+    fn with(knob: impl Fn(&str) -> Option<String>) -> Self {
+        let number =
+            |key: &str, default: u64| knob(key).and_then(|v| v.parse().ok()).unwrap_or(default);
         Self {
             max_line: number("RASTRO_HOST_MAX_LINE", DEFAULT_MAX_LINE as u64) as usize,
             silence: Duration::from_millis(number(
@@ -560,6 +578,44 @@ fn converse<S: Storage>(
 #[allow(non_snake_case)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn S31_host_limit_overrides_are_ignored_unless_this_is_a_debug_build() {
+        let everything = |debug: bool| {
+            Limits::with(|name| {
+                crate::overrides_allowed(debug).then(|| {
+                    assert!(name.starts_with("RASTRO_HOST_"));
+                    "7".to_string()
+                })
+            })
+        };
+        let tuned = everything(true);
+        assert_eq!(
+            (
+                tuned.max_line,
+                tuned.silence,
+                tuned.shutdown,
+                tuned.stderr_lines
+            ),
+            (7, Duration::from_millis(7), Duration::from_millis(7), 7)
+        );
+        let release = everything(false);
+        assert_eq!(
+            (
+                release.max_line,
+                release.silence,
+                release.shutdown,
+                release.stderr_lines
+            ),
+            (
+                DEFAULT_MAX_LINE,
+                DEFAULT_SILENCE,
+                DEFAULT_SHUTDOWN,
+                DEFAULT_STDERR_LINES
+            )
+        );
+    }
 
     /// evidence/R26: teardown kills the process group and releases every helper thread
     #[test]

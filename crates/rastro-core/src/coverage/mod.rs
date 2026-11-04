@@ -2,13 +2,17 @@
 use crate::{Coverage, CoverageState};
 use anyhow::{Context, Result};
 use chrono::{DateTime, Duration, Utc};
-use std::env;
 
 /// The instant coverage is judged at. `RASTRO_NOW` (RFC 3339) overrides the clock so tests
 /// can age a check without waiting; only the core reads it.
 pub fn now() -> Result<DateTime<Utc>> {
-    match env::var("RASTRO_NOW") {
-        Ok(text) if !text.is_empty() => text.parse().context("RASTRO_NOW must be an RFC 3339 time"),
+    now_from(crate::test_override("RASTRO_NOW"))
+}
+fn now_from(knob: Option<String>) -> Result<DateTime<Utc>> {
+    match knob {
+        Some(text) if !text.is_empty() => {
+            text.parse().context("RASTRO_NOW must be an RFC 3339 time")
+        }
         _ => Ok(Utc::now()),
     }
 }
@@ -28,5 +32,23 @@ impl Coverage {
             _ => {}
         }
         self
+    }
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn S31_rastro_now_is_ignored_unless_this_is_a_debug_build() {
+        let knob = || Some("2001-02-03T04:05:06Z".to_string());
+        let allowed = |debug| crate::overrides_allowed(debug).then(knob).flatten();
+        assert_eq!(
+            now_from(allowed(true)).unwrap(),
+            "2001-02-03T04:05:06Z".parse::<DateTime<Utc>>().unwrap()
+        );
+        let ignored = now_from(allowed(false)).unwrap();
+        assert!((Utc::now() - ignored).num_seconds().abs() < 5);
     }
 }
