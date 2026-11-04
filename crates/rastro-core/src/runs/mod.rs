@@ -42,7 +42,7 @@ impl<S: Storage> Rastro<S> {
         lock.lock()?;
         let mut reports = Vec::new();
         for source in &sources {
-            let plugin = host::discover(&self.locations, &source.connector)?;
+            let plugin = host::discover(&self.locations, &source.connector);
             let from = match self.storage.last_complete_check(source)? {
                 Some(check) => check.window_end,
                 None => source.window_start,
@@ -50,7 +50,7 @@ impl<S: Storage> Rastro<S> {
             reports.push(host::run(
                 &mut self.storage,
                 source,
-                plugin.as_ref(),
+                plugin.as_ref().map_err(|reason| *reason),
                 from,
                 Utc::now(),
             )?);
