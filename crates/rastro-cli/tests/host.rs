@@ -24,6 +24,8 @@ fn connector_binary() -> &'static Path {
 
 struct Env {
     home: TempDir,
+    /// Extra environment for the `rastro` process.
+    vars: Vec<(&'static str, String)>,
 }
 impl Env {
     fn new() -> Self {
@@ -32,6 +34,7 @@ impl Env {
     fn with_manifest(edit: impl FnOnce(&mut toml::Table)) -> Self {
         let env = Self {
             home: TempDir::new().unwrap(),
+            vars: Vec::new(),
         };
         let plugin = env.home.path().join("dev-plugins/test");
         fs::create_dir_all(&plugin).unwrap();
@@ -69,6 +72,9 @@ impl Env {
             .env("RASTRO_HOST_SHUTDOWN_MS", "300")
             .env("RASTRO_HOST_STDERR_LINES", "50")
             .args(args);
+        for (key, value) in &self.vars {
+            command.env(key, value);
+        }
         command
     }
     fn rastro(&self, args: &[&str]) -> Output {
@@ -427,7 +433,7 @@ fn S9c_connector_that_stops_reading_stdin_times_out() {
 fn S9d_connector_that_lingers_after_finish_is_killed_and_the_run_kept() {
     for linger in [
         json!({"do": "sleep", "ms": 20000}),
-        json!({"do": "spawn_holder", "secs": 4}),
+        json!({"do": "spawn_holder", "secs": 120}),
     ] {
         let env = Env::new();
         let mut script = vec![init(), complete(), finish(), linger];
@@ -485,8 +491,10 @@ fn S9f_invalid_utf8_or_a_bad_envelope_fails_with_protocol() {
     bad_version["jsonrpc"] = json!("1.0");
     let mut no_method = evidence();
     no_method.as_object_mut().unwrap().remove("method");
+    // The bad byte sits inside a quoted value, where lossy decoding would still parse.
     let mut invalid = serde_json::to_vec(&evidence()).unwrap();
-    invalid.extend([0xff, 0xfe]);
+    let at = invalid.windows(5).position(|w| w == b"hello").unwrap();
+    invalid.splice(at + 2..at + 3, [0xff]);
     let finish_without_id = send(json!({"jsonrpc": "2.0", "method": "run.finish",
         "params": {"status": "ok", "submitted": 0}}));
     for line in [
@@ -571,4 +579,107 @@ fn S11a_finish_with_only_rejected_coverage_reports_fails_with_protocol() {
         env.sql::<String>("SELECT state || ':' || reason FROM coverage"),
         "couldn't look:protocol"
     );
+}
+
+fn alive(pid: &str) -> bool {
+    Command::new("kill")
+        .args(["-0", pid])
+        .stderr(std::process::Stdio::null())
+        .status()
+        .unwrap()
+        .success()
+}
+
+#[test]
+fn S9g_many_core_diagnostics_never_make_the_run_wait_on_stderr() {
+    let env = Env::new();
+    env.script(&[
+        init(),
+        json!({"do": "flood", "lines": 20000}),
+        complete(),
+        finish(),
+    ]);
+    let (_, run) = env.sync_within(20, false);
+    assert_eq!(run["counts"]["rejected"], 20000);
+    let forged = json!({"jsonrpc": "2.0", "method": "coverage.report",
+        "params": {"status": "complete", "scope": "work"}});
+    let reports: Vec<Value> = (0..20000).map(|_| send(forged.clone())).collect();
+    let mut steps = vec![init()];
+    steps.extend(reports);
+    steps.extend([complete(), finish()]);
+    env.script(&steps);
+    let (_, run) = env.sync_within(20, false);
+    assert_eq!(run["status"], "ok");
+}
+
+#[test]
+fn S9h_unwritable_run_finish_reply_fails_with_timeout() {
+    let mut env = Env::new();
+    env.vars.push(("RASTRO_HOST_MAX_LINE", "1000000".into()));
+    env.script(&[
+        init(),
+        complete(),
+        json!({"do": "finish_big_id", "bytes": 200_000}),
+        json!({"do": "sleep", "ms": 20000}),
+    ]);
+    let (output, run) = env.sync_within(15, true);
+    assert!(!output.status.success());
+    failed_with(&run, "timeout");
+}
+
+#[test]
+fn S9i_ids_and_shapes_json_rpc_does_not_allow_fail_with_protocol() {
+    let mut shapes = Vec::new();
+    for id in [json!({}), json!([]), json!(true)] {
+        let mut message = evidence();
+        message["id"] = id;
+        shapes.push(message);
+    }
+    for key in ["result", "error"] {
+        let mut message = evidence();
+        message[key] = json!({});
+        shapes.push(message);
+    }
+    for message in shapes {
+        let env = Env::new();
+        env.script(&[init(), send(message), complete(), finish()]);
+        let (output, run) = env.sync_within(10, true);
+        assert!(!output.status.success());
+        failed_with(&run, "protocol");
+        assert_eq!(env.sql::<i64>("SELECT count(*) FROM evidence"), 0);
+    }
+}
+
+#[test]
+fn S9j_the_connectors_process_group_is_killed_when_the_run_ends() {
+    for linger in [false, true] {
+        let env = Env::new();
+        let pid_file = env.home.path().join("holder.pid");
+        let mut script = vec![
+            init(),
+            json!({"do": "spawn_holder", "secs": 120, "pid_file": pid_file}),
+            complete(),
+            finish(),
+        ];
+        if linger {
+            script.push(json!({"do": "sleep", "ms": 20000}));
+        }
+        env.script(&script);
+        let (output, run) = env.sync_within(10, true);
+        assert!(output.status.success());
+        assert_eq!(run["status"], "ok");
+        let pid = fs::read_to_string(&pid_file).unwrap();
+        let mut gone = false;
+        for _ in 0..40 {
+            if !alive(&pid) {
+                gone = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(50));
+        }
+        if !gone {
+            let _ = Command::new("kill").args(["-9", &pid]).status();
+        }
+        assert!(gone, "the connector's child outlived the run");
+    }
 }

@@ -5,7 +5,7 @@ use crate::runs::RunReport;
 use crate::{
     Counts, CoverageRecord, CoverageState, Locations, RunEnd, Source, Storage, display_safe,
 };
-use anyhow::{Context, Result, bail};
+use anyhow::{Result, bail};
 use chrono::{DateTime, SecondsFormat, Utc};
 use rastro_plugin_sdk::{
     COULDNT_LOOK_REASONS, COVERAGE_REPORT, CoverageReport, CoverageStatus, EVIDENCE_SUBMIT,
@@ -16,8 +16,9 @@ use std::{
     env,
     ffi::OsString,
     fs,
+    os::unix::process::CommandExt,
     path::{Path, PathBuf},
-    process::{Command, Stdio},
+    process::{Child, Command, Stdio},
     sync::mpsc::{Receiver, RecvTimeoutError},
     time::{Duration, Instant},
 };
@@ -280,45 +281,106 @@ fn drive<S: Storage>(
     session: &mut Session,
 ) -> Result<std::result::Result<RunFinish, &'static str>> {
     let command = resolve(&plugin.dir, &plugin.manifest.command);
-    let Ok(mut child) = Command::new(command)
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
+    let mut command = Command::new(command);
+    command
         .env_clear()
-        .envs(allowed_environment(&plugin.manifest))
-        .spawn()
+        .envs(allowed_environment(&plugin.manifest));
+    let Ok(mut connector) = Connector::launch(command, &plugin.manifest.id, Limits::from_env())
     else {
         return Ok(Err("not_installed"));
     };
-    let stdin = child.stdin.take().context("child stdin")?;
-    let stdout = child.stdout.take().context("child stdout")?;
-    let stderr = child.stderr.take().context("child stderr")?;
-    let limits = Limits::from_env();
-    let relayed = io::relay_stderr(stderr, plugin.manifest.id.clone(), limits.stderr_lines);
-    let mut wire = Wire {
-        jobs: io::write_lines(stdin),
-        events: io::read_lines(stdout, limits.max_line),
-        deadline: limits.silence,
-    };
-    let outcome = converse(storage, &mut wire, plugin, binding, grant, session);
-    // Closing the job queue closes stdin, which is how a well-behaved connector knows to exit.
-    drop(wire);
-    let deadline = Instant::now() + limits.shutdown;
-    let mut exited = matches!(outcome, Ok(Ok(_)));
-    while exited {
-        match child.try_wait() {
-            Ok(Some(_)) | Err(_) => break,
-            Ok(None) if Instant::now() >= deadline => exited = false,
-            Ok(None) => std::thread::sleep(Duration::from_millis(10)),
-        }
-    }
-    if !exited {
-        let _ = child.kill();
-    }
-    let _ = child.wait();
-    // A child of the connector may still hold the pipes: wait for the relay, but not forever.
-    let _ = relayed.recv_timeout(limits.shutdown);
+    let outcome = converse(
+        storage,
+        &mut connector.wire,
+        &connector.relay,
+        plugin,
+        binding,
+        grant,
+        session,
+    );
+    connector.teardown(matches!(outcome, Ok(Ok(_))));
     outcome
+}
+
+/// A running connector and everything the host holds to talk to it.
+struct Connector {
+    child: Child,
+    wire: Wire,
+    relay: io::Relay,
+    printed: Receiver<()>,
+    limits: Limits,
+    tally: io::Tally,
+}
+impl Connector {
+    /// Starts the command with piped stdio and its own process group,
+    /// so everything it starts can be stopped with it.
+    fn launch(mut command: Command, id: &str, limits: Limits) -> std::io::Result<Self> {
+        command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .process_group(0);
+        let mut child = command.spawn()?;
+        let (stdin, stdout, stderr) = (
+            child.stdin.take().expect("piped stdin"),
+            child.stdout.take().expect("piped stdout"),
+            child.stderr.take().expect("piped stderr"),
+        );
+        let tally = io::Tally::default();
+        let (relay, printed) = io::start_relay(id.into(), limits.stderr_lines, &tally);
+        io::drain_stderr(stderr, relay.clone(), &tally);
+        let wire = Wire {
+            jobs: io::write_lines(stdin, &tally),
+            events: io::read_lines(stdout, limits.max_line, &tally),
+            deadline: limits.silence,
+        };
+        Ok(Self {
+            child,
+            wire,
+            relay,
+            printed,
+            limits,
+            tally,
+        })
+    }
+
+    /// Ends the connector. After a clean finish it gets the shutdown deadline to exit on its
+    /// own; then its whole process group is killed, so a descendant can't keep the pipes open
+    /// and the helper threads end. Returns the helper-thread tally for tests.
+    fn teardown(mut self, finished: bool) -> io::Tally {
+        // Closing the job queue closes stdin, which is how a well-behaved connector exits.
+        drop(self.wire);
+        let pid = self.child.id();
+        let deadline = Instant::now() + self.limits.shutdown;
+        let mut exited = false;
+        while finished && !exited {
+            match self.child.try_wait() {
+                Ok(Some(_)) | Err(_) => exited = true,
+                Ok(None) if Instant::now() >= deadline => break,
+                Ok(None) => std::thread::sleep(Duration::from_millis(10)),
+            }
+        }
+        kill_group(pid);
+        let _ = self.child.wait();
+        drop(self.relay);
+        // The printer may be stuck on a terminal nobody reads: wait, but not forever.
+        let _ = self.printed.recv_timeout(self.limits.shutdown);
+        self.tally
+    }
+}
+
+/// SIGKILL to the process group led by `leader`, which `launch` created.
+fn kill_group(leader: u32) {
+    #[cfg(unix)]
+    {
+        unsafe extern "C" {
+            safe fn killpg(group: i32, signal: i32) -> i32;
+        }
+        const SIGKILL: i32 = 9;
+        let _ = killpg(leader as i32, SIGKILL);
+    }
+    #[cfg(not(unix))]
+    let _ = leader;
 }
 
 /// The two ends of the conversation: lines out under a deadline, and bounded, timed lines in.
@@ -342,7 +404,7 @@ impl Wire {
     fn recv(&mut self) -> std::result::Result<Envelope, &'static str> {
         match self.events.recv_timeout(self.deadline) {
             Ok(io::Event::Line(line)) => match serde_json::from_str::<Envelope>(&line) {
-                Ok(envelope) if envelope.jsonrpc == "2.0" => Ok(envelope),
+                Ok(envelope) if envelope.is_well_formed() => Ok(envelope),
                 _ => Err("protocol"),
             },
             Ok(io::Event::TooLong | io::Event::Invalid) => Err("protocol"),
@@ -355,6 +417,7 @@ impl Wire {
 fn converse<S: Storage>(
     storage: &mut S,
     wire: &mut Wire,
+    relay: &io::Relay,
     plugin: &Plugin,
     binding: &RunBinding,
     grant: &Grant,
@@ -399,7 +462,7 @@ fn converse<S: Storage>(
                         session.counts.accepted += 1;
                     }
                     Err(why) => {
-                        eprintln!("rejected evidence: {}", display_safe(&why));
+                        relay.line(&format!("rejected evidence: {why}"));
                         session.counts.rejected += 1;
                     }
                 }
@@ -414,7 +477,7 @@ fn converse<S: Storage>(
                 if bound {
                     session.coverage = Some(report);
                 } else {
-                    eprintln!("rejected coverage report: not the bound source, scope or window");
+                    relay.line("rejected coverage report: not the bound source, scope or window");
                 }
             }
             Some(RUN_FINISH) => {
@@ -425,10 +488,42 @@ fn converse<S: Storage>(
                     return Ok(Err("protocol"));
                 };
                 let reply = Envelope::response(message.id, session.counts)?;
-                let _ = wire.send(&reply);
+                step!(wire.send(&reply));
                 return Ok(Ok(finish));
             }
             _ => return Ok(Err("protocol")),
+        }
+    }
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn S9j_teardown_kills_the_process_group_and_releases_every_helper_thread() {
+        for finished in [false, true] {
+            let mut command = Command::new("/bin/sh");
+            // A background child shares the pipes with the connector; neither will exit.
+            command.args(["-c", "sleep 60 & exec sleep 60"]);
+            let limits = Limits {
+                max_line: 4096,
+                silence: Duration::from_secs(1),
+                shutdown: Duration::from_millis(200),
+                stderr_lines: 10,
+            };
+            let connector = Connector::launch(command, "test", limits).unwrap();
+            let tally = connector.teardown(finished);
+            let started = Instant::now();
+            while tally.live() > 0 {
+                assert!(
+                    started.elapsed() < Duration::from_secs(5),
+                    "{} helper threads still hold the pipes",
+                    tally.live()
+                );
+                std::thread::sleep(Duration::from_millis(10));
+            }
         }
     }
 }
