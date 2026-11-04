@@ -28,6 +28,12 @@ pub struct RunReport {
 impl<S: Storage> Rastro<S> {
     /// Runs the connector of one source, or of every source, one after another.
     pub fn sync(&mut self, name: Option<&str>) -> Result<Vec<RunReport>> {
+        self.sync_with_reread(name, false)
+    }
+
+    /// Runs connectors from the registered window start when `reread` is true.
+    /// Re-reading uses the same append, unchanged and coverage rules as any sync.
+    pub fn sync_with_reread(&mut self, name: Option<&str>, reread: bool) -> Result<Vec<RunReport>> {
         let sources: Vec<Source> = self
             .config
             .sources
@@ -50,9 +56,13 @@ impl<S: Storage> Rastro<S> {
         let mut reports = Vec::new();
         for source in &sources {
             let plugin = host::discover(&self.locations, &source.connector);
-            let from = match self.storage.last_complete_check(source)? {
-                Some(check) => check.window_end,
-                None => source.window_start,
+            let from = if reread {
+                source.window_start
+            } else {
+                match self.storage.last_complete_check(source)? {
+                    Some(check) => check.window_end,
+                    None => source.window_start,
+                }
             };
             reports.push(host::run(
                 &mut self.storage,

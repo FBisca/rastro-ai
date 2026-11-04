@@ -48,7 +48,8 @@ impl Env {
         let output = self.rastro(args);
         assert!(
             output.status.success(),
-            "{}",
+            "stdout: {} stderr: {}",
+            String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
         String::from_utf8(output.stdout).unwrap()
@@ -187,4 +188,79 @@ fn a_body_changing_and_changing_back_leaves_three_observations() {
     );
     let human = env.ok(&["search", "beta", "--history", "--full"]);
     assert!(human.contains("beta body"), "{human}");
+}
+
+#[test]
+fn S2_reread_starts_at_registration_and_appends_only_new_fields() {
+    let env = Env::new();
+    let start = "2026-01-01T00:00:00.000Z";
+    env.ok(&[
+        "source",
+        "add",
+        "project",
+        "--connector",
+        "test",
+        "--repo",
+        "o/p",
+        "--scope",
+        "personal",
+        "--window-start",
+        start,
+    ]);
+    let initial = sync_with(
+        &env,
+        &[
+            ("https://x/1", "first body"),
+            ("https://x/2", "absent later"),
+        ],
+    );
+    assert_eq!(initial["window"]["from"], start);
+    let resumed = sync_with(&env, &[("https://x/1", "first body")]);
+    assert_eq!(resumed["window"]["from"], initial["window"]["to"]);
+    let mut author = submit("https://x/1", "42");
+    author["params"]["field"] = json!("/user/id");
+    author["params"]["trust_class"] = json!("structured");
+    env.script(&[
+        json!({"do": "initialize"}),
+        json!({"do": "send", "message": submit("https://x/1", "first body")}),
+        json!({"do": "send", "message": author}),
+        json!({"do": "send", "message": {"jsonrpc": "2.0", "method": "coverage.report",
+            "params": {"status": "complete", "selection": "all"}}}),
+        json!({"do": "finish", "status": "ok", "submitted": 2}),
+    ]);
+    let reread = env.json(&["sync", "project", "--reread"])["result"]["runs"][0].clone();
+    assert_eq!(reread["window"]["from"], start);
+    assert_eq!(
+        reread["counts"],
+        json!({"submitted": 2, "accepted": 1, "rejected": 0, "unchanged": 1})
+    );
+    assert_eq!(reread["coverage"], "found");
+    assert_eq!(env.sql::<i64>("SELECT count(*) FROM evidence"), 3);
+    assert_eq!(env.sql::<i64>("SELECT count(*) FROM evidence WHERE location = 'https://x/2' AND quote = 'absent later'"), 1);
+    let run = reread["run_id"].as_i64().unwrap();
+    assert_eq!(
+        env.sql::<i64>(&format!(
+            "SELECT count(*) FROM run_evidence WHERE run_id = {run}"
+        )),
+        2
+    );
+    assert_eq!(
+        env.sql::<i64>(&format!(
+            "SELECT count(*) FROM run_evidence WHERE run_id = {run} AND evidence_id = 2"
+        )),
+        0
+    );
+    let coverage = env.json(&["coverage", "project", "--all-windows"]);
+    let windows = coverage["result"]["coverage"][0]["windows"]
+        .as_array()
+        .unwrap();
+    assert_eq!(windows.len(), 3);
+    let instant = |value: &Value| -> chrono::DateTime<chrono::Utc> {
+        value.as_str().unwrap().parse().unwrap()
+    };
+    assert!(windows.iter().any(|window| {
+        instant(&window["from"]) == instant(&reread["window"]["from"])
+            && instant(&window["to"]) == instant(&reread["window"]["to"])
+            && window["state"] == "found"
+    }));
 }

@@ -774,6 +774,11 @@
               "string",
               "null"
             ]
+          },
+          "reread": {
+            "default": false,
+            "description": "Re-read from the registered window start, appending new evidence and skipping unchanged fields.",
+            "type": "boolean"
           }
         },
         "title": "SyncRequest",
