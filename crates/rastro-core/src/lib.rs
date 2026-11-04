@@ -1,3 +1,4 @@
+pub mod files;
 use anyhow::{Context, Result, bail, ensure};
 use chrono::{DateTime, Duration, Utc};
 use serde::{Deserialize, Serialize};
@@ -58,7 +59,9 @@ impl Source {
         );
         let (number, unit) = rule.split_at(rule.char_indices().last().unwrap().0);
         ensure!(
-            matches!(unit, "s" | "m" | "h" | "d") && number.parse::<u64>().is_ok_and(|n| n > 0),
+            matches!(unit, "s" | "m" | "h" | "d")
+                && number.bytes().all(|b| b.is_ascii_digit())
+                && number.parse::<u64>().is_ok_and(|n| n > 0),
             "freshness rule must be a positive duration, e.g. 1h"
         );
         Ok(())
@@ -78,13 +81,14 @@ impl Locations {
                 .map(PathBuf::from)
         };
         if let Some(home) = variable("RASTRO_HOME") {
+            ensure!(home.is_absolute(), "RASTRO_HOME must be absolute");
             return Ok(Self {
                 data: home.join("data"),
                 config: home.join("config"),
             });
         }
         let directory = |key, fallback| -> Result<PathBuf> {
-            match variable(key) {
+            match variable(key).filter(|path| path.is_absolute()) {
                 Some(path) => Ok(path.join("rastro")),
                 None => Ok(variable("HOME")
                     .context("HOME is required when XDG directories are unset")?
@@ -95,6 +99,12 @@ impl Locations {
             data: directory("XDG_DATA_HOME", ".local/share/rastro")?,
             config: directory("XDG_CONFIG_HOME", ".config/rastro")?,
         })
+    }
+    fn config_lock(&self) -> Result<fs::File> {
+        files::private_directory(&self.config)?;
+        let file = files::private_file(&self.config.join("config.lock"))?;
+        file.lock()?;
+        Ok(file)
     }
     pub fn database(&self) -> PathBuf {
         self.data.join("rastro.sqlite3")
@@ -129,7 +139,7 @@ impl Config {
         Ok(config)
     }
     fn save(&self, locations: &Locations) -> Result<()> {
-        fs::create_dir_all(&locations.config)?;
+        files::private_directory(&locations.config)?;
         let mut file = tempfile::NamedTempFile::new_in(&locations.config)?;
         file.write_all(toml::to_string_pretty(self)?.as_bytes())?;
         file.as_file().sync_all()?;
@@ -182,6 +192,7 @@ pub struct Rastro<S> {
 }
 impl<S: Storage> Rastro<S> {
     pub fn open(locations: Locations, mut storage: S) -> Result<Self> {
+        let _lock = locations.config_lock()?;
         let config = Config::load(&locations)?;
         storage.project_sources(&config.sources)?;
         Ok(Self {
@@ -192,6 +203,8 @@ impl<S: Storage> Rastro<S> {
     }
     pub fn add_source(&mut self, source: Source) -> Result<Source> {
         source.validate()?;
+        let _lock = self.locations.config_lock()?;
+        self.config = Config::load(&self.locations)?;
         ensure!(
             !self.config.sources.iter().any(|s| s.name == source.name),
             "source already exists: {}",

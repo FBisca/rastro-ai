@@ -1,7 +1,7 @@
 use anyhow::{Result, bail, ensure};
 use rastro_core::{Coverage, CoverageState, Source, Storage};
 use rusqlite::{Connection, OptionalExtension, params};
-use std::{fs, path::Path};
+use std::path::Path;
 
 pub struct SqliteStorage {
     connection: Connection,
@@ -9,19 +9,24 @@ pub struct SqliteStorage {
 impl SqliteStorage {
     pub fn open(path: &Path) -> Result<Self> {
         if let Some(parent) = path.parent().filter(|p| !p.as_os_str().is_empty()) {
-            fs::create_dir_all(parent)?;
+            rastro_core::files::private_directory(parent)?;
         }
+        let _file = rastro_core::files::private_file(path)?;
         let mut connection = Connection::open(path)?;
         connection.execute_batch("PRAGMA foreign_keys = ON;")?;
-        let transaction = connection.transaction()?;
+        let transaction =
+            connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let version: u32 = transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
         ensure!(
-            version <= 1,
-            "database schema {version} is newer than supported version 1"
+            version <= 2,
+            "database schema {version} is newer than supported version 2"
         );
         if version == 0 {
             transaction.execute_batch(include_str!("../migrations/0001.sql"))?;
-            transaction.pragma_update(None, "user_version", 1)?;
+        }
+        if version < 2 {
+            transaction.execute_batch(include_str!("../migrations/0002.sql"))?;
+            transaction.pragma_update(None, "user_version", 2)?;
         }
         transaction.commit()?;
         Ok(Self { connection })
