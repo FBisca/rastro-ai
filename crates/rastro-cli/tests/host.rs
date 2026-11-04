@@ -555,7 +555,8 @@ fn S10a_recovered_run_records_couldnt_look_for_its_window() {
         env.sql::<String>("SELECT window_start || window_end FROM runs")
     );
     let covered: Value = serde_json::from_str(&env.ok(&["coverage", "project", "--json"])).unwrap();
-    assert_eq!(covered["result"]["coverage"][0]["state"], "couldn't look");
+    assert_eq!(covered["result"]["coverage"][0]["state"], "unknown");
+    assert_eq!(covered["result"]["coverage"][0]["reason"], "interrupted");
 }
 
 #[test]
