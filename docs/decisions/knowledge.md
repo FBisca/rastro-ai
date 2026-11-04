@@ -31,6 +31,6 @@ Status: agreed 2026-11-04. North star: `../concept.md` §1. Research: `../resear
 ## Added 2026-11-04 (roadmap slice 1)
 16. **Raw content default:** pointer plus quoted span. Keeping the full original is opt-in per source, at registration. Replay covers only what was retained.
 17. **A coverage window** is a half-open interval over the source's update time, plus a selection. A traversal cursor is how a connector resumes, not what coverage means. A window is complete only once every page and dependent read has finished.
-18. **"Couldn't look" reasons** are typed: `auth`, `forbidden`, `not_found_or_hidden`, `rate_limited`, `network`, `timeout`, `protocol`, `interrupted`, `storage`, each with optional safe detail and a retry time. An incomplete read never becomes "empty".
+18. **"Couldn't look" reasons** are typed: `auth`, `forbidden`, `not_found_or_hidden`, `rate_limited`, `network`, `timeout`, `protocol`, `interrupted`, `storage`, `result_cap` (the source caps how many results a query returns, so the read is incomplete; 2026-11-04), each with optional safe detail and a retry time. An incomplete read never becomes "empty".
 19. **Re-observing unchanged content adds no evidence;** changed content appends. Encoding: `../adr/0005-evidence-observations-and-spans.md`.
 20. **An empty search is not an empty source.** Search results always state the coverage of the sources they searched.
