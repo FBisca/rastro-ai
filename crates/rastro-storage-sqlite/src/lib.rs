@@ -2,8 +2,8 @@ use anyhow::{Result, bail};
 use chrono::{DateTime, SecondsFormat, Utc};
 use rastro_core::{
     Appended, COVERAGE_WINDOWS_SHOWN, CompleteCheck, Coverage, CoverageRecord, CoverageState,
-    CoverageWindow, Evidence, Hit, ReadStorage, Refusal, RunEnd, Scope, Snapshot, Source, Storage,
-    TrustClass, UnfinishedRun,
+    CoverageWindow, Evidence, Hit, Pair, ReadStorage, Refusal, RunEnd, Scope, Snapshot, Source,
+    Storage, TrustClass, UnfinishedRun,
 };
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use std::path::Path;
@@ -232,11 +232,14 @@ impl Storage for SqliteStorage {
         transaction.commit()?;
         Ok(())
     }
-    fn coverage(&self, source: &Source, all_windows: bool) -> Result<Coverage> {
+    fn stored_pairs(&self) -> Result<Vec<Pair>> {
+        View(&self.connection).stored_pairs()
+    }
+    fn coverage(&self, pair: &Pair, all_windows: bool) -> Result<Coverage> {
         // One read transaction: the totals, the state and the listing come from one snapshot,
         // even when a sync in another process commits meanwhile.
         let snapshot = self.connection.unchecked_transaction()?;
-        View(&snapshot).coverage(source, all_windows)
+        View(&snapshot).coverage(pair, all_windows)
     }
     fn start_run(
         &mut self,
@@ -358,7 +361,7 @@ impl Storage for SqliteStorage {
         Ok(())
     }
     fn last_complete_check(&self, source: &Source) -> Result<Option<CompleteCheck>> {
-        View(&self.connection).last_complete_check(source)
+        View(&self.connection).last_complete_check(&source.name, &source.scope)
     }
     fn interrupt_unfinished_runs(&mut self, at: DateTime<Utc>) -> Result<usize> {
         let transaction = self.connection.transaction()?;
@@ -397,14 +400,14 @@ impl Storage for SqliteStorage {
 }
 
 impl View<'_> {
-    fn last_complete_check(&self, source: &Source) -> Result<Option<CompleteCheck>> {
+    fn last_complete_check(&self, name: &str, scope: &Scope) -> Result<Option<CompleteCheck>> {
         let row: Option<(String, String)> = self
             .0
             .query_row(
                 "SELECT window_end, checked_at FROM coverage
                  WHERE source=?1 AND scope=?2 AND state IN ('found', 'empty')
                  ORDER BY id DESC LIMIT 1",
-                params![source.name, source.scope.0],
+                params![name, scope.0],
                 |row| Ok((row.get(0)?, row.get(1)?)),
             )
             .optional()?;
@@ -418,12 +421,32 @@ impl View<'_> {
     }
 }
 impl Snapshot for View<'_> {
-    fn coverage(&self, source: &Source, all_windows: bool) -> Result<Coverage> {
+    fn stored_pairs(&self) -> Result<Vec<Pair>> {
+        // A source row, a window, a run or evidence each name a pair; the rule is the one
+        // last stored for the source (a removed source keeps its row).
+        let mut statement = self.0.prepare(
+            "SELECT p.source, p.scope, s.freshness_rule FROM (
+                 SELECT name AS source, scope FROM sources
+                 UNION SELECT source, scope FROM coverage
+                 UNION SELECT source, scope FROM runs
+                 UNION SELECT source, scope FROM evidence
+             ) p JOIN sources s ON s.name = p.source ORDER BY p.source, p.scope",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok(Pair {
+                source: row.get(0)?,
+                scope: Scope(row.get(1)?),
+                freshness_rule: row.get(2)?,
+            })
+        })?;
+        Ok(rows.collect::<rusqlite::Result<_>>()?)
+    }
+    fn coverage(&self, pair: &Pair, all_windows: bool) -> Result<Coverage> {
         // The overall state is judged over every window, in SQL; only the listing is capped.
         let (windows_total, any_found): (i64, bool) = self.0.query_row(
             "SELECT count(*), coalesce(max(state = 'found'), 0) FROM coverage
              WHERE source=?1 AND scope=?2",
-            params![source.name, source.scope.0],
+            params![pair.source, pair.scope.0],
             |row| Ok((row.get(0)?, row.get(1)?)),
         )?;
         let limit = if all_windows {
@@ -435,7 +458,7 @@ impl Snapshot for View<'_> {
             "SELECT window_start, window_end, state, selection, reason, retry_at, checked_at
              FROM coverage WHERE source=?1 AND scope=?2 ORDER BY id DESC LIMIT ?3",
         )?;
-        let rows = statement.query_map(params![source.name, source.scope.0, limit], |row| {
+        let rows = statement.query_map(params![pair.source, pair.scope.0, limit], |row| {
             Ok((
                 [row.get::<_, String>(0)?, row.get(1)?],
                 [row.get::<_, String>(2)?, row.get(3)?],
@@ -476,10 +499,13 @@ impl Snapshot for View<'_> {
         };
         let reason = windows.first().and_then(|w| w.reason.clone());
         Ok(Coverage {
-            source: source.name.clone(),
-            scope: source.scope.clone(),
+            source: pair.source.clone(),
+            scope: pair.scope.clone(),
+            registered: true,
             state,
-            last_checked: self.last_complete_check(source)?.map(|c| c.checked_at),
+            last_checked: self
+                .last_complete_check(&pair.source, &pair.scope)?
+                .map(|c| c.checked_at),
             fresh_until: None,
             reason,
             windows_total: windows_total as usize,

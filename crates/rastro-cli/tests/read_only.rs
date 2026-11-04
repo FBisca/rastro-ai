@@ -327,9 +327,13 @@ impl InterleavedView<'_> {
     }
 }
 impl Snapshot for InterleavedView<'_> {
-    fn coverage(&self, source: &rastro_core::Source, all_windows: bool) -> Result<Coverage> {
+    fn coverage(&self, source: &rastro_core::Pair, all_windows: bool) -> Result<Coverage> {
         self.interleave();
         self.inner.coverage(source, all_windows)
+    }
+    fn stored_pairs(&self) -> Result<Vec<rastro_core::Pair>> {
+        self.interleave();
+        self.inner.stored_pairs()
     }
     fn search(&self, query: &str, limit: usize, history: bool) -> Result<Vec<rastro_core::Hit>> {
         self.interleave();
@@ -759,4 +763,72 @@ fn S11_an_interrupted_run_is_the_newest_window_counted_and_capped_like_its_recov
     );
     assert_eq!(from_read, from_written);
     assert_eq!(written["state"], "unknown");
+}
+
+fn edit_sources(env: &Env, edit: impl FnOnce(&mut Vec<toml::Value>)) {
+    let path = env.home.path().join("config/config.toml");
+    let mut config: toml::Table = fs::read_to_string(&path).unwrap().parse().unwrap();
+    edit(config.get_mut("sources").unwrap().as_array_mut().unwrap());
+    fs::write(path, config.to_string()).unwrap();
+}
+
+/// knowledge/21: the reader keeps a removed source's coverage, unregistered
+#[test]
+fn S13_the_reader_answers_a_removed_source_from_its_stored_windows_unregistered() {
+    let env = synced();
+    edit_sources(&env, |sources| sources.clear());
+    let mut reader = env.reader();
+    let entry = only(reader.coverage(None, false).unwrap());
+    assert_eq!(
+        (entry.state, entry.registered),
+        (CoverageState::Found, false)
+    );
+    assert_eq!(entry.windows_total, 1);
+    let hits = reader.search("body", &SearchOptions::default()).unwrap();
+    assert_eq!(hits.results.len(), 2);
+    for hit in &hits.results {
+        let covering = hit.coverage.as_ref().unwrap();
+        assert_eq!(
+            (covering.state, covering.registered),
+            (CoverageState::Found, false)
+        );
+    }
+}
+
+/// knowledge/21: a removed source that never synced reads never looked, unregistered
+#[test]
+fn S13a_the_reader_lists_a_removed_source_that_never_synced_as_never_looked() {
+    let env = Env::new();
+    env.add_source("project");
+    edit_sources(&env, |sources| sources.clear());
+    let entry = only(env.reader().coverage(None, false).unwrap());
+    assert_eq!(entry.source, "project");
+    assert_eq!(
+        (entry.state, entry.registered),
+        (CoverageState::NeverLooked, false)
+    );
+}
+
+/// knowledge/21: after a scope change, old-scope hits carry the old pair, unregistered
+#[test]
+fn S13b_the_reader_gives_old_scope_hits_the_old_pairs_coverage() {
+    let env = synced();
+    edit_sources(&env, |sources| sources[0]["scope"] = "work".into());
+    let mut reader = env.reader();
+    let coverage = reader.coverage(None, false).unwrap();
+    assert_eq!(coverage.len(), 2, "{coverage:?}");
+    let old = coverage.iter().find(|c| c.scope.0 == "personal").unwrap();
+    let new = coverage.iter().find(|c| c.scope.0 == "work").unwrap();
+    assert_eq!((old.state, old.registered), (CoverageState::Found, false));
+    assert_eq!(
+        (new.state, new.registered),
+        (CoverageState::NeverLooked, true)
+    );
+    let hits = reader.search("body", &SearchOptions::default()).unwrap();
+    assert!(!hits.results.is_empty());
+    for hit in &hits.results {
+        let covering = hit.coverage.as_ref().unwrap();
+        assert_eq!(covering.scope, hit.scope);
+        assert!(!covering.registered);
+    }
 }

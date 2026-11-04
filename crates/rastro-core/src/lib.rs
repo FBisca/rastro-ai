@@ -72,14 +72,7 @@ impl Source {
     }
     /// The freshness rule as a duration; `validate` guarantees the shape.
     pub fn freshness(&self) -> Duration {
-        let (number, unit) = self.freshness_rule.split_at(self.freshness_rule.len() - 1);
-        let n: i64 = number.parse().unwrap_or(0);
-        match unit {
-            "s" => Duration::seconds(n),
-            "m" => Duration::minutes(n),
-            "h" => Duration::hours(n),
-            _ => Duration::days(n),
-        }
+        parse_freshness(&self.freshness_rule)
     }
     pub fn validate(&self) -> Result<()> {
         ensure!(
@@ -230,10 +223,45 @@ impl CoverageState {
         }
     }
 }
+fn parse_freshness(rule: &str) -> Duration {
+    let (number, unit) = rule.split_at(rule.len() - 1);
+    let n: i64 = number.parse().unwrap_or(0);
+    match unit {
+        "s" => Duration::seconds(n),
+        "m" => Duration::minutes(n),
+        "h" => Duration::hours(n),
+        _ => Duration::days(n),
+    }
+}
+/// What coverage is kept for: a source name in one scope, with the freshness rule that
+/// judges it. A pair comes from the config or, once removed from it, from storage alone.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Pair {
+    pub source: String,
+    pub scope: Scope,
+    pub freshness_rule: String,
+}
+impl Pair {
+    pub fn freshness(&self) -> Duration {
+        parse_freshness(&self.freshness_rule)
+    }
+}
+impl From<&Source> for Pair {
+    fn from(source: &Source) -> Self {
+        Self {
+            source: source.name.clone(),
+            scope: source.scope.clone(),
+            freshness_rule: source.freshness_rule.clone(),
+        }
+    }
+}
 #[derive(Clone, Debug, JsonSchema, Serialize)]
 pub struct Coverage {
     pub source: String,
     pub scope: Scope,
+    /// Whether the source is in the config in this scope. A removed source, or one whose
+    /// scope changed, keeps the coverage its stored windows give, with `registered: false`.
+    pub registered: bool,
     pub state: CoverageState,
     /// When the source was last checked completely (found or empty).
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -299,7 +327,10 @@ pub trait Storage {
     fn project_sources(&mut self, sources: &[Source]) -> Result<()>;
     /// The state is judged over every window; `all_windows` lists them all, otherwise only
     /// the newest `COVERAGE_WINDOWS_SHOWN`.
-    fn coverage(&self, source: &Source, all_windows: bool) -> Result<Coverage>;
+    fn coverage(&self, pair: &Pair, all_windows: bool) -> Result<Coverage>;
+    /// Every (source, scope) pair storage holds anything for: a source row, a window, a run
+    /// or evidence. The freshness rule is the one last stored for the source.
+    fn stored_pairs(&self) -> Result<Vec<Pair>>;
     fn start_run(
         &mut self,
         source: &Source,
@@ -379,27 +410,16 @@ impl<S: Storage> Rastro<S> {
         &self.config.sources
     }
     pub fn coverage(&self, name: Option<&str>, all_windows: bool) -> Result<Vec<Coverage>> {
-        let sources: Vec<_> = self
-            .config
-            .sources
-            .iter()
-            .filter(|s| name.is_none_or(|n| s.name == n))
-            .collect();
-        if sources.is_empty()
-            && let Some(name) = name
-        {
-            return Err(UnknownSource(name.into()).into());
-        }
-        sources
+        let pairs = coverage::pairs(&self.config.sources, self.storage.stored_pairs()?, name)?;
+        let now = coverage::now()?;
+        pairs
             .into_iter()
-            .map(|s| self.source_coverage(s, all_windows))
+            .map(|(pair, registered)| {
+                let mut answer = self.storage.coverage(&pair, all_windows)?;
+                answer.registered = registered;
+                Ok(answer.judged(pair.freshness(), now))
+            })
             .collect()
-    }
-    fn source_coverage(&self, source: &Source, all_windows: bool) -> Result<Coverage> {
-        Ok(self
-            .storage
-            .coverage(source, all_windows)?
-            .judged(source.freshness(), coverage::now()?))
     }
 }
 

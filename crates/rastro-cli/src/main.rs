@@ -41,6 +41,9 @@ fn coverage_line(c: &Coverage) -> String {
         c.scope.0,
         c.state.as_str()
     );
+    if !c.registered {
+        line += " | Not in config";
+    }
     if let Some(at) = c.last_checked {
         line += &format!(" | Last checked: {}", stamp(at));
     }

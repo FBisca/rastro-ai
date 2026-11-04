@@ -17,6 +17,10 @@
           "description": "Why the latest attempt couldn't look, kept next to the last successful check.",
           "type": "string"
         },
+        "registered": {
+          "description": "Whether the source is in the config in this scope. A removed source, or one whose\nscope changed, keeps the coverage its stored windows give, with `registered: false`.",
+          "type": "boolean"
+        },
         "scope": {
           "$ref": "#/$defs/Scope"
         },
@@ -43,6 +47,7 @@
       "required": [
         "source",
         "scope",
+        "registered",
         "state",
         "windows_total"
       ],

@@ -149,7 +149,10 @@ pub(crate) fn assemble_search(
         .into_iter()
         .map(|hit| {
             let e = hit.evidence;
-            let covering = coverage.iter().find(|c| c.source == e.source).cloned();
+            let covering = coverage
+                .iter()
+                .find(|c| c.source == e.source && c.scope == e.scope)
+                .cloned();
             SearchResult {
                 id: hit.id,
                 matched: excerpt(&e.quote, hit.matched, e.start),
