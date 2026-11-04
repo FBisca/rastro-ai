@@ -26,6 +26,7 @@ const QUALIFIERS: [&str; 4] = ["author", "assignee", "review-requested", "mentio
 struct Run<'a, R, W> {
     transport: &'a mut Transport<R, W>,
     client: Client,
+    window_from: DateTime<Utc>,
     window_to: DateTime<Utc>,
     repo: String,
     seen: HashSet<u64>,
@@ -94,6 +95,11 @@ fn sync<R: BufRead, W: Write>(
     let mut run = Run {
         transport,
         client: Client::new(&base, token),
+        window_from: binding
+            .window
+            .from
+            .parse()
+            .map_err(|_| Failure::new("protocol"))?,
         window_to: binding
             .window
             .to
@@ -104,7 +110,7 @@ fn sync<R: BufRead, W: Write>(
         submitted: 0,
         capped: false,
     };
-    let result = run.read_all(&binding.window.from);
+    let result = run.read_all(&binding.window.from, &binding.window.to);
     *submitted = run.submitted;
     result?;
     if run.capped {
@@ -114,14 +120,17 @@ fn sync<R: BufRead, W: Write>(
 }
 
 impl<R: BufRead, W: Write> Run<'_, R, W> {
-    fn read_all(&mut self, from: &str) -> Result<(), Failure> {
+    fn read_all(&mut self, from: &str, to: &str) -> Result<(), Failure> {
         let user = self.client.get("/user", &[])?;
         let login = user.body["login"]
             .as_str()
             .ok_or(Failure::new("protocol"))?
             .to_string();
         for qualifier in QUALIFIERS {
-            let q = format!("repo:{} {qualifier}:{login} updated:>={from}", self.repo);
+            let q = format!(
+                "repo:{} {qualifier}:{login} updated:{from}..{to}",
+                self.repo
+            );
             let mut page = self.client.get(
                 "/search/issues",
                 &[
@@ -133,7 +142,7 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
             )?;
             loop {
                 let total = page.body["total_count"].as_u64().unwrap_or(0);
-                if total >= SEARCH_CAP || page.body["incomplete_results"] == true {
+                if total > SEARCH_CAP || page.body["incomplete_results"] == true {
                     self.capped = true;
                 }
                 let items = page.body["items"]
@@ -192,16 +201,19 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
             "structured",
             updated,
         )?;
-        for (field, key, name) in [
-            ("/labels", "labels", "name"),
-            ("/assignees", "assignees", "login"),
-        ] {
-            let names: Vec<&str> = item[key]
-                .as_array()
-                .map(|all| all.iter().filter_map(|v| v[name].as_str()).collect())
-                .unwrap_or_default();
-            let quote = (!names.is_empty()).then(|| json!(names).to_string());
-            self.submit(kind, url, field, quote.as_deref(), "structured", updated)?;
+        for (key, name) in [("labels", "name"), ("assignees", "login")] {
+            let all = item[key].as_array().map_or(&[][..], Vec::as_slice);
+            for (index, entry) in all.iter().enumerate() {
+                let field = format!("/{key}/{index}/{name}");
+                self.submit(
+                    kind,
+                    url,
+                    &field,
+                    entry[name].as_str(),
+                    "structured",
+                    updated,
+                )?;
+            }
         }
         self.read_comments(number)
     }
@@ -217,6 +229,11 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
                 let updated = comment["updated_at"]
                     .as_str()
                     .ok_or(Failure::new("protocol"))?;
+                let at: DateTime<Utc> = updated.parse().map_err(|_| Failure::new("protocol"))?;
+                // Comments follow the same half-open window as items.
+                if at < self.window_from || at >= self.window_to {
+                    continue;
+                }
                 self.submit(
                     "comment",
                     url,
