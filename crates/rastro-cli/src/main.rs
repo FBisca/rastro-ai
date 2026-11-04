@@ -238,9 +238,54 @@ fn run(operation: Operation) -> Result<(Value, String)> {
         }
     }
 }
+/// The operation a command line names, read without clap so a usage error can still say which.
+fn named_operation(args: &[String]) -> Option<&'static str> {
+    let mut words = args.iter().skip(1).filter(|a| !a.starts_with('-'));
+    match (words.next()?.as_str(), words.next().map(String::as_str)) {
+        ("source", Some("add")) => Some("source.add"),
+        ("source", Some("list")) => Some("source.list"),
+        ("coverage", _) => Some("coverage"),
+        ("sync", _) => Some("sync"),
+        ("search", _) => Some("search"),
+        ("index", Some("rebuild")) => Some("index.rebuild"),
+        _ => None,
+    }
+}
+fn parse() -> (Cli, &'static str) {
+    let args: Vec<String> = std::env::args().collect();
+    match Cli::try_parse_from(&args) {
+        Ok(cli) => {
+            let operation = cli.command.name();
+            (cli, operation)
+        }
+        Err(error) => {
+            use clap::error::ErrorKind;
+            let json = args
+                .iter()
+                .take_while(|a| *a != "--")
+                .any(|a| a == "--json");
+            let shown = !matches!(
+                error.kind(),
+                ErrorKind::DisplayHelp | ErrorKind::DisplayVersion
+            );
+            match named_operation(&args).filter(|_| json && shown) {
+                Some(operation) => {
+                    let text = error.to_string();
+                    let first = text.lines().next().unwrap_or_default();
+                    let message = first.strip_prefix("error: ").unwrap_or(first);
+                    println!(
+                        "{}",
+                        json!({"schema_version": 1, "operation": operation, "error": format!("usage: {message}")})
+                    );
+                    std::process::exit(2);
+                }
+                None => error.exit(),
+            }
+        }
+    }
+}
 fn main() {
-    let cli = Cli::parse();
-    let operation = cli.command.name();
+    let (cli, operation) = parse();
     match execute(cli.command) {
         Ok((result, human, ok)) => {
             if cli.json {
