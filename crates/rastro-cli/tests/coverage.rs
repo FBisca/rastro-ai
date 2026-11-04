@@ -1013,7 +1013,16 @@ fn S13b_hits_under_the_old_scope_carry_the_old_pairs_coverage_and_new_ones_the_n
         let scope = hit["scope"].as_str().unwrap();
         assert_eq!(hit["coverage"]["scope"], scope, "{hit}");
         assert_eq!(hit["coverage"]["registered"], scope == "work", "{hit}");
+        assert_eq!(hit["coverage"]["state"], "found", "{hit}");
     }
+    // Hours on, the old pair goes stale under the source's rule; so does the new one.
+    let later = (chrono::Utc::now() + chrono::Duration::hours(2)).to_rfc3339();
+    let (_, aged) = env.json_any(&["search", "body"], Some(&later));
+    for hit in aged["result"]["results"].as_array().unwrap() {
+        assert_eq!(hit["coverage"]["state"], "unknown", "{hit}");
+    }
+    // A name in neither config nor storage is unknown while storage holds other pairs.
+    assert!(!env.rastro(&["coverage", "nosuch"]).status.success());
 }
 fn json_scopes() -> toml::Value {
     toml::Value::Array(vec!["personal".into(), "work".into()])

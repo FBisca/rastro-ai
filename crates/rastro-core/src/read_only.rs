@@ -207,7 +207,7 @@ fn snapshot<S: ReadStorage, T>(
     })
 }
 
-fn coverage_of(
+pub(crate) fn coverage_of(
     view: Option<&dyn Snapshot>,
     unfinished: &[UnfinishedRun],
     config: &[Source],

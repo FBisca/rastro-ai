@@ -793,6 +793,57 @@ fn S13_the_reader_answers_a_removed_source_from_its_stored_windows_unregistered(
             (CoverageState::Found, false)
         );
     }
+    // Long past its one-hour rule: unknown, with the last check still shown.
+    env.db()
+        .execute(
+            "UPDATE coverage SET checked_at='2000-01-01T00:00:00.000Z'",
+            [],
+        )
+        .unwrap();
+    let mut reader = env.reader();
+    let stale = only(reader.coverage(None, false).unwrap());
+    assert_eq!(
+        (stale.state, stale.registered),
+        (CoverageState::Unknown, false)
+    );
+    assert_eq!(stale.last_checked.unwrap().to_rfc3339()[..4], *"2000");
+    for hit in reader
+        .search("body", &SearchOptions::default())
+        .unwrap()
+        .results
+    {
+        let covering = hit.coverage.unwrap();
+        assert_eq!(
+            (covering.state, covering.registered),
+            (CoverageState::Unknown, false)
+        );
+    }
+}
+
+/// knowledge/21: a removed source's unfinished run is its newest, counted window
+#[test]
+fn S13_the_reader_counts_a_removed_sources_interrupted_run_as_a_window() {
+    let env = synced();
+    edit_sources(&env, |sources| sources.clear());
+    unfinished_run(&env);
+    let entry = only(env.reader().coverage(None, false).unwrap());
+    assert!(!entry.registered);
+    assert_eq!(entry.windows_total, 2);
+    assert_eq!(entry.windows[0].state, CoverageState::CouldNotLook);
+    assert_eq!(entry.windows[0].reason.as_deref(), Some("interrupted"));
+    assert_eq!(entry.state, CoverageState::Unknown);
+}
+
+/// knowledge/21: a name in neither config nor storage is unknown, however many pairs storage has
+#[test]
+fn S13_a_name_in_neither_config_nor_storage_is_an_unknown_source() {
+    let env = synced();
+    edit_sources(&env, |sources| sources.clear());
+    let error = env.reader().coverage(Some("nosuch"), false).unwrap_err();
+    assert!(error.downcast_ref::<rastro_core::UnknownSource>().is_some());
+    assert!(!env.rastro(&["coverage", "nosuch"]).status.success());
+    // The stored name still answers.
+    assert!(env.rastro(&["coverage", "project"]).status.success());
 }
 
 /// knowledge/21: a removed source that never synced reads never looked, unregistered
@@ -830,5 +881,20 @@ fn S13b_the_reader_gives_old_scope_hits_the_old_pairs_coverage() {
         let covering = hit.coverage.as_ref().unwrap();
         assert_eq!(covering.scope, hit.scope);
         assert!(!covering.registered);
+        assert_eq!(covering.state, CoverageState::Found);
+    }
+    // The old pair goes stale under the rule stored for the source.
+    env.db()
+        .execute(
+            "UPDATE coverage SET checked_at='2000-01-01T00:00:00.000Z'",
+            [],
+        )
+        .unwrap();
+    let hits = env
+        .reader()
+        .search("body", &SearchOptions::default())
+        .unwrap();
+    for hit in &hits.results {
+        assert_eq!(hit.coverage.as_ref().unwrap().state, CoverageState::Unknown);
     }
 }

@@ -16,7 +16,7 @@ const LEGACY: [&str; 2] = ["202611041200_initial", "202611041500_evidence_insert
 
 /// `(name, sql)`, named `YYYYMMDDHHmm_<what>` so migrations from different branches
 /// order by time. Never edit one that has shipped; add a new one.
-const MIGRATIONS: [(&str, &str); 5] = [
+const MIGRATIONS: [(&str, &str); 6] = [
     (
         "202611041200_initial",
         include_str!("../migrations/202611041200_initial.sql"),
@@ -36,6 +36,10 @@ const MIGRATIONS: [(&str, &str); 5] = [
     (
         "202611051100_run_evidence",
         include_str!("../migrations/202611051100_run_evidence.sql"),
+    ),
+    (
+        "202611051300_coverage_pair_indexes",
+        include_str!("../migrations/202611051300_coverage_pair_indexes.sql"),
     ),
 ];
 
@@ -232,14 +236,10 @@ impl Storage for SqliteStorage {
         transaction.commit()?;
         Ok(())
     }
-    fn stored_pairs(&self) -> Result<Vec<Pair>> {
-        View(&self.connection).stored_pairs()
-    }
-    fn coverage(&self, pair: &Pair, all_windows: bool) -> Result<Coverage> {
-        // One read transaction: the totals, the state and the listing come from one snapshot,
-        // even when a sync in another process commits meanwhile.
-        let snapshot = self.connection.unchecked_transaction()?;
-        View(&snapshot).coverage(pair, all_windows)
+    fn snapshot<T>(&self, work: impl FnOnce(&dyn Snapshot) -> Result<T>) -> Result<T> {
+        // One read transaction: the pair list and every answer come from one snapshot.
+        let transaction = self.connection.unchecked_transaction()?;
+        work(&View(&transaction))
     }
     fn start_run(
         &mut self,
@@ -422,14 +422,13 @@ impl View<'_> {
 }
 impl Snapshot for View<'_> {
     fn stored_pairs(&self) -> Result<Vec<Pair>> {
-        // A source row, a window, a run or evidence each name a pair; the rule is the one
-        // last stored for the source (a removed source keeps its row).
+        // A source row or a run names a pair: every window and every evidence row comes from
+        // a run, so those legs would add nothing. The rule is the one last stored for the
+        // source (a removed source keeps its row).
         let mut statement = self.0.prepare(
             "SELECT p.source, p.scope, s.freshness_rule FROM (
                  SELECT name AS source, scope FROM sources
-                 UNION SELECT source, scope FROM coverage
                  UNION SELECT source, scope FROM runs
-                 UNION SELECT source, scope FROM evidence
              ) p JOIN sources s ON s.name = p.source ORDER BY p.source, p.scope",
         )?;
         let rows = statement.query_map([], |row| {
@@ -501,7 +500,7 @@ impl Snapshot for View<'_> {
         Ok(Coverage {
             source: pair.source.clone(),
             scope: pair.scope.clone(),
-            registered: true,
+            registered: false,
             state,
             last_checked: self
                 .last_complete_check(&pair.source, &pair.scope)?

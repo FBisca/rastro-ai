@@ -31,7 +31,8 @@ pub use search::{
     SearchResults,
 };
 
-/// A command named a source that isn't configured.
+/// A command named a source that is unknown: for `coverage`, one neither in the config nor in
+/// storage.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct UnknownSource(pub String);
 impl std::fmt::Display for UnknownSource {
@@ -223,18 +224,28 @@ impl CoverageState {
         }
     }
 }
+/// A freshness rule as a duration. Stored rows are input, so a malformed rule (empty,
+/// multi-byte, unknown unit) reads as zero: the pair is stale and answers "unknown".
 fn parse_freshness(rule: &str) -> Duration {
-    let (number, unit) = rule.split_at(rule.len() - 1);
-    let n: i64 = number.parse().unwrap_or(0);
+    let Some(unit) = rule.chars().last() else {
+        return Duration::zero();
+    };
+    let Ok(n) = rule[..rule.len() - unit.len_utf8()].parse::<i64>() else {
+        return Duration::zero();
+    };
     match unit {
-        "s" => Duration::seconds(n),
-        "m" => Duration::minutes(n),
-        "h" => Duration::hours(n),
-        _ => Duration::days(n),
+        's' => Duration::seconds(n),
+        'm' => Duration::minutes(n),
+        'h' => Duration::hours(n),
+        'd' => Duration::days(n),
+        _ => Duration::zero(),
     }
 }
 /// What coverage is kept for: a source name in one scope, with the freshness rule that
 /// judges it. A pair comes from the config or, once removed from it, from storage alone.
+/// A pair no longer in the config takes the source's current freshness rule, the one stored
+/// by name: a removed source keeps its last rule, and an old scope of a source takes the rule
+/// the source has now.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct Pair {
     pub source: String,
@@ -327,10 +338,9 @@ pub trait Storage {
     fn project_sources(&mut self, sources: &[Source]) -> Result<()>;
     /// The state is judged over every window; `all_windows` lists them all, otherwise only
     /// the newest `COVERAGE_WINDOWS_SHOWN`.
-    fn coverage(&self, pair: &Pair, all_windows: bool) -> Result<Coverage>;
-    /// Every (source, scope) pair storage holds anything for: a source row, a window, a run
-    /// or evidence. The freshness rule is the one last stored for the source.
-    fn stored_pairs(&self) -> Result<Vec<Pair>>;
+    /// Runs `work` against one read snapshot, so the pairs and every answer in it agree even
+    /// when a sync in another process commits meanwhile.
+    fn snapshot<T>(&self, work: impl FnOnce(&dyn Snapshot) -> Result<T>) -> Result<T>;
     fn start_run(
         &mut self,
         source: &Source,
@@ -410,16 +420,9 @@ impl<S: Storage> Rastro<S> {
         &self.config.sources
     }
     pub fn coverage(&self, name: Option<&str>, all_windows: bool) -> Result<Vec<Coverage>> {
-        let pairs = coverage::pairs(&self.config.sources, self.storage.stored_pairs()?, name)?;
-        let now = coverage::now()?;
-        pairs
-            .into_iter()
-            .map(|(pair, registered)| {
-                let mut answer = self.storage.coverage(&pair, all_windows)?;
-                answer.registered = registered;
-                Ok(answer.judged(pair.freshness(), now))
-            })
-            .collect()
+        self.storage.snapshot(|view| {
+            read_only::coverage_of(Some(view), &[], &self.config.sources, name, all_windows)
+        })
     }
 }
 
