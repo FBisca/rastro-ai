@@ -17,3 +17,4 @@ The core stores evidence, coverage, runs and sources in one embedded SQLite data
   - writes from one plugin message are a single transaction;
   - the FTS5 table is a disposable projection, rebuilt from evidence by `rastro index rebuild`, and never the only copy of anything.
 - The database lives under the data directory, never in a checkout.
+- Migrations are named `YYYYMMDDHHmm_<name>.sql` (UTC timestamp, short snake_case name) and recorded by name in a `schema_migrations` table, so parallel branches never collide on a number. Pending migrations apply in timestamp order; a database holding a migration this binary doesn't know is refused. Applied migrations are never edited (added 2026-11-04).

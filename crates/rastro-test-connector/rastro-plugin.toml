@@ -1,0 +1,14 @@
+id = "test"
+name = "Rastro test connector"
+version = "0.1.0"
+author = "Rastro"
+kinds = ["connector"]
+protocol = 1
+command = "rastro-test-connector"
+triggers = []
+dependencies = []
+
+[permissions]
+submit = ["issue", "comment"]
+scopes = []
+actions = []

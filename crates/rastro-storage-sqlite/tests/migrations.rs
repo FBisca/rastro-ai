@@ -11,7 +11,7 @@ fn S3a_stored_evidence_rejects_updates_and_deletes() {
         if legacy {
             let connection = Connection::open(&path).unwrap();
             connection
-                .execute_batch(include_str!("../migrations/0001.sql"))
+                .execute_batch(include_str!("../migrations/202611041200_initial.sql"))
                 .unwrap();
             connection.pragma_update(None, "user_version", 1).unwrap();
         }
@@ -44,8 +44,50 @@ fn S3a_stored_evidence_rejects_updates_and_deletes() {
             .unwrap();
         assert_eq!(quote, "é");
         let version: u32 = connection
-            .query_row("PRAGMA user_version", [], |row| row.get(0))
+            .query_row("SELECT count(*) FROM schema_migrations", [], |row| {
+                row.get(0)
+            })
             .unwrap();
-        assert_eq!(version, 2);
+        assert_eq!(version, 3);
     }
+}
+
+#[test]
+fn S3b_migrations_apply_once_in_timestamp_order_and_unknown_ones_are_refused() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("rastro.sqlite3");
+    let a = ("202611040001_a", "CREATE TABLE a (x)");
+    let b = ("202611040002_b", "CREATE TABLE b (x)");
+    let c = ("202611040003_c", "CREATE TABLE c (x)");
+    SqliteStorage::open_with(&path, &[a, c]).unwrap();
+    // A branch merged later brings a migration older than the latest applied one.
+    SqliteStorage::open_with(&path, &[c, b, a]).unwrap();
+    SqliteStorage::open_with(&path, &[a, b, c]).unwrap();
+    let connection = Connection::open(&path).unwrap();
+    let names = |connection: &Connection| -> Vec<String> {
+        connection
+            .prepare("SELECT name FROM schema_migrations ORDER BY rowid")
+            .unwrap()
+            .query_map([], |row| row.get(0))
+            .unwrap()
+            .collect::<Result<_, _>>()
+            .unwrap()
+    };
+    assert_eq!(names(&connection), [a.0, c.0, b.0]);
+    // A new database applies them in timestamp order whatever order they are listed in.
+    let fresh = home.path().join("fresh.sqlite3");
+    SqliteStorage::open_with(&fresh, &[c, a, b]).unwrap();
+    assert_eq!(names(&Connection::open(&fresh).unwrap()), [a.0, b.0, c.0]);
+    // A database holding a migration this binary doesn't know is refused.
+    let error = SqliteStorage::open_with(&path, &[a, b]).err().unwrap();
+    assert!(format!("{error:#}").contains(c.0), "{error:#}");
+    // The built-in set upgrades a database from before migrations were tracked by name.
+    let legacy = home.path().join("legacy.sqlite3");
+    let connection = Connection::open(&legacy).unwrap();
+    connection
+        .execute_batch(include_str!("../migrations/202611041200_initial.sql"))
+        .unwrap();
+    connection.pragma_update(None, "user_version", 1).unwrap();
+    SqliteStorage::open(&legacy).unwrap();
+    assert_eq!(names(&connection).len(), 3);
 }
