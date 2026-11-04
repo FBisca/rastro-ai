@@ -123,6 +123,9 @@ pub struct EvidenceSubmit {
     pub trust_class: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub source_updated_at: Option<String>,
+    /// Inherited from the binding; a different one is rejected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<Window>,
 }
 
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -145,6 +148,9 @@ pub struct CoverageReport {
     pub source: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scope: Option<String>,
+    /// Inherited from the binding; a different one is rejected.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub window: Option<Window>,
 }
 
 /// `run.finish` request: the plugin's own view. The core's counts are the authority.
@@ -167,8 +173,13 @@ pub struct Counts {
 pub struct Permissions {
     /// Evidence kinds the plugin may submit.
     pub submit: Vec<String>,
+    /// Scopes the plugin may be bound to. A source whose scope isn't listed is refused;
+    /// an empty list declares no scopes, so every source is refused.
     pub scopes: Vec<String>,
     pub actions: Vec<String>,
+    /// Environment variables the plugin needs (for example `GH_TOKEN`). It starts with a
+    /// cleared environment plus the basics (`PATH`, `HOME`, `TMPDIR`, `LANG`, `LC_*`).
+    pub env: Vec<String>,
 }
 /// `rastro-plugin.toml`. A request: the source's grant can only narrow it.
 #[derive(Clone, Debug, Deserialize, Serialize)]

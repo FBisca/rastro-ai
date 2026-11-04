@@ -307,3 +307,21 @@ impl<S: Storage> Rastro<S> {
         Ok(coverage)
     }
 }
+
+/// Connector-supplied text made safe for a terminal: control characters escaped, length bounded.
+pub fn display_safe(text: &str) -> String {
+    const LIMIT: usize = 500;
+    let mut out = String::new();
+    for (index, c) in text.chars().enumerate() {
+        if index == LIMIT {
+            out.push('…');
+            break;
+        }
+        if c.is_control() {
+            out.extend(c.escape_default());
+        } else {
+            out.push(c);
+        }
+    }
+    out
+}

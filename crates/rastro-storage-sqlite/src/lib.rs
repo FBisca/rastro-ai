@@ -1,4 +1,4 @@
-use anyhow::{Result, bail, ensure};
+use anyhow::{Result, bail};
 use chrono::{DateTime, SecondsFormat, Utc};
 use rastro_core::{
     CompleteCheck, Coverage, CoverageRecord, CoverageState, Evidence, Hit, RunEnd, Scope, Source,
@@ -6,6 +6,9 @@ use rastro_core::{
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use std::path::Path;
+
+/// What `PRAGMA user_version` 1 and 2 meant, before migrations were tracked by name. Frozen.
+const LEGACY: [&str; 2] = ["202611041200_initial", "202611041500_evidence_insert_guard"];
 
 /// `(name, sql)`, named `YYYYMMDDHHmm_<what>` so migrations from different branches
 /// order by time. Never edit one that has shipped; add a new one.
@@ -65,11 +68,13 @@ impl SqliteStorage {
             // means the first N migrations are in.
             let version: i64 =
                 transaction.query_row("PRAGMA user_version", [], |row| row.get(0))?;
-            ensure!(
-                version as usize <= migrations.len(),
-                "database schema {version} is newer than this version of rastro"
-            );
-            for (name, _) in &migrations[..version as usize] {
+            let meant: &[&str] = match version {
+                0 => &[],
+                1 => &LEGACY[..1],
+                2 => &LEGACY[..2],
+                other => bail!("unsupported legacy database (user_version {other})"),
+            };
+            for name in meant {
                 mark(&transaction, name)?;
             }
         }

@@ -29,6 +29,9 @@ struct Env {
 }
 impl Env {
     fn new() -> Self {
+        Self::with_manifest(|_| {})
+    }
+    fn with_manifest(edit: impl FnOnce(&mut toml::Table)) -> Self {
         let env = Self {
             home: TempDir::new().unwrap(),
         };
@@ -42,6 +45,7 @@ impl Env {
             "command".into(),
             connector_binary().to_str().unwrap().into(),
         );
+        edit(&mut manifest);
         fs::write(plugin.join("rastro-plugin.toml"), manifest.to_string()).unwrap();
         env
     }
@@ -49,6 +53,8 @@ impl Env {
         Command::new(env!("CARGO_BIN_EXE_rastro"))
             .env("RASTRO_HOME", self.home.path())
             .env("RASTRO_PLUGIN_PATH", self.home.path().join("dev-plugins"))
+            .env("RASTRO_SENTINEL_SECRET", "hunter2")
+            .env("RASTRO_DECLARED_VAR", "declared-value")
             .env("RASTRO_TEST_SCRIPT", self.home.path().join("script.jsonl"))
             .args(args)
             .output()
@@ -354,4 +360,112 @@ fn S4_sync_without_manifest_records_couldnt_look() {
     let human = env.rastro(&["sync", "ghost"]);
     assert!(!human.status.success());
     assert!(String::from_utf8_lossy(&human.stdout).contains("not_installed"));
+}
+
+fn set_permission(manifest: &mut toml::Table, key: &str, values: &[&str]) {
+    let values: Vec<toml::Value> = values.iter().map(|v| (*v).into()).collect();
+    manifest["permissions"]
+        .as_table_mut()
+        .unwrap()
+        .insert(key.into(), values.into());
+}
+
+#[test]
+fn S6a_source_scope_outside_the_manifest_scopes_is_refused() {
+    let env = Env::with_manifest(|m| set_permission(m, "scopes", &["work"]));
+    env.add_source("project");
+    env.script(&run_script(vec![valid("https://x/1", "hello"), complete()]));
+    let output = env.rastro(&["sync", "project", "--json"]);
+    assert!(!output.status.success());
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let run = &value["result"]["runs"][0];
+    assert_eq!(
+        (&run["status"], &run["reason"]),
+        (&json!("failed"), &json!("forbidden"))
+    );
+    assert_eq!(run["coverage"], "couldn't look");
+    assert_eq!(
+        env.sql::<String>("SELECT reason FROM coverage"),
+        "forbidden"
+    );
+    assert_eq!(env.sql::<i64>("SELECT count(*) FROM evidence"), 0);
+    // An empty list declares no scopes at all.
+    let env = Env::with_manifest(|m| set_permission(m, "scopes", &[]));
+    env.add_source("project");
+    assert!(!env.rastro(&["sync", "project"]).status.success());
+}
+
+#[test]
+fn S6a_a_window_other_than_the_bound_one_is_rejected() {
+    let env = Env::new();
+    env.add_source("project");
+    let forged = json!({"from": "1900-01-01T00:00:00Z", "to": "1900-02-01T00:00:00Z"});
+    let mut report = complete();
+    report["params"]["window"] = forged.clone();
+    env.script(&run_script(vec![
+        with(valid("https://x/1", "hello"), "window", forged),
+        report,
+    ]));
+    let synced = env.json(&["sync", "project"]);
+    let run = &synced["result"]["runs"][0];
+    assert_eq!(
+        run["counts"],
+        json!({"submitted": 1, "accepted": 0, "rejected": 1, "unchanged": 0})
+    );
+    assert_eq!(run["coverage"], "couldn't look");
+    assert_eq!(env.sql::<i64>("SELECT count(*) FROM evidence"), 0);
+}
+
+#[test]
+fn S6b_connector_sees_only_allowed_and_declared_environment() {
+    let env = Env::with_manifest(|m| {
+        set_permission(m, "env", &["RASTRO_TEST_SCRIPT", "RASTRO_DECLARED_VAR"]);
+    });
+    env.add_source("project");
+    let dump = env.home.path().join("env.txt");
+    env.script(&[
+        json!({"do": "initialize"}),
+        json!({"do": "dump_env", "path": dump}),
+        json!({"do": "send", "message": complete()}),
+        json!({"do": "finish"}),
+    ]);
+    env.ok(&["sync", "project"]);
+    let seen = fs::read_to_string(dump).unwrap();
+    assert!(
+        seen.contains("RASTRO_DECLARED_VAR=declared-value"),
+        "{seen}"
+    );
+    assert!(seen.contains("PATH="), "{seen}");
+    assert!(
+        !seen.contains("RASTRO_SENTINEL_SECRET") && !seen.contains("hunter2"),
+        "{seen}"
+    );
+    assert!(!seen.contains("RASTRO_HOME"), "{seen}");
+}
+
+#[test]
+fn S6c_control_characters_from_connectors_are_escaped_in_human_output() {
+    let env = Env::new();
+    env.add_source("project");
+    let esc = "\u{1b}[31mred";
+    env.script(&run_script(vec![
+        with(valid("https://x/1", "hello"), "kind", json!(esc)),
+        valid(&format!("https://x/{esc}"), &format!("fox {esc}")),
+        complete(),
+    ]));
+    let output = env.rastro(&["sync", "project"]);
+    assert!(!output.stdout.contains(&0x1b) && !output.stderr.contains(&0x1b));
+    assert!(String::from_utf8_lossy(&output.stderr).contains("\\u{1b}"));
+    let human = env.ok(&["search", "fox"]);
+    assert!(!human.contains('\u{1b}'), "{human:?}");
+    assert!(human.contains("\\u{1b}[31mred"), "{human}");
+    let exact = env.json(&["search", "fox"]);
+    assert_eq!(exact["result"]["results"][0]["quote"], format!("fox {esc}"));
+    env.script(&[
+        json!({"do": "initialize"}),
+        json!({"do": "send", "message": complete()}),
+        json!({"do": "finish", "status": "failed", "reason": esc}),
+    ]);
+    let failed = env.rastro(&["sync", "project"]);
+    assert!(!failed.stdout.contains(&0x1b) && !failed.stderr.contains(&0x1b));
 }

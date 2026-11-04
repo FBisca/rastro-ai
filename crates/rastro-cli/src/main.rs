@@ -2,7 +2,7 @@ use anyhow::Result;
 use chrono::{DateTime, SecondsFormat, Utc};
 use clap::{Parser, Subcommand};
 use rastro_core::{
-    Coverage, Locations, Rastro, Scope, Source,
+    Coverage, Locations, Rastro, Scope, Source, display_safe,
     runs::{RunReport, SearchResults},
 };
 use rastro_storage_sqlite::SqliteStorage;
@@ -98,7 +98,7 @@ fn sync_line(run: &RunReport) -> String {
         run.coverage.as_str()
     );
     if let Some(reason) = &run.reason {
-        line += &format!(" | Reason: {reason}");
+        line += &format!(" | Reason: {}", display_safe(reason));
     }
     line
 }
@@ -114,7 +114,7 @@ fn search_text(text: &str, found: &SearchResults) -> String {
             let e = &r.hit.evidence;
             let mut block = format!(
                 "\"{}\"\n  Link: {} | Field: {} | Span: [{}, {}) | Captured: {} | Trust class: {} | Scope: {} | Source: {}",
-                e.quote, e.location, e.field, e.start, e.end, stamp(e.captured_at),
+                display_safe(&e.quote), display_safe(&e.location), display_safe(&e.field), e.start, e.end, stamp(e.captured_at),
                 e.trust_class.as_str(), e.scope.0, e.source
             );
             if let Some(c) = &r.coverage {

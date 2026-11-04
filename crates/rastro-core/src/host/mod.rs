@@ -2,7 +2,9 @@
 //! Sequential and happy-path first; hardening against crashes and silence builds on `drive`.
 use crate::evidence::{Grant, validate};
 use crate::runs::RunReport;
-use crate::{Counts, CoverageRecord, CoverageState, Locations, RunEnd, Source, Storage};
+use crate::{
+    Counts, CoverageRecord, CoverageState, Locations, RunEnd, Source, Storage, display_safe,
+};
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, SecondsFormat, Utc};
 use rastro_plugin_sdk::{
@@ -11,7 +13,9 @@ use rastro_plugin_sdk::{
     RunFinish, Transport, Window, major,
 };
 use std::{
-    env, fs,
+    env,
+    ffi::OsString,
+    fs,
     io::BufReader,
     path::{Path, PathBuf},
     process::{Command, Stdio},
@@ -104,10 +108,10 @@ pub fn run<S: Storage>(
     };
     let mut session = Session::default();
     let outcome = match plugin {
-        Some(plugin) => {
-            let grant = Grant::new(&plugin.manifest, &source.name, &source.scope);
-            drive(storage, plugin, &binding, &grant, &mut session)
-        }
+        Some(plugin) => match Grant::new(&plugin.manifest, &source.name, &source.scope, &window) {
+            Some(grant) => drive(storage, plugin, &binding, &grant, &mut session),
+            None => Ok(Err("forbidden")),
+        },
         None => Ok(Err("not_installed")),
     };
     let (status, reason) = match outcome {
@@ -191,6 +195,8 @@ fn drive<S: Storage>(
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
         .stderr(Stdio::inherit())
+        .env_clear()
+        .envs(allowed_environment(&plugin.manifest))
         .spawn()
     else {
         return Ok(Err("spawn"));
@@ -205,6 +211,18 @@ fn drive<S: Storage>(
     drop(transport);
     let _ = child.wait();
     outcome
+}
+
+/// The only variables a plugin starts with: the basics plus those its manifest declares.
+fn allowed_environment(manifest: &Manifest) -> Vec<(OsString, OsString)> {
+    env::vars_os()
+        .filter(|(name, _)| {
+            let name = name.to_string_lossy();
+            matches!(name.as_ref(), "PATH" | "HOME" | "TMPDIR" | "LANG")
+                || name.starts_with("LC_")
+                || manifest.permissions.env.iter().any(|d| *d == name)
+        })
+        .collect()
 }
 
 fn resolve(dir: &Path, command: &str) -> PathBuf {
@@ -262,7 +280,7 @@ fn converse<S: Storage>(
                         session.counts.accepted += 1;
                     }
                     Err(why) => {
-                        eprintln!("rejected evidence: {why}");
+                        eprintln!("rejected evidence: {}", display_safe(&why));
                         session.counts.rejected += 1;
                     }
                 }
@@ -272,11 +290,12 @@ fn converse<S: Storage>(
                     return Ok(Err("protocol"));
                 };
                 let bound = report.source.as_ref().is_none_or(|s| *s == binding.source)
+                    && grant.allows_window(&report.window)
                     && report.scope.as_ref().is_none_or(|s| *s == binding.scope);
                 if bound {
                     session.coverage = Some(report);
                 } else {
-                    eprintln!("rejected coverage report: not the bound source or scope");
+                    eprintln!("rejected coverage report: not the bound source, scope or window");
                 }
             }
             Some(RUN_FINISH) => {
