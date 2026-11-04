@@ -42,8 +42,9 @@ fn sync(env: &Env) -> Value {
     env.json(&["sync", "x"])["result"]["runs"][0].clone()
 }
 
+/// evidence/R34: only owner involved items become evidence
 #[test]
-fn S12_only_owner_involved_items_become_evidence() {
+fn only_owner_involved_items_become_evidence() {
     let fixture = Fixture::start(standard);
     let env = Env::new(&fixture.base);
     let run = sync(&env);
@@ -72,8 +73,9 @@ fn S12_only_owner_involved_items_become_evidence() {
     );
 }
 
+/// evidence/R37: each field is its own cited observation
 #[test]
-fn S13_each_field_is_its_own_cited_observation() {
+fn each_field_is_its_own_cited_observation() {
     let fixture = Fixture::start(standard);
     let env = Env::new(&fixture.base);
     sync(&env);
@@ -117,8 +119,9 @@ fn S13_each_field_is_its_own_cited_observation() {
     assert_eq!(result["end"], 10);
 }
 
+/// evidence/R40: rate limit mid run keeps completed pages and is not found
 #[test]
-fn S14_rate_limit_mid_run_keeps_completed_pages_and_is_not_found() {
+fn rate_limit_mid_run_keeps_completed_pages_and_is_not_found() {
     let reset = Utc::now().timestamp() + 600;
     let fixture = Fixture::start(move |req, base| {
         if req.path == "/search/issues" && qualifier(req) == "author" {
@@ -162,8 +165,9 @@ fn S14_rate_limit_mid_run_keeps_completed_pages_and_is_not_found() {
     assert_eq!(covered["result"]["coverage"][0]["reason"], "rate_limited");
 }
 
+/// evidence/R44: instruction like content never changes the requests
 #[test]
-fn S15_instruction_like_content_never_changes_the_requests() {
+fn instruction_like_content_never_changes_the_requests() {
     let fixture = Fixture::start(standard);
     let env = Env::new(&fixture.base);
     sync(&env);
@@ -182,8 +186,9 @@ fn S15_instruction_like_content_never_changes_the_requests() {
     }
 }
 
+/// evidence/R46: missing token is auth and no token is stored
 #[test]
-fn S16_missing_token_is_auth_and_no_token_is_stored() {
+fn missing_token_is_auth_and_no_token_is_stored() {
     let fixture = Fixture::start(standard);
     let env = Env::new(&fixture.base).without_token();
     let output = env.run(&["sync", "x", "--json"]);
@@ -196,8 +201,9 @@ fn S16_missing_token_is_auth_and_no_token_is_stored() {
     assert!(!env.leaks("gh: not logged in", &[output]));
 }
 
+/// evidence/R46: rejected token is auth and never appears anywhere
 #[test]
-fn S16_rejected_token_is_auth_and_never_appears_anywhere() {
+fn rejected_token_is_auth_and_never_appears_anywhere() {
     let fixture = Fixture::start(|req, _| match req.path.as_str() {
         "/user" => Reply::status(401, json!({"message": "Bad credentials"})),
         _ => Reply::status(404, json!({})),
@@ -214,8 +220,9 @@ fn S16_rejected_token_is_auth_and_never_appears_anywhere() {
     assert!(!env.leaks(TOKEN, &[sync, coverage]));
 }
 
+/// evidence/R40: search result cap is incomplete not found
 #[test]
-fn S14_search_result_cap_is_incomplete_not_found() {
+fn search_result_cap_is_incomplete_not_found() {
     let fixture = Fixture::start(|req, base| {
         if req.path == "/search/issues" && qualifier(req) == "author" {
             let mut page = search_page(vec![issue(1, "Crash on start", Some("boom"), false)]);
@@ -233,8 +240,9 @@ fn S14_search_result_cap_is_incomplete_not_found() {
     );
 }
 
+/// evidence/R40: http failures map to typed reasons
 #[test]
-fn S14_http_failures_map_to_typed_reasons() {
+fn http_failures_map_to_typed_reasons() {
     for (status, reason) in [
         (403, "forbidden"),
         (404, "not_found_or_hidden"),
@@ -270,8 +278,9 @@ fn comment(number: u64, id: u64, body: &str, updated_at: String) -> Value {
            "body": body, "updated_at": updated_at})
 }
 
+/// evidence/R35: only comments updated within the window become evidence
 #[test]
-fn S12a_only_comments_updated_within_the_window_become_evidence() {
+fn only_comments_updated_within_the_window_become_evidence() {
     // The window is whatever the search query asked for, so comments are placed on its edges.
     let window = std::sync::Arc::new(std::sync::Mutex::new(
         None::<(DateTime<Utc>, DateTime<Utc>)>,
@@ -309,8 +318,9 @@ fn S12a_only_comments_updated_within_the_window_become_evidence() {
     );
 }
 
+/// evidence/R36: search queries name the repo and the window
 #[test]
-fn S12b_search_queries_name_the_repo_and_the_window() {
+fn search_queries_name_the_repo_and_the_window() {
     let fixture = Fixture::start(standard);
     let env = Env::new(&fixture.base);
     let window = sync(&env)["window"].clone();
@@ -334,8 +344,9 @@ fn S12b_search_queries_name_the_repo_and_the_window() {
     assert_eq!(queries, expected);
 }
 
+/// evidence/R38: labels and assignees quote the value at their own path
 #[test]
-fn S13a_labels_and_assignees_quote_the_value_at_their_own_path() {
+fn labels_and_assignees_quote_the_value_at_their_own_path() {
     let fixture = Fixture::start(with_route(|req, _| {
         (req.path == "/search/issues" && qualifier(req) == "assignee").then(|| {
             let mut item = issue(3, "Slow query", Some("it is slow"), false);
@@ -362,8 +373,9 @@ fn S13a_labels_and_assignees_quote_the_value_at_their_own_path() {
     }
 }
 
+/// evidence/R39: spans are utf8 bytes and the quote equals them
 #[test]
-fn S13b_spans_are_utf8_bytes_and_the_quote_equals_them() {
+fn spans_are_utf8_bytes_and_the_quote_equals_them() {
     let text = "héllo wörld 日本語 😀";
     assert!(text.len() > text.chars().count());
     let fixture = Fixture::start(with_route(|req, _| {
@@ -424,8 +436,9 @@ fn big_search(items: u64, reported: u64, incomplete: bool) -> impl Fn(&Req, &str
     }
 }
 
+/// evidence/R41: more than 1000 results or incomplete results is result cap
 #[test]
-fn S14a_more_than_1000_results_or_incomplete_results_is_result_cap() {
+fn more_than_1000_results_or_incomplete_results_is_result_cap() {
     // (items served, total reported, incomplete_results, expected coverage reason)
     let cases = [
         (999, 999, false, None),
@@ -457,8 +470,9 @@ fn S14a_more_than_1000_results_or_incomplete_results_is_result_cap() {
     }
 }
 
+/// evidence/R42: only primary or secondary limit signals make a 403 rate limited
 #[test]
-fn S14b_only_primary_or_secondary_limit_signals_make_a_403_rate_limited() {
+fn only_primary_or_secondary_limit_signals_make_a_403_rate_limited() {
     let reset = Utc::now().timestamp() + 600;
     let reset_text = reset.to_string();
     // (headers, expected reason, accepted retry_at range as epoch seconds)
@@ -513,8 +527,9 @@ fn S14b_only_primary_or_secondary_limit_signals_make_a_403_rate_limited() {
     }
 }
 
+/// evidence/R43: every page of an items comments is read
 #[test]
-fn S14c_every_page_of_an_items_comments_is_read() {
+fn every_page_of_an_items_comments_is_read() {
     let fixture = Fixture::start(with_route(|req, base| {
         (req.path == "/repos/o/p/issues/3/comments").then(|| {
             let page = page_of(req);
@@ -548,8 +563,9 @@ fn S14c_every_page_of_an_items_comments_is_read() {
     );
 }
 
+/// evidence/R45: links and redirects away from the api host are not followed
 #[test]
-fn S15a_links_and_redirects_away_from_the_api_host_are_not_followed() {
+fn links_and_redirects_away_from_the_api_host_are_not_followed() {
     let foreign = Fixture::start(|_, _| Reply::ok(json!({"login": "me"})));
     let other = foreign.base.clone();
     let to_foreign = |case: &'static str| {

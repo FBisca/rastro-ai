@@ -31,8 +31,9 @@ const ADD: &[&str] = &[
     "personal",
 ];
 
+/// evidence/R1: source add then list shows the source
 #[test]
-fn S1_source_add_then_list_shows_the_source() {
+fn source_add_then_list_shows_the_source() {
     let home = TempDir::new().unwrap();
     let before = Utc::now();
     let added = run(&mut command(home.path()), &[ADD, &["--json"]].concat());
@@ -86,8 +87,9 @@ fn S1_source_add_then_list_shows_the_source() {
     assert_eq!(saved["keep_original"].as_bool(), Some(false));
 }
 
+/// evidence/R2: registered source has never looked coverage
 #[test]
-fn S2_registered_source_has_never_looked_coverage() {
+fn registered_source_has_never_looked_coverage() {
     let home = TempDir::new().unwrap();
     run(&mut command(home.path()), ADD);
     assert!(run(&mut command(home.path()), &["coverage", "project"]).contains("never looked"));
@@ -110,8 +112,9 @@ fn S2_registered_source_has_never_looked_coverage() {
     assert!(error["error"].as_str().unwrap().contains("unknown source"));
 }
 
+/// evidence/R3: locations follow rastro xdg and home
 #[test]
-fn S3_locations_follow_rastro_xdg_and_home() {
+fn locations_follow_rastro_xdg_and_home() {
     for mode in 0..3 {
         let root = TempDir::new().unwrap();
         let home = root.path().join("home");
@@ -167,8 +170,9 @@ fn S3_locations_follow_rastro_xdg_and_home() {
     }
 }
 
+/// evidence/R1: concurrent registrations persist and reject duplicates
 #[test]
-fn S1_concurrent_registrations_persist_and_reject_duplicates() {
+fn concurrent_registrations_persist_and_reject_duplicates() {
     let home = TempDir::new().unwrap();
     run(&mut command(home.path()), &["source", "list"]);
     let children: Vec<_> = (0..20)
@@ -198,9 +202,10 @@ fn S1_concurrent_registrations_persist_and_reject_duplicates() {
     assert_eq!(successes, 1, "exactly one duplicate registration succeeds");
 }
 
+/// evidence/R3: private files under permissive umask
 #[cfg(unix)]
 #[test]
-fn S3_private_files_under_permissive_umask() {
+fn private_files_under_permissive_umask() {
     use std::os::unix::fs::PermissionsExt;
     if std::env::var_os("RASTRO_TEST_PRIVATE_CHILD").is_none() {
         let output = Command::new("sh")
@@ -268,8 +273,9 @@ fn S3_private_files_under_permissive_umask() {
     connection.execute_batch("ROLLBACK;").unwrap();
 }
 
+/// evidence/R1: freshness rejects signed duration and outputs match schema
 #[test]
-fn S1_freshness_rejects_signed_duration_and_outputs_match_schema() {
+fn freshness_rejects_signed_duration_and_outputs_match_schema() {
     let home = TempDir::new().unwrap();
     let schema: Value =
         serde_json::from_str(include_str!("../../../schema/operations-v1.schema.json")).unwrap();
@@ -293,8 +299,9 @@ fn S1_freshness_rejects_signed_duration_and_outputs_match_schema() {
     }
 }
 
+/// evidence/R3: empty and relative location overrides
 #[test]
-fn S3_empty_and_relative_location_overrides() {
+fn empty_and_relative_location_overrides() {
     for (rastro, xdg, succeeds) in [
         (Some(""), Some(""), true),
         (None, Some("relative"), true),

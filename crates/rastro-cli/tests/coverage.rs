@@ -147,8 +147,9 @@ fn coverage_of(env: &Env, now: Option<&str>) -> Value {
     value["result"]["coverage"][0].clone()
 }
 
+/// evidence/R51: past freshness or after a failed attempt coverage is unknown with its evidence
 #[test]
-fn S21_past_freshness_or_after_a_failed_attempt_coverage_is_unknown_with_its_evidence() {
+fn past_freshness_or_after_a_failed_attempt_coverage_is_unknown_with_its_evidence() {
     let env = Env::new();
     synced_once(&env);
     let fresh = coverage_of(&env, None);
@@ -183,8 +184,9 @@ fn S21_past_freshness_or_after_a_failed_attempt_coverage_is_unknown_with_its_evi
     assert_eq!(found["result"]["coverage"][0]["state"], "unknown");
 }
 
+/// evidence/R52: rebuilding the dropped index returns the same results with citations
 #[test]
-fn S22_rebuilding_the_dropped_index_returns_the_same_results_with_citations() {
+fn rebuilding_the_dropped_index_returns_the_same_results_with_citations() {
     let env = Env::new();
     synced_once(&env);
     let before = env.json(&["search", "body", "--history"]);
@@ -209,8 +211,9 @@ fn S22_rebuilding_the_dropped_index_returns_the_same_results_with_citations() {
     assert!(env.ok(&["index", "rebuild"]).contains("2"));
 }
 
+/// evidence/R54: every command validates against the operation schema on success and failure
 #[test]
-fn S23_every_command_validates_against_the_operation_schema_on_success_and_failure() {
+fn every_command_validates_against_the_operation_schema_on_success_and_failure() {
     let env = Env::new();
     // Successes.
     let added = env.json(&[
@@ -313,8 +316,9 @@ fn S23_every_command_validates_against_the_operation_schema_on_success_and_failu
     }
 }
 
+/// evidence/R55: arguments that do not parse give a schema valid error with json
 #[test]
-fn S23a_arguments_that_do_not_parse_give_a_schema_valid_error_with_json() {
+fn arguments_that_do_not_parse_give_a_schema_valid_error_with_json() {
     let env = Env::new();
     let cases: [(&[&str], &str); 5] = [
         (&["search"], "search"),
@@ -371,8 +375,9 @@ fn S23a_arguments_that_do_not_parse_give_a_schema_valid_error_with_json() {
     assert!(env.rastro(&["--version"]).status.success());
 }
 
+/// evidence/R53: a rebuilt index behaves like a freshly migrated one
 #[test]
-fn S22a_a_rebuilt_index_behaves_like_a_freshly_migrated_one() {
+fn a_rebuilt_index_behaves_like_a_freshly_migrated_one() {
     let bodies: [&[(&str, &str)]; 3] = [
         &[
             ("https://x/1", "running café"),
@@ -431,9 +436,10 @@ fn S22a_a_rebuilt_index_behaves_like_a_freshly_migrated_one() {
     assert_eq!(cited(&rebuilt, &["search", "naive"]).len(), 0);
 }
 
+/// evidence/R56: an argument that is not utf8 never panics
 #[cfg(unix)]
 #[test]
-fn S23b_an_argument_that_is_not_utf8_never_panics() {
+fn an_argument_that_is_not_utf8_never_panics() {
     use std::{ffi::OsString, os::unix::ffi::OsStringExt};
     let env = Env::new();
     let bad = || OsString::from_vec(vec![0xff, 0xfe]);

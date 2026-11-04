@@ -185,8 +185,9 @@ fn finish() -> Value {
     json!({"do": "finish", "submitted": 1})
 }
 
+/// evidence/R13: unsupported major or different manifest id fails with protocol
 #[test]
-fn S7_unsupported_major_or_different_manifest_id_fails_with_protocol() {
+fn unsupported_major_or_different_manifest_id_fails_with_protocol() {
     for handshake in [
         json!({"do": "initialize", "protocol": "2.0"}),
         json!({"do": "initialize", "manifest_id": "someone-else"}),
@@ -207,8 +208,9 @@ fn S7_unsupported_major_or_different_manifest_id_fails_with_protocol() {
     }
 }
 
+/// evidence/R14: manifest without permissions env still loads
 #[test]
-fn S7a_manifest_without_permissions_env_still_loads() {
+fn manifest_without_permissions_env_still_loads() {
     let env = Env::with_manifest(|m| {
         m["permissions"].as_table_mut().unwrap().remove("env");
     });
@@ -221,8 +223,9 @@ fn S7a_manifest_without_permissions_env_still_loads() {
     assert_eq!(run["status"], "ok");
 }
 
+/// evidence/R15: connector exit before finish is interrupted and keeps evidence
 #[test]
-fn S8_connector_exit_before_finish_is_interrupted_and_keeps_evidence() {
+fn connector_exit_before_finish_is_interrupted_and_keeps_evidence() {
     let env = Env::new();
     env.script(&[init(), send(evidence()), json!({"do": "exit", "code": 3})]);
     let (output, run) = env.sync();
@@ -239,8 +242,9 @@ fn S8_connector_exit_before_finish_is_interrupted_and_keeps_evidence() {
     );
 }
 
+/// evidence/R16: malformed oversized or silent connector is killed
 #[test]
-fn S9_malformed_oversized_or_silent_connector_is_killed() {
+fn malformed_oversized_or_silent_connector_is_killed() {
     let cases = [
         (
             vec![
@@ -285,8 +289,9 @@ fn S9_malformed_oversized_or_silent_connector_is_killed() {
     }
 }
 
+/// evidence/R17: stderr is relayed escaped and never blocks the connector
 #[test]
-fn S9a_stderr_is_relayed_escaped_and_never_blocks_the_connector() {
+fn stderr_is_relayed_escaped_and_never_blocks_the_connector() {
     let env = Env::new();
     env.script(&[
         init(),
@@ -311,8 +316,9 @@ fn S9a_stderr_is_relayed_escaped_and_never_blocks_the_connector() {
     assert!(stderr.lines().all(|line| line.chars().count() < 1000));
 }
 
+/// evidence/R30: unfinished run is marked interrupted when the core starts
 #[test]
-fn S10_unfinished_run_is_marked_interrupted_when_the_core_starts() {
+fn unfinished_run_is_marked_interrupted_when_the_core_starts() {
     let env = Env::new();
     env.db()
         .execute(
@@ -356,8 +362,9 @@ fn S10_unfinished_run_is_marked_interrupted_when_the_core_starts() {
     assert!(running.wait().unwrap().success());
 }
 
+/// evidence/R32: typed couldnt look reason is stored and never empty
 #[test]
-fn S11_typed_couldnt_look_reason_is_stored_and_never_empty() {
+fn typed_couldnt_look_reason_is_stored_and_never_empty() {
     let retry = "2026-11-05T10:00:00Z";
     let report = |reason: &str| {
         send(
@@ -394,8 +401,9 @@ fn failed_with(run: &Value, reason: &str) {
     );
 }
 
+/// evidence/R18: fast stdout is held in bounded memory and the run completes
 #[test]
-fn S9b_fast_stdout_is_held_in_bounded_memory_and_the_run_completes() {
+fn fast_stdout_is_held_in_bounded_memory_and_the_run_completes() {
     let env = Env::new();
     env.script(&[
         init(),
@@ -408,8 +416,9 @@ fn S9b_fast_stdout_is_held_in_bounded_memory_and_the_run_completes() {
     assert_eq!(run["counts"]["rejected"], 20000);
 }
 
+/// evidence/R19: connector that stops reading stdin times out
 #[test]
-fn S9c_connector_that_stops_reading_stdin_times_out() {
+fn connector_that_stops_reading_stdin_times_out() {
     let env = Env::new().tight();
     // The binding in `initialize` is bigger than any pipe buffer.
     env.ok(&[
@@ -430,8 +439,9 @@ fn S9c_connector_that_stops_reading_stdin_times_out() {
     assert!(!output.status.success());
 }
 
+/// evidence/R20: connector that lingers after finish is killed and the run kept
 #[test]
-fn S9d_connector_that_lingers_after_finish_is_killed_and_the_run_kept() {
+fn connector_that_lingers_after_finish_is_killed_and_the_run_kept() {
     for linger in [
         json!({"do": "sleep", "ms": 20000}),
         json!({"do": "spawn_holder", "secs": 120}),
@@ -456,8 +466,9 @@ fn S9d_connector_that_lingers_after_finish_is_killed_and_the_run_kept() {
     }
 }
 
+/// evidence/R21: stderr relay drops the excess and never blocks
 #[test]
-fn S9e_stderr_relay_drops_the_excess_and_never_blocks() {
+fn stderr_relay_drops_the_excess_and_never_blocks() {
     let env = Env::new();
     env.script(&[
         init(),
@@ -486,8 +497,9 @@ fn S9e_stderr_relay_drops_the_excess_and_never_blocks() {
     assert_eq!(run["status"], "ok");
 }
 
+/// evidence/R22: invalid utf8 or a bad envelope fails with protocol
 #[test]
-fn S9f_invalid_utf8_or_a_bad_envelope_fails_with_protocol() {
+fn invalid_utf8_or_a_bad_envelope_fails_with_protocol() {
     let mut bad_version = evidence();
     bad_version["jsonrpc"] = json!("1.0");
     let mut no_method = evidence();
@@ -514,8 +526,9 @@ fn S9f_invalid_utf8_or_a_bad_envelope_fails_with_protocol() {
     }
 }
 
+/// evidence/R31: recovered run records couldnt look for its window
 #[test]
-fn S10a_recovered_run_records_couldnt_look_for_its_window() {
+fn recovered_run_records_couldnt_look_for_its_window() {
     let env = Env::new();
     env.script(&[
         init(),
@@ -556,8 +569,9 @@ fn S10a_recovered_run_records_couldnt_look_for_its_window() {
     assert_eq!(covered["result"]["coverage"][0]["reason"], "interrupted");
 }
 
+/// evidence/R33: finish without coverage fails with protocol
 #[test]
-fn S11a_finish_without_coverage_fails_with_protocol() {
+fn finish_without_coverage_fails_with_protocol() {
     let env = Env::new();
     env.script(&[init(), send(evidence()), finish()]);
     let (output, run) = env.sync_within(10, true);
@@ -567,8 +581,9 @@ fn S11a_finish_without_coverage_fails_with_protocol() {
     assert_eq!(env.sql::<String>("SELECT reason FROM coverage"), "protocol");
 }
 
+/// evidence/R33: finish with only rejected coverage reports fails with protocol
 #[test]
-fn S11a_finish_with_only_rejected_coverage_reports_fails_with_protocol() {
+fn finish_with_only_rejected_coverage_reports_fails_with_protocol() {
     let env = Env::new();
     let forged = json!({"from": "1900-01-01T00:00:00Z", "to": "1900-02-01T00:00:00Z"});
     let report = send(json!({"jsonrpc": "2.0", "method": "coverage.report",
@@ -594,8 +609,9 @@ fn alive(pid: &str) -> bool {
     !state.is_empty() && !state.starts_with('Z')
 }
 
+/// evidence/R23: many core diagnostics never make the run wait on stderr
 #[test]
-fn S9g_many_core_diagnostics_never_make_the_run_wait_on_stderr() {
+fn many_core_diagnostics_never_make_the_run_wait_on_stderr() {
     let env = Env::new();
     env.script(&[
         init(),
@@ -616,8 +632,9 @@ fn S9g_many_core_diagnostics_never_make_the_run_wait_on_stderr() {
     assert_eq!(run["status"], "ok");
 }
 
+/// evidence/R24: unwritable run finish reply fails with timeout
 #[test]
-fn S9h_unwritable_run_finish_reply_fails_with_timeout() {
+fn unwritable_run_finish_reply_fails_with_timeout() {
     let mut env = Env::new().tight();
     env.vars.push(("RASTRO_HOST_MAX_LINE", "1000000".into()));
     env.script(&[
@@ -631,8 +648,9 @@ fn S9h_unwritable_run_finish_reply_fails_with_timeout() {
     failed_with(&run, "timeout");
 }
 
+/// evidence/R25: ids and shapes json rpc does not allow fail with protocol
 #[test]
-fn S9i_ids_and_shapes_json_rpc_does_not_allow_fail_with_protocol() {
+fn ids_and_shapes_json_rpc_does_not_allow_fail_with_protocol() {
     let mut shapes = Vec::new();
     for id in [json!({}), json!([]), json!(true)] {
         let mut message = evidence();
@@ -654,8 +672,9 @@ fn S9i_ids_and_shapes_json_rpc_does_not_allow_fail_with_protocol() {
     }
 }
 
+/// evidence/R26: the connectors process group is killed when the run ends
 #[test]
-fn S9j_the_connectors_process_group_is_killed_when_the_run_ends() {
+fn the_connectors_process_group_is_killed_when_the_run_ends() {
     for linger in [false, true] {
         let env = Env::new();
         let pid_file = env.home.path().join("holder.pid");
@@ -688,8 +707,9 @@ fn S9j_the_connectors_process_group_is_killed_when_the_run_ends() {
     }
 }
 
+/// evidence/R28: span offsets the store cannot hold are rejected without waiting on stderr
 #[test]
-fn S9l_span_offsets_the_store_cannot_hold_are_rejected_without_waiting_on_stderr() {
+fn span_offsets_the_store_cannot_hold_are_rejected_without_waiting_on_stderr() {
     let mut env = Env::new();
     env.vars.push(("RASTRO_HOST_STDERR_LINES", "100000".into()));
     let huge = json!({"jsonrpc": "2.0", "method": "evidence.submit", "params": {
@@ -712,8 +732,9 @@ fn S9l_span_offsets_the_store_cannot_hold_are_rejected_without_waiting_on_stderr
     assert_eq!(env.sql::<i64>("SELECT count(*) FROM evidence"), 0);
 }
 
+/// evidence/R29: many syncs with blocked stderr finish without piling up printers
 #[test]
-fn S9m_many_syncs_with_blocked_stderr_finish_without_piling_up_printers() {
+fn many_syncs_with_blocked_stderr_finish_without_piling_up_printers() {
     let mut env = Env::new();
     env.vars.push(("RASTRO_HOST_STDERR_LINES", "100000".into()));
     for name in ["two", "three", "four", "five"] {
@@ -741,8 +762,9 @@ fn S9m_many_syncs_with_blocked_stderr_finish_without_piling_up_printers() {
     assert!(started.elapsed().as_secs() < 10);
 }
 
+/// evidence/R28: a storage failure under blocked stderr fails the run with storage without hanging
 #[test]
-fn S9l_a_storage_failure_under_blocked_stderr_fails_the_run_with_storage_without_hanging() {
+fn a_storage_failure_under_blocked_stderr_fails_the_run_with_storage_without_hanging() {
     let mut env = Env::new();
     env.vars.push(("RASTRO_HOST_STDERR_LINES", "100000".into()));
     // The search index is gone, so appending an accepted observation fails inside the store.

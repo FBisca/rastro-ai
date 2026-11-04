@@ -126,8 +126,9 @@ fn run_script(messages: Vec<Value>) -> Vec<Value> {
     steps
 }
 
+/// evidence/R6: sync stores evidence and found coverage
 #[test]
-fn S4_sync_stores_evidence_and_found_coverage() {
+fn sync_stores_evidence_and_found_coverage() {
     let env = Env::new();
     env.add_source("project");
     env.script(&run_script(vec![
@@ -171,8 +172,9 @@ fn S4_sync_stores_evidence_and_found_coverage() {
     );
 }
 
+/// evidence/R7: complete sync without evidence records empty
 #[test]
-fn S4a_complete_sync_without_evidence_records_empty() {
+fn complete_sync_without_evidence_records_empty() {
     let env = Env::new();
     env.add_source("project");
     env.script(&run_script(vec![complete()]));
@@ -185,8 +187,9 @@ fn S4a_complete_sync_without_evidence_records_empty() {
     assert_eq!(covered["result"]["coverage"][0]["state"], "empty");
 }
 
+/// evidence/R8: evidence without location span quote or trust class is rejected
 #[test]
-fn S5_evidence_without_location_span_quote_or_trust_class_is_rejected() {
+fn evidence_without_location_span_quote_or_trust_class_is_rejected() {
     let env = Env::new();
     env.add_source("project");
     let good = valid("https://github.com/o/p/issues/1", "hello world");
@@ -221,8 +224,9 @@ fn S5_evidence_without_location_span_quote_or_trust_class_is_rejected() {
     assert!(human.contains("rejected 8"), "{human}");
 }
 
+/// evidence/R9: forbidden kind or forged source or scope is rejected
 #[test]
-fn S6_forbidden_kind_or_forged_source_or_scope_is_rejected() {
+fn forbidden_kind_or_forged_source_or_scope_is_rejected() {
     let env = Env::new();
     env.add_source("project");
     let good = valid("https://github.com/o/p/issues/1", "hello world");
@@ -252,8 +256,9 @@ fn synced_env() -> Env {
     env
 }
 
+/// evidence/R49: search results carry the citation and coverage
 #[test]
-fn S19_search_results_carry_the_citation_and_coverage() {
+fn search_results_carry_the_citation_and_coverage() {
     let env = synced_env();
     let human = env.ok(&["search", "quick fox"]);
     for expected in [
@@ -290,8 +295,9 @@ fn S19_search_results_carry_the_citation_and_coverage() {
     assert!(hit["coverage"]["fresh_until"].is_string());
 }
 
+/// evidence/R50: search without a match states the coverage of each source
 #[test]
-fn S20_search_without_a_match_states_the_coverage_of_each_source() {
+fn search_without_a_match_states_the_coverage_of_each_source() {
     let env = synced_env();
     let human = env.ok(&["search", "zebra"]);
     assert!(human.contains("no evidence found"), "{human}");
@@ -312,8 +318,9 @@ fn S20_search_without_a_match_states_the_coverage_of_each_source() {
     assert_eq!(coverage[1]["state"], "never looked");
 }
 
+/// evidence/R6: sync without manifest records couldnt look
 #[test]
-fn S4_sync_without_manifest_records_couldnt_look() {
+fn sync_without_manifest_records_couldnt_look() {
     let env = Env::new();
     env.ok(&[
         "source",
@@ -354,8 +361,9 @@ fn set_permission(manifest: &mut toml::Table, key: &str, values: &[&str]) {
         .insert(key.into(), values.into());
 }
 
+/// evidence/R10: source scope outside the manifest scopes is refused
 #[test]
-fn S6a_source_scope_outside_the_manifest_scopes_is_refused() {
+fn source_scope_outside_the_manifest_scopes_is_refused() {
     let env = Env::with_manifest(|m| set_permission(m, "scopes", &["work"]));
     env.add_source("project");
     env.script(&run_script(vec![valid("https://x/1", "hello"), complete()]));
@@ -379,8 +387,9 @@ fn S6a_source_scope_outside_the_manifest_scopes_is_refused() {
     assert!(!env.rastro(&["sync", "project"]).status.success());
 }
 
+/// evidence/R10: a window other than the bound one is rejected
 #[test]
-fn S6a_a_window_other_than_the_bound_one_is_rejected() {
+fn a_window_other_than_the_bound_one_is_rejected() {
     let env = Env::new();
     env.add_source("project");
     let forged = json!({"from": "1900-01-01T00:00:00Z", "to": "1900-02-01T00:00:00Z"});
@@ -406,8 +415,9 @@ fn S6a_a_window_other_than_the_bound_one_is_rejected() {
     assert_eq!(env.sql::<i64>("SELECT count(*) FROM evidence"), 0);
 }
 
+/// evidence/R11: connector sees only allowed and declared environment
 #[test]
-fn S6b_connector_sees_only_allowed_and_declared_environment() {
+fn connector_sees_only_allowed_and_declared_environment() {
     let env = Env::with_manifest(|m| {
         set_permission(m, "env", &["RASTRO_TEST_SCRIPT", "RASTRO_DECLARED_VAR"]);
     });
@@ -433,8 +443,9 @@ fn S6b_connector_sees_only_allowed_and_declared_environment() {
     assert!(!seen.contains("RASTRO_HOME"), "{seen}");
 }
 
+/// evidence/R12: control characters from connectors are escaped in human output
 #[test]
-fn S6c_control_characters_from_connectors_are_escaped_in_human_output() {
+fn control_characters_from_connectors_are_escaped_in_human_output() {
     let env = Env::new();
     env.add_source("project");
     let esc = "\u{1b}[31mred";

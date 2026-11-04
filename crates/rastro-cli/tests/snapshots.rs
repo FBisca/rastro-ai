@@ -3,8 +3,9 @@ mod support;
 
 use std::fs;
 
+/// evidence/R6: test support, the snapshot of a binary is the current build
 #[test]
-fn S15a_snapshot_is_the_current_build() {
+fn snapshot_is_the_current_build() {
     let dir = tempfile::tempdir().unwrap();
     let source = dir.path().join("tool");
     let write = |bytes: &[u8], at: std::time::SystemTime| {
