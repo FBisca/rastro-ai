@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+chrono.workspace = true
 rastro-core = { path = "../rastro-core" }
 rusqlite = { version = "0.38", features = ["bundled"] }
 serde_json.workspace = true

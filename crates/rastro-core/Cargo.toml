@@ -9,3 +9,5 @@ chrono.workspace = true
 serde.workspace = true
 toml.workspace = true
 tempfile = "3"
+rastro-plugin-sdk = { path = "../rastro-plugin-sdk" }
+serde_json.workspace = true

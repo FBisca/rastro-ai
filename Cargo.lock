@@ -839,8 +839,20 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "chrono",
+ "rastro-plugin-sdk",
  "serde",
+ "serde_json",
  "tempfile",
+ "toml",
+]
+
+[[package]]
+name = "rastro-plugin-sdk"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "serde",
+ "serde_json",
  "toml",
 ]
 
@@ -849,10 +861,21 @@ name = "rastro-storage-sqlite"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "rastro-core",
  "rusqlite",
  "serde_json",
  "tempfile",
+]
+
+[[package]]
+name = "rastro-test-connector"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rastro-plugin-sdk",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
