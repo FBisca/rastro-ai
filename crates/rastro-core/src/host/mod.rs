@@ -133,16 +133,18 @@ pub fn run<S: Storage>(
         (c.status == CoverageStatus::CouldntLook).then(|| typed(c.reason.as_deref()))
     });
     // Why the run failed, if it did: what the host saw first, then what the connector said.
+    // A rejected submission means the read was not what the window promises, whatever else
+    // the connector reports; only a failure the host itself saw comes first.
+    let rejected_read = counts.rejected > 0 && matches!(outcome, Ok(Ok(_)));
     let reason: Option<String> = match outcome {
         Ok(Err(reason)) => Some(reason.to_string()),
         Err(_) => Some("storage".into()),
+        Ok(Ok(_)) if rejected_read => Some("protocol".into()),
         Ok(Ok(finish)) if finish.status != "ok" => Some(finish.reason.as_deref().map_or_else(
             || reported.clone().unwrap_or_else(|| "protocol".into()),
             |r| typed(Some(r)),
         )),
         Ok(Ok(_)) if reported.is_some() => reported,
-        // A rejected submission means the read was not what the window promises.
-        Ok(Ok(_)) if counts.rejected > 0 => Some("protocol".into()),
         Ok(Ok(_)) if coverage.is_none() => Some("protocol".into()),
         Ok(Ok(_)) => None,
     };
@@ -160,7 +162,11 @@ pub fn run<S: Storage>(
         Some(report) => (
             CoverageState::CouldNotLook,
             reason.clone(),
-            report.retry_at.and_then(|t| t.parse().ok()),
+            // A retry time belongs to the reason the connector gave, which no longer stands.
+            report
+                .retry_at
+                .filter(|_| !rejected_read)
+                .and_then(|t| t.parse().ok()),
             report.selection,
         ),
         // A connector that finishes without reporting coverage looked at nothing we can vouch for.
