@@ -254,6 +254,13 @@ impl Storage for SqliteStorage {
         })
         .transpose()
     }
+    fn interrupt_unfinished_runs(&mut self, at: DateTime<Utc>) -> Result<usize> {
+        Ok(self.connection.execute(
+            "UPDATE runs SET status='failed', reason='interrupted', finished_at=?1
+             WHERE finished_at IS NULL",
+            [stamp(at)],
+        )?)
+    }
     fn search(&self, query: &str, limit: usize) -> Result<Vec<Hit>> {
         let mut statement = self.connection.prepare(
             "SELECT e.id, e.source, e.scope, e.location, e.field, e.start as i64, e.end as i64, e.quote,

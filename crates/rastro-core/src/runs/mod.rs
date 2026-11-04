@@ -1,5 +1,5 @@
 //! Runs: one execution of a connector for a source, and the log it leaves.
-use crate::{Counts, CoverageState, Rastro, Source, Storage, host};
+use crate::{Counts, CoverageState, Rastro, Source, Storage, files, host};
 use anyhow::{Result, bail};
 use chrono::{DateTime, Utc};
 use rastro_plugin_sdk::Window;
@@ -37,6 +37,9 @@ impl<S: Storage> Rastro<S> {
         {
             bail!("unknown source: {name}");
         }
+        files::private_directory(&self.locations.data)?;
+        let lock = files::private_file(&self.locations.sync_lock())?;
+        lock.lock()?;
         let mut reports = Vec::new();
         for source in &sources {
             let plugin = host::discover(&self.locations, &source.connector)?;
@@ -52,6 +55,7 @@ impl<S: Storage> Rastro<S> {
                 Utc::now(),
             )?);
         }
+        drop(lock);
         Ok(reports)
     }
 

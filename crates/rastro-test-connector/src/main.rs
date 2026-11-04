@@ -6,6 +6,8 @@
 //! - `send_raw` {line}: write that text as one line (malformed input)
 //! - `finish` {status?, submitted?, reason?}: send `run.finish` and wait for the reply
 //! - `sleep` {ms}
+//! - `send_oversized` {bytes}: send a valid `evidence.submit` whose quote is that many bytes
+//! - `stderr` {text, repeat?}: write that line to stderr
 //! - `dump_env` {path}: write the environment, one NAME=value per line, to that file
 //! - `exit` {code?}: end the process at once
 //!
@@ -17,7 +19,7 @@ use rastro_plugin_sdk::{
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
-use std::{env, fs, io, thread, time::Duration};
+use std::{env, fs, io, io::Write, thread, time::Duration};
 
 #[derive(Deserialize)]
 #[serde(tag = "do", rename_all = "snake_case")]
@@ -42,6 +44,14 @@ enum Step {
     Sleep {
         ms: u64,
     },
+    SendOversized {
+        bytes: usize,
+    },
+    Stderr {
+        text: String,
+        #[serde(default = "one")]
+        repeat: usize,
+    },
     DumpEnv {
         path: String,
     },
@@ -49,6 +59,9 @@ enum Step {
         #[serde(default)]
         code: i32,
     },
+}
+fn one() -> usize {
+    1
 }
 fn ok() -> String {
     "ok".into()
@@ -108,6 +121,19 @@ fn main() -> Result<()> {
                 }
             }
             Step::Sleep { ms } => thread::sleep(Duration::from_millis(ms)),
+            Step::SendOversized { bytes } => {
+                let quote = "x".repeat(bytes);
+                transport.send(&json!({"jsonrpc": "2.0", "method": "evidence.submit",
+                    "params": {"kind": "issue", "location": "https://x/1", "field": "/body",
+                        "start": 0, "end": bytes, "quote": quote,
+                        "trust_class": "untrusted content"}}))?;
+            }
+            Step::Stderr { text, repeat } => {
+                let mut stderr = io::stderr().lock();
+                for _ in 0..repeat {
+                    writeln!(stderr, "{text}")?;
+                }
+            }
             Step::DumpEnv { path } => {
                 let lines: Vec<_> = env::vars().map(|(k, v)| format!("{k}={v}")).collect();
                 fs::write(path, lines.join("\n"))?;
