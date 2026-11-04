@@ -273,20 +273,41 @@ fn comment(number: u64, id: u64, body: &str, updated_at: String) -> Value {
 
 #[test]
 fn S12a_only_comments_updated_within_the_window_become_evidence() {
-    let fixture = Fixture::start(with_route(|req, _| {
+    // The window is whatever the search query asked for, so comments are placed on its edges.
+    let window = std::sync::Arc::new(std::sync::Mutex::new(
+        None::<(DateTime<Utc>, DateTime<Utc>)>,
+    ));
+    let seen = window.clone();
+    let fixture = Fixture::start(with_route(move |req, _| {
+        if req.path == "/search/issues" {
+            let (from, to) = req.query.split_once("updated:")?.1.split_once("..")?;
+            let to = to.split('&').next()?;
+            *seen.lock().unwrap() = Some((from.parse().ok()?, to.parse().ok()?));
+            return None;
+        }
         (req.path == "/repos/o/p/issues/3/comments").then(|| {
+            let (from, to) = window.lock().unwrap().expect("search comes first");
+            let ms = chrono::Duration::milliseconds(1);
+            let at = |t: DateTime<Utc>| t.to_rfc3339_opts(chrono::SecondsFormat::Millis, true);
             Reply::ok(json!([
-                comment(3, 1, "too old", days_ago(200)),
-                comment(3, 2, "inside the window", days_ago(1)),
-                comment(3, 3, "after the window", days_ago(-1)),
+                comment(3, 1, "just before from", at(from - ms)),
+                comment(3, 2, "exactly from", at(from)),
+                comment(3, 3, "just after from", at(from + ms)),
+                comment(3, 4, "just before to", at(to - ms)),
+                comment(3, 5, "exactly to", at(to)),
+                comment(3, 6, "just after to", at(to + ms)),
             ]))
         })
     }));
     let env = Env::new(&fixture.base);
     sync(&env);
-    let quotes =
-        env.rows("SELECT quote FROM evidence WHERE location LIKE '%/issues/3#issuecomment-%'");
-    assert_eq!(quotes, [["inside the window"]]);
+    let quotes = env.rows(
+        "SELECT quote FROM evidence WHERE location LIKE '%/issues/3#issuecomment-%' ORDER BY quote",
+    );
+    assert_eq!(
+        quotes,
+        [["exactly from"], ["just after from"], ["just before to"]]
+    );
 }
 
 #[test]
@@ -294,25 +315,24 @@ fn S12b_search_queries_name_the_repo_and_the_window() {
     let fixture = Fixture::start(standard);
     let env = Env::new(&fixture.base);
     let window = sync(&env)["window"].clone();
-    let queries: Vec<_> = fixture
+    let (from, to) = (
+        window["from"].as_str().unwrap(),
+        window["to"].as_str().unwrap(),
+    );
+    let queries: Vec<String> = fixture
         .requests()
         .into_iter()
         .filter(|r| r.path == "/search/issues")
+        .map(|r| {
+            let q = r.query.split('&').find_map(|p| p.strip_prefix("q="));
+            q.expect("search has a q parameter").to_string()
+        })
         .collect();
-    assert_eq!(queries.len(), 4);
-    for query in &queries {
-        for part in [
-            "repo:o/p",
-            window["from"].as_str().unwrap(),
-            window["to"].as_str().unwrap(),
-        ] {
-            assert!(
-                query.query.contains(part),
-                "{part} missing from {}",
-                query.query
-            );
-        }
-    }
+    let expected: Vec<String> = ["author", "assignee", "review-requested", "mentions"]
+        .iter()
+        .map(|q| format!("repo:o/p {q}:me updated:{from}..{to}"))
+        .collect();
+    assert_eq!(queries, expected);
 }
 
 #[test]
