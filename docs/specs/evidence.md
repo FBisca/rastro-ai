@@ -1,5 +1,5 @@
 # Evidence
-Paths: crates/rastro-core/, crates/rastro-storage-sqlite/, crates/rastro-cli/, crates/rastro-plugin-sdk/, crates/rastro-test-connector/, crates/rastro-connector-github/
+Paths: crates/rastro-core/, crates/rastro-storage-sqlite/, crates/rastro-cli/, crates/rastro-plugin-sdk/, crates/rastro-test-connector/, crates/rastro-connector-github/, schema/
 
 ## Requirements
 - **R1** WHEN the owner runs `rastro source add project --connector github --repo o/p --scope personal`, THEN `rastro source list` shows `project` with its connector, selector, scope, freshness rule and window start, and the config file holds it. (from cited-search-github/S1)
@@ -59,3 +59,17 @@ Paths: crates/rastro-core/, crates/rastro-storage-sqlite/, crates/rastro-cli/, c
 - **R55** WHEN a known command runs with `--json` but its arguments don't parse, THEN it prints a schema-valid error result for that operation and exits non-zero; `--help` and `--version` still work. (from cited-search-github/S23a)
 - **R56** WHEN a command gets an argument that isn't valid UTF-8, THEN it never panics: for a known operation under `--json` it prints that operation's schema-valid error result, and either way it exits 2. (from cited-search-github/S23b)
 - **R57** WHEN the owner registers one of their real repos and syncs, THEN searching for a phrase they remember returns it with a working link, and `rastro coverage` is accurate. (from cited-search-github/S24)
+- **R58** WHEN `rastro coverage` reports a last-checked time that falls on a whole second, THEN its human output and `--json` name the same instant. (from cited-search-github/S21a)
+- **R59** WHEN the live check runs under `--ignored` with only one of its variables set, or one empty, THEN it fails naming what is missing; with neither set it is skipped. (from cited-search-github/S24a)
+- **R60** WHEN a source added with `--keep-original` syncs, THEN each new observation stores the full original beside its quoted span and `rastro search --json` returns it; a source without the flag stores none. (from cited-search-github/S25)
+- **R61** WHEN a connector sends an original that isn't a JSON object for a source that keeps originals, THEN the core rejects that submission, stores no original, and `rastro search --json` stays schema-valid. (from cited-search-github/S25a)
+- **R62** WHEN a connector sends `"original": null` for a source that keeps originals, THEN the core rejects that submission like any other non-object original; an omitted original is still accepted. (from cited-search-github/S25b)
+- **R63** WHEN a source has more than one window, THEN `rastro coverage` lists each window `[from, to)` with its state, selection and, for "couldn't look", its retry time. (from cited-search-github/S26)
+- **R64** WHEN a later sync over a quiet period finds nothing new, THEN `rastro coverage` and each search hit still answer "found" for the source, and the quiet window shows "empty" in its own row. (from cited-search-github/S26a)
+- **R65** WHEN every submission in a run is rejected, THEN the window records "couldn't look: protocol", never "empty". (from cited-search-github/S27)
+- **R66** WHEN some submissions in a run are rejected, THEN the accepted evidence is stored and the window records "couldn't look: protocol", not "found". (from cited-search-github/S27a)
+- **R67** WHEN a run has a rejected submission and also a connector-reported failure or a failed finish, THEN the window records "couldn't look: protocol" and the accepted evidence is kept. (from cited-search-github/S27b)
+- **R68** WHEN a source's connector isn't installed, THEN coverage records "couldn't look: not_installed", and `not_installed` is one of the published typed reasons. (from cited-search-github/S28)
+- **R69** WHEN a source's manifest fails its check, THEN a failed run with "couldn't look: protocol" is recorded and any other source in the same sync still runs. (from cited-search-github/S29)
+- **R70** WHEN the GitHub API base URL override names a host that isn't loopback, THEN the connector sends no request and coverage records "couldn't look: protocol". (from cited-search-github/S30)
+- **R71** WHEN a release build runs with `RASTRO_NOW` or a `RASTRO_HOST_*` override set, THEN it ignores them. (from cited-search-github/S31)

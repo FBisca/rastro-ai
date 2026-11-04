@@ -190,9 +190,10 @@ pub fn loopback(base: &str) -> bool {
 mod tests {
     use super::loopback;
 
+    /// evidence/R70: only loopback hosts are accepted
     #[test]
     #[allow(non_snake_case)]
-    fn S30_only_loopback_hosts_are_accepted() {
+    fn only_loopback_hosts_are_accepted() {
         for ok in [
             "http://127.0.0.1:8080",
             "http://127.0.0.1",

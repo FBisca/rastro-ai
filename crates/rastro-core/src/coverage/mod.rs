@@ -40,8 +40,9 @@ impl Coverage {
 mod tests {
     use super::*;
 
+    /// evidence/R71: rastro now is ignored unless this is a debug build
     #[test]
-    fn S31_rastro_now_is_ignored_unless_this_is_a_debug_build() {
+    fn rastro_now_is_ignored_unless_this_is_a_debug_build() {
         let knob = || Some("2001-02-03T04:05:06Z".to_string());
         let allowed = |debug| crate::overrides_allowed(debug).then(knob).flatten();
         assert_eq!(

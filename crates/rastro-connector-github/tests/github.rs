@@ -618,8 +618,9 @@ fn links_and_redirects_away_from_the_api_host_are_not_followed() {
 }
 
 /// S25: a source added with --keep-original stores each item or comment as read, and search returns it
+/// evidence/R60: keep original stores the item or comment as read
 #[test]
-fn S25_keep_original_stores_the_item_or_comment_as_read() {
+fn keep_original_stores_the_item_or_comment_as_read() {
     let fixture = Fixture::start(standard);
     let env = Env::with_source_args(&fixture.base, &["--keep-original"]);
     assert_eq!(sync(&env)["status"], "ok");
@@ -657,8 +658,9 @@ fn S25_keep_original_stores_the_item_or_comment_as_read() {
 }
 
 /// S25: a source without the flag stores no original and search has no such field
+/// evidence/R60: without the flag nothing is stored
 #[test]
-fn S25_without_the_flag_nothing_is_stored() {
+fn without_the_flag_nothing_is_stored() {
     let fixture = Fixture::start(standard);
     let env = Env::new(&fixture.base);
     assert_eq!(sync(&env)["status"], "ok");
@@ -672,8 +674,9 @@ fn S25_without_the_flag_nothing_is_stored() {
 }
 
 /// S25: the connector attaches originals only when the host says the source keeps them
+/// evidence/R60: connector sends originals only when told
 #[test]
-fn S25_connector_sends_originals_only_when_told() {
+fn connector_sends_originals_only_when_told() {
     let fixture = Fixture::start(standard);
     let sent = |keep: bool| -> Vec<Value> {
         let mut child = std::process::Command::new(connector_binary())
@@ -719,8 +722,9 @@ fn S25_connector_sends_originals_only_when_told() {
     assert!(not_told.iter().all(|e| e.get("original").is_none()));
 }
 
+/// evidence/R70: a non loopback api base url sends no request and is couldnt look protocol
 #[test]
-fn S30_a_non_loopback_api_base_url_sends_no_request_and_is_couldnt_look_protocol() {
+fn a_non_loopback_api_base_url_sends_no_request_and_is_couldnt_look_protocol() {
     let fixture = Fixture::start(standard);
     let port = fixture.base.rsplit(':').next().unwrap().to_string();
     for base in [

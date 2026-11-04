@@ -509,8 +509,9 @@ fn windows(env: &Env) -> Vec<Value> {
         .clone()
 }
 
+/// evidence/R63: coverage lists each window with its state selection and retry time
 #[test]
-fn S26_coverage_lists_each_window_with_its_state_selection_and_retry_time() {
+fn coverage_lists_each_window_with_its_state_selection_and_retry_time() {
     let env = Env::new();
     synced_once(&env);
     let retry = "2030-01-01T00:00:00Z";
@@ -547,8 +548,9 @@ fn S26_coverage_lists_each_window_with_its_state_selection_and_retry_time() {
     same_instant(&next["window"]["from"], &listed[0]["to"], "");
 }
 
+/// evidence/R64: a quiet later window is empty in its row and the source stays found
 #[test]
-fn S26a_a_quiet_later_window_is_empty_in_its_row_and_the_source_stays_found() {
+fn a_quiet_later_window_is_empty_in_its_row_and_the_source_stays_found() {
     let env = Env::new();
     synced_once(&env);
     let quiet = raw_sync(
@@ -583,8 +585,9 @@ fn S26a_a_quiet_later_window_is_empty_in_its_row_and_the_source_stays_found() {
     assert_eq!(coverage_of(&fresh, None)["state"], "empty");
 }
 
+/// evidence/R65: a run whose submissions are all rejected is couldnt look protocol never empty
 #[test]
-fn S27_a_run_whose_submissions_are_all_rejected_is_couldnt_look_protocol_never_empty() {
+fn a_run_whose_submissions_are_all_rejected_is_couldnt_look_protocol_never_empty() {
     let env = Env::new();
     env.add_source("project");
     let bad = json!({"jsonrpc": "2.0", "method": "evidence.submit", "params": {"kind": "issue"}});
@@ -606,8 +609,9 @@ fn S27_a_run_whose_submissions_are_all_rejected_is_couldnt_look_protocol_never_e
     assert_eq!(coverage_of(&env, None)["state"], "unknown");
 }
 
+/// evidence/R66: some rejected submissions keep the accepted evidence but the window is couldnt look
 #[test]
-fn S27a_some_rejected_submissions_keep_the_accepted_evidence_but_the_window_is_couldnt_look() {
+fn some_rejected_submissions_keep_the_accepted_evidence_but_the_window_is_couldnt_look() {
     let env = Env::new();
     env.add_source("project");
     let bad = json!({"jsonrpc": "2.0", "method": "evidence.submit", "params": {"kind": "issue"}});
@@ -632,8 +636,9 @@ fn S27a_some_rejected_submissions_keep_the_accepted_evidence_but_the_window_is_c
     same_instant(&again["window"]["from"], &listed[0]["from"], "");
 }
 
+/// evidence/R68: a connector that isnt installed is couldnt look not installed a published reason
 #[test]
-fn S28_a_connector_that_isnt_installed_is_couldnt_look_not_installed_a_published_reason() {
+fn a_connector_that_isnt_installed_is_couldnt_look_not_installed_a_published_reason() {
     let env = Env::new();
     env.add_source("project");
     fs::remove_dir_all(env.home.path().join("dev-plugins/test")).unwrap();
@@ -662,8 +667,9 @@ fn S28_a_connector_that_isnt_installed_is_couldnt_look_not_installed_a_published
     assert_eq!(run["reason"], "not_installed", "{run}");
 }
 
+/// evidence/R69: a manifest that fails its check is a failed run and other sources still run
 #[test]
-fn S29_a_manifest_that_fails_its_check_is_a_failed_run_and_other_sources_still_run() {
+fn a_manifest_that_fails_its_check_is_a_failed_run_and_other_sources_still_run() {
     type Edit = fn(&mut toml::Table);
     let edits: [(&str, Edit); 3] = [
         ("protocol major", |m| {
@@ -741,8 +747,9 @@ fn S29_a_manifest_that_fails_its_check_is_a_failed_run_and_other_sources_still_r
     }
 }
 
+/// evidence/R67: a rejected submission wins over a reported failure or a failed finish
 #[test]
-fn S27b_a_rejected_submission_wins_over_a_reported_failure_or_a_failed_finish() {
+fn a_rejected_submission_wins_over_a_reported_failure_or_a_failed_finish() {
     let bad = json!({"jsonrpc": "2.0", "method": "evidence.submit", "params": {"kind": "issue"}});
     let reported = report(json!({"status": "couldnt_look", "reason": "rate_limited",
         "retry_at": "2030-01-01T00:00:00Z", "selection": "all"}));
@@ -781,8 +788,9 @@ fn S27b_a_rejected_submission_wins_over_a_reported_failure_or_a_failed_finish() 
     }
 }
 
+/// evidence/R70: manifest parse diagnostics name the position and never echo values
 #[test]
-fn S30_manifest_parse_diagnostics_name_the_position_and_never_echo_values() {
+fn manifest_parse_diagnostics_name_the_position_and_never_echo_values() {
     let env = Env::new();
     env.add_source("project");
     let broken = env.home.path().join("dev-plugins/broken");
@@ -802,8 +810,9 @@ fn S30_manifest_parse_diagnostics_name_the_position_and_never_echo_values() {
 }
 
 /// S21a: a last-checked time on a whole second is the same instant in human output and --json
+/// evidence/R58: a whole second last checked is the same instant in human and json
 #[test]
-fn S21a_a_whole_second_last_checked_is_the_same_instant_in_human_and_json() {
+fn a_whole_second_last_checked_is_the_same_instant_in_human_and_json() {
     let env = Env::new();
     synced_once(&env);
     Connection::open(env.home.path().join("data/rastro.sqlite3"))

@@ -494,8 +494,9 @@ fn control_characters_from_connectors_are_escaped_in_human_output() {
 }
 
 /// S25: the core keeps an original only for a source with the flag, whatever the connector sends
+/// evidence/R60: core drops an original from a source without the flag
 #[test]
-fn S25_core_drops_an_original_from_a_source_without_the_flag() {
+fn core_drops_an_original_from_a_source_without_the_flag() {
     let original = json!({"id": 7, "body": "hello world", "extra": [1, 2]});
     let script = run_script(vec![
         with(
@@ -525,8 +526,9 @@ fn S25_core_drops_an_original_from_a_source_without_the_flag() {
 }
 
 /// S25a: an original that isn't a JSON object is rejected, nothing is stored, search stays schema-valid
+/// evidence/R61: a non object original is rejected for a source that keeps originals
 #[test]
-fn S25a_a_non_object_original_is_rejected_for_a_source_that_keeps_originals() {
+fn a_non_object_original_is_rejected_for_a_source_that_keeps_originals() {
     for bad in [json!("not-an-object"), json!([1, 2]), json!(7), json!(true)] {
         let env = Env::new();
         env.add_source_with("project", &["--keep-original"]);
@@ -551,8 +553,9 @@ fn S25a_a_non_object_original_is_rejected_for_a_source_that_keeps_originals() {
 }
 
 /// S25b: an explicit null original is rejected for a source that keeps originals; omitted is fine
+/// evidence/R62: a null original is rejected but an omitted one is accepted
 #[test]
-fn S25b_a_null_original_is_rejected_but_an_omitted_one_is_accepted() {
+fn a_null_original_is_rejected_but_an_omitted_one_is_accepted() {
     let message = || valid("https://github.com/o/p/issues/1", "hello world");
     let env = Env::new();
     env.add_source_with("project", &["--keep-original"]);

@@ -1,6 +1,6 @@
 # Plan: Cited search over one real source (GitHub)
 
-Slug: `cited-search-github`. Living spec: `docs/specs/evidence.md` (created when this plan is archived). Status: APPROVED 2026-11-04.
+Slug: `cited-search-github`. Living spec: `docs/specs/evidence.md` (created when this plan is archived). Status: ARCHIVED 2026-11-04.
 
 ## Why now
 Roadmap slice 1 is the walking skeleton for M1. Slice 2 (agents query Rastro over MCP) is the first time the owner uses Rastro as a client, and it needs this slice's core, store, plugin host and search. GitHub is a source the owner actually checks, so even slice 1 is usable on its own: cited search, plus honest gaps.
@@ -178,10 +178,10 @@ Roadmap slice 1 is the walking skeleton for M1. Slice 2 (agents query Rastro ove
 | T17 | Keep the full original when the source opts in | S25 | none | crates/rastro-plugin-sdk/, crates/rastro-connector-github/, crates/rastro-storage-sqlite/, crates/rastro-core/, crates/rastro-cli/, schema/ | agent | COMPLETE (#22) |
 | T18 | Coverage per window; rejected submissions never make a window found or empty | S26, S26a, S27, S27a | none | crates/rastro-core/, crates/rastro-storage-sqlite/, crates/rastro-cli/, schema/ | agent | COMPLETE (#23) |
 | T19 | A failed manifest check is a failed run, not an aborted sync; `not_installed` is a typed reason | S28, S29 | T18 | crates/rastro-core/, crates/rastro-plugin-sdk/, crates/rastro-cli/, docs/decisions/knowledge.md | agent | COMPLETE (#27) |
-| T20 | Test-only overrides stay out of real use: loopback-only API override, debug-only clock and host limits | S30, S31 | T17, T19 | crates/rastro-core/, crates/rastro-connector-github/, crates/rastro-cli/ | agent | TO-DO |
+| T20 | Test-only overrides stay out of real use: loopback-only API override, debug-only clock and host limits | S30, S31 | T17, T19 | crates/rastro-core/, crates/rastro-connector-github/, crates/rastro-cli/ | agent | COMPLETE (#30) |
 | T21 | The live check fails loudly when half-configured | S24a | none | crates/rastro-cli/tests/live.rs | agent | COMPLETE (#21) |
 | T22 | Review fix: an original must be a JSON object, or the submission is rejected | S25a | T17 | crates/rastro-core/, crates/rastro-cli/tests/, crates/rastro-test-connector/ | agent | COMPLETE (#24) |
 | T23 | Review fix: a rejected submission makes the window "couldn't look: protocol" whatever else failed | S27b | T18 | crates/rastro-core/, crates/rastro-cli/tests/, crates/rastro-test-connector/ | agent | COMPLETE (#26) |
 | T24 | Review fix: an explicit null original is rejected for a source that keeps originals | S25b | T22 | crates/rastro-plugin-sdk/, crates/rastro-core/, crates/rastro-cli/tests/, crates/rastro-test-connector/ | agent | COMPLETE (#25) |
 | T25 | Review fix: the rejection-precedence test compares instants, not timestamp strings | S27b | T23 | crates/rastro-cli/tests/ | agent | COMPLETE (#28) |
-| T26 | Review fix: the coverage test matches its human timestamp by instant, not by string | S21a | T25 | crates/rastro-cli/tests/ | agent | TO-DO |
+| T26 | Review fix: the coverage test matches its human timestamp by instant, not by string | S21a | T25 | crates/rastro-cli/tests/ | agent | COMPLETE (#29) |
