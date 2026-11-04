@@ -141,6 +141,8 @@ pub fn run<S: Storage>(
             |r| typed(Some(r)),
         )),
         Ok(Ok(_)) if reported.is_some() => reported,
+        // A rejected submission means the read was not what the window promises.
+        Ok(Ok(_)) if counts.rejected > 0 => Some("protocol".into()),
         Ok(Ok(_)) if coverage.is_none() => Some("protocol".into()),
         Ok(Ok(_)) => None,
     };
