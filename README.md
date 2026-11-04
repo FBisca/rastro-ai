@@ -9,5 +9,7 @@ Status: concept. Nothing is built yet.
 - North star: `docs/concept.md`
 - Language: `docs/GLOSSARY.md`
 - Decisions by scope: `docs/decisions/` (levels, learning, knowledge, vocabulary, sharing, plugins, surfaces, renderers, interruptions)
+- Architecture decisions (ADRs): `docs/adr/`
+- Roadmap: `docs/roadmap.md`
 - Parked: `docs/open-questions.md`
 - Research: `docs/research/`
