@@ -174,8 +174,11 @@ fn past_freshness_or_after_a_failed_attempt_coverage_is_unknown_with_its_evidenc
     assert!(stale.get("reason").is_none(), "{stale}");
     let human =
         String::from_utf8(env.rastro_at(&["coverage", "project"], Some(&later)).stdout).unwrap();
+    // The human line prints milliseconds, `--json` drops zero ones: same instant.
+    let checked_at: chrono::DateTime<chrono::Utc> = checked.parse().unwrap();
     assert!(
-        human.contains("unknown") && human.contains(&checked),
+        human.contains("unknown")
+            && human.contains(&checked_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
         "{human}"
     );
     // The connector goes away; the latest attempt fails inside the freshness rule.
@@ -796,4 +799,31 @@ fn S30_manifest_parse_diagnostics_name_the_position_and_never_echo_values() {
     assert!(stderr.contains("line 3"), "{stderr}");
     assert!(!stderr.contains("test-secret-token-1234"), "{stderr}");
     assert!(!stderr.contains("version ="), "{stderr}");
+}
+
+/// S21a: a last-checked time on a whole second is the same instant in human output and --json
+#[test]
+fn S21a_a_whole_second_last_checked_is_the_same_instant_in_human_and_json() {
+    let env = Env::new();
+    synced_once(&env);
+    Connection::open(env.home.path().join("data/rastro.sqlite3"))
+        .unwrap()
+        .execute(
+            "UPDATE coverage SET checked_at = '2026-11-04T10:00:00.000Z'",
+            [],
+        )
+        .unwrap();
+    let json = coverage_of(&env, Some("2026-11-04T10:05:00Z"));
+    let from_json: chrono::DateTime<chrono::Utc> =
+        json["last_checked"].as_str().unwrap().parse().unwrap();
+    let human = env.rastro_at(&["coverage", "project"], Some("2026-11-04T10:05:00Z"));
+    let human = String::from_utf8(human.stdout).unwrap();
+    let printed = human
+        .split("Last checked: ")
+        .nth(1)
+        .and_then(|rest| rest.split_whitespace().next())
+        .unwrap_or_else(|| panic!("no last checked in {human}"));
+    let from_human: chrono::DateTime<chrono::Utc> = printed.parse().unwrap();
+    assert_eq!(from_json, from_human, "{human} vs {json}");
+    assert_eq!(from_json.timestamp(), 1_793_786_400);
 }
