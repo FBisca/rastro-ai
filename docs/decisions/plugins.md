@@ -48,7 +48,8 @@ Status: agreed 2026-11-04. North star: `../concept.md` §3 and §4.
 
 ## Added 2026-11-04 (roadmap slice 3)
 Architecture: `../adr/0008-extractor-role-and-protocol.md`.
-14. **The Extractor role is live,** deterministic and out of process, on the connector's supervision. The core validates every claim: delivered evidence, trust class, span, a rule declared deterministic, and the vocabulary (§1). Hypothesis claims wait for slice 5.
-15. **An extractor is bound to sources by config,** with a default per connector (GitHub: `rastro-extractor-github`). It reads only the evidence of its bound sources; an installed but unbound one never runs; a bound but missing one reads `not_installed`.
+14. **The Extractor role is live,** deterministic and out of process, on the connector's supervision. The core validates every claim: delivered evidence, trust class, span, an extraction rule declared deterministic, and the vocabulary (§1). Hypothesis claims wait for slice 5.
+15. **An extractor is bound to sources by config,** with a default per connector (GitHub: `rastro-extractor-github`). It reads only the evidence of its bound sources; an installed but unbound one never runs; a bound but missing one reads `not_installed`. The connector's manifest names its default extractor; the source's config binds it.
+    If extraction fails after ingestion, `sync` exits non-zero, the source's coverage stays as read, its extraction state reads `failed`, and reads serve the last good projection.
 16. **One package may provide several kinds** (§4). The GitHub extractor provides `extractor` and `vocabulary`; that is no exception to `../adr/0001-rust-core-out-of-process-plugins.md`.
 17. **Extractor runs are logged** as runs (§9) with plugin id, version and counts, apart from connector coverage.

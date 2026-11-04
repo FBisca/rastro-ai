@@ -23,3 +23,5 @@ Amended 2026-11-04: a crashed run is marked `interrupted` at the next writing op
 ## Considered options
 - **gRPC or another binary RPC:** typed, but heavier for contributors writing an afternoon plugin.
 - **Bare NDJSON with no RPC envelope:** simpler, but it has no request/response pairing for the handshake and the finish.
+
+Amended 2026-11-04 by ADR 0008: `initialize` may name an extractor role (absent means connector). An extractor receives `evidence.batch` from the core (the last one marked) and sends `claim.submit`; `run.finish` carries claim counts. Protocol stays 1.x, additive. Status stays accepted.

@@ -43,15 +43,15 @@ Status: agreed 2026-11-04. North star: `../concept.md` §1. Research: `../resear
 
 ## Added 2026-11-04 (roadmap slice 3)
 Architecture: `../adr/0008-extractor-role-and-protocol.md`, `../adr/0009-claims-projection.md`.
-23. **Claims are observed only, from structured evidence.** An extractor's deterministic rules, checked by the core, are the only source. Hypotheses wait for slice 5. No claim comes from a title or body.
-24. **One exact canonical identifier is one entity,** across sources and scopes. That is not a merge (§4; merges are slice 4). No fuzzy or name matching, no bare-login lookup, no `about(me)`.
+23. **Claims are observed only, from structured evidence.** An extractor's deterministic extraction rules, checked by the core, are the only source. Hypotheses wait for slice 5. No claim and no display name comes from a title or body.
+24. **One exact canonical identifier is one entity,** across sources and scopes. That is not a merge (§4; merges are slice 4). No fuzzy or name matching, no bare-login lookup, no `about(me)`. Canonical identifiers: `github:account/<numeric id>` for accounts, with the login as an alias so a rename keeps the entity; the normalised `html_url`, fragments kept, for pull requests, issues, comments and repositories.
 25. **Known time comes from evidence; valid time is `unknown`.** A known interval opens at the `captured_at` of the observation that establishes support and closes at the `captured_at` of the one that replaces it. An item-level update time is not when a field changed, so valid time isn't fabricated (§7). "As of" queries are slice 7.
 26. **Supersession and conflict.** A claim is `observed` while any current support remains, and `superseded` once none does. `superseded_by` is set only for a scalar replacement. A missing or null field, an unreadable item or an item not returned never counts as removal. When sources disagree about the same resource and field, the newer comparable observation is current; a tie, or observations that can't be compared, leaves both `observed` with `conflicts_with` (§8). Conflict and supersession are computed from visible supports only (§14).
-27. **Bots are kept.** Bot comments stay evidence and bots get author claims; filtering is for slice 5. Authors are recorded as structured evidence. Decides open questions #6 (for this slice) and #7.
+27. **Bots are kept.** Bot comments stay evidence and bots get author claims; filtering is for slice 5. The GitHub connector records the author as structured evidence at `/user/id`, `/user/login` and `/user/type` on items and comments. A null author records nothing: no author claim, no deleted-account guess. Kind, repository and comment parent come from the canonical `html_url` by a documented deterministic extraction rule, each tied to a structured observation of that location. List evidence stays per-index (`../specs/evidence.md` R38); list removal is unsupported (§31). Decides open questions #6 (for this slice) and #7.
 28. **`rastro sync <source> --reread`** re-reads from the source's registered window start, under the normal append, unchanged and coverage rules. It can't recover past edits or items that left the selection, and an item not returned is never taken as deleted. CLI-only.
 29. **Answers state extraction state** next to coverage: `not_installed`, `behind`, `running`, `failed` or `current`. An empty `about` is not "nothing known" (§11, §20).
 
 ## Accepted limits 2026-11-04 (roadmap slice 3)
 30. **Repository rename or transfer, and URL redirects,** give a new canonical identifier, so a new entity.
 31. **List removal is unsupported.** List evidence stays per-index (`../specs/evidence.md` R38), so a removed element is not seen as removed.
-32. **Rank leakage across scopes remains** as in §21 of slice 2; a scope isn't an isolation boundary until slice 14.
+32. **Rank leakage across scopes remains** as in `surfaces.md` §21; a scope isn't an isolation boundary until slice 14.
