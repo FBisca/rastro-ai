@@ -45,6 +45,11 @@ Roadmap slice 1 is the walking skeleton for M1. Slice 2 (agents query Rastro ove
 | D20 | Migrations are named `YYYYMMDDHHmm_<name>.sql` (UTC) and tracked by name in a `schema_migrations` table, not by a sequence number | `0001.sql` numbering with `PRAGMA user_version` | Contributors on parallel branches don't collide or renumber | Owner, 2026-11-04; ADR 0002 |
 | D21 | A connector process starts with a cleared environment: only `PATH`, `HOME`, `TMPDIR`, `LANG`, `LC_*`, plus the variables its manifest lists in `permissions.env` (e.g. `GH_TOKEN`) | Inheriting the owner's whole environment | Unrelated service tokens never reach a plugin | Codex review of the plugin host; ADR 0004 |
 | D22 | S24 is satisfied by the owner's sign-off on 2026-11-04 (synced KaliosFit/app-flutter and FBisca/app-nextjs; cited hits with working links; coverage went from never looked to found), plus an ignored live test (`RASTRO_LIVE_REPO`, `RASTRO_LIVE_PHRASE`) as its re-runnable check | Leaving S24 untested | A real-repo scenario cannot run in CI, but it should stay re-runnable by the owner | Owner, 2026-11-04 |
+| D23 | Coverage is answered per window: `rastro coverage` lists each window with its state, selection and retry time; a source's answer is "found" when any complete window found evidence, "empty" only when every complete window was empty, and freshness and failures apply as in S21 | Latest window as the whole answer | A quiet re-sync must not erase what an earlier window found | Gap review, glossary "Coverage" |
+| D24 | Any rejected submission makes the run's window "couldn't look: protocol"; accepted evidence is still stored | Count only accepted items; a new `rejected` reason | An incomplete read never becomes "empty" or a complete "found" | knowledge §18 |
+| D25 | `not_installed` joins the typed reasons; a manifest that fails its check records a failed run with "couldn't look: protocol" instead of aborting the sync | Map not-installed to `protocol`; abort on a bad manifest | Both are real, distinct outcomes the owner can act on | knowledge §18, D19 |
+| D26 | Test-only overrides stay out of real use: the API base URL override is honoured only for loopback hosts; `RASTRO_NOW` and `RASTRO_HOST_*` only in debug builds | Keep them live in release; drop them | Tests need them; a stray value must not send the token elsewhere or make stale coverage look fresh | Gap review |
+| D27 | `--keep-original` stores the full original the connector read (the item or comment as returned) beside each new observation; `rastro search --json` returns it; human output is unchanged | Store a separate copy file; show it in human output | Owner's choice per source, already promised by D13 | D13, knowledge §16 |
 
 ## Scenarios
 **Registration and location**
@@ -116,6 +121,18 @@ Roadmap slice 1 is the walking skeleton for M1. Slice 2 (agents query Rastro ove
 **Owner sign-off**
 - **S24** WHEN the owner registers one of their real repos and syncs, THEN searching for a phrase they remember returns it with a working link, and `rastro coverage` is accurate.
 
+**Review of the whole slice**
+- **S24a** WHEN the live check runs under `--ignored` with only one of its variables set, or one empty, THEN it fails naming what is missing; with neither set it is skipped.
+- **S25** WHEN a source added with `--keep-original` syncs, THEN each new observation stores the full original beside its quoted span and `rastro search --json` returns it; a source without the flag stores none.
+- **S26** WHEN a source has more than one window, THEN `rastro coverage` lists each window `[from, to)` with its state, selection and, for "couldn't look", its retry time.
+- **S26a** WHEN a later sync over a quiet period finds nothing new, THEN `rastro coverage` and each search hit still answer "found" for the source, and the quiet window shows "empty" in its own row.
+- **S27** WHEN every submission in a run is rejected, THEN the window records "couldn't look: protocol", never "empty".
+- **S27a** WHEN some submissions in a run are rejected, THEN the accepted evidence is stored and the window records "couldn't look: protocol", not "found".
+- **S28** WHEN a source's connector isn't installed, THEN coverage records "couldn't look: not_installed", and `not_installed` is one of the published typed reasons.
+- **S29** WHEN a source's manifest fails its check, THEN a failed run with "couldn't look: protocol" is recorded and any other source in the same sync still runs.
+- **S30** WHEN the GitHub API base URL override names a host that isn't loopback, THEN the connector sends no request and coverage records "couldn't look: protocol".
+- **S31** WHEN a release build runs with `RASTRO_NOW` or a `RASTRO_HOST_*` override set, THEN it ignores them.
+
 ## Out of scope
 - Claims, entities, extractors, `about` and `why` (slice 3); MCP (slice 2).
 - More than one source kind; GitHub Discussions, reviews' inline comments, commits.
@@ -154,3 +171,8 @@ Roadmap slice 1 is the walking skeleton for M1. Slice 2 (agents query Rastro ove
 | T14 | CLI arguments read as OS strings, so non-UTF-8 input gets the usage error, never a panic | S23b | T13 | crates/rastro-cli/ | agent | COMPLETE (#16: converge pass, Codex re-review approve, CI green) |
 | T15 | Tests hold under load: deadlines only as tight as the scenario being tested, no flakes with several suites running at once | S9, S15a | T14 | crates/rastro-cli/tests/, crates/rastro-connector-github/tests/ | agent | COMPLETE (#17: converge pass, CI green; Codex review finding moved to T16) |
 | T16 | Each test process runs its own snapshot of the binaries, never a copy cached by size and time | S9, S15a | T15 | crates/rastro-cli/tests/, crates/rastro-connector-github/tests/ | agent | COMPLETE (#18) |
+| T17 | Keep the full original when the source opts in | S25 | none | crates/rastro-plugin-sdk/, crates/rastro-connector-github/, crates/rastro-storage-sqlite/, crates/rastro-core/, crates/rastro-cli/ | agent | TO-DO |
+| T18 | Coverage per window; rejected submissions never make a window found or empty | S26, S26a, S27, S27a | none | crates/rastro-core/, crates/rastro-storage-sqlite/, crates/rastro-cli/ | agent | TO-DO |
+| T19 | A failed manifest check is a failed run, not an aborted sync; `not_installed` is a typed reason | S28, S29 | T18 | crates/rastro-core/, crates/rastro-plugin-sdk/, crates/rastro-cli/, docs/decisions/knowledge.md | agent | TO-DO |
+| T20 | Test-only overrides stay out of real use: loopback-only API override, debug-only clock and host limits | S30, S31 | T17, T19 | crates/rastro-core/, crates/rastro-connector-github/, crates/rastro-cli/ | agent | TO-DO |
+| T21 | The live check fails loudly when half-configured | S24a | none | crates/rastro-cli/tests/live.rs | agent | TO-DO |
