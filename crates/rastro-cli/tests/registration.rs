@@ -165,3 +165,173 @@ fn S3_locations_follow_rastro_xdg_and_home() {
         }
     }
 }
+
+#[test]
+fn S1_concurrent_registrations_persist_and_reject_duplicates() {
+    let home = TempDir::new().unwrap();
+    run(&mut command(home.path()), &["source", "list"]);
+    let children: Vec<_> = (0..20)
+        .map(|i| {
+            let mut args = ADD.to_vec();
+            let name = format!("project-{i}");
+            args[2] = &name;
+            command(home.path()).args(args).spawn().unwrap()
+        })
+        .collect();
+    for mut child in children {
+        assert!(child.wait().unwrap().success());
+    }
+    let listed: Value = serde_json::from_str(&run(
+        &mut command(home.path()),
+        &["source", "list", "--json"],
+    ))
+    .unwrap();
+    assert_eq!(listed["result"]["sources"].as_array().unwrap().len(), 20);
+    let children: Vec<_> = (0..2)
+        .map(|_| command(home.path()).args(ADD).spawn().unwrap())
+        .collect();
+    let successes = children
+        .into_iter()
+        .filter_map(|mut child| child.wait().unwrap().success().then_some(()))
+        .count();
+    assert_eq!(successes, 1, "exactly one duplicate registration succeeds");
+}
+
+#[cfg(unix)]
+#[test]
+fn S3_private_files_under_permissive_umask() {
+    use std::os::unix::fs::PermissionsExt;
+    if std::env::var_os("RASTRO_TEST_PRIVATE_CHILD").is_none() {
+        let output = Command::new("sh")
+            .args(["-c", "umask 000; exec \"$@\"", "rastro-test"])
+            .arg(std::env::current_exe().unwrap())
+            .args([
+                "--exact",
+                "S3_private_files_under_permissive_umask",
+                "--nocapture",
+            ])
+            .env("RASTRO_TEST_PRIVATE_CHILD", "1")
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        return;
+    }
+    let home = TempDir::new().unwrap();
+    let mut cmd = Command::new("sh");
+    cmd.args([
+        "-c",
+        "umask 000; exec \"$@\"",
+        "rastro-test",
+        env!("CARGO_BIN_EXE_rastro"),
+    ])
+    .env("RASTRO_HOME", home.path());
+    run(&mut cmd, ADD);
+    let mode = |path: &Path| {
+        std::fs::metadata(path)
+            .unwrap_or_else(|e| panic!("{path:?}: {e}"))
+            .permissions()
+            .mode()
+            & 0o777
+    };
+    for directory in ["config", "data"] {
+        assert_eq!(mode(&home.path().join(directory)), 0o700, "{directory}");
+    }
+    for file in [
+        "data/rastro.sqlite3",
+        "config/config.toml",
+        "config/config.lock",
+    ] {
+        assert_eq!(mode(&home.path().join(file)), 0o600, "{file}");
+    }
+    let db = home.path().join("data/rastro.sqlite3");
+    let connection = rusqlite::Connection::open(&db).unwrap();
+    connection
+        .execute_batch(
+            "PRAGMA journal_mode=WAL; BEGIN IMMEDIATE; UPDATE sources SET connector='changed';",
+        )
+        .unwrap();
+    for suffix in ["-wal", "-shm"] {
+        assert_eq!(
+            mode(&db.with_file_name(format!("rastro.sqlite3{suffix}"))),
+            0o600,
+            "{suffix}"
+        );
+    }
+    connection.execute_batch("ROLLBACK; PRAGMA journal_mode=DELETE; BEGIN IMMEDIATE; UPDATE sources SET connector='changed';").unwrap();
+    assert_eq!(mode(&db.with_file_name("rastro.sqlite3-journal")), 0o600);
+    connection.execute_batch("ROLLBACK;").unwrap();
+}
+
+#[test]
+fn S1_freshness_rejects_signed_duration_and_outputs_match_schema() {
+    let home = TempDir::new().unwrap();
+    let schema: Value =
+        serde_json::from_str(include_str!("../../../schema/operations-v1.schema.json")).unwrap();
+    let validator = jsonschema::validator_for(&schema).unwrap();
+    let output = command(home.path())
+        .args(ADD)
+        .args(["--freshness-rule", "+1h", "--json"])
+        .output()
+        .unwrap();
+    assert!(!output.status.success(), "signed duration must be rejected");
+    validator
+        .validate(&serde_json::from_slice::<Value>(&output.stdout).unwrap())
+        .unwrap();
+    for args in [
+        [ADD, &["--freshness-rule", "2h", "--json"]].concat(),
+        vec!["source", "list", "--json"],
+        vec!["coverage", "project", "--json"],
+    ] {
+        let value: Value = serde_json::from_str(&run(&mut command(home.path()), &args)).unwrap();
+        validator.validate(&value).unwrap();
+    }
+}
+
+#[test]
+fn S3_empty_and_relative_location_overrides() {
+    for (rastro, xdg, succeeds) in [
+        (Some(""), Some(""), true),
+        (None, Some("relative"), true),
+        (Some("relative"), None, false),
+    ] {
+        let root = TempDir::new().unwrap();
+        let home = root.path().join("home");
+        let mut cmd = Command::new(env!("CARGO_BIN_EXE_rastro"));
+        cmd.current_dir(root.path())
+            .env("HOME", &home)
+            .env_remove("RASTRO_HOME")
+            .env_remove("XDG_DATA_HOME")
+            .env_remove("XDG_CONFIG_HOME");
+        if let Some(value) = rastro {
+            cmd.env("RASTRO_HOME", value);
+        }
+        if let Some(value) = xdg {
+            cmd.env("XDG_DATA_HOME", value)
+                .env("XDG_CONFIG_HOME", value);
+        }
+        let output = cmd.args(ADD).arg("--json").output().unwrap();
+        assert_eq!(
+            output.status.success(),
+            succeeds,
+            "rastro={rastro:?}, xdg={xdg:?}"
+        );
+        if succeeds {
+            assert!(home.join(".local/share/rastro/rastro.sqlite3").is_file());
+            assert!(home.join(".config/rastro/config.toml").is_file());
+        } else {
+            let json: Value = serde_json::from_slice(&output.stdout).unwrap();
+            assert!(
+                json["error"]
+                    .as_str()
+                    .unwrap()
+                    .contains("RASTRO_HOME must be absolute")
+            );
+        }
+        assert!(!root.path().join("relative").exists());
+    }
+}
