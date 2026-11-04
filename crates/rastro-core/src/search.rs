@@ -40,26 +40,26 @@ pub(crate) fn search_query(text: &str) -> Option<String> {
     (!terms.is_empty()).then(|| terms.join(" "))
 }
 
-/// Where in the field a hit matched: a window of at most [`EXCERPT_BYTES`] bytes.
+/// Where in the span a hit matched: a window of at most [`EXCERPT_BYTES`] bytes.
 #[derive(Debug, JsonSchema, Serialize)]
 pub struct Match {
-    /// Byte offset of the excerpt in the field, in the same origin as the hit's `start`.
+    /// Byte offset of the excerpt in the quote's span, in the same origin as the hit's `start`.
     pub start: u64,
     /// Byte offset just past the excerpt, in the same origin as the hit's `end`.
     pub end: u64,
     /// The excerpt, as stored; never rewritten.
     pub text: String,
-    /// Text of the field precedes the excerpt.
+    /// Text of the span precedes the excerpt.
     pub clipped_before: bool,
-    /// Text of the field follows the excerpt.
+    /// Text of the span follows the excerpt.
     pub clipped_after: bool,
-    /// False when the matching word couldn't be found; the excerpt then starts at the field's start.
+    /// False when the matching word couldn't be found; the excerpt then starts at the span's start.
     pub located: bool,
 }
 
-/// The excerpt of `quote` (the whole field, starting at byte `origin`) around the first match,
+/// The excerpt of `quote` (the whole span, starting at byte `origin`) around the first match,
 /// `matched` being its byte range in `quote`. Without a usable range the excerpt is the
-/// field's start, `located: false`.
+/// span's start, `located: false`.
 pub fn excerpt(quote: &str, matched: Option<(usize, usize)>, origin: u64) -> Match {
     let len = quote.len();
     let located = matched.filter(|&(s, e)| {
@@ -67,7 +67,7 @@ pub fn excerpt(quote: &str, matched: Option<(usize, usize)>, origin: u64) -> Mat
     });
     let (start, end) = match located {
         Some((s, e)) if e - s < EXCERPT_BYTES => {
-            // Equal room either side of the match, moved inward at the field's ends.
+            // Equal room either side of the match, moved inward at the span's ends.
             let room = EXCERPT_BYTES - (e - s);
             let start = s.saturating_sub(room / 2);
             let end = (start + EXCERPT_BYTES).min(len);
@@ -106,13 +106,16 @@ pub struct SearchResult {
     pub id: i64,
     pub source: String,
     pub scope: crate::Scope,
+    #[schemars(length(min = 1))]
     pub location: String,
+    #[schemars(length(min = 1))]
     pub field: String,
     pub start: u64,
     pub end: u64,
     #[serde(rename = "match")]
     pub matched: Match,
-    /// The whole field; only when the search asked for `full`.
+    #[schemars(length(min = 1))]
+    /// The whole span; only when the search asked for `full`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quote: Option<String>,
     pub trust_class: TrustClass,

@@ -489,13 +489,16 @@ impl Snapshot for View<'_> {
     fn search(&self, query: &str, limit: usize, history: bool) -> Result<Vec<Hit>> {
         let mut statement = self.0.prepare(
             "SELECT e.id, e.source, e.scope, e.location, e.field, e.start as i64, e.end as i64, e.quote,
-             e.trust_class, e.captured_at, e.source_updated_at, e.original,
-             highlight(evidence_fts, 0, char(1), char(2))
+             e.trust_class, e.captured_at, e.source_updated_at, e.original
              FROM evidence_fts JOIN evidence e ON e.id = evidence_fts.rowid
              WHERE evidence_fts MATCH ?1
              AND (?3 OR e.id = (SELECT max(l.id) FROM evidence l WHERE l.source = e.source
                   AND l.scope = e.scope AND l.location = e.location AND l.field = e.field))
              ORDER BY bm25(evidence_fts), e.id LIMIT ?2",
+        )?;
+        let mut highlight = self.0.prepare(
+            "SELECT highlight(evidence_fts, 0, char(1), char(2)) FROM evidence_fts
+             WHERE evidence_fts MATCH ?1 AND rowid = ?2",
         )?;
         let rows = statement.query_map(params![query, limit as i64, history], |row| {
             Ok((
@@ -510,7 +513,6 @@ impl Snapshot for View<'_> {
                 [row.get::<_, String>(7)?, row.get(8)?, row.get(9)?],
                 row.get::<_, Option<String>>(10)?,
                 row.get::<_, Option<String>>(11)?,
-                row.get::<_, String>(12)?,
             ))
         })?;
         rows.map(|row| {
@@ -521,8 +523,9 @@ impl Snapshot for View<'_> {
                 [quote, trust, captured],
                 updated,
                 original,
-                marked,
             ) = row?;
+            // Only the rows kept pay for highlighting (it re-tokenizes the quote).
+            let marked: String = highlight.query_row(params![query, id], |row| row.get(0))?;
             let matched = first_match(&quote, &marked);
             Ok(Hit {
                 id,

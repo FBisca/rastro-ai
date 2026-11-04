@@ -133,7 +133,7 @@ pub struct SearchRequest {
     #[serde(default)]
     pub history: bool,
     /// Most hits to return, from 1 to 50; the result says when more matched.
-    #[arg(long, default_value_t = Limit::default(), value_parser = parse_limit)]
+    #[arg(long, default_value_t = Limit::default(), value_parser = parse_limit, allow_hyphen_values = true)]
     #[serde(default)]
     pub limit: Limit,
     /// Return the whole quote and the original on each hit, not only the excerpt.
