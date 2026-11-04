@@ -567,20 +567,49 @@ fn S19a_a_pending_or_unknown_migration_is_refused_with_a_typed_error() {
     assert!(matches!(refusal(&env), Refusal::UnknownMigration(n) if n == "299912312359_future"));
 }
 
-/// surfaces/S18: a reader holding sync.lock when a sync starts doesn't leave a crashed run behind
+/// surfaces/S18a: a sync that takes sync.lock marks a never-finished run interrupted before its own,
+/// even when a reader blocked the startup recovery
 #[test]
-fn S18_a_sync_starting_beside_a_reader_still_recovers_the_crashed_run_before_its_own() {
+fn S18a_a_sync_starting_beside_a_reader_still_recovers_the_crashed_run_before_its_own() {
     let env = synced();
     unfinished_run(&env);
     let holder = fs::File::open(env.home.path().join("data/sync.lock")).unwrap();
     holder.lock_shared().unwrap();
-    // Let go after the writing open has given up waiting, so the sync can take the lock.
-    let release = std::thread::spawn(move || {
-        std::thread::sleep(Duration::from_millis(1500));
-        drop(holder);
-    });
-    let output = env.sync("project", &[("https://x/3", "third body")], 0);
-    release.join().unwrap();
+    // The sync's open holds config.lock until it has given up waiting on us, so held-then-free
+    // means the open is over and the sync is on its way to taking sync.lock. Only then let go.
+    env.script(&sync_script(&[("https://x/3", "third body")], 0));
+    let child = env
+        .command(&["sync", "project"])
+        .env("RASTRO_HOST_SILENCE_MS", "15000")
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let config_lock = fs::File::options()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .open(env.home.path().join("config/config.lock"))
+        .unwrap();
+    let held = |file: &fs::File| match file.try_lock() {
+        Ok(()) => {
+            file.unlock().unwrap();
+            false
+        }
+        Err(_) => true,
+    };
+    let deadline = std::time::Instant::now() + Duration::from_secs(30);
+    while !held(&config_lock) {
+        assert!(std::time::Instant::now() < deadline, "open never started");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    while held(&config_lock) {
+        assert!(std::time::Instant::now() < deadline, "open never ended");
+        std::thread::sleep(Duration::from_millis(1));
+    }
+    drop(holder);
+    let output = child.wait_with_output().unwrap();
     assert!(output.status.success());
     let runs = |env: &Env| -> Vec<String> {
         env.db()
