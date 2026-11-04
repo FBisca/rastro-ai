@@ -855,7 +855,7 @@ fn found_then_quiet(env: &Env, quiet: usize) {
 
 /// evidence/R63: a source with more than ten windows lists its ten newest, newest first
 #[test]
-fn S11_a_source_with_more_than_ten_windows_lists_the_ten_newest_newest_first() {
+fn a_source_with_more_than_ten_windows_lists_the_ten_newest_newest_first() {
     let env = Env::new();
     found_then_quiet(&env, 11);
     let source = coverage_of(&env, None);
@@ -885,7 +885,7 @@ fn S11_a_source_with_more_than_ten_windows_lists_the_ten_newest_newest_first() {
 
 /// evidence/R64: the only window that found evidence being outside the newest ten keeps "found"
 #[test]
-fn S12_the_only_found_window_older_than_the_newest_ten_still_answers_found() {
+fn the_only_found_window_older_than_the_newest_ten_still_answers_found() {
     let env = Env::new();
     found_then_quiet(&env, 11);
     let source = coverage_of(&env, None);
@@ -922,9 +922,9 @@ fn all_coverage(env: &Env, now: Option<&str>) -> Vec<Value> {
     value["result"]["coverage"].as_array().unwrap().clone()
 }
 
-/// knowledge/21: a removed source's hits and entry carry its stored coverage, registered false
+/// surfaces/R7: a removed source's hits and entry carry its stored coverage, registered false
 #[test]
-fn S13_a_removed_source_keeps_its_stored_coverage_marked_unregistered_until_it_goes_unknown() {
+fn a_removed_source_keeps_its_stored_coverage_marked_unregistered_until_it_goes_unknown() {
     let env = Env::new();
     synced_once(&env);
     edit_sources(&env, |sources| sources.clear());
@@ -957,9 +957,9 @@ fn S13_a_removed_source_keeps_its_stored_coverage_marked_unregistered_until_it_g
     );
 }
 
-/// knowledge/21: a removed source that never synced is listed as never looked, unregistered
+/// surfaces/R8: a removed source that never synced is listed as never looked, unregistered
 #[test]
-fn S13a_a_removed_source_that_never_synced_is_never_looked_and_unregistered() {
+fn a_removed_source_that_never_synced_is_never_looked_and_unregistered() {
     let env = Env::new();
     env.add_source("project");
     env.add_source("other");
@@ -981,9 +981,9 @@ fn S13a_a_removed_source_that_never_synced_is_never_looked_and_unregistered() {
     assert_eq!(by_name("project")["windows_total"], 0);
 }
 
-/// knowledge/21: a changed scope leaves the old pair's coverage on its hits, unregistered
+/// surfaces/R9: a changed scope leaves the old pair's coverage on its hits, unregistered
 #[test]
-fn S13b_hits_under_the_old_scope_carry_the_old_pairs_coverage_and_new_ones_the_new() {
+fn hits_under_the_old_scope_carry_the_old_pairs_coverage_and_new_ones_the_new() {
     let env = Env::with_manifest(|manifest| {
         manifest["permissions"]["scopes"] = json_scopes();
     });

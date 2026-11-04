@@ -1,4 +1,4 @@
-//! Bounded search on the read-only path (plan agents-can-ask S7b, S24).
+//! Bounded search on the read-only path.
 #![allow(non_snake_case)]
 mod support;
 use anyhow::Result;
@@ -75,9 +75,9 @@ fn hit(id: i64, quote: &str, matched: Option<(usize, usize)>) -> Hit {
     }
 }
 
-/// evidence/R49 (amended): when storage can't place the match, the excerpt starts at the field start
+/// evidence/R49: when storage can't place the match, the excerpt starts at the field start
 #[test]
-fn S7b_a_hit_without_a_located_match_excerpts_from_the_start() {
+fn a_hit_without_a_located_match_excerpts_from_the_start() {
     let dir = TempDir::new().unwrap();
     let locations = Locations {
         data: dir.path().join("data"),
@@ -102,9 +102,9 @@ fn S7b_a_hit_without_a_located_match_excerpts_from_the_start() {
     assert!(value["results"][0].get("quote").is_none());
 }
 
-/// surfaces/S24: the read-only path returns instruction-like text verbatim and writes nothing
+/// surfaces/R24: the read-only path returns instruction-like text verbatim and writes nothing
 #[test]
-fn S24_the_read_only_search_returns_injected_text_verbatim_and_writes_nothing() {
+fn the_read_only_search_returns_injected_text_verbatim_and_writes_nothing() {
     let home = TempDir::new().unwrap();
     let plugin = home.path().join("dev-plugins/test");
     fs::create_dir_all(&plugin).unwrap();
@@ -184,9 +184,9 @@ fn S24_the_read_only_search_returns_injected_text_verbatim_and_writes_nothing() 
     assert_eq!(fs::read(&wal).unwrap_or_default(), kept);
 }
 
-/// evidence/R49 (amended): offsets are in the span's origin, not the quote's
+/// evidence/R49: offsets are in the span's origin, not the quote's
 #[test]
-fn S7_excerpt_offsets_are_in_the_spans_origin() {
+fn excerpt_offsets_are_in_the_spans_origin() {
     let dir = TempDir::new().unwrap();
     let locations = Locations {
         data: dir.path().join("data"),

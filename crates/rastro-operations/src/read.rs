@@ -39,9 +39,9 @@ mod tests {
         }
     }
 
-    /// S2: catalog requests dispatch to supported reader operations or reject explicitly.
+    /// surfaces/R2: catalog requests dispatch to supported reader operations or reject explicitly.
     #[test]
-    fn S2_read_dispatch_accepts_only_supported_catalog_operations() {
+    fn read_dispatch_accepts_only_supported_catalog_operations() {
         // A missing home exercises the real Reader without files or a storage dependency.
         let home = std::env::temp_dir().join(format!(
             "rastro-read-dispatch-{}-{}",

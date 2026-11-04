@@ -156,8 +156,9 @@ pub fn run(scopes: Vec<String>) -> Result<()> {
 mod tests {
     use super::*;
 
+    /// surfaces/R23: bounded cuts multi byte text to the limit on a character boundary
     #[test]
-    fn S23_bounded_cuts_multi_byte_text_to_the_limit_on_a_character_boundary() {
+    fn bounded_cuts_multi_byte_text_to_the_limit_on_a_character_boundary() {
         // 3-byte characters, with a prefix that puts the limit inside one.
         let message = format!("e{}", "€".repeat(2000));
         let cut = bounded(&message);

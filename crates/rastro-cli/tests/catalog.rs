@@ -13,9 +13,9 @@ fn run(home: &std::path::Path, args: &[&str]) -> std::process::Output {
         .unwrap()
 }
 
-/// S2: `--help` lists exactly the inputs, defaults and descriptions the catalog defines
+/// surfaces/R2: `--help` lists exactly the inputs, defaults and descriptions the catalog defines
 #[test]
-fn S2_help_lists_exactly_what_the_catalog_defines() {
+fn help_lists_exactly_what_the_catalog_defines() {
     let home = tempfile::tempdir().unwrap();
     for name in ["search", "coverage"] {
         let spec = catalog::find(name).unwrap();
@@ -95,9 +95,9 @@ fn S2_help_lists_exactly_what_the_catalog_defines() {
     }
 }
 
-/// S5: every command's `--json` envelope is version 2, valid against the v2 schema; v1 is frozen
+/// surfaces/R6: every command's `--json` envelope is version 2, valid against the v2 schema; v1 is frozen
 #[test]
-fn S5_every_envelope_is_version_2_and_schema_valid() {
+fn every_envelope_is_version_2_and_schema_valid() {
     let schema: Value =
         serde_json::from_str(include_str!("../../../schema/operations-v2.schema.json")).unwrap();
     let validator = jsonschema::validator_for(&schema).unwrap();

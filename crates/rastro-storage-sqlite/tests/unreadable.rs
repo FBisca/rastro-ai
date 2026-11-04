@@ -3,9 +3,9 @@ use rastro_core::{ReadStorage, Refusal};
 use rastro_storage_sqlite::SqliteStorage;
 use std::{fs, os::unix::fs::PermissionsExt};
 
-/// surfaces/S19: a store that can't be read without writing is a typed refusal
+/// surfaces/R18: a store that can't be read without writing is a typed refusal
 #[test]
-fn S19_an_unreadable_store_is_a_typed_refusal() {
+fn an_unreadable_store_is_a_typed_refusal() {
     let directory = tempfile::tempdir().unwrap();
     let path = directory.path().join("rastro.sqlite3");
     drop(SqliteStorage::open(&path).unwrap());

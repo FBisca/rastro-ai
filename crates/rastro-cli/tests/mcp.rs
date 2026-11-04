@@ -269,9 +269,9 @@ fn tool<'a>(tools: &'a [Value], name: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("no tool {name}"))
 }
 
-/// S2a: each tool's name, description and input schema equal the catalog entry
+/// surfaces/R3: each tool's name, description and input schema equal the catalog entry
 #[test]
-fn S2a_listed_tools_equal_the_catalog_entries() {
+fn listed_tools_equal_the_catalog_entries() {
     let env = Env::new();
     let mut session = env.start();
     session.initialize();
@@ -285,9 +285,9 @@ fn S2a_listed_tools_equal_the_catalog_entries() {
     }
 }
 
-/// S3: exactly search and coverage, read-only; any other tool is a JSON-RPC error and runs nothing
+/// surfaces/R4: exactly search and coverage, read-only; any other tool is a JSON-RPC error and runs nothing
 #[test]
-fn S3_only_search_and_coverage_are_listed_and_other_tools_are_protocol_errors() {
+fn only_search_and_coverage_are_listed_and_other_tools_are_protocol_errors() {
     let env = seeded();
     let config = env.home.path().join("config/config.toml");
     let config_before = fs::read(&config).unwrap();
@@ -337,9 +337,9 @@ fn last_migration(db: &Connection) -> String {
         .unwrap()
 }
 
-/// S15: launch applies the pending migration, recovers the crashed run and switches on WAL
+/// surfaces/R12: launch applies the pending migration, recovers the crashed run and switches on WAL
 #[test]
-fn S15_launch_migrates_recovers_and_turns_on_wal_before_the_first_answer() {
+fn launch_migrates_recovers_and_turns_on_wal_before_the_first_answer() {
     let env = Env::new();
     env.add_source("project");
     let db = env.db();
@@ -384,9 +384,9 @@ fn S15_launch_migrates_recovers_and_turns_on_wal_before_the_first_answer() {
     assert_eq!(coverage["reason"], "interrupted", "{answer}");
 }
 
-/// S15a: an unknown newer migration stops the launch: non-zero, refusal on stderr, stdout empty
+/// surfaces/R13: an unknown newer migration stops the launch: non-zero, refusal on stderr, stdout empty
 #[test]
-fn S15a_an_unknown_newer_migration_refuses_to_start() {
+fn an_unknown_newer_migration_refuses_to_start() {
     let env = Env::new();
     env.add_source("project");
     env.db()
@@ -402,9 +402,9 @@ fn S15a_an_unknown_newer_migration_refuses_to_start() {
     assert!(stderr.contains("299912312359_future"), "{stderr}");
 }
 
-/// S15a, stdout half: nothing reaches stdout
+/// surfaces/R13: nothing reaches stdout
 #[test]
-fn S15a_the_refused_launch_prints_nothing_on_stdout() {
+fn the_refused_launch_prints_nothing_on_stdout() {
     let env = Env::new();
     env.add_source("project");
     env.db()
@@ -420,9 +420,9 @@ fn S15a_the_refused_launch_prints_nothing_on_stdout() {
     assert!(stderr.contains("299912312359_future"), "{stderr}");
 }
 
-/// S22: an operation error is a tool result with the error envelope; bad arguments are a protocol error
+/// surfaces/R22: an operation error is a tool result with the error envelope; bad arguments are a protocol error
 #[test]
-fn S22_operation_errors_are_tool_results_and_bad_arguments_are_protocol_errors() {
+fn operation_errors_are_tool_results_and_bad_arguments_are_protocol_errors() {
     let env = seeded();
     let mut session = env.start();
     session.initialize();
@@ -456,10 +456,10 @@ fn seeded() -> Env {
     env
 }
 
-/// S20: every stdout line is JSON-RPC; results carry structuredContent and the same text;
+/// surfaces/R20: every stdout line is JSON-RPC; results carry structuredContent and the same text;
 /// descriptions label results as data
 #[test]
-fn S20_a_scripted_client_gets_protocol_only_stdout_and_matching_structured_and_text_results() {
+fn a_scripted_client_gets_protocol_only_stdout_and_matching_structured_and_text_results() {
     let env = seeded();
     let mut session = env.start();
     let init = session.initialize();
@@ -499,9 +499,9 @@ fn S20_a_scripted_client_gets_protocol_only_stdout_and_matching_structured_and_t
     assert!(status.success());
 }
 
-/// S20 (second half): every line the server printed is a JSON-RPC 2.0 message
+/// surfaces/R20: every line the server printed is a JSON-RPC 2.0 message
 #[test]
-fn S20_every_stdout_line_is_a_json_rpc_message() {
+fn every_stdout_line_is_a_json_rpc_message() {
     let env = seeded();
     let mut session = env.start();
     session.initialize();
@@ -523,9 +523,9 @@ fn S20_every_stdout_line_is_a_json_rpc_message() {
     }
 }
 
-/// S21: an unsupported revision gets the pinned one back, and the session proceeds
+/// surfaces/R21: an unsupported revision gets the pinned one back, and the session proceeds
 #[test]
-fn S21_an_unsupported_revision_is_answered_with_the_pinned_revision() {
+fn an_unsupported_revision_is_answered_with_the_pinned_revision() {
     let env = seeded();
     for asked in ["2025-06-18", "2024-11-05", "1999-01-01", "2099-01-01"] {
         let mut session = env.start();
@@ -538,9 +538,9 @@ fn S21_an_unsupported_revision_is_answered_with_the_pinned_revision() {
     }
 }
 
-/// S23: closing stdin ends the server with 0, no child left; stderr stays small
+/// surfaces/R23: closing stdin ends the server with 0, no child left; stderr stays small
 #[test]
-fn S23_closing_stdin_exits_zero_and_diagnostics_stay_on_stderr_within_a_bound() {
+fn closing_stdin_exits_zero_and_diagnostics_stay_on_stderr_within_a_bound() {
     let env = seeded();
     let mut session = env.start();
     session.initialize();
@@ -572,9 +572,9 @@ fn S23_closing_stdin_exits_zero_and_diagnostics_stay_on_stderr_within_a_bound() 
     assert!(left.is_empty(), "left behind: {left:?}");
 }
 
-/// S21: a client that starts with `server/discover` (Claude Code's v2 flow) keeps its session
+/// surfaces/R21: a client that starts with `server/discover` (Claude Code's v2 flow) keeps its session
 #[test]
-fn S21_server_discover_first_does_not_end_the_session_and_initialize_then_works() {
+fn server_discover_first_does_not_end_the_session_and_initialize_then_works() {
     let env = seeded();
     let mut session = env.start();
     let discovered = session.request("server/discover", json!({}));
@@ -588,9 +588,9 @@ fn S21_server_discover_first_does_not_end_the_session_and_initialize_then_works(
     assert_eq!(session.list_tools().len(), 2);
 }
 
-/// S25: two clients with different clientInfo get identical results; no name is stored
+/// surfaces/R25: two clients with different clientInfo get identical results; no name is stored
 #[test]
-fn S25_client_info_changes_no_result_and_is_stored_nowhere() {
+fn client_info_changes_no_result_and_is_stored_nowhere() {
     let env = seeded();
     let mut answers = Vec::new();
     for client in ["client-alpha-7f3", "client-beta-91c"] {
@@ -654,9 +654,9 @@ fn parity_env() -> Env {
     env
 }
 
-/// S4: the same request as `rastro … --json` and as a tool call gives equal envelopes
+/// surfaces/R5: the same request as `rastro … --json` and as a tool call gives equal envelopes
 #[test]
-fn S4_a_cli_envelope_equals_the_tool_result_for_the_same_request() {
+fn a_cli_envelope_equals_the_tool_result_for_the_same_request() {
     let env = parity_env();
     let mut session = env.start();
     session.initialize();
@@ -741,9 +741,9 @@ fn S4_a_cli_envelope_equals_the_tool_result_for_the_same_request() {
     );
 }
 
-/// S9a (MCP half): a limit outside 1..=50, or not a whole number, is invalid params
+/// evidence/R49: a limit outside 1..=50, or not a whole number, is invalid params
 #[test]
-fn S9a_a_bad_limit_is_a_protocol_error_over_mcp() {
+fn a_bad_limit_is_a_protocol_error_over_mcp() {
     let env = seeded();
     let mut session = env.start();
     session.initialize();
@@ -780,9 +780,9 @@ fn S9a_a_bad_limit_is_a_protocol_error_over_mcp() {
     }
 }
 
-/// S19a: a migration that appears after the server started is a tool error, and it keeps serving
+/// surfaces/R19: a migration that appears after the server started is a tool error, and it keeps serving
 #[test]
-fn S19a_a_pending_or_unknown_migration_after_start_is_a_tool_error_and_the_server_keeps_serving() {
+fn a_pending_or_unknown_migration_after_start_is_a_tool_error_and_the_server_keeps_serving() {
     let env = seeded();
     let mut session = env.start();
     session.initialize();
@@ -828,9 +828,9 @@ fn S19a_a_pending_or_unknown_migration_after_start_is_a_tool_error_and_the_serve
     assert!(status.success());
 }
 
-/// S22: a store that can't be read (no write access to create the WAL side files) is a tool error
+/// surfaces/R22: a store that can't be read (no write access to create the WAL side files) is a tool error
 #[test]
-fn S22_an_unavailable_store_is_a_tool_error_and_the_server_keeps_serving() {
+fn an_unavailable_store_is_a_tool_error_and_the_server_keeps_serving() {
     let env = seeded();
     let mut session = env.start();
     session.initialize();
@@ -927,10 +927,10 @@ fn tables(env: &Env) -> Vec<(String, Vec<Vec<String>>)> {
         .collect()
 }
 
-/// S24 (MCP half): `full` over the injection fixture returns the body verbatim, untrusted;
+/// surfaces/R24: `full` over the injection fixture returns the body verbatim, untrusted;
 /// the server runs no process and writes nothing
 #[test]
-fn S24_an_injection_body_comes_back_verbatim_and_nothing_runs_or_changes() {
+fn an_injection_body_comes_back_verbatim_and_nothing_runs_or_changes() {
     let env = Env::new();
     env.ok(&[
         "source",
@@ -1008,14 +1008,14 @@ fn S24_an_injection_body_comes_back_verbatim_and_nothing_runs_or_changes() {
     assert!(left.is_empty(), "left behind: {left:?}");
 }
 
-/// S26: the scripted half of the owner's check, against the owner's real data. Run by hand:
+/// surfaces/R26: the scripted half of the owner's check, against the owner's real data. Run by hand:
 ///
 /// ```text
 /// RASTRO_MCP_LIVE_PHRASE="a phrase your synced sources contain" \
 ///   [RASTRO_MCP_LIVE_NO_MATCH="a phrase nothing contains"] \
 ///   [RASTRO_MCP_LIVE_STALE_SOURCE="a source whose freshness rule has run out"] \
 ///   [RASTRO_HOME=/your/rastro/home] \
-///   cargo test -p rastro-cli --test mcp S26 -- --ignored --nocapture
+///   cargo test -p rastro-cli --test mcp a_scripted_client_gets_a_cited_answer_a_true_no_match_and_stale_reads_unknown -- --ignored --nocapture
 /// ```
 ///
 /// It starts `rastro mcp` with your environment (so `RASTRO_HOME` is yours), asks for a cited
@@ -1029,7 +1029,7 @@ fn S24_an_injection_body_comes_back_verbatim_and_nothing_runs_or_changes() {
 /// owner's own sign-off.
 #[test]
 #[ignore = "reads the owner's real RASTRO_HOME; see the doc comment"]
-fn S26_a_scripted_client_gets_a_cited_answer_a_true_no_match_and_stale_reads_unknown() {
+fn a_scripted_client_gets_a_cited_answer_a_true_no_match_and_stale_reads_unknown() {
     let phrase = std::env::var("RASTRO_MCP_LIVE_PHRASE")
         .expect("set RASTRO_MCP_LIVE_PHRASE to a phrase your synced sources contain");
     let no_match = std::env::var("RASTRO_MCP_LIVE_NO_MATCH")
@@ -1111,9 +1111,9 @@ fn S26_a_scripted_client_gets_a_cited_answer_a_true_no_match_and_stale_reads_unk
     assert!(status.success());
 }
 
-/// S14: excluded matches cannot consume the limit or leak through coverage.
+/// surfaces/R10: excluded matches cannot consume the limit or leak through coverage.
 #[test]
-fn S14_personal_search_filters_before_the_limit_and_hides_other_coverage() {
+fn personal_search_filters_before_the_limit_and_hides_other_coverage() {
     let env = Env::new();
     env.add_scoped_source("private-office", "work");
     let locations: Vec<_> = (0..60).map(|n| format!("https://office/{n}")).collect();
@@ -1167,9 +1167,9 @@ fn S14_personal_search_filters_before_the_limit_and_hides_other_coverage() {
     }
 }
 
-/// S14: filter configured and historical pairs before answering coverage or resolving names.
+/// surfaces/R10: filter configured and historical pairs before answering coverage or resolving names.
 #[test]
-fn S14_coverage_filters_pairs_counts_reasons_and_hidden_only_names() {
+fn coverage_filters_pairs_counts_reasons_and_hidden_only_names() {
     let env = seeded();
     env.add_scoped_source("private-office", "work");
     env.sync("private-office", &[("https://office/1", "body")]);
@@ -1237,9 +1237,9 @@ fn S14_coverage_filters_pairs_counts_reasons_and_hidden_only_names() {
     assert_eq!(result["truncated"], false);
 }
 
-/// S14/S14a: launch scopes form a union; omission allows every scope.
+/// surfaces/R11: launch scopes form a union; omission allows every scope.
 #[test]
-fn S14a_no_flag_allows_every_scope_and_repeatable_flags_allow_the_union() {
+fn no_flag_allows_every_scope_and_repeatable_flags_allow_the_union() {
     let env = seeded();
     env.add_scoped_source("office", "work");
     env.sync("office", &[("https://office/1", "body")]);
@@ -1272,9 +1272,9 @@ fn S14a_no_flag_allows_every_scope_and_repeatable_flags_allow_the_union() {
     }
 }
 
-/// S14a: scope is launch configuration, never a tool argument or a CLI read flag.
+/// surfaces/R11: scope is launch configuration, never a tool argument or a CLI read flag.
 #[test]
-fn S14a_scope_tool_arguments_return_exact_invalid_params_code() {
+fn scope_tool_arguments_return_exact_invalid_params_code() {
     let env = seeded();
     for args in [vec!["mcp"], vec!["mcp", "--scope", "personal"]] {
         let mut session = Session::start(env.command(&args));
@@ -1298,9 +1298,9 @@ fn S14a_scope_tool_arguments_return_exact_invalid_params_code() {
     }
 }
 
-/// S14: a hidden invalid source cannot leak through scoped config diagnostics.
+/// surfaces/R10: a hidden invalid source cannot leak through scoped config diagnostics.
 #[test]
-fn S14_scoped_config_errors_hide_names_in_both_tools() {
+fn scoped_config_errors_hide_names_in_both_tools() {
     let env = seeded();
     env.add_scoped_source("office-secret", "work");
     let mut scoped = Session::start(env.command(&["mcp", "--scope", "personal"]));
@@ -1330,9 +1330,9 @@ fn S14_scoped_config_errors_hide_names_in_both_tools() {
     assert!(String::from_utf8_lossy(&cli.stderr).contains("duplicate source: office-secret"));
 }
 
-/// S14: only the allowed pair of a source with old and current scopes covers its hits.
+/// surfaces/R10: only the allowed pair of a source with old and current scopes covers its hits.
 #[test]
-fn S14_search_pairs_each_hit_with_only_its_allowed_scope_coverage() {
+fn search_pairs_each_hit_with_only_its_allowed_scope_coverage() {
     let env = seeded();
     let path = env.home.path().join("config/config.toml");
     let mut config: toml::Table = fs::read_to_string(&path).unwrap().parse().unwrap();
@@ -1383,9 +1383,9 @@ fn S14_search_pairs_each_hit_with_only_its_allowed_scope_coverage() {
     }
 }
 
-/// S14: hidden unfinished runs never add interrupted windows to scoped coverage.
+/// surfaces/R10: hidden unfinished runs never add interrupted windows to scoped coverage.
 #[test]
-fn S14_hidden_unfinished_runs_are_neither_loaded_nor_counted() {
+fn hidden_unfinished_runs_are_neither_loaded_nor_counted() {
     let env = seeded();
     env.add_scoped_source("office-secret", "work");
     let mut scoped = Session::start(env.command(&["mcp", "--scope", "personal"]));

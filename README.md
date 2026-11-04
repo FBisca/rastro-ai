@@ -20,7 +20,7 @@ Status: the evidence slice is built (register sources, sync them, search with ci
 
 `rastro mcp` serves two read-only tools, `search` and `coverage`, to an agent tool over stdio.
 
-1. Install: `cargo install --path crates/rastro-cli` (puts `rastro` on your `PATH`). A client launched from a GUI may not see your shell `PATH`; give it the absolute path to `rastro` instead.
+1. From an up-to-date `main` checkout, install: `cargo install --locked --path crates/rastro-cli`. Without `--locked`, Cargo re-resolves dependencies; an old branch may lack `rastro mcp`. Ensure `~/.cargo/bin` is on `PATH`, or give the client the absolute path (usually `~/.cargo/bin/rastro`); GUI clients may not inherit your shell `PATH`.
 2. Register and sync the sources to ask about: `rastro source add …`, then `rastro sync`. Without evidence the tools answer "never looked".
 3. Add the server to your agent tool:
    - Claude Code: `claude mcp add rastro -- rastro mcp` (add `--scope user` to have it in every project).
