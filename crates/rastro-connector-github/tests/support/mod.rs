@@ -147,6 +147,7 @@ pub fn issue(number: u64, title: &str, body: Option<&str>, pull: bool) -> Value 
         "number": number, "title": title, "body": body, "state": "open",
         "html_url": format!("https://github.com/o/p/{}/{number}", if pull { "pull" } else { "issues" }),
         "updated_at": days_ago(1),
+        "user": {"id": 123456789012345_u64, "login": "me", "type": "User"},
         "labels": [{"name": "bug"}], "assignees": [{"login": "me"}],
     });
     if pull {

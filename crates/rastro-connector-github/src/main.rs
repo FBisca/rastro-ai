@@ -243,6 +243,14 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
                 )?;
             }
         }
+        self.submit_author(
+            kind,
+            url,
+            Origin {
+                updated,
+                original: item,
+            },
+        )?;
         self.read_comments(number)
     }
 
@@ -273,12 +281,34 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
                         original: comment,
                     },
                 )?;
+                self.submit_author(
+                    "comment",
+                    url,
+                    Origin {
+                        updated,
+                        original: comment,
+                    },
+                )?;
             }
             match page.next {
                 Some(url) => page = self.client.get_url(&url)?,
                 None => return Ok(()),
             }
         }
+    }
+
+    /// Author fields are structured observations at the item's own location.
+    fn submit_author(&mut self, kind: &str, location: &str, origin: Origin) -> Result<(), Failure> {
+        let user = &origin.original["user"];
+        let id = user["id"].as_u64().map(|id| id.to_string());
+        for (field, text) in [
+            ("/user/id", id.as_deref()),
+            ("/user/login", user["login"].as_str()),
+            ("/user/type", user["type"].as_str()),
+        ] {
+            self.submit(kind, location, field, text, "structured", origin)?;
+        }
+        Ok(())
     }
 
     /// One observation: the whole text of one field. Empty or missing text is skipped.
