@@ -1,9 +1,10 @@
+#![allow(non_snake_case)]
 use rastro_core::{Scope, Source, Storage};
 use rastro_storage_sqlite::SqliteStorage;
 use rusqlite::Connection;
 
 #[test]
-fn migrations_preserve_evidence_and_reject_updates_and_deletes() {
+fn S3a_stored_evidence_rejects_updates_and_deletes() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("rastro.sqlite3");
     let mut storage = SqliteStorage::open(&path).unwrap();
