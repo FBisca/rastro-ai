@@ -254,13 +254,14 @@ pub struct Why {
 }
 
 #[cfg(test)]
+#[allow(non_snake_case)]
 mod tests {
     use super::*;
 
     /// The canonical encoding is fixed: these ids (checked against an independent SHA-256 of
     /// the encoding) must never change within version 1.
     #[test]
-    fn ids_are_stable_across_builds() {
+    fn S7_ids_are_stable_across_builds() {
         let pr = entity_id("https://github.com/o/p/pull/1");
         assert_eq!(pr, "e_e57fd39600ca2d8bb660fe3b66cc4aed");
         let open = Object::Literal {
