@@ -75,7 +75,11 @@ impl<S: Storage> Rastro<S> {
         } else {
             self.storage.search(&terms.join(" "), 50, history)?
         };
-        let coverage = self.coverage(None)?;
+        let mut coverage = self.coverage(None)?;
+        // A search names each source's answer; the window rows belong to `coverage`.
+        for answer in &mut coverage {
+            answer.windows.clear();
+        }
         let results = hits
             .into_iter()
             .map(|hit| {

@@ -465,3 +465,148 @@ fn an_argument_that_is_not_utf8_never_panics() {
         assert!(plain.stdout.is_empty());
     }
 }
+
+fn raw_sync(env: &Env, messages: Vec<Value>) -> (bool, Value) {
+    let mut steps = vec![json!({"do": "initialize"})];
+    steps.extend(
+        messages
+            .into_iter()
+            .map(|m| json!({"do": "send", "message": m})),
+    );
+    steps.push(json!({"do": "finish", "status": "ok", "submitted": 0}));
+    env.script(&steps);
+    let (ok, value) = env.json_any(&["sync", "project"], None);
+    (ok, value["result"]["runs"][0].clone())
+}
+fn report(params: Value) -> Value {
+    json!({"jsonrpc": "2.0", "method": "coverage.report", "params": params})
+}
+fn windows(env: &Env) -> Vec<Value> {
+    coverage_of(env, None)["windows"]
+        .as_array()
+        .unwrap()
+        .clone()
+}
+
+#[test]
+fn S26_coverage_lists_each_window_with_its_state_selection_and_retry_time() {
+    let env = Env::new();
+    synced_once(&env);
+    let retry = "2030-01-01T00:00:00Z";
+    let (ok, run) = raw_sync(
+        &env,
+        vec![report(
+            json!({"status": "couldnt_look", "reason": "rate_limited",
+            "retry_at": retry, "selection": "authored"}),
+        )],
+    );
+    assert!(!ok, "{run}");
+    let listed = windows(&env);
+    assert_eq!(listed.len(), 2, "{listed:?}");
+    assert_eq!(listed[0]["state"], "found");
+    assert_eq!(listed[0]["selection"], "all");
+    assert_eq!(listed[1]["state"], "couldn't look");
+    assert_eq!(listed[1]["selection"], "authored");
+    assert_eq!(listed[1]["reason"], "rate_limited");
+    assert_eq!(listed[1]["retry_at"], retry);
+    // Windows are half-open and consecutive: the failed window did not advance the start.
+    assert_eq!(listed[1]["from"], listed[0]["to"]);
+    assert!(listed[0].get("retry_at").is_none());
+    let human = env.ok(&["coverage", "project"]);
+    for expected in [
+        "rate_limited",
+        "2030-01-01T00:00:00.000Z",
+        "authored",
+        "found",
+    ] {
+        assert!(human.contains(expected), "missing {expected}: {human}");
+    }
+    // The next sync starts where the last complete window ended, not after the failed one.
+    let next = sync_with(&env, &[("https://x/1", "first body")]);
+    assert_eq!(next["window"]["from"], listed[0]["to"]);
+}
+
+#[test]
+fn S26a_a_quiet_later_window_is_empty_in_its_row_and_the_source_stays_found() {
+    let env = Env::new();
+    synced_once(&env);
+    let quiet = raw_sync(
+        &env,
+        vec![report(json!({"status": "complete", "selection": "all"}))],
+    );
+    assert_eq!(quiet.1["coverage"], "empty", "{quiet:?}");
+    let source = coverage_of(&env, None);
+    assert_eq!(source["state"], "found");
+    let listed = windows(&env);
+    assert_eq!(
+        listed
+            .iter()
+            .map(|w| w["state"].clone())
+            .collect::<Vec<_>>(),
+        ["found", "empty"]
+    );
+    let hit = env.json(&["search", "body"]);
+    assert_eq!(hit["result"]["results"][0]["coverage"]["state"], "found");
+    assert_eq!(hit["result"]["coverage"][0]["state"], "found");
+    // Only a source whose every complete window was empty is empty.
+    let fresh = Env::new();
+    fresh.add_source("project");
+    raw_sync(
+        &fresh,
+        vec![report(json!({"status": "complete", "selection": "all"}))],
+    );
+    raw_sync(
+        &fresh,
+        vec![report(json!({"status": "complete", "selection": "all"}))],
+    );
+    assert_eq!(coverage_of(&fresh, None)["state"], "empty");
+}
+
+#[test]
+fn S27_a_run_whose_submissions_are_all_rejected_is_couldnt_look_protocol_never_empty() {
+    let env = Env::new();
+    env.add_source("project");
+    let bad = json!({"jsonrpc": "2.0", "method": "evidence.submit", "params": {"kind": "issue"}});
+    let (ok, run) = raw_sync(
+        &env,
+        vec![
+            bad.clone(),
+            bad,
+            report(json!({"status": "complete", "selection": "all"})),
+        ],
+    );
+    assert!(!ok);
+    assert_eq!(run["counts"]["rejected"], 2);
+    assert_eq!(run["reason"], "protocol");
+    assert_eq!(run["coverage"], "couldn't look");
+    let listed = windows(&env);
+    assert_eq!(listed[0]["state"], "couldn't look");
+    assert_eq!(listed[0]["reason"], "protocol");
+    assert_eq!(coverage_of(&env, None)["state"], "unknown");
+}
+
+#[test]
+fn S27a_some_rejected_submissions_keep_the_accepted_evidence_but_the_window_is_couldnt_look() {
+    let env = Env::new();
+    env.add_source("project");
+    let bad = json!({"jsonrpc": "2.0", "method": "evidence.submit", "params": {"kind": "issue"}});
+    let (ok, run) = raw_sync(
+        &env,
+        vec![
+            submit("https://x/1", "kept body"),
+            bad,
+            report(json!({"status": "complete", "selection": "all"})),
+        ],
+    );
+    assert!(!ok);
+    assert_eq!(run["counts"]["accepted"], 1);
+    assert_eq!(run["counts"]["rejected"], 1);
+    assert_eq!(run["coverage"], "couldn't look");
+    assert_eq!(env.sql::<i64>("SELECT count(*) FROM evidence"), 1);
+    let listed = windows(&env);
+    assert_eq!(listed[0]["state"], "couldn't look");
+    assert_eq!(listed[0]["reason"], "protocol");
+    // The window did not complete, so the next sync reads it again.
+    let again = sync_with(&env, &[("https://x/1", "kept body")]);
+    assert_eq!(again["window"]["from"], listed[0]["from"]);
+}

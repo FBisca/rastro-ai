@@ -412,7 +412,9 @@ fn fast_stdout_is_held_in_bounded_memory_and_the_run_completes() {
         finish(),
     ]);
     let (output, run) = env.sync_within(20, true);
-    assert!(output.status.success());
+    // Every line was rejected, so the window was not read as it promises.
+    assert!(!output.status.success());
+    failed_with(&run, "protocol");
     assert_eq!(run["counts"]["rejected"], 20000);
 }
 
@@ -724,7 +726,8 @@ fn span_offsets_the_store_cannot_hold_are_rejected_without_waiting_on_stderr() {
         finish(),
     ]);
     let (output, run) = env.sync_within(15, false);
-    assert!(output.status.success());
+    assert!(!output.status.success());
+    failed_with(&run, "protocol");
     assert_eq!(
         run["counts"],
         json!({"submitted": 1, "accepted": 0, "rejected": 1, "unchanged": 0})

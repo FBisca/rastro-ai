@@ -271,6 +271,12 @@
         },
         "reason": {
           "type": "string"
+        },
+        "windows": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/coverage_window"
+          }
         }
       }
     },
@@ -469,6 +475,48 @@
               "type": "null"
             }
           ]
+        }
+      }
+    },
+    "coverage_window": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "from",
+        "to",
+        "state",
+        "selection",
+        "checked_at"
+      ],
+      "properties": {
+        "from": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "to": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "state": {
+          "enum": [
+            "found",
+            "empty",
+            "couldn't look"
+          ]
+        },
+        "selection": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "retry_at": {
+          "type": "string",
+          "format": "date-time"
+        },
+        "checked_at": {
+          "type": "string",
+          "format": "date-time"
         }
       }
     }

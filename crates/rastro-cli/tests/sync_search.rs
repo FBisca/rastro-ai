@@ -53,6 +53,12 @@ impl Env {
         );
         String::from_utf8(output.stdout).unwrap()
     }
+    /// A command that must fail (exit non-zero) yet still print a schema-valid result.
+    fn json_failing(&self, args: &[&str]) -> Value {
+        let output = self.rastro(&[args, &["--json"]].concat());
+        assert!(!output.status.success());
+        serde_json::from_slice(&output.stdout).unwrap()
+    }
     fn json(&self, args: &[&str]) -> Value {
         let value: Value = serde_json::from_str(&self.ok(&[args, &["--json"]].concat())).unwrap();
         let schema: Value =
@@ -213,14 +219,17 @@ fn evidence_without_location_span_quote_or_trust_class_is_rejected() {
         good,
         complete(),
     ]));
-    let synced = env.json(&["sync", "project"]);
+    // Rejected submissions mean the window was not read as promised, though the accepted
+    // evidence stays.
+    let synced = env.json_failing(&["sync", "project"]);
+    assert_eq!(synced["result"]["runs"][0]["reason"], "protocol");
     assert_eq!(
         synced["result"]["runs"][0]["counts"],
         json!({"submitted": 9, "accepted": 1, "rejected": 8, "unchanged": 0})
     );
     assert_eq!(env.sql::<i64>("SELECT count(*) FROM evidence"), 1);
     assert_eq!(env.sql::<i64>("SELECT rejected FROM runs"), 8);
-    let human = env.ok(&["sync", "project"]);
+    let human = String::from_utf8(env.rastro(&["sync", "project"]).stdout).unwrap();
     assert!(human.contains("rejected 8"), "{human}");
 }
 
@@ -236,7 +245,8 @@ fn forbidden_kind_or_forged_source_or_scope_is_rejected() {
         with(good.clone(), "scope", json!("work")),
         complete(),
     ]));
-    let synced = env.json(&["sync", "project"]);
+    let synced = env.json_failing(&["sync", "project"]);
+    assert_eq!(synced["result"]["runs"][0]["reason"], "protocol");
     assert_eq!(
         synced["result"]["runs"][0]["counts"],
         json!({"submitted": 3, "accepted": 0, "rejected": 3, "unchanged": 0})
