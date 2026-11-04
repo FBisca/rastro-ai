@@ -1,28 +1,12 @@
 #![allow(non_snake_case)]
+mod support;
 use rusqlite::Connection;
 use serde_json::{Value, json};
 use std::{
     fs,
-    path::{Path, PathBuf},
     process::{Command, Output},
-    sync::OnceLock,
 };
 use tempfile::TempDir;
-
-/// The test connector lives next to `rastro` in the target directory.
-fn connector_binary() -> &'static Path {
-    static BINARY: OnceLock<PathBuf> = OnceLock::new();
-    BINARY.get_or_init(|| {
-        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-        let status = Command::new(cargo)
-            .args(["build", "--quiet", "-p", "rastro-test-connector"])
-            .status()
-            .unwrap();
-        assert!(status.success(), "building the test connector failed");
-        let rastro = Path::new(env!("CARGO_BIN_EXE_rastro"));
-        rastro.with_file_name("rastro-test-connector")
-    })
-}
 
 struct Env {
     home: TempDir,
@@ -43,7 +27,7 @@ impl Env {
                 .unwrap();
         manifest.insert(
             "command".into(),
-            connector_binary().to_str().unwrap().into(),
+            support::test_connector().to_str().unwrap().into(),
         );
         edit(&mut manifest);
         fs::write(plugin.join("rastro-plugin.toml"), manifest.to_string()).unwrap();
@@ -57,7 +41,7 @@ impl Env {
         self.rastro_os(args.iter().map(Into::into).collect(), now)
     }
     fn rastro_os(&self, args: Vec<std::ffi::OsString>, now: Option<&str>) -> Output {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_rastro"));
+        let mut command = Command::new(support::rastro());
         if let Some(now) = now {
             command.env("RASTRO_NOW", now);
         }
