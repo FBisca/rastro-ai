@@ -216,7 +216,7 @@ fn S16_rejected_token_is_auth_and_never_appears_anywhere() {
 }
 
 #[test]
-fn hitting_the_search_result_cap_is_incomplete_not_found() {
+fn S14_search_result_cap_is_incomplete_not_found() {
     let fixture = Fixture::start(|req, base| {
         if req.path == "/search/issues" && qualifier(req) == "author" {
             let mut page = search_page(vec![issue(1, "Crash on start", Some("boom"), false)]);
@@ -235,7 +235,7 @@ fn hitting_the_search_result_cap_is_incomplete_not_found() {
 }
 
 #[test]
-fn http_failures_map_to_typed_reasons() {
+fn S14_http_failures_map_to_typed_reasons() {
     for (status, reason) in [
         (403, "forbidden"),
         (404, "not_found_or_hidden"),
