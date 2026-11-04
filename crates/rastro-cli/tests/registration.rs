@@ -1,11 +1,12 @@
 #![allow(non_snake_case)]
+mod support;
 use chrono::{DateTime, Utc};
 use serde_json::Value;
 use std::{path::Path, process::Command};
 use tempfile::TempDir;
 
 fn command(home: &Path) -> Command {
-    let mut cmd = Command::new(env!("CARGO_BIN_EXE_rastro"));
+    let mut cmd = Command::new(support::rastro());
     cmd.env("RASTRO_HOME", home);
     cmd
 }
@@ -227,7 +228,7 @@ fn S3_private_files_under_permissive_umask() {
         "-c",
         "umask 000; exec \"$@\"",
         "rastro-test",
-        env!("CARGO_BIN_EXE_rastro"),
+        support::rastro().to_str().unwrap(),
     ])
     .env("RASTRO_HOME", home.path());
     run(&mut cmd, ADD);
@@ -301,7 +302,7 @@ fn S3_empty_and_relative_location_overrides() {
     ] {
         let root = TempDir::new().unwrap();
         let home = root.path().join("home");
-        let mut cmd = Command::new(env!("CARGO_BIN_EXE_rastro"));
+        let mut cmd = Command::new(support::rastro());
         cmd.current_dir(root.path())
             .env("HOME", &home)
             .env_remove("RASTRO_HOME")

@@ -1,5 +1,7 @@
 //! A fixture GitHub server and a harness that drives the real `rastro` binary.
 #![allow(dead_code)]
+#[path = "../../../rastro-cli/tests/support/binaries.rs"]
+mod binaries;
 use rusqlite::Connection;
 use serde_json::{Value, json};
 use std::{
@@ -228,7 +230,9 @@ impl Env {
         let output = self.run(args);
         assert!(
             output.status.success(),
-            "{}",
+            "{args:?}: {} stdout: {} stderr: {}",
+            output.status,
+            String::from_utf8_lossy(&output.stdout),
             String::from_utf8_lossy(&output.stderr)
         );
     }
@@ -286,20 +290,26 @@ impl Env {
     }
 }
 
+/// The connector under test, as a private copy no concurrent build can rewrite.
 fn connector_binary() -> PathBuf {
-    PathBuf::from(env!("CARGO_BIN_EXE_rastro-connector-github"))
+    static BINARY: OnceLock<PathBuf> = OnceLock::new();
+    BINARY
+        .get_or_init(|| {
+            binaries::private_copy(Path::new(env!("CARGO_BIN_EXE_rastro-connector-github")))
+        })
+        .clone()
 }
-/// `rastro` lives in another package, so build it next to the connector once.
+/// `rastro` lives in another package, so build it next to the connector once and copy it.
 fn rastro_binary() -> &'static Path {
     static BINARY: OnceLock<PathBuf> = OnceLock::new();
     BINARY.get_or_init(|| {
-        let connector = connector_binary();
+        let connector = Path::new(env!("CARGO_BIN_EXE_rastro-connector-github"));
         let mut build = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
         build.args(["build", "--quiet", "-p", "rastro-cli"]);
         if connector.parent().is_some_and(|d| d.ends_with("release")) {
             build.arg("--release");
         }
         assert!(build.status().unwrap().success(), "building rastro failed");
-        connector.with_file_name("rastro")
+        binaries::private_copy(&connector.with_file_name("rastro"))
     })
 }

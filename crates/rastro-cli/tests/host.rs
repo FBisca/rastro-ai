@@ -1,26 +1,12 @@
 #![allow(non_snake_case)]
+mod support;
 use rusqlite::Connection;
 use serde_json::{Value, json};
 use std::{
     fs,
-    path::{Path, PathBuf},
     process::{Command, Output},
-    sync::OnceLock,
 };
 use tempfile::TempDir;
-
-fn connector_binary() -> &'static Path {
-    static BINARY: OnceLock<PathBuf> = OnceLock::new();
-    BINARY.get_or_init(|| {
-        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
-        let status = Command::new(cargo)
-            .args(["build", "--quiet", "-p", "rastro-test-connector"])
-            .status()
-            .unwrap();
-        assert!(status.success(), "building the test connector failed");
-        Path::new(env!("CARGO_BIN_EXE_rastro")).with_file_name("rastro-test-connector")
-    })
-}
 
 struct Env {
     home: TempDir,
@@ -44,7 +30,7 @@ impl Env {
                 .unwrap();
         manifest.insert(
             "command".into(),
-            connector_binary().to_str().unwrap().into(),
+            support::test_connector().to_str().unwrap().into(),
         );
         edit(&mut manifest);
         fs::write(plugin.join("rastro-plugin.toml"), manifest.to_string()).unwrap();
@@ -61,15 +47,22 @@ impl Env {
         ]);
         env
     }
+    /// For scenarios whose point is a timeout: a short silence limit, which a slow machine can
+    /// only make come sooner. Every other scenario keeps the generous default, so a connector
+    /// that is merely slow to start is never mistaken for a silent one.
+    fn tight(mut self) -> Self {
+        self.vars.push(("RASTRO_HOST_SILENCE_MS", "1500".into()));
+        self
+    }
     fn command(&self, args: &[&str]) -> Command {
-        let mut command = Command::new(env!("CARGO_BIN_EXE_rastro"));
+        let mut command = Command::new(support::rastro());
         command
             .env("RASTRO_HOME", self.home.path())
             .env("RASTRO_PLUGIN_PATH", self.home.path().join("dev-plugins"))
             .env("RASTRO_TEST_SCRIPT", self.home.path().join("script.jsonl"))
-            .env("RASTRO_HOST_SILENCE_MS", "600")
+            .env("RASTRO_HOST_SILENCE_MS", "8000")
             .env("RASTRO_HOST_MAX_LINE", "4096")
-            .env("RASTRO_HOST_SHUTDOWN_MS", "300")
+            .env("RASTRO_HOST_SHUTDOWN_MS", "3000")
             .env("RASTRO_HOST_STDERR_LINES", "50")
             .args(args);
         for (key, value) in &self.vars {
@@ -263,7 +256,11 @@ fn S9_malformed_oversized_or_silent_connector_is_killed() {
         (vec![json!({"do": "sleep", "ms": 20000})], "timeout"),
     ];
     for (steps, reason) in cases {
-        let env = Env::new();
+        let env = if reason == "timeout" {
+            Env::new().tight()
+        } else {
+            Env::new()
+        };
         let mut script = vec![init()];
         script.extend(steps);
         script.extend([complete(), finish()]);
@@ -413,7 +410,7 @@ fn S9b_fast_stdout_is_held_in_bounded_memory_and_the_run_completes() {
 
 #[test]
 fn S9c_connector_that_stops_reading_stdin_times_out() {
-    let env = Env::new();
+    let env = Env::new().tight();
     // The binding in `initialize` is bigger than any pipe buffer.
     env.ok(&[
         "source",
@@ -621,7 +618,7 @@ fn S9g_many_core_diagnostics_never_make_the_run_wait_on_stderr() {
 
 #[test]
 fn S9h_unwritable_run_finish_reply_fails_with_timeout() {
-    let mut env = Env::new();
+    let mut env = Env::new().tight();
     env.vars.push(("RASTRO_HOST_MAX_LINE", "1000000".into()));
     env.script(&[
         init(),
