@@ -132,7 +132,7 @@ pub struct SearchRequest {
     #[arg(long)]
     #[serde(default)]
     pub history: bool,
-    /// Most hits to return, from 1 to 50; the result says when more matched.
+    /// Most hits to return, a whole number from 1 to 50 (in JSON, 20.0 counts as 20; the command line takes plain digits); the result says when more matched.
     #[arg(long, default_value_t = Limit::default(), value_parser = parse_limit, allow_hyphen_values = true)]
     #[serde(default)]
     pub limit: Limit,
@@ -144,7 +144,7 @@ pub struct SearchRequest {
 
 /// A search's hit limit: a whole number from 1 to 50.
 #[derive(Clone, Copy, Debug, Deserialize, JsonSchema, Serialize)]
-#[serde(try_from = "u64", into = "u64")]
+#[serde(try_from = "serde_json::Number", into = "u64")]
 #[schemars(with = "u8", inline, extend("minimum" = 1, "maximum" = 50))]
 pub struct Limit(usize);
 impl Default for Limit {
@@ -160,6 +160,20 @@ impl TryFrom<u64> for Limit {
             .filter(|n| (1..=MAX_SEARCH_LIMIT).contains(n))
             .map(Self)
             .ok_or_else(|| format!("limit must be a whole number from 1 to {MAX_SEARCH_LIMIT}"))
+    }
+}
+impl TryFrom<serde_json::Number> for Limit {
+    type Error = String;
+    /// A JSON number that is whole: `20` and `20.0` are 20; `1.5` and negatives are not.
+    fn try_from(number: serde_json::Number) -> Result<Self, String> {
+        let whole = number.as_u64().or_else(|| {
+            number
+                .as_f64()
+                .filter(|f| f.fract() == 0.0 && *f >= 0.0 && *f <= u64::MAX as f64)
+                .map(|f| f as u64)
+        });
+        // Out of range, fractional or negative: the same message as any bad limit.
+        Self::try_from(whole.unwrap_or(u64::MAX))
     }
 }
 impl From<Limit> for u64 {
