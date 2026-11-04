@@ -391,6 +391,12 @@ pub trait Storage {
         claims: &[claims::ObservedClaim],
         checkpoint: Option<&claims::Checkpoint>,
     ) -> Result<Counts>;
+    /// Bound sources, including retained historical sources, for a complete replay.
+    fn extraction_sources(&self) -> Result<Vec<(Source, String)>>;
+    /// Creates an empty private projection generation. Audit logs remain outside it.
+    fn begin_claims_rebuild(&mut self) -> Result<()>;
+    /// Atomically publishes the staged generation, or discards it on failure.
+    fn finish_claims_rebuild(&mut self, publish: bool) -> Result<usize>;
     /// A claim and its supports, or `None` for an unknown id.
     fn why(&self, claim: &str) -> Result<Option<claims::Why>>;
 }

@@ -5,6 +5,7 @@ types = ["code:PullRequest", "code:Repository"]
 
 [[predicates]]
 id = "code:state"
+cardinality = "one"
 domain = ["code:PullRequest"]
 range = ["string"]
 

@@ -55,6 +55,7 @@ pub struct Support {
 /// A claim the core accepted as `observed`, ready to store.
 #[derive(Clone, Debug)]
 pub struct ObservedClaim {
+    pub scalar: bool,
     pub id: String,
     pub subject: Entity,
     pub predicate: String,
@@ -102,6 +103,15 @@ pub fn claim_id(subject: &str, predicate: &str, object: &Object) -> String {
 /// Revision: the hash of a claim's visible state, its status and the set of its current
 /// supports, so a second support changes it.
 pub fn revision(status: &str, supports: &[Support]) -> String {
+    revision_with_links(status, supports, &[])
+}
+
+/// Extends the v1 encoding with sorted (kind, target) link parts.
+pub fn revision_with_links(
+    status: &str,
+    supports: &[Support],
+    links: &[(String, String)],
+) -> String {
     let mut supports = supports.to_vec();
     supports.sort();
     let numbers: Vec<_> = supports
@@ -123,6 +133,11 @@ pub fn revision(status: &str, supports: &[Support]) -> String {
             (b'N', &**end),
             (b'R', &*support.extraction_rule),
         ]);
+    }
+    let mut links = links.to_vec();
+    links.sort();
+    for (kind, target) in &links {
+        parts.extend([(b'K', kind.as_str()), (b'C', target.as_str())]);
     }
     digest("r_", "rastro/revision/v1", &parts)
 }
@@ -225,6 +240,7 @@ pub fn validate(
     }
     let subject = Entity::new(subject.identifier, subject.entity_type);
     Ok(ObservedClaim {
+        scalar: predicate.cardinality == rastro_plugin_sdk::Cardinality::One,
         id: claim_id(&subject.id, &submit.predicate, &object),
         subject,
         predicate: submit.predicate,
@@ -243,10 +259,28 @@ pub struct ClaimView {
     #[schemars(extend("enum" = ["observed", "superseded"]))]
     pub status: String,
     pub revision: String,
+    pub known_intervals: Vec<KnownInterval>,
+    pub valid_time: ValidTime,
+    pub conflicts_with: Vec<String>,
+    pub supersedes: Vec<String>,
+    pub superseded_by: Vec<String>,
+}
+/// When evidence established and replaced current support for a claim.
+#[derive(Clone, Debug, JsonSchema, Serialize)]
+pub struct KnownInterval {
+    pub start: DateTime<Utc>,
+    pub end: Option<DateTime<Utc>>,
+}
+/// Item update times do not establish when individual fields changed in the world.
+#[derive(Clone, Debug, JsonSchema, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ValidTime {
+    Unknown,
 }
 /// One support of a claim, with the evidence it cites.
 #[derive(Clone, Debug, JsonSchema, Serialize)]
 pub struct SupportView {
+    pub current: bool,
     pub evidence_id: i64,
     pub source: String,
     pub scope: Scope,

@@ -37,6 +37,14 @@ enum Step {
     Touch {
         path: String,
     },
+    /// Pause one source after earlier sources have staged their generation; optionally fail.
+    Gate {
+        source: String,
+        entered: String,
+        release: String,
+        #[serde(default)]
+        fail: bool,
+    },
     Drain,
     Exit {
         #[serde(default)]
@@ -88,11 +96,19 @@ fn main() -> Result<()> {
     let mut transport = Transport::new(io::stdin().lock(), io::stdout().lock());
     let mut items: Vec<BatchItem> = Vec::new();
     let mut sent = 0;
+    let mut source = String::new();
     for step in script()? {
         match step {
             Step::Initialize => {
                 let request = transport.read()?.context("core closed before initialize")?;
                 let params: ExtractorInitializeParams = request.params()?;
+                source = params
+                    .run
+                    .pairs
+                    .first()
+                    .context("missing source binding")?
+                    .source
+                    .clone();
                 if params.role != Role::Extractor {
                     bail!("not started as an extractor");
                 }
@@ -143,6 +159,26 @@ fn main() -> Result<()> {
                 }
             }
             Step::Touch { path } => fs::write(path, "")?,
+            Step::Gate {
+                source: selected,
+                entered,
+                release,
+                fail,
+            } => {
+                if source == selected {
+                    fs::write(entered, "")?;
+                    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+                    while !std::path::Path::new(&release).exists() {
+                        if std::time::Instant::now() >= deadline {
+                            bail!("gate timed out");
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(10));
+                    }
+                    if fail {
+                        bail!("scripted failure after staging an earlier source");
+                    }
+                }
+            }
             Step::Drain => while transport.read()?.is_some() {},
             Step::Exit { code } => std::process::exit(code),
         }

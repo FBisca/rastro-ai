@@ -346,9 +346,8 @@ fn launch_migrates_recovers_and_turns_on_wal_before_the_first_answer() {
     // Undo the last migration, so it is pending again.
     let last = last_migration(&db);
     db.execute_batch(
-        "DROP TABLE extraction_checkpoint; DROP TABLE claim_support; DROP TABLE claim;
-         DROP TABLE alias; DROP TABLE entity; DROP INDEX evidence_by_pair_capture;
-         ALTER TABLE sources DROP COLUMN extractor; ALTER TABLE runs DROP COLUMN role;
+        "DROP TABLE claim_link; DROP TABLE known_interval; DROP TABLE projection_generation;
+         ALTER TABLE claim DROP COLUMN scalar; ALTER TABLE claim DROP COLUMN valid_time;
          INSERT INTO runs (source, scope, plugin_id, plugin_version, started_at, status,
            window_start, window_end)
          VALUES ('project', 'personal', 'test', '0.1.0', '2026-11-04T00:00:00.000Z',

@@ -37,10 +37,14 @@ pub struct SearchResponse {
 pub struct IndexRebuildResult {
     pub indexed: usize,
 }
+#[derive(Debug, JsonSchema, Serialize)]
+pub struct ClaimsRebuildResult {
+    pub claims: usize,
+}
 /// A claim and every support it has, each citing its evidence.
 #[derive(Debug, JsonSchema, Serialize)]
 pub struct WhyResult {
-    pub claim: ClaimView,
+    pub claim: Box<ClaimView>,
     pub supports: Vec<SupportView>,
 }
 
@@ -88,7 +92,7 @@ mod tests {
             }),
             Response::IndexRebuild(IndexRebuildResult { indexed: 0 }),
             Response::Why(WhyResult {
-                claim: ClaimView {
+                claim: Box::new(ClaimView {
                     id: "c".into(),
                     subject: rastro_core::claims::Entity::new("s".into(), "t".into()),
                     predicate: "p".into(),
@@ -98,9 +102,15 @@ mod tests {
                     },
                     status: "observed".into(),
                     revision: "r".into(),
-                },
+                    known_intervals: vec![],
+                    valid_time: rastro_core::claims::ValidTime::Unknown,
+                    conflicts_with: vec![],
+                    supersedes: vec![],
+                    superseded_by: vec![],
+                }),
                 supports: vec![],
             }),
+            Response::ClaimsRebuild(ClaimsRebuildResult { claims: 0 }),
         ];
         let arguments = |name: &str| match name {
             "source.add" => {

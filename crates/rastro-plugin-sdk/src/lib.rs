@@ -379,9 +379,19 @@ pub struct Vocabulary {
 /// it takes.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Predicate {
+    #[serde(default)]
+    pub cardinality: Cardinality,
     pub id: String,
     pub domain: Vec<String>,
     pub range: Vec<String>,
+}
+/// Number of current values per subject and observation context.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Cardinality {
+    One,
+    #[default]
+    Many,
 }
 impl Vocabulary {
     pub fn parse(text: &str) -> Result<Self> {

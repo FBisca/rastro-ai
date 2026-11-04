@@ -1,6 +1,6 @@
 //! Request types: serde (JSON input), schemars (schema) and clap (command line) from one definition.
 //! A doc comment is both the CLI help and the schema description.
-pub use crate::catalog::{IndexRequest, Request, SourceRequest};
+pub use crate::catalog::{ClaimsRequest, IndexRequest, Request, SourceRequest};
 use crate::{catalog::Surface, results::*};
 use anyhow::Result;
 use clap::Args;
@@ -248,8 +248,20 @@ impl WhyRequest {
     pub(crate) fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<WhyResult> {
         let why = rastro.why(&self.claim)?;
         Ok(WhyResult {
-            claim: why.claim,
+            claim: Box::new(why.claim),
             supports: why.supports,
+        })
+    }
+}
+
+/// Rebuild the claims projection by replaying all evidence through bound extractors.
+#[derive(Args, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ClaimsRebuildRequest {}
+impl ClaimsRebuildRequest {
+    pub(crate) fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<ClaimsRebuildResult> {
+        Ok(ClaimsRebuildResult {
+            claims: rastro.rebuild_claims()?,
         })
     }
 }

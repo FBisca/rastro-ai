@@ -17,7 +17,9 @@ const LEGACY: [&str; 2] = ["202611041200_initial", "202611041500_evidence_insert
 
 /// `(name, sql)`, named `YYYYMMDDHHmm_<what>` so migrations from different branches
 /// order by time. Never edit one that has shipped; add a new one.
-const MIGRATIONS: [(&str, &str); 7] = [
+mod lifecycle;
+
+const MIGRATIONS: [(&str, &str); 8] = [
     (
         "202611041200_initial",
         include_str!("../migrations/202611041200_initial.sql"),
@@ -45,6 +47,10 @@ const MIGRATIONS: [(&str, &str); 7] = [
     (
         "202611061000_claims_projection",
         include_str!("../migrations/202611061000_claims_projection.sql"),
+    ),
+    (
+        "202611061100_claim_lifecycle",
+        include_str!("../migrations/202611061100_claim_lifecycle.sql"),
     ),
 ];
 
@@ -536,14 +542,15 @@ impl Storage for SqliteStorage {
             }
             transaction.execute(
                 "INSERT OR IGNORE INTO claim (id, subject, predicate, object_entity, object_value,
-                 object_datatype, status, revision) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'observed', '')",
+                 object_datatype, status, revision, scalar) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'observed', '', ?7)",
                 params![
                     claim.id,
                     claim.subject.id,
                     claim.predicate,
                     object_entity,
                     object_value,
-                    object_datatype
+                    object_datatype,
+                    claim.scalar
                 ],
             )?;
             let mut added = 0;
@@ -570,29 +577,8 @@ impl Storage for SqliteStorage {
                 continue;
             }
             counts.accepted += 1;
-            let current: Vec<rastro_core::claims::Support> = transaction
-                .prepare(
-                    "SELECT evidence_id, field, start, end, extraction_rule FROM claim_support
-                     WHERE claim_id = ?1 AND current = 1",
-                )?
-                .query_map([&claim.id], |row| {
-                    Ok(rastro_core::claims::Support {
-                        evidence_id: row.get(0)?,
-                        field: row.get(1)?,
-                        start: row.get::<_, i64>(2)? as u64,
-                        end: row.get::<_, i64>(3)? as u64,
-                        extraction_rule: row.get(4)?,
-                    })
-                })?
-                .collect::<Result<_, _>>()?;
-            transaction.execute(
-                "UPDATE claim SET status = 'observed', revision = ?2 WHERE id = ?1",
-                params![
-                    claim.id,
-                    rastro_core::claims::revision("observed", &current)
-                ],
-            )?;
         }
+        lifecycle::refresh(&transaction)?;
         if let Some(c) = checkpoint {
             transaction.execute(
                 "INSERT INTO extraction_checkpoint (extractor, extractor_version, source, scope,
@@ -612,8 +598,30 @@ impl Storage for SqliteStorage {
         transaction.commit()?;
         Ok(counts)
     }
+    fn extraction_sources(&self) -> Result<Vec<(Source, String)>> {
+        let rows = self.connection.prepare("SELECT name, scope, extractor FROM sources WHERE extractor IS NOT NULL
+             UNION SELECT s.name, e.scope, s.extractor FROM sources s JOIN evidence e ON e.source = s.name
+             WHERE s.extractor IS NOT NULL ORDER BY name, scope")?
+            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        Ok(rows
+            .into_iter()
+            .map(|(name, scope, extractor)| {
+                (Source::github(name, String::new(), Scope(scope)), extractor)
+            })
+            .collect())
+    }
+    fn begin_claims_rebuild(&mut self) -> Result<()> {
+        lifecycle::begin_rebuild(&self.connection)
+    }
+    fn finish_claims_rebuild(&mut self, publish: bool) -> Result<usize> {
+        lifecycle::finish_rebuild(&mut self.connection, publish)
+    }
     fn why(&self, claim: &str) -> Result<Option<Why>> {
-        View(&self.connection).why(claim)
+        let snapshot = self.connection.unchecked_transaction()?;
+        let result = View(&snapshot).why(claim)?;
+        snapshot.commit()?;
+        Ok(result)
     }
 }
 
@@ -665,7 +673,7 @@ impl View<'_> {
         let mut statement = self.0.prepare(
             "SELECT e.id, e.source, e.scope, e.location, s.field, s.start, s.end, e.start,
              e.quote, e.trust_class, e.captured_at, e.source_updated_at, s.extraction_rule,
-             s.extractor, s.extractor_version
+             s.extractor, s.extractor_version, s.current
              FROM claim_support s JOIN evidence e ON e.id = s.evidence_id
              WHERE s.claim_id = ?1 ORDER BY e.captured_at, e.id",
         )?;
@@ -686,6 +694,7 @@ impl View<'_> {
                 [row.get::<_, String>(8)?, row.get(9)?, row.get(10)?],
                 row.get::<_, Option<String>>(11)?,
                 [row.get::<_, String>(12)?, row.get(13)?, row.get(14)?],
+                row.get::<_, bool>(15)?,
             ))
         })?;
         let supports = rows
@@ -697,12 +706,14 @@ impl View<'_> {
                     [quote, trust, captured],
                     updated,
                     [extraction_rule, extractor, extractor_version],
+                    current,
                 ) = row?;
                 let quote = quote
                     .get((start - from) as usize..(end - from) as usize)
                     .unwrap_or_default()
                     .to_string();
                 Ok(SupportView {
+                    current,
                     evidence_id,
                     source,
                     scope: Scope(scope),
@@ -722,12 +733,17 @@ impl View<'_> {
             .collect::<Result<_>>()?;
         Ok(Some(Why {
             claim: ClaimView {
-                id,
+                id: id.clone(),
                 subject: Entity::new(subject, subject_type),
                 predicate,
                 object,
                 status,
                 revision,
+                known_intervals: lifecycle::intervals(self.0, &id)?,
+                valid_time: rastro_core::claims::ValidTime::Unknown,
+                conflicts_with: lifecycle::links(self.0, &id, "conflicts_with", false)?,
+                supersedes: lifecycle::links(self.0, &id, "supersedes", false)?,
+                superseded_by: lifecycle::links(self.0, &id, "supersedes", true)?,
             },
             supports,
         }))
