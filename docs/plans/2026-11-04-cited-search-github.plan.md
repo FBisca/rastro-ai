@@ -42,6 +42,7 @@ Roadmap slice 1 is the walking skeleton for M1. Slice 2 (agents query Rastro ove
 | D18 | Rust test names carry the scenario ID in upper case (`fn S1_source_add_lists_the_source()`), with `#![allow(non_snake_case)]` at the top of each test file | Lower-case `s1_` names | The converge gate matches IDs case-sensitively | orchestrate gate |
 | D16 | Cargo workspace: `rastro-core` (lib), `rastro-storage-sqlite` (lib), `rastro-cli` (bin `rastro`), `rastro-connector-github` (bin), `rastro-plugin-sdk` (lib: protocol types shared by connectors) | One crate | Library first; plugins depend on protocol types, never on the core | ADR 0001; Codex review |
 | D19 | The core finds plugin manifests in `<config dir>/plugins/*/rastro-plugin.toml` and in the directories of `RASTRO_PLUGIN_PATH` (colon-separated, for development and tests); `command` resolves relative to the manifest's directory. A sync whose connector has no manifest fails as "couldn't look" | A built-in connector list | Plugins stay out of the core; tests point at the test connector | ADR 0004 |
+| D20 | Migrations are named `YYYYMMDDHHmm_<name>.sql` (UTC) and tracked by name in a `schema_migrations` table, not by a sequence number | `0001.sql` numbering with `PRAGMA user_version` | Contributors on parallel branches don't collide or renumber | Owner, 2026-11-04; ADR 0002 |
 
 ## Scenarios
 **Registration and location**
@@ -49,6 +50,7 @@ Roadmap slice 1 is the walking skeleton for M1. Slice 2 (agents query Rastro ove
 - **S2** WHEN a source is registered but has never synced, THEN `rastro coverage project` reports "never looked".
 - **S3** WHEN `RASTRO_HOME` is set, THEN data and config live under it. Otherwise `XDG_DATA_HOME` and `XDG_CONFIG_HOME` are used, and failing those, `~/.local/share/rastro` and `~/.config/rastro`.
 - **S3a** WHEN anything tries to update or delete stored evidence, THEN the store rejects it and the evidence is unchanged.
+- **S3b** WHEN migrations written on different branches are merged in any order, THEN each applies exactly once, in timestamp order, on new and existing databases, and a database with an unknown newer migration is refused.
 
 **Sync through the plugin host**
 - **S4** WHEN `rastro sync project` runs a connector that submits evidence and a complete coverage report, THEN the evidence is stored, coverage records "found" for the window, and the run log shows `ok` with the plugin version and the core's counts.
@@ -105,7 +107,7 @@ Roadmap slice 1 is the walking skeleton for M1. Slice 2 (agents query Rastro ove
 | # | What it delivers | Satisfies | Blocked by | Paths | Owner | Status |
 |---|---|---|---|---|---|---|
 | T1 | Workspace, CI, `rastro-core` config/location, SQLite store with migrations, `rastro source add/list`, `rastro coverage` "never looked", `--json` schema skeleton | S1–S3a | none | Cargo.toml, Cargo.lock, rust-toolchain.toml, .gitignore, .github/workflows/, crates/rastro-core/, crates/rastro-storage-sqlite/, crates/rastro-cli/, schema/, tests/cli/ | agent | COMPLETE (#2, #3: converge pass, Codex review approve, CI green) |
-| T2 | Plugin SDK + host: spawn, handshake, `evidence.submit`/`coverage.report`/`run.finish`, validation, run log, scripted test connector; basic `rastro search` with citations | S4, S4a, S5, S6, S19, S20 | T1 | Cargo.toml, Cargo.lock, crates/rastro-plugin-sdk/, crates/rastro-test-connector/, crates/rastro-core/, crates/rastro-storage-sqlite/, crates/rastro-cli/, schema/, tests/ | agent | IN PROGRESS |
+| T2 | Plugin SDK + host: spawn, handshake, `evidence.submit`/`coverage.report`/`run.finish`, validation, run log, scripted test connector; basic `rastro search` with citations | S3b, S4, S4a, S5, S6, S19, S20 | T1 | Cargo.toml, Cargo.lock, crates/rastro-plugin-sdk/, crates/rastro-test-connector/, crates/rastro-core/, crates/rastro-storage-sqlite/, crates/rastro-cli/, schema/, tests/ | agent | IN PROGRESS |
 | T3 | Host hardening: version and manifest mismatch, crash, malformed or oversized lines, timeouts, interrupted-run recovery, typed "couldn't look" | S7–S11 | T2 | crates/rastro-core/src/host/, crates/rastro-core/src/runs/, tests/host/, crates/rastro-test-connector/ | agent | TO-DO |
 | T4 | GitHub connector: involvement queries, pagination, comment reads, span mapping, trust classes, auth and rate-limit failures, fixture server | S12–S16 | T2 | Cargo.toml, Cargo.lock, crates/rastro-connector-github/, tests/github/ | agent | TO-DO |
 | T5 | Re-observation: unchanged linking, append on change, `run_evidence`, latest-per-location search, `--history` | S17, S18 | T2 | crates/rastro-core/src/evidence/, crates/rastro-storage-sqlite/, crates/rastro-cli/src/search*, tests/resync/ | agent | TO-DO |
