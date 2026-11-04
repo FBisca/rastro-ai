@@ -57,7 +57,7 @@ pub struct UnfinishedRun {
 /// What storage can answer inside one read transaction.
 pub trait Snapshot {
     /// What storage recorded for the source, before the freshness rule is applied.
-    fn coverage(&self, source: &Source) -> Result<Coverage>;
+    fn coverage(&self, source: &Source, all_windows: bool) -> Result<Coverage>;
     fn search(&self, query: &str, limit: usize, history: bool) -> Result<Vec<Hit>>;
     /// Runs with no end and a window; recovery would turn each into "couldn't look: interrupted".
     fn unfinished_runs(&self) -> Result<Vec<UnfinishedRun>>;
@@ -138,7 +138,7 @@ impl<S: ReadStorage> Reader<S> {
         &self.config.sources
     }
     /// Each configured source's coverage (or the named one's), judged at the current time.
-    pub fn coverage(&mut self, name: Option<&str>) -> Result<Vec<Coverage>> {
+    pub fn coverage(&mut self, name: Option<&str>, all_windows: bool) -> Result<Vec<Coverage>> {
         let Self {
             locations,
             config,
@@ -146,7 +146,7 @@ impl<S: ReadStorage> Reader<S> {
         } = self;
         let sources = select(config, name)?;
         snapshot(locations, storage, |view, unfinished| {
-            coverage_of(view, unfinished, &sources)
+            coverage_of(view, unfinished, &sources, all_windows)
         })
     }
     /// Full-text search over evidence quotes, each hit with its source's coverage.
@@ -163,7 +163,7 @@ impl<S: ReadStorage> Reader<S> {
                 (Some(query), Some(view)) => view.search(query, SEARCH_LIMIT, history)?,
                 _ => Vec::new(),
             };
-            let mut coverage = coverage_of(view, unfinished, &sources)?;
+            let mut coverage = coverage_of(view, unfinished, &sources, false)?;
             for answer in &mut coverage {
                 answer.windows.clear();
             }
@@ -224,13 +224,14 @@ fn coverage_of(
     view: Option<&dyn Snapshot>,
     unfinished: &[UnfinishedRun],
     sources: &[&Source],
+    all_windows: bool,
 ) -> Result<Vec<Coverage>> {
     let now = crate::coverage::now()?;
     sources
         .iter()
         .map(|source| {
             let mut coverage = match view {
-                Some(view) => view.coverage(source)?,
+                Some(view) => view.coverage(source, all_windows)?,
                 None => Coverage {
                     source: source.name.clone(),
                     scope: source.scope.clone(),
@@ -238,6 +239,7 @@ fn coverage_of(
                     last_checked: None,
                     fresh_until: None,
                     reason: None,
+                    windows_total: 0,
                     windows: Vec::new(),
                 },
             };
@@ -246,17 +248,24 @@ fn coverage_of(
                 .iter()
                 .filter(|r| r.source == source.name && r.scope == source.scope)
             {
-                coverage.windows.push(CoverageWindow {
-                    from: run.window.0,
-                    to: run.window.1,
-                    state: CoverageState::CouldNotLook,
-                    selection: "all".into(),
-                    reason: Some("interrupted".into()),
-                    retry_at: None,
-                    checked_at: now,
-                });
+                coverage.windows_total += 1;
+                coverage.windows.insert(
+                    0,
+                    CoverageWindow {
+                        from: run.window.0,
+                        to: run.window.1,
+                        state: CoverageState::CouldNotLook,
+                        selection: "all".into(),
+                        reason: Some("interrupted".into()),
+                        retry_at: None,
+                        checked_at: now,
+                    },
+                );
                 coverage.state = CoverageState::CouldNotLook;
                 coverage.reason = Some("interrupted".into());
+            }
+            if !all_windows {
+                coverage.windows.truncate(crate::COVERAGE_WINDOWS_SHOWN);
             }
             Ok(coverage.judged(source.freshness(), now))
         })

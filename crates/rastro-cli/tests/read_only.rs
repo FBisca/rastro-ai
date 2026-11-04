@@ -210,7 +210,7 @@ fn S16_search_and_coverage_change_no_row_and_take_no_exclusive_config_lock() {
         let mut reader = Rastro::open_read_only(locations, SqliteStorage::open_read_only).unwrap();
         (
             reader.search("body", false).unwrap(),
-            reader.coverage(None).unwrap(),
+            reader.coverage(None, false).unwrap(),
         )
     });
     drop(holder);
@@ -242,7 +242,7 @@ fn S16_the_writing_open_switches_the_database_to_wal_mode() {
             r.get::<_, String>(0)
         })
         .unwrap();
-    env.reader().coverage(None).unwrap();
+    env.reader().coverage(None, false).unwrap();
     assert_eq!(mode(&env).unwrap(), "delete");
 }
 
@@ -284,7 +284,7 @@ fn S17_calls_during_a_sync_in_another_process_answer_without_a_lock_error() {
                 Rastro::open_read_only(locations, SqliteStorage::open_read_only).unwrap();
             (
                 reader.search("body", false).unwrap(),
-                reader.coverage(None).unwrap(),
+                reader.coverage(None, false).unwrap(),
             )
         });
         // The sync may already have committed its third body; never fewer than before.
@@ -313,9 +313,9 @@ impl InterleavedView<'_> {
     }
 }
 impl Snapshot for InterleavedView<'_> {
-    fn coverage(&self, source: &rastro_core::Source) -> Result<Coverage> {
+    fn coverage(&self, source: &rastro_core::Source, all_windows: bool) -> Result<Coverage> {
         self.interleave();
-        self.inner.coverage(source)
+        self.inner.coverage(source, all_windows)
     }
     fn search(&self, query: &str, limit: usize, history: bool) -> Result<Vec<rastro_core::Hit>> {
         self.interleave();
@@ -342,7 +342,7 @@ impl ReadStorage for Interleaved {
 #[test]
 fn S17_hits_and_coverage_in_one_answer_come_from_the_same_snapshot() {
     let env = synced();
-    let old = only(env.reader().coverage(None).unwrap()).last_checked;
+    let old = only(env.reader().coverage(None, false).unwrap()).last_checked;
     let database = env.database();
     let write_another_sync = move || {
         // A whole run commits between the first read of the call and its last.
@@ -430,7 +430,7 @@ fn S17a_a_source_added_after_the_last_call_appears_in_the_next() {
     let env = synced();
     let names = |env: &Env| -> Vec<String> {
         env.reader()
-            .coverage(None)
+            .coverage(None, false)
             .unwrap()
             .into_iter()
             .map(|c| c.source)
@@ -465,12 +465,12 @@ fn S18_an_unfinished_run_with_no_live_sync_reads_unknown_interrupted_without_wri
     // A live sync holds sync.lock: its unfinished run changes nothing.
     let live = fs::File::create(env.home.path().join("data/sync.lock")).unwrap();
     live.lock().unwrap();
-    let during = only(env.reader().coverage(None).unwrap());
+    let during = only(env.reader().coverage(None, false).unwrap());
     assert_eq!(during.state, CoverageState::NeverLooked, "{during:?}");
     assert_eq!(during.reason, None);
     drop(live);
     // Nothing holds it: the run was left by a crash.
-    let after = only(env.reader().coverage(None).unwrap());
+    let after = only(env.reader().coverage(None, false).unwrap());
     assert_eq!(after.state, CoverageState::Unknown, "{after:?}");
     assert_eq!(after.reason.as_deref(), Some("interrupted"));
     let searched = env.reader().search("anything", false).unwrap();
@@ -481,7 +481,7 @@ fn S18_an_unfinished_run_with_no_live_sync_reads_unknown_interrupted_without_wri
     assert_eq!(dump(&env.db()), before, "a read wrote");
     // The writing open records the same answer.
     env.ok(&["coverage"]);
-    let recovered = only(env.reader().coverage(None).unwrap());
+    let recovered = only(env.reader().coverage(None, false).unwrap());
     assert_eq!(recovered.state, CoverageState::Unknown);
     assert_eq!(recovered.reason.as_deref(), Some("interrupted"));
 }
@@ -494,7 +494,7 @@ fn S19_a_missing_database_answers_from_config_and_creates_no_file() {
     env.add_source("other");
     fs::remove_dir_all(env.home.path().join("data")).unwrap();
     let mut reader = env.reader();
-    let coverage = reader.coverage(None).unwrap();
+    let coverage = reader.coverage(None, false).unwrap();
     assert_eq!(coverage.len(), 2);
     assert!(
         coverage
@@ -510,7 +510,7 @@ fn S19_a_missing_database_answers_from_config_and_creates_no_file() {
             .iter()
             .all(|c| c.state == CoverageState::NeverLooked)
     );
-    assert!(reader.coverage(Some("nobody")).is_err());
+    assert!(reader.coverage(Some("nobody"), false).is_err());
     assert!(
         !env.home.path().join("data").exists(),
         "a read created data"
@@ -526,7 +526,7 @@ fn S19_a_read_with_no_config_and_no_database_creates_nothing() {
         config: home.path().join("config"),
     };
     let mut reader = Rastro::open_read_only(locations, SqliteStorage::open_read_only).unwrap();
-    assert!(reader.coverage(None).unwrap().is_empty());
+    assert!(reader.coverage(None, false).unwrap().is_empty());
     assert!(reader.search("x", false).unwrap().results.is_empty());
     assert_eq!(fs::read_dir(home.path()).unwrap().count(), 0);
 }
@@ -537,7 +537,7 @@ fn S19a_a_pending_or_unknown_migration_is_refused_with_a_typed_error() {
     let env = synced();
     let refusal = |env: &Env| -> Refusal {
         let mut reader = env.reader();
-        let error = reader.coverage(None).unwrap_err();
+        let error = reader.coverage(None, false).unwrap_err();
         let search = reader.search("body", false).unwrap_err();
         assert!(search.downcast_ref::<Refusal>().is_some());
         error.downcast::<Refusal>().unwrap()
@@ -607,10 +607,58 @@ fn S18_a_sync_starting_beside_a_reader_still_recovers_the_crashed_run_before_its
         "{states:?}"
     );
     assert_eq!(
-        only(env.reader().coverage(None).unwrap()).state,
+        only(env.reader().coverage(None, false).unwrap()).state,
         CoverageState::Found
     );
     let human = env.ok(&["coverage"]);
     // The overall line says found; the interrupted window stays listed as history.
     assert!(human.contains("Coverage: found"), "{human}");
+}
+
+/// A found window, then `quiet` empty ones: the only evidence is the oldest window.
+fn found_then_quiet(quiet: usize) -> Env {
+    let env = synced();
+    for _ in 0..quiet {
+        assert!(env.sync("project", &[], 0).status.success());
+    }
+    env
+}
+
+/// evidence/R63: a source with more than ten windows lists the ten newest, newest first
+#[test]
+fn S11_the_reader_lists_the_ten_newest_windows_newest_first_or_all_on_request() {
+    let env = found_then_quiet(11);
+    let capped = only(env.reader().coverage(None, false).unwrap());
+    assert_eq!(capped.windows_total, 12);
+    assert_eq!(capped.windows.len(), 10);
+    assert!(
+        capped
+            .windows
+            .iter()
+            .all(|w| w.state == CoverageState::Empty)
+    );
+    assert!(capped.windows.windows(2).all(|p| p[0].from >= p[1].from));
+    let all = only(env.reader().coverage(None, true).unwrap());
+    assert_eq!(all.windows_total, 12);
+    assert_eq!(all.windows.len(), 12);
+    assert_eq!(all.windows[11].state, CoverageState::Found);
+    assert_eq!(all.windows[0].from, capped.windows[0].from);
+}
+
+/// evidence/R64: the only found window being outside the newest ten keeps the source found
+#[test]
+fn S12_the_reader_answers_found_when_the_only_found_window_is_outside_the_newest_ten() {
+    let env = found_then_quiet(11);
+    let mut reader = env.reader();
+    assert_eq!(
+        only(reader.coverage(None, false).unwrap()).state,
+        CoverageState::Found
+    );
+    let hits = reader.search("body", false).unwrap();
+    assert_eq!(hits.results.len(), 2);
+    assert!(
+        hits.results
+            .iter()
+            .all(|h| h.coverage.as_ref().unwrap().state == CoverageState::Found)
+    );
 }

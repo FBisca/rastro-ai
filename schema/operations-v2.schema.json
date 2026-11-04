@@ -27,17 +27,24 @@
           "$ref": "#/$defs/CoverageState"
         },
         "windows": {
-          "description": "Every window the source was looked at, oldest first; empty in search answers.",
+          "description": "The newest windows the source was looked at, newest first (all of them when asked\nfor); empty in search answers.",
           "items": {
             "$ref": "#/$defs/CoverageWindow"
           },
           "type": "array"
+        },
+        "windows_total": {
+          "description": "How many windows the source has been looked at over, listed or not.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
         }
       },
       "required": [
         "source",
         "scope",
-        "state"
+        "state",
+        "windows_total"
       ],
       "type": "object"
     },
@@ -657,6 +664,11 @@
         "additionalProperties": false,
         "description": "Show what each source has been looked at, and how fresh that is.",
         "properties": {
+          "all_windows": {
+            "default": false,
+            "description": "List every window of each source, not only its 10 newest.",
+            "type": "boolean"
+          },
           "name": {
             "default": null,
             "description": "Only this source; every source when omitted.",

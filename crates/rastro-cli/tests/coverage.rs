@@ -525,15 +525,16 @@ fn coverage_lists_each_window_with_its_state_selection_and_retry_time() {
     assert!(!ok, "{run}");
     let listed = windows(&env);
     assert_eq!(listed.len(), 2, "{listed:?}");
-    assert_eq!(listed[0]["state"], "found");
-    assert_eq!(listed[0]["selection"], "all");
-    assert_eq!(listed[1]["state"], "couldn't look");
-    assert_eq!(listed[1]["selection"], "authored");
-    assert_eq!(listed[1]["reason"], "rate_limited");
-    same_instant(&listed[1]["retry_at"], &json!(retry), "retry_at");
+    // Newest first.
+    assert_eq!(listed[1]["state"], "found");
+    assert_eq!(listed[1]["selection"], "all");
+    assert_eq!(listed[0]["state"], "couldn't look");
+    assert_eq!(listed[0]["selection"], "authored");
+    assert_eq!(listed[0]["reason"], "rate_limited");
+    same_instant(&listed[0]["retry_at"], &json!(retry), "retry_at");
     // Windows are half-open and consecutive: the failed window did not advance the start.
-    same_instant(&listed[1]["from"], &listed[0]["to"], "");
-    assert!(listed[0].get("retry_at").is_none());
+    same_instant(&listed[0]["from"], &listed[1]["to"], "");
+    assert!(listed[1].get("retry_at").is_none());
     let human = env.ok(&["coverage", "project"]);
     for expected in [
         "rate_limited",
@@ -545,7 +546,7 @@ fn coverage_lists_each_window_with_its_state_selection_and_retry_time() {
     }
     // The next sync starts where the last complete window ended, not after the failed one.
     let next = sync_with(&env, &[("https://x/1", "first body")]);
-    same_instant(&next["window"]["from"], &listed[0]["to"], "");
+    same_instant(&next["window"]["from"], &listed[1]["to"], "");
 }
 
 /// evidence/R64: a quiet later window is empty in its row and the source stays found
@@ -566,7 +567,7 @@ fn a_quiet_later_window_is_empty_in_its_row_and_the_source_stays_found() {
             .iter()
             .map(|w| w["state"].clone())
             .collect::<Vec<_>>(),
-        ["found", "empty"]
+        ["empty", "found"]
     );
     let hit = env.json(&["search", "body"]);
     assert_eq!(hit["result"]["results"][0]["coverage"]["state"], "found");
@@ -835,4 +836,65 @@ fn a_whole_second_last_checked_is_the_same_instant_in_human_and_json() {
     let from_human: chrono::DateTime<chrono::Utc> = printed.parse().unwrap();
     assert_eq!(from_json, from_human, "{human} vs {json}");
     assert_eq!(from_json.timestamp(), 1_793_786_400);
+}
+
+/// A found window, then `quiet` empty ones: the only evidence is the oldest window.
+fn found_then_quiet(env: &Env, quiet: usize) {
+    synced_once(env);
+    for _ in 0..quiet {
+        let (ok, run) = raw_sync(
+            env,
+            vec![report(json!({"status": "complete", "selection": "all"}))],
+        );
+        assert!(ok, "{run}");
+    }
+}
+
+/// evidence/R63: a source with more than ten windows lists its ten newest, newest first
+#[test]
+fn S11_a_source_with_more_than_ten_windows_lists_the_ten_newest_newest_first() {
+    let env = Env::new();
+    found_then_quiet(&env, 11);
+    let source = coverage_of(&env, None);
+    assert_eq!(source["windows_total"], 12, "{source}");
+    let listed = source["windows"].as_array().unwrap().clone();
+    assert_eq!(listed.len(), 10, "{listed:?}");
+    assert!(listed.iter().all(|w| w["state"] == "empty"), "{listed:?}");
+    let starts: Vec<chrono::DateTime<chrono::Utc>> = listed
+        .iter()
+        .map(|w| w["from"].as_str().unwrap().parse().unwrap())
+        .collect();
+    assert!(starts.windows(2).all(|p| p[0] >= p[1]), "{starts:?}");
+    let human = env.ok(&["coverage", "project"]);
+    assert!(human.contains("showing 10 of 12"), "{human}");
+
+    let (ok, all) = env.json_any(&["coverage", "project", "--all-windows"], None);
+    assert!(ok, "{all}");
+    let source = &all["result"]["coverage"][0];
+    assert_eq!(source["windows_total"], 12);
+    let every = source["windows"].as_array().unwrap();
+    assert_eq!(every.len(), 12);
+    assert_eq!(every[11]["state"], "found");
+    assert_eq!(every[0], listed[0]);
+    let human = env.ok(&["coverage", "project", "--all-windows"]);
+    assert!(!human.contains("showing"), "{human}");
+}
+
+/// evidence/R64: the only window that found evidence being outside the newest ten keeps "found"
+#[test]
+fn S12_the_only_found_window_older_than_the_newest_ten_still_answers_found() {
+    let env = Env::new();
+    found_then_quiet(&env, 11);
+    let source = coverage_of(&env, None);
+    assert!(
+        source["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|w| w["state"] == "empty")
+    );
+    assert_eq!(source["state"], "found");
+    let hit = env.json(&["search", "body"]);
+    assert_eq!(hit["result"]["results"][0]["coverage"]["state"], "found");
+    assert_eq!(hit["result"]["coverage"][0]["state"], "found");
 }

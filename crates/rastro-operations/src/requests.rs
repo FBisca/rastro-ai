@@ -87,6 +87,10 @@ pub struct CoverageRequest {
     /// Only this source; every source when omitted.
     #[serde(default)]
     pub name: Option<String>,
+    /// List every window of each source, not only its 10 newest.
+    #[arg(long)]
+    #[serde(default)]
+    pub all_windows: bool,
 }
 impl Operation for CoverageRequest {
     const NAME: &'static str = "coverage";
@@ -222,7 +226,7 @@ impl Request {
                 sources: rastro.sources().to_vec(),
             }),
             Self::Coverage(request) => Response::Coverage(CoverageResult {
-                coverage: rastro.coverage(request.name.as_deref())?,
+                coverage: rastro.coverage(request.name.as_deref(), request.all_windows)?,
             }),
             Self::Sync(request) => Response::Sync(SyncResult {
                 runs: rastro.sync(request.name.as_deref())?,

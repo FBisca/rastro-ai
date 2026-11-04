@@ -177,7 +177,7 @@ fn S5_every_envelope_is_version_2_and_schema_valid() {
     let covering = |w: Value| {
         envelope(
             "coverage",
-            serde_json::json!({"coverage": [{"source": "a", "scope": "w", "state": "found", "windows": [w]}]}),
+            serde_json::json!({"coverage": [{"source": "a", "scope": "w", "state": "found", "windows_total": 1, "windows": [w]}]}),
         )
     };
     validator.validate(&covering(window("found"))).unwrap();

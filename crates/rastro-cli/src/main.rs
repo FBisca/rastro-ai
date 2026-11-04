@@ -58,6 +58,13 @@ fn window_line(w: &CoverageWindow) -> String {
 }
 fn coverage_block(c: &Coverage) -> String {
     let mut lines = vec![coverage_line(c)];
+    if c.windows.len() < c.windows_total {
+        lines.push(format!(
+            "  Windows: showing {} of {} (--all-windows lists every one)",
+            c.windows.len(),
+            c.windows_total
+        ));
+    }
     lines.extend(c.windows.iter().map(window_line));
     lines.join("\n")
 }
