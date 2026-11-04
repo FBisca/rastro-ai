@@ -1,7 +1,9 @@
 //! Result types: what each operation returns, serialised into the envelope's `result`.
 pub use crate::catalog::Response;
 use crate::envelope;
-use rastro_core::{Coverage, Source, runs::RunReport, search::SearchResult};
+use rastro_core::claims::{ClaimView, SupportView};
+use rastro_core::runs::{ExtractionState, RunReport};
+use rastro_core::{Coverage, Source, search::SearchResult};
 use schemars::JsonSchema;
 use serde::Serialize;
 use serde_json::Value;
@@ -35,15 +37,27 @@ pub struct SearchResponse {
 pub struct IndexRebuildResult {
     pub indexed: usize,
 }
+/// A claim and every support it has, each citing its evidence.
+#[derive(Debug, JsonSchema, Serialize)]
+pub struct WhyResult {
+    pub claim: ClaimView,
+    pub supports: Vec<SupportView>,
+}
 
 impl Response {
     pub fn envelope(&self) -> Value {
         envelope::success(self.operation(), &self.result())
     }
-    /// False when a sync ran a source that failed.
+    /// False when a sync ran a source, or its extractor, that failed.
     pub fn succeeded(&self) -> bool {
         match self {
-            Self::Sync(r) => r.runs.iter().all(|run| run.status == "ok"),
+            Self::Sync(r) => r.runs.iter().all(|run| {
+                run.status == "ok"
+                    && run
+                        .extraction
+                        .as_ref()
+                        .is_none_or(|e| e.state != ExtractionState::Failed)
+            }),
             _ => true,
         }
     }
@@ -73,12 +87,27 @@ mod tests {
                 coverage: vec![],
             }),
             Response::IndexRebuild(IndexRebuildResult { indexed: 0 }),
+            Response::Why(WhyResult {
+                claim: ClaimView {
+                    id: "c".into(),
+                    subject: rastro_core::claims::Entity::new("s".into(), "t".into()),
+                    predicate: "p".into(),
+                    object: rastro_core::claims::Object::Literal {
+                        value: "v".into(),
+                        datatype: "string".into(),
+                    },
+                    status: "observed".into(),
+                    revision: "r".into(),
+                },
+                supports: vec![],
+            }),
         ];
         let arguments = |name: &str| match name {
             "source.add" => {
                 serde_json::json!({"name": "a", "connector": "github", "repo": "o/r", "scope": "w"})
             }
             "search" => serde_json::json!({"text": "x"}),
+            "why" => serde_json::json!({"claim": "c"}),
             _ => serde_json::json!({}),
         };
         for (spec, response) in CATALOG.iter().zip(&responses) {

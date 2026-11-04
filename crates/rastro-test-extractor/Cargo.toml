@@ -1,0 +1,11 @@
+[package]
+name = "rastro-test-extractor"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[dependencies]
+anyhow.workspace = true
+rastro-plugin-sdk = { path = "../rastro-plugin-sdk" }
+serde.workspace = true
+serde_json.workspace = true

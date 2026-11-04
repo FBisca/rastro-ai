@@ -7,6 +7,8 @@ protocol = 1
 command = "rastro-connector-github"
 triggers = []
 dependencies = []
+# Every GitHub source is bound to this extractor.
+default_extractor = "rastro-extractor-github"
 
 [permissions]
 submit = ["issue", "pull_request", "comment"]

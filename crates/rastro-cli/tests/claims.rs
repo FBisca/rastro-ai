@@ -1,0 +1,514 @@
+#![allow(non_snake_case)]
+//! Extraction end to end: the scripted connector feeds evidence, the scripted extractor turns
+//! it into claims, and `why` reads them back.
+mod support;
+use rusqlite::Connection;
+use serde_json::{Value, json};
+use std::{
+    fs,
+    path::PathBuf,
+    process::{Command, Output},
+    time::{Duration, Instant},
+};
+use tempfile::TempDir;
+
+const PR: &str = "https://github.com/o/p/pull/1";
+
+struct Env {
+    home: TempDir,
+}
+impl Env {
+    /// The test connector, binding `extractor` by default, plus the test extractor.
+    fn new(extractor: Option<&str>) -> Self {
+        let env = Self {
+            home: TempDir::new().unwrap(),
+        };
+        env.connector("test", extractor);
+        let dir = env.plugin_dir("test-extractor");
+        let mut manifest: toml::Table =
+            include_str!("../../rastro-test-extractor/rastro-plugin.toml")
+                .parse()
+                .unwrap();
+        let command = support::test_extractor().to_str().unwrap();
+        manifest.insert("command".into(), command.into());
+        fs::write(dir.join("rastro-plugin.toml"), manifest.to_string()).unwrap();
+        fs::write(
+            dir.join("vocabulary.toml"),
+            include_str!("../../rastro-test-extractor/vocabulary.toml"),
+        )
+        .unwrap();
+        env
+    }
+    fn plugin_dir(&self, id: &str) -> PathBuf {
+        let dir = self.home.path().join("dev-plugins").join(id);
+        fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+    /// A copy of the test connector's manifest under another id.
+    fn connector(&self, id: &str, extractor: Option<&str>) {
+        let mut manifest: toml::Table =
+            include_str!("../../rastro-test-connector/rastro-plugin.toml")
+                .parse()
+                .unwrap();
+        manifest.insert("id".into(), id.into());
+        let command = support::test_connector().to_str().unwrap();
+        manifest.insert("command".into(), command.into());
+        if let Some(extractor) = extractor {
+            manifest.insert("default_extractor".into(), extractor.into());
+        }
+        fs::write(
+            self.plugin_dir(id).join("rastro-plugin.toml"),
+            manifest.to_string(),
+        )
+        .unwrap();
+    }
+    fn command(&self, args: &[&str]) -> Command {
+        let mut command = Command::new(support::rastro());
+        command
+            .env("RASTRO_HOME", self.home.path())
+            .env("RASTRO_PLUGIN_PATH", self.home.path().join("dev-plugins"))
+            .env("RASTRO_TEST_SCRIPT", self.path("connector.jsonl"))
+            .env("RASTRO_TEST_EXTRACTOR_SCRIPT", self.path("extractor.jsonl"))
+            .args(args);
+        command
+    }
+    fn rastro(&self, args: &[&str]) -> Output {
+        self.command(args).output().unwrap()
+    }
+    fn ok(&self, args: &[&str]) -> String {
+        let output = self.rastro(args);
+        assert!(
+            output.status.success(),
+            "{}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    }
+    fn json(&self, args: &[&str]) -> Value {
+        let value: Value = serde_json::from_str(&self.ok(&[args, &["--json"]].concat())).unwrap();
+        let schema: Value =
+            serde_json::from_str(include_str!("../../../schema/operations-v2.schema.json"))
+                .unwrap();
+        jsonschema::validator_for(&schema)
+            .unwrap()
+            .validate(&value)
+            .unwrap_or_else(|e| panic!("{e}: {value}"));
+        value["result"].clone()
+    }
+    fn path(&self, name: &str) -> PathBuf {
+        self.home.path().join(name)
+    }
+    fn add_source(&self, name: &str, connector: &str) {
+        self.ok(&[
+            "source",
+            "add",
+            name,
+            "--connector",
+            connector,
+            "--repo",
+            "o/p",
+            "--scope",
+            "personal",
+        ]);
+    }
+    /// The connector submits these observations and reports complete coverage.
+    fn observe(&self, evidence: &[Value]) {
+        let mut steps = vec![json!({"do": "initialize"})];
+        for params in evidence {
+            let message = json!({"jsonrpc": "2.0", "method": "evidence.submit", "params": params});
+            steps.push(json!({"do": "send", "message": message}));
+        }
+        let complete = json!({"jsonrpc": "2.0", "method": "coverage.report",
+            "params": {"status": "complete", "selection": "all"}});
+        steps.push(json!({"do": "send", "message": complete}));
+        steps.push(json!({"do": "finish", "submitted": evidence.len()}));
+        write_script(&self.path("connector.jsonl"), &steps);
+    }
+    /// The extractor reads every batch, sends these claims and finishes.
+    fn extract(&self, claims: &[Value]) {
+        let mut steps = vec![json!({"do": "initialize"}), json!({"do": "read_batches"})];
+        for params in claims {
+            let message = json!({"jsonrpc": "2.0", "method": "claim.submit", "params": params});
+            steps.push(json!({"do": "send", "message": message}));
+        }
+        steps.push(json!({"do": "finish"}));
+        write_script(&self.path("extractor.jsonl"), &steps);
+    }
+    fn sql<T: rusqlite::types::FromSql>(&self, query: &str) -> T {
+        Connection::open(self.path("data/rastro.sqlite3"))
+            .unwrap()
+            .query_row(query, [], |row| row.get(0))
+            .unwrap()
+    }
+    fn count(&self, table: &str) -> i64 {
+        self.sql(&format!("SELECT count(*) FROM {table}"))
+    }
+}
+fn write_script(path: &PathBuf, steps: &[Value]) {
+    let lines: Vec<_> = steps.iter().map(Value::to_string).collect();
+    fs::write(path, lines.join("\n")).unwrap();
+}
+
+fn observation(location: &str, field: &str, quote: &str, trust: &str) -> Value {
+    json!({"kind": "issue", "location": location, "field": field, "start": 0,
+        "end": quote.len(), "quote": quote, "trust_class": trust,
+        "source_updated_at": "2026-11-01T00:00:00Z"})
+}
+fn state(quote: &str) -> Value {
+    observation(PR, "/state", quote, "structured")
+}
+fn body(quote: &str) -> Value {
+    observation(PR, "/body", quote, "untrusted content")
+}
+fn pr() -> Value {
+    json!({"identifier": PR, "type": "code:PullRequest"})
+}
+fn literal(value: &str) -> Value {
+    json!({"kind": "literal", "value": value, "datatype": "string"})
+}
+/// A claim on the PR, supported by the given span of one delivered observation.
+fn claim(predicate: &str, object: Value, rule: &str, support: Value) -> Value {
+    json!({"subject": pr(), "predicate": predicate, "object": object,
+        "extraction_rule": rule, "supports": [support]})
+}
+fn support(evidence: Value, field: &str, end: Value) -> Value {
+    json!({"evidence_id": evidence, "field": field, "start": 0, "end": end})
+}
+fn first_state_support() -> Value {
+    support(json!("$evidence:0"), "/state", json!("$end:0"))
+}
+
+/// S3: a bound extractor runs over its source's pending evidence after ingestion, its claims
+/// read through `why`, its run is logged on its own, and coverage is as without it
+#[test]
+fn S3_a_bound_extractor_turns_its_sources_evidence_into_claims_read_through_why() {
+    let env = Env::new(Some("test-extractor"));
+    env.connector("other", None);
+    env.add_source("project", "test");
+    env.add_source("elsewhere", "other");
+    env.observe(&[state("open"), body("Please close this.")]);
+    let synced = env.json(&["sync"]);
+    let runs = synced["runs"].as_array().unwrap();
+    let extraction = &runs[0]["extraction"];
+    assert_eq!(extraction["extractor"], "test-extractor", "{synced}");
+    assert_eq!(extraction["extractor_version"], "0.1.0");
+    assert_eq!(extraction["state"], "current");
+    assert_eq!(
+        extraction["counts"],
+        json!({"submitted": 1, "accepted": 1, "rejected": 0, "unchanged": 0})
+    );
+    assert!(runs[1].get("extraction").is_none(), "{synced}");
+    // Its own run: plugin id, version and the claim counts.
+    assert_eq!(
+        env.sql::<String>(
+            "SELECT plugin_id || ' ' || plugin_version || ' ' || source || ' ' || status
+             || ' ' || submitted || '/' || accepted || '/' || rejected
+             FROM runs WHERE role = 'extractor'"
+        ),
+        "test-extractor 0.1.0 project ok 1/1/0"
+    );
+    // Only the bound source's evidence reached the extractor.
+    assert_eq!(env.count("claim"), 1);
+    let id: String = env.sql("SELECT id FROM claim");
+    let why = env.json(&["why", &id]);
+    let claim = &why["claim"];
+    assert_eq!(claim["id"], id.as_str());
+    assert_eq!(claim["subject"]["identifier"], PR);
+    assert_eq!(claim["subject"]["type"], "code:PullRequest");
+    assert_eq!(claim["predicate"], "code:state");
+    assert_eq!(claim["object"], literal("open"));
+    assert_eq!(claim["status"], "observed");
+    let supports = why["supports"].as_array().unwrap();
+    assert_eq!(supports.len(), 1, "{why}");
+    let evidence: i64 =
+        env.sql("SELECT id FROM evidence WHERE source = 'project' AND field = '/state'");
+    let s = &supports[0];
+    assert_eq!(s["evidence_id"], evidence);
+    assert_eq!(
+        (&s["source"], &s["scope"], &s["location"], &s["field"]),
+        (
+            &json!("project"),
+            &json!("personal"),
+            &json!(PR),
+            &json!("/state")
+        )
+    );
+    assert_eq!(
+        (&s["start"], &s["end"], &s["quote"]),
+        (&json!(0), &json!(4), &json!("open"))
+    );
+    assert_eq!(s["trust_class"], "structured");
+    assert_eq!(s["extraction_rule"], "state-field");
+    let human = env.ok(&["why", &id]);
+    assert!(
+        human.contains("code:state") && human.contains("/state"),
+        "{human}"
+    );
+    // Coverage is what it is without an extractor.
+    let without = Env::new(None);
+    without.add_source("project", "test");
+    without.observe(&[state("open"), body("Please close this.")]);
+    without.ok(&["sync"]);
+    let shape = |env: &Env| {
+        let c = env.json(&["coverage", "project"])["coverage"][0].clone();
+        let windows: Vec<_> = c["windows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|w| (w["state"].clone(), w["selection"].clone()))
+            .collect();
+        (c["state"].clone(), c["windows_total"].clone(), windows)
+    };
+    assert_eq!(shape(&env), shape(&without));
+    assert_eq!(env.count("coverage WHERE source = 'project'"), 1);
+}
+
+/// S4: a claim whose support is untrusted, undelivered, outside its evidence or from a rule
+/// not declared deterministic is rejected, counted, and leaves nothing behind
+#[test]
+fn S4_claims_with_untrusted_undelivered_outside_or_nondeterministic_supports_are_rejected() {
+    let env = Env::new(Some("test-extractor"));
+    env.connector("other", None);
+    // Synced first, unbound: its observations (ids 1 and 2) never reach the extractor.
+    env.add_source("elsewhere", "other");
+    env.add_source("project", "test");
+    env.observe(&[state("open"), body("Please close this.")]);
+    env.extract(&[
+        claim(
+            "code:state",
+            literal("open"),
+            "state-field",
+            first_state_support(),
+        ),
+        claim(
+            "code:state",
+            literal("untrusted"),
+            "state-field",
+            support(json!("$evidence:1"), "/body", json!(6)),
+        ),
+        claim(
+            "code:state",
+            literal("undelivered"),
+            "state-field",
+            support(json!(1), "/state", json!(4)),
+        ),
+        claim(
+            "code:state",
+            literal("outside"),
+            "state-field",
+            support(json!("$evidence:0"), "/state", json!(99)),
+        ),
+        claim(
+            "code:state",
+            literal("other field"),
+            "state-field",
+            support(json!("$evidence:0"), "/title", json!(4)),
+        ),
+        claim(
+            "code:state",
+            literal("guessed"),
+            "guess",
+            first_state_support(),
+        ),
+        claim(
+            "code:state",
+            literal("undeclared"),
+            "made-up",
+            first_state_support(),
+        ),
+    ]);
+    let synced = env.json(&["sync"]);
+    assert_eq!(
+        synced["runs"][1]["extraction"]["counts"],
+        json!({"submitted": 7, "accepted": 1, "rejected": 6, "unchanged": 0}),
+        "{synced}"
+    );
+    assert_eq!(
+        (
+            env.count("claim"),
+            env.count("claim_support"),
+            env.count("entity")
+        ),
+        (1, 1, 1)
+    );
+    assert_eq!(env.sql::<String>("SELECT object_value FROM claim"), "open");
+}
+
+/// S4a: a predicate outside the vocabulary, or a subject or object outside its domain or
+/// range, is rejected and counted
+#[test]
+fn S4a_claims_outside_the_vocabulary_are_rejected() {
+    let env = Env::new(Some("test-extractor"));
+    env.add_source("project", "test");
+    env.observe(&[state("open")]);
+    let repo = |kind: &str| json!({"kind": "entity", "identifier": "https://github.com/o/p", "type": kind});
+    let on = |subject: Value, predicate: &str, object: Value| {
+        json!({"subject": subject, "predicate": predicate, "object": object,
+            "extraction_rule": "state-field", "supports": [first_state_support()]})
+    };
+    env.extract(&[
+        on(pr(), "code:in_repository", repo("code:Repository")),
+        on(pr(), "code:colour", literal("open")),
+        on(
+            json!({"identifier": "https://github.com/o/p", "type": "code:Repository"}),
+            "code:state",
+            literal("open"),
+        ),
+        on(pr(), "code:in_repository", repo("code:PullRequest")),
+        on(
+            pr(),
+            "code:state",
+            json!({"kind": "literal", "value": "open", "datatype": "number"}),
+        ),
+        on(
+            json!({"identifier": PR, "type": "code:Unknown"}),
+            "code:state",
+            literal("open"),
+        ),
+    ]);
+    let synced = env.json(&["sync"]);
+    assert_eq!(
+        synced["runs"][0]["extraction"]["counts"],
+        json!({"submitted": 6, "accepted": 1, "rejected": 5, "unchanged": 0}),
+        "{synced}"
+    );
+    assert_eq!((env.count("claim"), env.count("entity")), (1, 2));
+    assert_eq!(
+        env.sql::<String>("SELECT predicate FROM claim"),
+        "code:in_repository"
+    );
+}
+
+/// S5: a bound extractor that isn't installed reads `not_installed` and the sync succeeds;
+/// an installed extractor no source is bound to never runs
+#[test]
+fn S5_a_missing_bound_extractor_reads_not_installed_and_an_unbound_one_never_runs() {
+    let env = Env::new(Some("missing-extractor"));
+    env.add_source("project", "test");
+    env.observe(&[state("open")]);
+    let synced = env.json(&["sync"]);
+    let extraction = &synced["runs"][0]["extraction"];
+    assert_eq!(extraction["extractor"], "missing-extractor", "{synced}");
+    assert_eq!(extraction["state"], "not_installed");
+    assert_eq!(synced["runs"][0]["status"], "ok");
+    assert_eq!(
+        env.sql::<String>(
+            "SELECT plugin_id || ' ' || status || ' ' || reason FROM runs WHERE role = 'extractor'"
+        ),
+        "missing-extractor failed not_installed"
+    );
+    assert_eq!(env.count("claim"), 0);
+
+    let unbound = Env::new(None);
+    unbound.add_source("project", "test");
+    unbound.observe(&[state("open")]);
+    let ran = unbound.path("extractor-ran");
+    write_script(
+        &unbound.path("extractor.jsonl"),
+        &[
+            json!({"do": "touch", "path": ran}),
+            json!({"do": "initialize"}),
+        ],
+    );
+    let synced = unbound.json(&["sync"]);
+    assert!(synced["runs"][0].get("extraction").is_none(), "{synced}");
+    assert!(!ran.exists());
+    assert_eq!(unbound.count("runs WHERE role = 'extractor'"), 0);
+    assert_eq!(unbound.count("claim"), 0);
+}
+
+/// S6: an existing GitHub source is bound to `rastro-extractor-github` by its connector,
+/// without the owner editing config
+#[test]
+fn S6_an_existing_github_source_is_bound_to_the_github_extractor() {
+    let env = Env::new(None);
+    // The GitHub connector's own manifest, run by the test connector.
+    let mut manifest: toml::Table =
+        include_str!("../../rastro-connector-github/rastro-plugin.toml")
+            .parse()
+            .unwrap();
+    let command = support::test_connector().to_str().unwrap();
+    manifest.insert("command".into(), command.into());
+    let dir = env.plugin_dir("github");
+    fs::write(dir.join("rastro-plugin.toml"), manifest.to_string()).unwrap();
+    // A source as configured before extractors existed.
+    let config = "[[sources]]\nname = \"demo\"\nconnector = \"github\"\nscope = \"personal\"\n\
+        freshness_rule = \"1h\"\nwindow_start = \"2026-10-01T00:00:00Z\"\nkeep_original = false\n\n\
+        [sources.selector]\nrepo = \"o/p\"\n";
+    fs::create_dir_all(env.path("config")).unwrap();
+    fs::write(env.path("config/config.toml"), config).unwrap();
+    let synced = env.json(&["sync"]);
+    let extraction = &synced["runs"][0]["extraction"];
+    assert_eq!(
+        extraction["extractor"], "rastro-extractor-github",
+        "{synced}"
+    );
+    assert_eq!(
+        env.sql::<String>("SELECT extractor FROM sources WHERE name = 'demo'"),
+        "rastro-extractor-github"
+    );
+    assert_eq!(
+        fs::read_to_string(env.path("config/config.toml")).unwrap(),
+        config
+    );
+}
+
+/// S7: two sources observing the same PR with the same state give one PR entity and one
+/// `code:state` claim with two supports
+#[test]
+fn S7_two_sources_observing_the_same_pr_state_share_one_entity_and_one_claim() {
+    let env = Env::new(Some("test-extractor"));
+    env.add_source("a", "test");
+    env.add_source("b", "test");
+    env.observe(&[state("open")]);
+    env.json(&["sync"]);
+    assert_eq!((env.count("entity"), env.count("claim")), (1, 1));
+    let id: String = env.sql("SELECT id FROM claim");
+    let why = env.json(&["why", &id]);
+    assert_eq!(why["claim"]["predicate"], "code:state");
+    let mut sources: Vec<_> = why["supports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["source"].as_str().unwrap().to_string())
+        .collect();
+    sources.sort();
+    assert_eq!(sources, ["a", "b"], "{why}");
+}
+
+/// S18a: an extractor run left unfinished is marked interrupted at the next writing open,
+/// and no source coverage window is created for it
+#[test]
+fn S18a_an_unfinished_extractor_run_is_marked_interrupted_without_a_coverage_window() {
+    let env = Env::new(Some("test-extractor"));
+    env.add_source("project", "test");
+    env.observe(&[state("open")]);
+    let started = env.path("extractor-started");
+    write_script(
+        &env.path("extractor.jsonl"),
+        &[
+            json!({"do": "initialize"}),
+            json!({"do": "touch", "path": started}),
+            json!({"do": "drain"}),
+        ],
+    );
+    let mut sync = env.command(&["sync"]).spawn().unwrap();
+    let deadline = Instant::now() + Duration::from_secs(30);
+    while !started.exists() {
+        assert!(Instant::now() < deadline, "the extractor never started");
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    // The core dies mid-extraction.
+    sync.kill().unwrap();
+    sync.wait().unwrap();
+    let extractor_run =
+        "SELECT status || ' ' || coalesce(reason, '-') FROM runs WHERE role = 'extractor'";
+    assert_eq!(env.sql::<String>(extractor_run), "running -");
+    assert_eq!(env.count("coverage"), 1);
+    env.ok(&["coverage"]);
+    assert_eq!(env.sql::<String>(extractor_run), "failed interrupted");
+    assert_eq!(env.count("coverage"), 1);
+    let coverage = env.json(&["coverage", "project"]);
+    assert_eq!(coverage["coverage"][0]["state"], "found", "{coverage}");
+}

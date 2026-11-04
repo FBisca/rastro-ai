@@ -1,3 +1,4 @@
+pub mod claims;
 pub mod coverage;
 pub mod evidence;
 pub mod files;
@@ -360,9 +361,38 @@ pub trait Storage {
     /// Drops and rebuilds the full-text index from the stored evidence; returns how many
     /// observations it indexed. Evidence itself is untouched.
     fn rebuild_index(&mut self) -> Result<usize>;
-    /// Marks every run that never finished as failed with reason `interrupted`.
+    /// Marks every run that never finished as failed with reason `interrupted`; a connector
+    /// run's window becomes "couldn't look", an extractor run adds no window.
     /// Returns how many it marked.
     fn interrupt_unfinished_runs(&mut self, at: DateTime<Utc>) -> Result<usize>;
+    /// Records which extractor the source's connector binds it to.
+    fn bind_extractor(&mut self, source: &str, extractor: Option<&str>) -> Result<()>;
+    /// Logs an extractor run over one source; it has no window and no coverage.
+    fn start_extraction(
+        &mut self,
+        source: &Source,
+        plugin: (&str, &str),
+        started_at: DateTime<Utc>,
+    ) -> Result<i64>;
+    /// The source's observations past the extractor version's checkpoint, in replay order
+    /// (`captured_at`, evidence id), each with its id.
+    fn pending_evidence(
+        &self,
+        extractor: (&str, &str),
+        source: &Source,
+    ) -> Result<Vec<(i64, Evidence)>>;
+    /// Stores accepted claims (their entities, aliases and supports) and moves the checkpoint,
+    /// in one transaction. Counts each claim accepted (something new), unchanged, or rejected
+    /// (an identifier already stored under another type).
+    fn record_claims(
+        &mut self,
+        run_id: i64,
+        extractor: (&str, &str),
+        claims: &[claims::ObservedClaim],
+        checkpoint: Option<&claims::Checkpoint>,
+    ) -> Result<Counts>;
+    /// A claim and its supports, or `None` for an unknown id.
+    fn why(&self, claim: &str) -> Result<Option<claims::Why>>;
 }
 
 pub struct Rastro<S> {
@@ -418,6 +448,12 @@ impl<S: Storage> Rastro<S> {
     }
     pub fn sources(&self) -> &[Source] {
         &self.config.sources
+    }
+    /// A claim with every support it has; an unknown id is an error.
+    pub fn why(&self, claim: &str) -> Result<claims::Why> {
+        self.storage
+            .why(claim)?
+            .with_context(|| format!("unknown claim: {claim}"))
     }
     pub fn coverage(&self, name: Option<&str>, all_windows: bool) -> Result<Vec<Coverage>> {
         self.storage.snapshot(|view| {

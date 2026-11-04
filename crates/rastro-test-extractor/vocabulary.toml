@@ -1,0 +1,14 @@
+# A tiny slice of `code`, enough for tests to emit valid and invalid claims.
+namespace = "code"
+version = "0.1.0"
+types = ["code:PullRequest", "code:Repository"]
+
+[[predicates]]
+id = "code:state"
+domain = ["code:PullRequest"]
+range = ["string"]
+
+[[predicates]]
+id = "code:in_repository"
+domain = ["code:PullRequest"]
+range = ["code:Repository"]

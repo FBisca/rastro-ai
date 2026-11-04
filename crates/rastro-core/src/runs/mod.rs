@@ -23,6 +23,40 @@ pub struct RunReport {
     pub window: Window,
     pub counts: Counts,
     pub coverage: CoverageState,
+    /// The run of the extractor the source is bound to, after ingestion.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub extraction: Option<ExtractionReport>,
+}
+
+/// How an extractor run ended.
+#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtractionState {
+    Current,
+    Failed,
+    NotInstalled,
+}
+impl ExtractionState {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Current => "current",
+            Self::Failed => "failed",
+            Self::NotInstalled => "not_installed",
+        }
+    }
+}
+/// One extractor run over a source's pending evidence. Its counts are of claims.
+#[derive(Debug, JsonSchema, Serialize)]
+pub struct ExtractionReport {
+    pub run_id: i64,
+    pub extractor: String,
+    pub extractor_version: String,
+    pub state: ExtractionState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Observations sent to the extractor.
+    pub evidence: usize,
+    pub counts: Counts,
 }
 
 impl<S: Storage> Rastro<S> {
@@ -55,7 +89,7 @@ impl<S: Storage> Rastro<S> {
         self.storage.interrupt_unfinished_runs(Utc::now())?;
         let mut reports = Vec::new();
         for source in &sources {
-            let plugin = host::discover(&self.locations, &source.connector);
+            let plugin = host::discover(&self.locations, &source.connector, "connector");
             let from = if reread {
                 source.window_start
             } else {
@@ -64,13 +98,24 @@ impl<S: Storage> Rastro<S> {
                     None => source.window_start,
                 }
             };
-            reports.push(host::run(
+            let mut report = host::run(
                 &mut self.storage,
                 source,
                 plugin.as_ref().map_err(|reason| *reason),
                 from,
                 Utc::now(),
-            )?);
+            )?;
+            // The connector binds its sources to an extractor; only that one ever reads them.
+            if let Ok(plugin) = &plugin {
+                let bound = plugin.manifest.default_extractor.as_deref();
+                self.storage.bind_extractor(&source.name, bound)?;
+                if let Some(extractor) = bound {
+                    let extraction =
+                        host::extract(&mut self.storage, &self.locations, source, extractor)?;
+                    report.extraction = Some(extraction);
+                }
+            }
+            reports.push(report);
         }
         drop(lock);
         Ok(reports)

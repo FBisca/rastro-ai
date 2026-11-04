@@ -21,20 +21,23 @@ use std::{
     time::{Duration, Instant},
 };
 
+mod extract;
 mod io;
+pub use extract::extract;
 
 pub struct Plugin {
     pub manifest: Manifest,
     pub dir: PathBuf,
 }
 
-/// Finds the manifest whose `id` is the source's connector, under `<config>/plugins` and
+/// Finds the manifest whose `id` is `id` and that provides `kind`, under `<config>/plugins` and
 /// the directories of `RASTRO_PLUGIN_PATH`. Each root may be a plugin directory or hold some.
 /// `Err` carries the typed reason the run will fail with: `not_installed` when no manifest
 /// matches, `protocol` when the matching one fails its check.
 pub fn discover(
     locations: &Locations,
-    connector: &str,
+    id: &str,
+    kind: &str,
 ) -> std::result::Result<Plugin, &'static str> {
     let mut roots = vec![locations.plugins()];
     if let Some(path) = env::var_os("RASTRO_PLUGIN_PATH") {
@@ -54,9 +57,9 @@ pub fn discover(
                 continue;
             };
             match Manifest::parse(&text) {
-                Ok(manifest) if manifest.id == connector => {
-                    return check(manifest, dir).map_err(|error| {
-                        eprintln!("plugin {connector} fails its check: {error:#}");
+                Ok(manifest) if manifest.id == id => {
+                    return check(manifest, dir, kind).map_err(|error| {
+                        eprintln!("plugin {id} fails its check: {error:#}");
                         "protocol"
                     });
                 }
@@ -86,7 +89,7 @@ fn parse_diagnostic(dir: &Path, text: &str, error: &anyhow::Error) -> String {
     format!("{}: invalid rastro-plugin.toml{at}", file.display())
 }
 
-fn check(manifest: Manifest, dir: PathBuf) -> Result<Plugin> {
+fn check(manifest: Manifest, dir: PathBuf, kind: &str) -> Result<Plugin> {
     if major(PROTOCOL_VERSION) != manifest.protocol.to_string() {
         bail!(
             "plugin {} speaks protocol {}",
@@ -94,11 +97,11 @@ fn check(manifest: Manifest, dir: PathBuf) -> Result<Plugin> {
             manifest.protocol
         );
     }
-    if !manifest.kinds.iter().any(|k| k == "connector") {
-        bail!("plugin {} is not a connector", manifest.id);
+    if !manifest.kinds.iter().any(|k| k == kind) {
+        bail!("plugin {} is not a {kind}", manifest.id);
     }
     if !manifest.permissions.actions.is_empty() {
-        bail!("a connector can't hold actions (plugin {})", manifest.id);
+        bail!("a {kind} can't hold actions (plugin {})", manifest.id);
     }
     Ok(Plugin { manifest, dir })
 }
@@ -242,6 +245,7 @@ pub fn run<S: Storage>(
         window,
         counts,
         coverage: state,
+        extraction: None,
     })
 }
 
@@ -483,6 +487,13 @@ impl Wire {
             Err(RecvTimeoutError::Timeout) => Err("timeout"),
         }
     }
+    /// Queues a line without waiting for it to be written, so the host can read the plugin's
+    /// answers while it is still taking input. A failed write shows up as end of input.
+    fn post(&mut self, message: &Envelope) -> std::result::Result<(), &'static str> {
+        let line = serde_json::to_string(message).map_err(|_| "protocol")?;
+        let (ack, _) = std::sync::mpsc::sync_channel(1);
+        self.jobs.send((line, ack)).map_err(|_| "interrupted")
+    }
     fn recv(&mut self) -> std::result::Result<Envelope, &'static str> {
         match self.events.recv_timeout(self.deadline) {
             Ok(io::Event::Line(line)) => match serde_json::from_str::<Envelope>(&line) {
@@ -494,6 +505,27 @@ impl Wire {
             Err(RecvTimeoutError::Timeout) => Err("timeout"),
         }
     }
+}
+
+/// Sends `initialize` and checks the answer names our protocol major and the manifest.
+fn handshake(
+    wire: &mut Wire,
+    plugin: &Plugin,
+    init: impl serde::Serialize,
+) -> Result<std::result::Result<(), &'static str>> {
+    if let Err(reason) = wire.send(&Envelope::request(1, INITIALIZE, init)?) {
+        return Ok(Err(reason));
+    }
+    let reply = match wire.recv() {
+        Ok(reply) => reply,
+        Err(reason) => return Ok(Err(reason)),
+    };
+    let agreed = reply.id == Some(1.into())
+        && reply.result::<InitializeResult>().is_ok_and(|init| {
+            major(&init.protocol) == major(PROTOCOL_VERSION)
+                && init.manifest_id == plugin.manifest.id
+        });
+    Ok(if agreed { Ok(()) } else { Err("protocol") })
 }
 
 fn converse<S: Storage>(
@@ -518,17 +550,7 @@ fn converse<S: Storage>(
             }
         };
     }
-    step!(wire.send(&Envelope::request(1, INITIALIZE, init)?));
-    let reply = step!(wire.recv());
-    if reply.id != Some(1.into()) {
-        return Ok(Err("protocol"));
-    }
-    let Ok(init) = reply.result::<InitializeResult>() else {
-        return Ok(Err("protocol"));
-    };
-    if major(&init.protocol) != major(PROTOCOL_VERSION) || init.manifest_id != plugin.manifest.id {
-        return Ok(Err("protocol"));
-    }
+    step!(handshake(wire, plugin, init)?);
     loop {
         let message = step!(wire.recv());
         match message.method.as_deref() {

@@ -1,0 +1,24 @@
+id = "test-extractor"
+name = "Rastro test extractor"
+version = "0.1.0"
+author = "Rastro"
+kinds = ["extractor", "vocabulary"]
+protocol = 1
+command = "rastro-test-extractor"
+triggers = []
+dependencies = ["code"]
+vocabulary = "vocabulary.toml"
+
+[[extraction_rules]]
+id = "state-field"
+deterministic = true
+
+[[extraction_rules]]
+id = "guess"
+deterministic = false
+
+[permissions]
+submit = []
+scopes = ["personal", "work"]
+env = ["RASTRO_TEST_EXTRACTOR_SCRIPT"]
+actions = []

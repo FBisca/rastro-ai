@@ -5,7 +5,10 @@ use rastro_core::{
     Coverage, CoverageWindow, Locations, MAX_SEARCH_LIMIT, Rastro, display_escaped, display_safe,
     runs::RunReport,
 };
-use rastro_operations::{Request, Response, catalog, envelope, results::SearchResponse};
+use rastro_operations::{
+    Request, Response, catalog, envelope,
+    results::{SearchResponse, WhyResult},
+};
 use rastro_storage_sqlite::SqliteStorage;
 use std::ffi::OsString;
 
@@ -104,7 +107,47 @@ fn sync_line(run: &RunReport) -> String {
     if let Some(reason) = &run.reason {
         line += &format!(" | Reason: {}", display_safe(reason));
     }
+    if let Some(e) = &run.extraction {
+        line += &format!(
+            "\n  Extractor: {} {} | {} | evidence {} | claims submitted {}, accepted {}, rejected {}, unchanged {}",
+            display_safe(&e.extractor),
+            e.extractor_version,
+            e.state.as_str(),
+            e.evidence,
+            e.counts.submitted,
+            e.counts.accepted,
+            e.counts.rejected,
+            e.counts.unchanged
+        );
+    }
     line
+}
+fn why_text(why: &WhyResult) -> String {
+    let c = &why.claim;
+    let object = match &c.object {
+        rastro_core::claims::Object::Entity { identifier, .. } => display_safe(identifier),
+        rastro_core::claims::Object::Literal { value, .. } => {
+            format!("\"{}\"", display_safe(value))
+        }
+    };
+    let mut lines = vec![format!(
+        "{} {} {} | Status: {} | Claim: {} | Revision: {}",
+        display_safe(&c.subject.identifier),
+        display_safe(&c.predicate),
+        object,
+        c.status,
+        c.id,
+        c.revision
+    )];
+    lines.extend(why.supports.iter().map(|s| {
+        format!(
+            "  \"{}\" | Link: {} | Field: {} | Span: [{}, {}) | Captured: {} | Trust class: {} | Scope: {} | Source: {} | Rule: {} ({} {})",
+            display_safe(&s.quote), display_safe(&s.location), display_safe(&s.field), s.start, s.end,
+            stamp(s.captured_at), s.trust_class.as_str(), s.scope.0, s.source,
+            display_safe(&s.extraction_rule), display_safe(&s.extractor), display_safe(&s.extractor_version)
+        )
+    }));
+    lines.join("\n")
 }
 fn search_text(text: &str, found: &SearchResponse) -> String {
     if found.results.is_empty() {
@@ -166,6 +209,7 @@ fn human(response: &Response) -> String {
         Response::Sync(r) => or_none(r.runs.iter().map(sync_line).collect()),
         Response::IndexRebuild(r) => format!("Index rebuilt: {} observations", r.indexed),
         Response::Search(r) => search_text(&r.query, r),
+        Response::Why(r) => why_text(r),
     }
 }
 fn execute(request: Request) -> Result<Outcome> {
