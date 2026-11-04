@@ -10,10 +10,20 @@ use rastro_plugin_sdk::{
     ExtractionBinding, ExtractorInitializeParams, PROTOCOL_VERSION, RUN_FINISH, Role, RunFinish,
     SourceScope, Span, Vocabulary,
 };
-use std::{collections::HashMap, fs, process::Command};
+use std::{
+    collections::{BTreeMap, HashMap, btree_map::Entry},
+    fs,
+    path::{Component, Path},
+    process::Command,
+    time::Instant,
+};
 
 /// Observations per `evidence.batch`.
 const BATCH: usize = 100;
+/// Claims a run may submit unless the limits say otherwise: this many per observation
+/// delivered, and never fewer than `MIN_CLAIMS`.
+const CLAIMS_PER_EVIDENCE: usize = 20;
+const MIN_CLAIMS: usize = 1000;
 
 type Outcome = std::result::Result<(), &'static str>;
 
@@ -84,19 +94,35 @@ pub fn extract<S: Storage>(
     })
 }
 
-/// The extractor's own vocabulary: a namespace it lists among its dependencies.
+/// The extractor's own vocabulary: a file inside its directory, defining a namespace it lists
+/// among its dependencies, every type and predicate named in that namespace.
 fn vocabulary(plugin: &Plugin) -> Result<Vocabulary> {
     let file = plugin
         .manifest
         .vocabulary
         .as_deref()
         .context("an extractor names its vocabulary file")?;
-    let vocabulary = Vocabulary::parse(&fs::read_to_string(plugin.dir.join(file))?)?;
     ensure!(
-        plugin.manifest.dependencies.contains(&vocabulary.namespace),
-        "vocabulary {} isn't among the dependencies",
-        vocabulary.namespace
+        Path::new(file)
+            .components()
+            .all(|c| matches!(c, Component::Normal(_))),
+        "the vocabulary file must lie inside the plugin directory"
     );
+    let vocabulary = Vocabulary::parse(&fs::read_to_string(plugin.dir.join(file))?)?;
+    let namespace = &vocabulary.namespace;
+    ensure!(
+        plugin.manifest.dependencies.contains(namespace),
+        "vocabulary {namespace} isn't among the dependencies"
+    );
+    let prefix = format!("{namespace}:");
+    let ids = vocabulary.types.iter();
+    let ids = ids.chain(vocabulary.predicates.iter().map(|p| &p.id));
+    for id in ids {
+        ensure!(
+            id.len() > prefix.len() && id.starts_with(&prefix),
+            "vocabulary {namespace} defines {id} outside its namespace"
+        );
+    }
     Ok(vocabulary)
 }
 
@@ -115,11 +141,13 @@ fn drive<S: Storage>(storage: &mut S, run: &Run, counts: &mut Counts) -> Outcome
     let manifest = &run.plugin.manifest;
     let mut command = Command::new(resolve(&run.plugin.dir, &manifest.command));
     command.env_clear().envs(allowed_environment(manifest));
+    // Discovery found the manifest; a command that won't start is the plugin's fault.
     let Ok(mut process) = Connector::launch(command, &manifest.id, Limits::from_env()) else {
-        return Err("not_installed");
+        return Err("protocol");
     };
-    let outcome =
-        converse(storage, &mut process.wire, &process.relay, run, counts).unwrap_or_else(|error| {
+    let wire = &mut process.wire;
+    let outcome = converse(storage, wire, &process.relay, &process.limits, run, counts)
+        .unwrap_or_else(|error| {
             process.relay.line(&format!("storage error: {error:#}"));
             Err("storage")
         });
@@ -131,10 +159,15 @@ fn converse<S: Storage>(
     storage: &mut S,
     wire: &mut Wire,
     relay: &super::io::Relay,
+    limits: &Limits,
     run: &Run,
     counts: &mut Counts,
 ) -> Result<Outcome> {
     let manifest = &run.plugin.manifest;
+    let end = Instant::now() + limits.extraction_time;
+    let cap = limits
+        .max_claims
+        .unwrap_or(MIN_CLAIMS.max(CLAIMS_PER_EVIDENCE * run.pending.len()));
     let init = ExtractorInitializeParams {
         protocol: PROTOCOL_VERSION.into(),
         manifest_id: manifest.id.clone(),
@@ -168,15 +201,20 @@ fn converse<S: Storage>(
         }
     }
     let delivered: HashMap<i64, Evidence> = run.pending.iter().cloned().collect();
-    let mut accepted: Vec<ObservedClaim> = Vec::new();
+    // One entry per claim id; a repeat in the same run adds its supports and counts unchanged.
+    let mut accepted: BTreeMap<String, ObservedClaim> = BTreeMap::new();
     loop {
-        let message = match wire.recv() {
+        let message = match wire.recv_by(end) {
             Ok(message) => message,
             Err(reason) => return Ok(Err(reason)),
         };
         match message.method.as_deref() {
             Some(CLAIM_SUBMIT) => {
                 counts.submitted += 1;
+                if counts.submitted as usize > cap {
+                    relay.line(&format!("more than {cap} claims in one run"));
+                    return Ok(Err("protocol"));
+                }
                 let checked = message
                     .params()
                     .map_err(|error| format!("{error:#}"))
@@ -184,7 +222,15 @@ fn converse<S: Storage>(
                         claims::validate(submit, &delivered, manifest, run.vocabulary)
                     });
                 match checked {
-                    Ok(claim) => accepted.push(claim),
+                    Ok(claim) => match accepted.entry(claim.id.clone()) {
+                        Entry::Vacant(entry) => {
+                            entry.insert(claim);
+                        }
+                        Entry::Occupied(mut entry) => {
+                            entry.get_mut().supports.extend(claim.supports);
+                            counts.unchanged += 1;
+                        }
+                    },
                     Err(why) => {
                         relay.line(&format!("rejected claim: {why}"));
                         counts.rejected += 1;
@@ -203,10 +249,12 @@ fn converse<S: Storage>(
                         scope: run.source.scope.clone(),
                         last: (e.captured_at, *id),
                     });
+                    let claims: Vec<ObservedClaim> =
+                        std::mem::take(&mut accepted).into_values().collect();
                     let stored = storage.record_claims(
                         run.run_id,
                         (&manifest.id, &manifest.version),
-                        &accepted,
+                        &claims,
                         checkpoint.as_ref(),
                     )?;
                     counts.accepted += stored.accepted;
@@ -221,8 +269,9 @@ fn converse<S: Storage>(
                         .find(|r| Some(*r) == reason)
                         .unwrap_or("protocol"))
                 };
+                // What was stored stays stored, even if the extractor can't hear the answer.
                 if let Err(reason) = wire.send(&Envelope::response(message.id, *counts)?) {
-                    return Ok(Err(reason));
+                    relay.line(&format!("couldn't answer run.finish: {reason}"));
                 }
                 return Ok(outcome);
             }

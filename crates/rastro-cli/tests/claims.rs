@@ -270,11 +270,37 @@ fn S3_a_bound_extractor_turns_its_sources_evidence_into_claims_read_through_why(
 fn S4_claims_with_untrusted_undelivered_outside_or_nondeterministic_supports_are_rejected() {
     let env = Env::new(Some("test-extractor"));
     env.connector("other", None);
-    // Synced first, unbound: its observations (ids 1 and 2) never reach the extractor.
     env.add_source("elsewhere", "other");
     env.add_source("project", "test");
-    env.observe(&[state("open"), body("Please close this.")]);
+    // An earlier run: its observation (id 1) is behind the checkpoint afterwards.
+    env.observe(&[state("draft")]);
+    write_script(
+        &env.path("extractor.jsonl"),
+        &[
+            json!({"do": "initialize"}),
+            json!({"do": "read_batches"}),
+            json!({"do": "state_claims"}),
+            json!({"do": "finish"}),
+        ],
+    );
+    env.json(&["sync", "project"]);
+    // Synced first and unbound: its observations (ids 2 to 4) never reach the extractor.
+    let login = observation(PR, "/user/login", "zoë", "structured");
+    env.observe(&[state("open"), body("Please close this."), login]);
     env.extract(&[
+        claim(
+            "code:state",
+            literal("behind the checkpoint"),
+            "state-field",
+            support(json!(1), "/state", json!(5)),
+        ),
+        claim(
+            "code:state",
+            literal("mid-character"),
+            "state-field",
+            // "zo" and the first byte of "ë".
+            support(json!("$evidence:2"), "/user/login", json!(3)),
+        ),
         claim(
             "code:state",
             literal("open"),
@@ -291,7 +317,7 @@ fn S4_claims_with_untrusted_undelivered_outside_or_nondeterministic_supports_are
             "code:state",
             literal("undelivered"),
             "state-field",
-            support(json!(1), "/state", json!(4)),
+            support(json!(2), "/state", json!(4)),
         ),
         claim(
             "code:state",
@@ -321,7 +347,7 @@ fn S4_claims_with_untrusted_undelivered_outside_or_nondeterministic_supports_are
     let synced = env.json(&["sync"]);
     assert_eq!(
         synced["runs"][1]["extraction"]["counts"],
-        json!({"submitted": 7, "accepted": 1, "rejected": 6, "unchanged": 0}),
+        json!({"submitted": 9, "accepted": 1, "rejected": 8, "unchanged": 0}),
         "{synced}"
     );
     assert_eq!(
@@ -330,9 +356,49 @@ fn S4_claims_with_untrusted_undelivered_outside_or_nondeterministic_supports_are
             env.count("claim_support"),
             env.count("entity")
         ),
-        (1, 1, 1)
+        (2, 2, 1)
     );
-    assert_eq!(env.sql::<String>("SELECT object_value FROM claim"), "open");
+    assert_eq!(
+        env.sql::<String>("SELECT group_concat(object_value, ' ') FROM (SELECT object_value FROM claim ORDER BY object_value)"),
+        "draft open"
+    );
+}
+
+/// S4: an extractor that submits more claims than the run allows fails, and nothing of the
+/// run is stored
+#[test]
+fn S4_an_extractor_exceeding_the_claim_cap_fails_and_stores_nothing() {
+    let env = Env::new(Some("test-extractor"));
+    env.add_source("project", "test");
+    env.observe(&[state("open")]);
+    let valid = claim(
+        "code:state",
+        literal("open"),
+        "state-field",
+        first_state_support(),
+    );
+    env.extract(&[valid.clone(), valid.clone(), valid]);
+    let output = env
+        .command(&["sync", "--json"])
+        .env("RASTRO_HOST_MAX_CLAIMS", "2")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let synced: Value = serde_json::from_slice(&output.stdout).unwrap();
+    let extraction = &synced["result"]["runs"][0]["extraction"];
+    assert_eq!(
+        (&extraction["state"], &extraction["reason"]),
+        (&json!("failed"), &json!("protocol")),
+        "{synced}"
+    );
+    assert_eq!(
+        (
+            env.count("claim"),
+            env.count("entity"),
+            env.count("extraction_checkpoint")
+        ),
+        (0, 0, 0)
+    );
 }
 
 /// S4a: a predicate outside the vocabulary, or a subject or object outside its domain or
@@ -511,4 +577,21 @@ fn S18a_an_unfinished_extractor_run_is_marked_interrupted_without_a_coverage_win
     assert_eq!(env.count("coverage"), 1);
     let coverage = env.json(&["coverage", "project"]);
     assert_eq!(coverage["coverage"][0]["state"], "found", "{coverage}");
+    // Even an unfinished extractor run that names a window adds no coverage for it.
+    Connection::open(env.path("data/rastro.sqlite3"))
+        .unwrap()
+        .execute(
+            "INSERT INTO runs (source, scope, plugin_id, plugin_version, started_at, status, role,
+             window_start, window_end) VALUES ('project', 'personal', 'test-extractor', '0.1.0',
+             '2026-11-04T00:00:00.000Z', 'running', 'extractor', '2026-11-01T00:00:00.000Z',
+             '2026-11-04T00:00:00.000Z')",
+            [],
+        )
+        .unwrap();
+    env.ok(&["coverage"]);
+    assert_eq!(
+        env.count("runs WHERE role = 'extractor' AND reason = 'interrupted'"),
+        2
+    );
+    assert_eq!(env.count("coverage"), 1);
 }

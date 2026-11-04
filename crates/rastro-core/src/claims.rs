@@ -6,7 +6,10 @@ use rastro_plugin_sdk::{ClaimObject, ClaimSubmit, Manifest, Vocabulary};
 use schemars::JsonSchema;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
+
+/// The longest identifier, predicate or literal value a claim may carry, in UTF-8 bytes.
+pub const MAX_TERM_BYTES: usize = 4096;
 
 /// An entity: one exact canonical identifier, with its type.
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
@@ -56,7 +59,7 @@ pub struct ObservedClaim {
     pub subject: Entity,
     pub predicate: String,
     pub object: Object,
-    pub supports: Vec<Support>,
+    pub supports: BTreeSet<Support>,
 }
 /// How far an extractor version has read a (source, scope): the last observation processed,
 /// in replay order (`captured_at`, evidence id).
@@ -132,6 +135,20 @@ pub fn validate(
     manifest: &Manifest,
     vocabulary: &Vocabulary,
 ) -> Result<ObservedClaim, String> {
+    let terms = [&submit.subject.identifier, &submit.predicate];
+    let object_term = match &submit.object {
+        ClaimObject::Entity { identifier, .. } => identifier,
+        ClaimObject::Literal { value, .. } => value,
+    };
+    if terms
+        .into_iter()
+        .chain([object_term])
+        .any(|t| t.len() > MAX_TERM_BYTES)
+    {
+        return Err(format!(
+            "a claim term is longer than {MAX_TERM_BYTES} bytes"
+        ));
+    }
     let rule = manifest
         .extraction_rules
         .iter()
@@ -178,7 +195,7 @@ pub fn validate(
     if submit.supports.is_empty() {
         return Err("a claim needs at least one support".into());
     }
-    let mut supports = Vec::new();
+    let mut supports = BTreeSet::new();
     for support in submit.supports {
         let evidence = delivered
             .get(&support.evidence_id)
@@ -198,7 +215,7 @@ pub fn validate(
         if !inside || !at(support.start) || !at(support.end) {
             return Err("support span lies outside its evidence".into());
         }
-        supports.push(Support {
+        supports.insert(Support {
             evidence_id: support.evidence_id,
             field: support.field,
             start: support.start,

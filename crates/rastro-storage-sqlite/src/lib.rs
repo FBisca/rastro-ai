@@ -300,6 +300,17 @@ impl Storage for SqliteStorage {
             transaction.commit()?;
             return Ok(Appended::Unchanged(id));
         }
+        // Capture times never go backwards within a pair, so id order is replay order and an
+        // extraction checkpoint can't skip an observation appended under an earlier clock.
+        let floor: Option<String> = transaction.query_row(
+            "SELECT max(captured_at) FROM evidence WHERE source = ?1 AND scope = ?2",
+            params![e.source, e.scope.0],
+            |row| row.get(0),
+        )?;
+        let captured_at = match floor.map(parse_time).transpose()? {
+            Some(floor) if floor > e.captured_at => floor,
+            _ => e.captured_at,
+        };
         transaction.execute(
             "INSERT INTO evidence (source, scope, location, field, start, end, quote, captured_at,
              source_updated_at, trust_class, original) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
@@ -311,7 +322,7 @@ impl Storage for SqliteStorage {
                 e.start as i64,
                 e.end as i64,
                 e.quote,
-                stamp(e.captured_at),
+                stamp(captured_at),
                 e.source_updated_at.map(stamp),
                 e.trust_class.as_str(),
                 e.original.as_ref().map(|o| o.to_string())

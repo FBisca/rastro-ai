@@ -258,6 +258,10 @@ struct Limits {
     shutdown: Duration,
     /// Stderr lines relayed per run.
     stderr_lines: usize,
+    /// Claims an extractor run may submit; unset, it scales with the evidence delivered.
+    max_claims: Option<usize>,
+    /// How long an extractor run may take in all.
+    extraction_time: Duration,
 }
 impl Limits {
     fn from_env() -> Self {
@@ -278,6 +282,11 @@ impl Limits {
                 DEFAULT_SHUTDOWN.as_millis() as u64,
             )),
             stderr_lines: number("RASTRO_HOST_STDERR_LINES", DEFAULT_STDERR_LINES as u64) as usize,
+            max_claims: knob("RASTRO_HOST_MAX_CLAIMS").and_then(|v| v.parse().ok()),
+            extraction_time: Duration::from_millis(number(
+                "RASTRO_HOST_EXTRACTION_MS",
+                DEFAULT_EXTRACTION_TIME.as_millis() as u64,
+            )),
         }
     }
 }
@@ -290,6 +299,8 @@ pub const DEFAULT_SILENCE: Duration = Duration::from_secs(60);
 pub const DEFAULT_SHUTDOWN: Duration = Duration::from_secs(5);
 /// How many stderr lines are relayed per run; the rest are counted and dropped.
 pub const DEFAULT_STDERR_LINES: usize = 1000;
+/// How long an extractor run may take in all, however chatty it is.
+pub const DEFAULT_EXTRACTION_TIME: Duration = Duration::from_secs(600);
 
 /// A reason a connector gives must be one of the typed ones; anything else means it broke
 /// the contract and is recorded as `protocol`.
@@ -494,6 +505,18 @@ impl Wire {
         let (ack, _) = std::sync::mpsc::sync_channel(1);
         self.jobs.send((line, ack)).map_err(|_| "interrupted")
     }
+    /// `recv`, but never past `end`: a plugin that keeps talking still runs out of time.
+    fn recv_by(&mut self, end: Instant) -> std::result::Result<Envelope, &'static str> {
+        let left = end.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            return Err("timeout");
+        }
+        let silence = self.deadline;
+        self.deadline = silence.min(left);
+        let message = self.recv();
+        self.deadline = silence;
+        message
+    }
     fn recv(&mut self) -> std::result::Result<Envelope, &'static str> {
         match self.events.recv_timeout(self.deadline) {
             Ok(io::Event::Line(line)) => match serde_json::from_str::<Envelope>(&line) {
@@ -627,6 +650,10 @@ mod tests {
             ),
             (7, Duration::from_millis(7), Duration::from_millis(7), 7)
         );
+        assert_eq!(
+            (tuned.max_claims, tuned.extraction_time),
+            (Some(7), Duration::from_millis(7))
+        );
         let release = everything(false);
         assert_eq!(
             (
@@ -642,6 +669,10 @@ mod tests {
                 DEFAULT_STDERR_LINES
             )
         );
+        assert_eq!(
+            (release.max_claims, release.extraction_time),
+            (None, DEFAULT_EXTRACTION_TIME)
+        );
     }
 
     /// evidence/R26: teardown kills the process group and releases every helper thread
@@ -656,6 +687,8 @@ mod tests {
                 silence: Duration::from_secs(1),
                 shutdown: Duration::from_millis(200),
                 stderr_lines: 10,
+                max_claims: None,
+                extraction_time: Duration::from_secs(5),
             };
             let connector = Connector::launch(command, "test", limits).unwrap();
             let tally = connector.teardown(finished);
@@ -682,6 +715,8 @@ mod tests {
             silence: Duration::from_secs(1),
             shutdown: Duration::from_secs(5),
             stderr_lines: 10,
+            max_claims: None,
+            extraction_time: Duration::from_secs(5),
         };
         let connector = Connector::launch(command, "test", limits).unwrap();
         let mut state = String::new();

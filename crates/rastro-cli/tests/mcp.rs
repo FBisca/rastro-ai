@@ -347,7 +347,7 @@ fn launch_migrates_recovers_and_turns_on_wal_before_the_first_answer() {
     let last = last_migration(&db);
     db.execute_batch(
         "DROP TABLE extraction_checkpoint; DROP TABLE claim_support; DROP TABLE claim;
-         DROP TABLE alias; DROP TABLE entity;
+         DROP TABLE alias; DROP TABLE entity; DROP INDEX evidence_by_pair_capture;
          ALTER TABLE sources DROP COLUMN extractor; ALTER TABLE runs DROP COLUMN role;
          INSERT INTO runs (source, scope, plugin_id, plugin_version, started_at, status,
            window_start, window_end)

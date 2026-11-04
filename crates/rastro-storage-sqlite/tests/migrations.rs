@@ -122,3 +122,62 @@ fn legacy_user_version_maps_to_the_migrations_it_meant() {
     let error = SqliteStorage::open(&path).err().unwrap();
     assert!(format!("{error:#}").contains("user_version 3"), "{error:#}");
 }
+
+/// S3: evidence appended while the clock reads earlier than an extracted observation is still
+/// pending for the extractor: capture times never go backwards within a (source, scope)
+#[test]
+fn S3_evidence_captured_with_an_earlier_clock_is_still_extracted() {
+    use chrono::{DateTime, Utc};
+    use rastro_core::{Evidence, TrustClass, claims::Checkpoint};
+    let home = tempfile::tempdir().unwrap();
+    let mut storage = SqliteStorage::open(&home.path().join("rastro.sqlite3")).unwrap();
+    let source = Source::github("project".into(), "o/p".into(), Scope("personal".into()));
+    storage
+        .project_sources(std::slice::from_ref(&source))
+        .unwrap();
+    let at = |text: &str| text.parse::<DateTime<Utc>>().unwrap();
+    let observed = |location: &str, captured_at: DateTime<Utc>| Evidence {
+        source: "project".into(),
+        scope: Scope("personal".into()),
+        location: location.into(),
+        field: "/state".into(),
+        start: 0,
+        end: 4,
+        quote: "open".into(),
+        trust_class: TrustClass::Structured,
+        captured_at,
+        source_updated_at: None,
+        original: None,
+    };
+    let window = (at("2026-11-01T00:00:00Z"), at("2026-11-02T00:00:00Z"));
+    let run = storage
+        .start_run(&source, ("test", "0.1.0"), window.0, window)
+        .unwrap();
+    storage
+        .append_evidence(run, &observed("https://x/1", at("2026-11-04T12:00:00Z")))
+        .unwrap();
+    let extractor = ("test-extractor", "0.1.0");
+    let pending = storage.pending_evidence(extractor, &source).unwrap();
+    let (id, first) = &pending[0];
+    let extraction = storage
+        .start_extraction(&source, extractor, window.0)
+        .unwrap();
+    let checkpoint = Checkpoint {
+        extractor: extractor.0.into(),
+        extractor_version: extractor.1.into(),
+        source: "project".into(),
+        scope: Scope("personal".into()),
+        last: (first.captured_at, *id),
+    };
+    storage
+        .record_claims(extraction, extractor, &[], Some(&checkpoint))
+        .unwrap();
+    // The clock went back an hour before the next observation.
+    storage
+        .append_evidence(run, &observed("https://x/2", at("2026-11-04T11:00:00Z")))
+        .unwrap();
+    let pending = storage.pending_evidence(extractor, &source).unwrap();
+    let locations: Vec<_> = pending.iter().map(|(_, e)| e.location.as_str()).collect();
+    assert_eq!(locations, ["https://x/2"]);
+    assert!(pending[0].1.captured_at >= first.captured_at);
+}

@@ -32,3 +32,5 @@ CREATE TABLE extraction_checkpoint (
     scope TEXT NOT NULL, last_captured_at TEXT NOT NULL, last_evidence_id INTEGER NOT NULL,
     PRIMARY KEY (extractor, extractor_version, source, scope)
 ) WITHOUT ROWID;
+-- Replay order within a pair, and the floor that keeps capture times from going backwards.
+CREATE INDEX evidence_by_pair_capture ON evidence (source, scope, captured_at, id);
