@@ -54,6 +54,9 @@ impl Env {
     }
     /// `now` ages the clock coverage is judged by (`RASTRO_NOW`); the core alone reads it.
     fn rastro_at(&self, args: &[&str], now: Option<&str>) -> Output {
+        self.rastro_os(args.iter().map(Into::into).collect(), now)
+    }
+    fn rastro_os(&self, args: Vec<std::ffi::OsString>, now: Option<&str>) -> Output {
         let mut command = Command::new(env!("CARGO_BIN_EXE_rastro"));
         if let Some(now) = now {
             command.env("RASTRO_NOW", now);
@@ -442,4 +445,33 @@ fn S22a_a_rebuilt_index_behaves_like_a_freshly_migrated_one() {
     assert_eq!(cited(&rebuilt, &["search", "run"]).len(), 1);
     assert_eq!(cited(&rebuilt, &["search", "cafe", "--history"]).len(), 3);
     assert_eq!(cited(&rebuilt, &["search", "naive"]).len(), 0);
+}
+
+#[cfg(unix)]
+#[test]
+fn S23b_an_argument_that_is_not_utf8_never_panics() {
+    use std::{ffi::OsString, os::unix::ffi::OsStringExt};
+    let env = Env::new();
+    let bad = || OsString::from_vec(vec![0xff, 0xfe]);
+    for (words, operation) in [
+        (vec!["search"], "search"),
+        (vec!["sync"], "sync"),
+        (vec!["coverage"], "coverage"),
+        (vec!["index", "rebuild"], "index.rebuild"),
+        (vec!["source", "add"], "source.add"),
+    ] {
+        let mut args: Vec<OsString> = words.iter().map(Into::into).collect();
+        args.push(bad());
+        let mut json = args.clone();
+        json.push("--json".into());
+        let output = env.rastro_os(json, None);
+        assert_eq!(output.status.code(), Some(2), "{words:?}");
+        let value: Value =
+            serde_json::from_slice(&output.stdout).unwrap_or_else(|e| panic!("{words:?}: {e}"));
+        validate(&value);
+        assert_eq!(value["operation"], operation);
+        let plain = env.rastro_os(args, None);
+        assert_eq!(plain.status.code(), Some(2), "{words:?}");
+        assert!(plain.stdout.is_empty());
+    }
 }
