@@ -10,5 +10,6 @@ dependencies = []
 
 [permissions]
 submit = ["issue", "comment"]
-scopes = []
+scopes = ["personal"]
+env = ["RASTRO_TEST_SCRIPT"]
 actions = []

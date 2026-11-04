@@ -6,6 +6,7 @@
 //! - `send_raw` {line}: write that text as one line (malformed input)
 //! - `finish` {status?, submitted?, reason?}: send `run.finish` and wait for the reply
 //! - `sleep` {ms}
+//! - `dump_env` {path}: write the environment, one NAME=value per line, to that file
 //! - `exit` {code?}: end the process at once
 //!
 //! Without a script it initializes, reports complete coverage and finishes.
@@ -40,6 +41,9 @@ enum Step {
     },
     Sleep {
         ms: u64,
+    },
+    DumpEnv {
+        path: String,
     },
     Exit {
         #[serde(default)]
@@ -104,6 +108,10 @@ fn main() -> Result<()> {
                 }
             }
             Step::Sleep { ms } => thread::sleep(Duration::from_millis(ms)),
+            Step::DumpEnv { path } => {
+                let lines: Vec<_> = env::vars().map(|(k, v)| format!("{k}={v}")).collect();
+                fs::write(path, lines.join("\n"))?;
+            }
             Step::Exit { code } => std::process::exit(code),
         }
     }

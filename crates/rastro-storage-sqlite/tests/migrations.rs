@@ -91,3 +91,31 @@ fn S3b_migrations_apply_once_in_timestamp_order_and_unknown_ones_are_refused() {
     SqliteStorage::open(&legacy).unwrap();
     assert_eq!(names(&connection).len(), 3);
 }
+
+#[test]
+fn S3b_legacy_user_version_maps_to_the_migrations_it_meant() {
+    let initial = include_str!("../migrations/202611041200_initial.sql");
+    let guard = include_str!("../migrations/202611041500_evidence_insert_guard.sql");
+    let legacy = |version: i64, sql: &[&str]| {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("rastro.sqlite3");
+        let connection = Connection::open(&path).unwrap();
+        for sql in sql {
+            connection.execute_batch(sql).unwrap();
+        }
+        connection
+            .pragma_update(None, "user_version", version)
+            .unwrap();
+        (home, path)
+    };
+    let (_home, path) = legacy(2, &[initial, guard]);
+    SqliteStorage::open(&path).unwrap();
+    let connection = Connection::open(&path).unwrap();
+    let count: i64 = connection
+        .query_row("SELECT count(*) FROM evidence_fts", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(count, 0);
+    let (_home, path) = legacy(3, &[initial, guard]);
+    let error = SqliteStorage::open(&path).err().unwrap();
+    assert!(format!("{error:#}").contains("user_version 3"), "{error:#}");
+}

@@ -1,7 +1,7 @@
 //! Evidence: validated observations the store appends and never changes (ADR 0005).
 use crate::Scope;
 use chrono::{DateTime, Utc};
-use rastro_plugin_sdk::{EvidenceSubmit, Manifest};
+use rastro_plugin_sdk::{EvidenceSubmit, Manifest, Window};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeSet;
 
@@ -57,14 +57,33 @@ pub struct Grant {
     pub source: String,
     pub scope: Scope,
     pub kinds: BTreeSet<String>,
+    pub window: Window,
 }
 impl Grant {
-    pub fn new(manifest: &Manifest, source: &str, scope: &Scope) -> Self {
-        Self {
-            source: source.into(),
-            scope: scope.clone(),
-            kinds: manifest.permissions.submit.iter().cloned().collect(),
-        }
+    /// `None` when the manifest doesn't declare the source's scope.
+    pub fn new(manifest: &Manifest, source: &str, scope: &Scope, window: &Window) -> Option<Self> {
+        manifest
+            .permissions
+            .scopes
+            .contains(&scope.0)
+            .then(|| Self {
+                source: source.into(),
+                scope: scope.clone(),
+                kinds: manifest.permissions.submit.iter().cloned().collect(),
+                window: window.clone(),
+            })
+    }
+    /// A message may repeat the bound window, never name another.
+    pub fn allows_window(&self, window: &Option<Window>) -> bool {
+        let instants = |w: &Window| {
+            Some((
+                w.from.parse::<DateTime<Utc>>().ok()?,
+                w.to.parse::<DateTime<Utc>>().ok()?,
+            ))
+        };
+        window
+            .as_ref()
+            .is_none_or(|w| instants(w).is_some() && instants(w) == instants(&self.window))
     }
 }
 
@@ -83,6 +102,9 @@ pub fn validate(
     }
     if submit.scope.is_some_and(|s| s != grant.scope.0) {
         return Err("scope differs from the bound scope".into());
+    }
+    if !grant.allows_window(&submit.window) {
+        return Err("window differs from the bound window".into());
     }
     let location = submit
         .location
