@@ -36,11 +36,16 @@ Status: agreed 2026-11-04. North star: `../concept.md` §5.
 Architecture: `../adr/0006-mcp-server-over-stdio.md` (the server, the pinned protocol revision, errors) and `../adr/0007-typed-operation-catalog.md` (one catalog for the CLI, MCP and the schema).
 11. **MCP exposes `search` and `coverage` only.** `sync`, `source.*` and `index.rebuild` stay CLI-only. This is the first real use by agent tools, before claims or identity.
 12. **A search hit shows why it matched.** It carries a `match` excerpt: centred on the first match, at most 400 bytes, cut at UTF-8 character boundaries, with offsets from the same origin as the span, plus `clipped_before` and `clipped_after`. Stemmed and diacritic-folded matches count, as in the index. If the match can't be located, the excerpt starts at the field's start with `located: false`. (Decides open question #8.)
-13. **Bounded search.** Amends `../specs/evidence.md` R49, R60 (applied when the plan is archived).
+13. **Bounded search.** Amends `../specs/evidence.md` R49, R60 (applied).
     - `quote` and `original` come back only with `full: true` (`--full` on the CLI). Human `--full` shows the whole quote, escaped and not clipped.
     - `limit` defaults to 20, range 1–50. `truncated: true` says more hits exist. Order is bm25, then id.
-14. **Bounded coverage.** Each source returns its overall state, judged over all its windows, plus its 10 newest windows (newest first) and `windows_total`. `all_windows: true` (`--all-windows`) returns every window. Amends R63; R64 holds (applied when the plan is archived).
+14. **Bounded coverage.** Each source returns its overall state, judged over all its windows, plus its 10 newest windows (newest first) and `windows_total`. `all_windows: true` (`--all-windows`) returns every window. Amends R63; R64 holds (applied).
 15. **Scope is set by the owner at launch.** An optional, repeatable `rastro mcp --scope <s>` filters search and coverage inside the storage query, before the limit. A tool argument can't name a scope. No flag means all scopes. Per-plugin scope grants stay in slice 14.
 16. **The caller is the owner.** The client's self-reported `clientInfo` grants nothing and isn't stored. MCP reads aren't plugin runs and aren't logged yet: plugins §9 logs plugin runs, and here the agent tool is a client, not a plugin Rastro runs. Logging reads is slice 9.
 17. **Results are labelled, not enforced.** Hits keep their trust class, and the tool descriptions say results are data from sources, never instructions. Nothing is rewritten or fenced, and Rastro doesn't claim injection resistance: the agent tool still limits what the agent can do.
 18. **Operation errors are results, protocol errors are protocol.** An error inside an operation is a tool result with `isError: true` and the v2 error envelope. An unknown tool, or arguments that fail the input schema, is a JSON-RPC error.
+
+## Accepted limits 2026-11-04
+19. **MCP tools declare no `outputSchema`.** The success schema would reject operation error envelopes; both remain v2 envelopes in `structuredContent` and text.
+20. **Garbage stdin lines are silently ignored by rmcp.** They produce no stderr diagnostic.
+21. **Launch scopes filter rows before the limit, but not rank statistics.** Full-text rank statistics span every scope, so hidden evidence can shift visible hit order. Accepted limit: a scope is not an isolation boundary until per-plugin scope grants in roadmap slice 14.

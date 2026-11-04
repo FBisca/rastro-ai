@@ -55,10 +55,10 @@ mod tests {
     use crate::catalog::CATALOG;
     use rastro_core::{Scope, Source};
 
-    /// S2: a request, its response and the catalog give an operation the same name
+    /// surfaces/R2: a request, its response and the catalog give an operation the same name
     #[test]
     #[allow(non_snake_case)]
-    fn S2_request_response_and_catalog_agree_on_names() {
+    fn request_response_and_catalog_agree_on_names() {
         let responses = [
             Response::SourceAdd(SourceAddResult {
                 source: Source::github("a".into(), "o/r".into(), Scope("w".into())),

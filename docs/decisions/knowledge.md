@@ -36,4 +36,7 @@ Status: agreed 2026-11-04. North star: `../concept.md` §1. Research: `../resear
 20. **An empty search is not an empty source.** Search results always state the coverage of the sources they searched.
 
 ## Added 2026-11-04 (roadmap slice 2)
-21. **Coverage is per (source, scope) pair, across config and storage.** The pairs are those in the config plus those only in storage (a removed source, or one whose scope changed). A pair that isn't in the config is `registered: false`. Its freshness comes from its stored windows: once the freshness rule has passed it reads "unknown", and a pair that never synced stays "never looked". So a hit always states its coverage (§20), even for a removed source. This decides the hit half of open question #9; the `source remove` command is still open.
+21. **Coverage is per (source, scope) pair, across config and storage.** The pairs are those in the config plus those only in storage (a removed source, or one whose scope changed). A pair that isn't in the config is `registered: false`. Its coverage comes from its stored windows: once the freshness rule has passed it reads "unknown", and a pair that never synced stays "never looked". So a hit always states its coverage (§20), even for a removed source. This decides the hit half of open question #9; the `source remove` command is still open.
+
+## Accepted limits 2026-11-04
+22. **Sources are keyed by name.** An old (source, scope) pair takes the source's current freshness rule, rather than a historical rule for that pair. While `rastro mcp` runs, its read-only reader uses fresh config without projection; the CLI projects config into storage. After a config edit, their answers for an old pair can differ until a writing open projects the change.

@@ -331,10 +331,10 @@ mod tests {
     use super::*;
     use clap::Subcommand;
 
-    /// S2: the CLI tree and the catalog name the same operations
+    /// surfaces/R2: the CLI tree and the catalog name the same operations
     #[test]
     #[allow(non_snake_case)]
-    fn S2_the_clap_tree_names_exactly_the_cataloged_operations() {
+    fn the_clap_tree_names_exactly_the_cataloged_operations() {
         let mut from_clap = command_names(&Request::augment_subcommands(Command::new("rastro")));
         from_clap.sort();
         let mut from_catalog: Vec<_> = CATALOG.iter().map(|s| s.name.to_string()).collect();
