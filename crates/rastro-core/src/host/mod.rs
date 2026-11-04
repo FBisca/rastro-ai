@@ -2,9 +2,7 @@
 //! Sequential and happy-path first; hardening against crashes and silence builds on `drive`.
 use crate::evidence::{Grant, validate};
 use crate::runs::RunReport;
-use crate::{
-    Counts, CoverageRecord, CoverageState, Locations, RunEnd, Source, Storage, display_safe,
-};
+use crate::{Counts, CoverageRecord, CoverageState, Locations, RunEnd, Source, Storage};
 use anyhow::{Result, bail};
 use chrono::{DateTime, SecondsFormat, Utc};
 use rastro_plugin_sdk::{
@@ -130,10 +128,7 @@ pub fn run<S: Storage>(
     // Why the run failed, if it did: what the host saw first, then what the connector said.
     let reason: Option<String> = match outcome {
         Ok(Err(reason)) => Some(reason.to_string()),
-        Err(error) => {
-            eprintln!("storage error: {}", display_safe(&format!("{error:#}")));
-            Some("storage".into())
-        }
+        Err(_) => Some("storage".into()),
         Ok(Ok(finish)) if finish.status != "ok" => Some(finish.reason.as_deref().map_or_else(
             || reported.clone().unwrap_or_else(|| "protocol".into()),
             |r| typed(Some(r)),
@@ -289,7 +284,7 @@ fn drive<S: Storage>(
     else {
         return Ok(Err("not_installed"));
     };
-    let outcome = converse(
+    let outcome = match converse(
         storage,
         &mut connector.wire,
         &connector.relay,
@@ -297,7 +292,13 @@ fn drive<S: Storage>(
         binding,
         grant,
         session,
-    );
+    ) {
+        Err(error) => {
+            connector.relay.line(&format!("storage error: {error:#}"));
+            Ok(Err("storage"))
+        }
+        outcome => outcome,
+    };
     connector.teardown(matches!(outcome, Ok(Ok(_))));
     outcome
 }
@@ -307,7 +308,6 @@ struct Connector {
     child: Child,
     wire: Wire,
     relay: io::Relay,
-    printed: Receiver<()>,
     limits: Limits,
     tally: io::Tally,
 }
@@ -327,7 +327,7 @@ impl Connector {
             child.stderr.take().expect("piped stderr"),
         );
         let tally = io::Tally::default();
-        let (relay, printed) = io::start_relay(id.into(), limits.stderr_lines, &tally);
+        let relay = io::start_relay(io::Printer::global(), id.into(), limits.stderr_lines);
         io::drain_stderr(stderr, relay.clone(), &tally);
         let wire = Wire {
             jobs: io::write_lines(stdin, &tally),
@@ -338,7 +338,6 @@ impl Connector {
             child,
             wire,
             relay,
-            printed,
             limits,
             tally,
         })
@@ -347,25 +346,62 @@ impl Connector {
     /// Ends the connector. After a clean finish it gets the shutdown deadline to exit on its
     /// own; then its whole process group is killed, so a descendant can't keep the pipes open
     /// and the helper threads end. Returns the helper-thread tally for tests.
-    fn teardown(mut self, finished: bool) -> io::Tally {
+    fn teardown(self, finished: bool) -> io::Tally {
+        self.teardown_observed(finished, |_| {})
+    }
+
+    /// `before_signal` runs with the leader's pid just before the group is signalled; tests use
+    /// it to see the leader is still unreaped at that moment.
+    fn teardown_observed(mut self, finished: bool, before_signal: impl FnOnce(u32)) -> io::Tally {
         // Closing the job queue closes stdin, which is how a well-behaved connector exits.
         drop(self.wire);
         let pid = self.child.id();
         let deadline = Instant::now() + self.limits.shutdown;
-        let mut exited = false;
-        while finished && !exited {
-            match self.child.try_wait() {
-                Ok(Some(_)) | Err(_) => exited = true,
-                Ok(None) if Instant::now() >= deadline => break,
-                Ok(None) => std::thread::sleep(Duration::from_millis(10)),
-            }
+        // Watch for the exit without reaping: the pid stays ours until the group is signalled.
+        while finished && !has_exited(pid) && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(10));
         }
+        before_signal(pid);
         kill_group(pid);
         let _ = self.child.wait();
         drop(self.relay);
-        // The printer may be stuck on a terminal nobody reads: wait, but not forever.
-        let _ = self.printed.recv_timeout(self.limits.shutdown);
+        // The helper threads end once the group is dead and the pipes are closed.
+        let ended = Instant::now() + self.limits.shutdown;
+        while self.tally.live() > 0 && Instant::now() < ended {
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        io::Printer::global().flush(self.limits.shutdown);
         self.tally
+    }
+}
+
+/// Whether the child has exited, seen without reaping it (`waitid` with `WNOWAIT`).
+fn has_exited(pid: u32) -> bool {
+    #[cfg(unix)]
+    {
+        #[repr(C, align(8))]
+        struct Info([u8; 128]);
+        unsafe extern "C" {
+            fn waitid(kind: i32, id: u32, info: *mut Info, options: i32) -> i32;
+        }
+        const P_PID: i32 = 1;
+        const WEXITED: i32 = 4;
+        const WNOHANG: i32 = 1;
+        #[cfg(target_os = "macos")]
+        const WNOWAIT: i32 = 0x20;
+        #[cfg(not(target_os = "macos"))]
+        const WNOWAIT: i32 = 0x0100_0000;
+        let mut info = Info([0; 128]);
+        // SAFETY: `info` is a zeroed, 8-aligned buffer at least as large as `siginfo_t`;
+        // with WNOHANG the call returns at once and sets `si_signo` (the first four bytes)
+        // only when the child has exited.
+        let result = unsafe { waitid(P_PID, pid, &mut info, WEXITED | WNOWAIT | WNOHANG) };
+        result != 0 || info.0[..4] != [0; 4]
+    }
+    #[cfg(not(unix))]
+    {
+        let _ = pid;
+        true
     }
 }
 
@@ -525,5 +561,31 @@ mod tests {
                 std::thread::sleep(Duration::from_millis(10));
             }
         }
+    }
+
+    #[test]
+    fn S9k_the_group_is_signalled_while_the_exited_leader_is_still_unreaped() {
+        let mut command = Command::new("/bin/sh");
+        // The leader exits at once; its background child keeps the pipes.
+        command.args(["-c", "sleep 60 & exit 0"]);
+        let limits = Limits {
+            max_line: 4096,
+            silence: Duration::from_secs(1),
+            shutdown: Duration::from_secs(5),
+            stderr_lines: 10,
+        };
+        let connector = Connector::launch(command, "test", limits).unwrap();
+        let mut state = String::new();
+        connector.teardown_observed(true, |pid| {
+            let output = Command::new("ps")
+                .args(["-o", "stat=", "-p", &pid.to_string()])
+                .output()
+                .unwrap();
+            state = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        });
+        assert!(
+            state.starts_with('Z'),
+            "leader was {state:?} when signalled, not a zombie"
+        );
     }
 }

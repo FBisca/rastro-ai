@@ -102,8 +102,13 @@ impl Env {
     /// Runs `rastro sync project --json` and fails the test, killing it, if it takes longer than
     /// `secs`. With `read_stderr` false its stderr is a pipe nobody reads.
     fn sync_within(&self, secs: u64, read_stderr: bool) -> (Output, Value) {
+        let (output, value) = self.within(&["sync", "project", "--json"], secs, read_stderr);
+        let run = value["result"]["runs"][0].clone();
+        (output, run)
+    }
+    fn within(&self, args: &[&str], secs: u64, read_stderr: bool) -> (Output, Value) {
         use std::io::Read;
-        let mut command = self.command(&["sync", "project", "--json"]);
+        let mut command = self.command(args);
         command
             .stdout(std::process::Stdio::piped())
             .stderr(std::process::Stdio::piped());
@@ -138,8 +143,7 @@ impl Env {
             }
         };
         let value: Value = serde_json::from_slice(&output.stdout).unwrap();
-        let run = value["result"]["runs"][0].clone();
-        (output, run)
+        (output, value)
     }
     fn rastro_within(&self, args: &[&str], secs: u64) -> Output {
         let child = self
@@ -581,13 +585,15 @@ fn S11a_finish_with_only_rejected_coverage_reports_fails_with_protocol() {
     );
 }
 
+/// A process that is running or sleeping; a zombie (exited, unreaped) is not alive.
 fn alive(pid: &str) -> bool {
-    Command::new("kill")
-        .args(["-0", pid])
-        .stderr(std::process::Stdio::null())
-        .status()
-        .unwrap()
-        .success()
+    let output = Command::new("ps")
+        .args(["-o", "stat=", "-p", pid])
+        .output()
+        .unwrap();
+    let state = String::from_utf8_lossy(&output.stdout);
+    let state = state.trim();
+    !state.is_empty() && !state.starts_with('Z')
 }
 
 #[test]
@@ -682,4 +688,57 @@ fn S9j_the_connectors_process_group_is_killed_when_the_run_ends() {
         }
         assert!(gone, "the connector's child outlived the run");
     }
+}
+
+#[test]
+fn S9l_span_offsets_the_store_cannot_hold_are_rejected_without_waiting_on_stderr() {
+    let mut env = Env::new();
+    env.vars.push(("RASTRO_HOST_STDERR_LINES", "100000".into()));
+    let huge = json!({"jsonrpc": "2.0", "method": "evidence.submit", "params": {
+        "kind": "issue", "location": "https://x/1", "field": "/body",
+        "start": 9223372036854775808u64, "end": 9223372036854775813u64, "quote": "hello",
+        "trust_class": "untrusted content"}});
+    env.script(&[
+        init(),
+        json!({"do": "stderr", "text": "x".repeat(900), "repeat": 20000}),
+        send(huge),
+        complete(),
+        finish(),
+    ]);
+    let (output, run) = env.sync_within(15, false);
+    assert!(output.status.success());
+    assert_eq!(
+        run["counts"],
+        json!({"submitted": 1, "accepted": 0, "rejected": 1, "unchanged": 0})
+    );
+    assert_eq!(env.sql::<i64>("SELECT count(*) FROM evidence"), 0);
+}
+
+#[test]
+fn S9m_many_syncs_with_blocked_stderr_finish_without_piling_up_printers() {
+    let mut env = Env::new();
+    env.vars.push(("RASTRO_HOST_STDERR_LINES", "100000".into()));
+    for name in ["two", "three", "four", "five"] {
+        env.ok(&[
+            "source",
+            "add",
+            name,
+            "--connector",
+            "test",
+            "--repo",
+            "o/p",
+            "--scope",
+            "personal",
+        ]);
+    }
+    env.script(&[
+        init(),
+        json!({"do": "stderr", "text": "x".repeat(900), "repeat": 5000}),
+        complete(),
+        finish(),
+    ]);
+    let started = std::time::Instant::now();
+    let (_, value) = env.within(&["sync", "--json"], 20, false);
+    assert_eq!(value["result"]["runs"].as_array().unwrap().len(), 5);
+    assert!(started.elapsed().as_secs() < 10);
 }

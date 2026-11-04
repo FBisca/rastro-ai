@@ -5,11 +5,12 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     process::{ChildStderr, ChildStdin},
     sync::{
-        Arc,
-        atomic::{AtomicUsize, Ordering},
+        Arc, OnceLock,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
         mpsc::{Receiver, Sender, SyncSender, channel, sync_channel},
     },
     thread,
+    time::Duration,
 };
 
 /// Lines held between the reader thread and the host. When it is full the reader stops
@@ -22,7 +23,6 @@ const RELAY_QUEUE: usize = 256;
 #[derive(Clone, Default)]
 pub struct Tally(Arc<AtomicUsize>);
 impl Tally {
-    #[cfg(test)]
     pub fn live(&self) -> usize {
         self.0.load(Ordering::SeqCst)
     }
@@ -102,53 +102,125 @@ pub fn write_lines(mut stdin: ChildStdin, tally: &Tally) -> Sender<Job> {
     sender
 }
 
-/// Where everything the core says about a connector goes: its stderr and the core's own
-/// diagnostics about it. At most `max` lines are printed per run, each escaped; the rest are
-/// dropped and counted, and a notice says how many. Printing happens on its own thread, so a
-/// terminal that isn't drained stalls neither the host nor the connector.
+/// The one place the core prints connector-related lines: a single thread per process with a
+/// bounded queue, shared by every run. A terminal that isn't drained stalls that thread and
+/// fills the queue; further lines are dropped, and nothing else ever waits on it.
 #[derive(Clone)]
-pub struct Relay {
-    queue: SyncSender<String>,
-    dropped: Arc<AtomicUsize>,
-    used: Arc<AtomicUsize>,
+pub struct Printer {
+    queue: SyncSender<Message>,
+    queued: Arc<AtomicUsize>,
+    stalled: Arc<AtomicBool>,
+}
+/// Printer threads started, for tests to show runs don't add any.
+#[cfg(test)]
+static PRINTER_THREADS: AtomicUsize = AtomicUsize::new(0);
+
+enum Message {
+    Line(String),
+    Flush(SyncSender<()>),
+}
+impl Printer {
+    /// The process-wide printer, started on first use, writing to stderr.
+    pub fn global() -> &'static Printer {
+        static PRINTER: OnceLock<Printer> = OnceLock::new();
+        PRINTER.get_or_init(|| Printer::start(Box::new(std::io::stderr())))
+    }
+    #[cfg(test)]
+    pub fn with_sink(sink: Box<dyn Write + Send>) -> Printer {
+        PRINTER_THREADS.fetch_add(1, Ordering::SeqCst);
+        Printer::start(sink)
+    }
+    fn start(mut sink: Box<dyn Write + Send>) -> Printer {
+        let (queue, messages) = sync_channel::<Message>(RELAY_QUEUE);
+        let printer = Printer {
+            queue,
+            queued: Arc::new(AtomicUsize::new(0)),
+            stalled: Arc::new(AtomicBool::new(false)),
+        };
+        let (queued, stalled) = (Arc::clone(&printer.queued), Arc::clone(&printer.stalled));
+        thread::spawn(move || {
+            for message in messages {
+                match message {
+                    Message::Line(line) => {
+                        queued.fetch_sub(1, Ordering::SeqCst);
+                        let _ = writeln!(sink, "{line}");
+                        stalled.store(false, Ordering::SeqCst);
+                    }
+                    Message::Flush(done) => {
+                        let _ = done.send(());
+                    }
+                }
+            }
+        });
+        printer
+    }
+    fn push(&self, line: String) -> bool {
+        let sent = self.queue.try_send(Message::Line(line)).is_ok();
+        if sent {
+            self.queued.fetch_add(1, Ordering::SeqCst);
+        }
+        sent
+    }
+    /// Waits, for at most `timeout`, until what is queued has been printed. If the printer is
+    /// known to be stuck it doesn't wait at all, so a blocked terminal costs one timeout, not
+    /// one per run.
+    pub fn flush(&self, timeout: Duration) {
+        if self.stalled.load(Ordering::SeqCst) {
+            return;
+        }
+        let (done, printed) = sync_channel(1);
+        if self.queue.try_send(Message::Flush(done)).is_err() {
+            return;
+        }
+        if printed.recv_timeout(timeout).is_err() {
+            self.stalled.store(true, Ordering::SeqCst);
+        }
+    }
+    #[cfg(test)]
+    pub fn queued(&self) -> usize {
+        self.queued.load(Ordering::SeqCst)
+    }
+}
+
+/// One run's view of the printer: at most `max` lines are printed per run, each escaped and
+/// tagged with the plugin; the rest are dropped and counted, and a notice says how many.
+#[derive(Clone)]
+pub struct Relay(Arc<RelayState>);
+struct RelayState {
+    printer: Printer,
+    plugin: String,
+    dropped: AtomicUsize,
+    used: AtomicUsize,
     max: usize,
 }
 impl Relay {
     pub fn line(&self, text: &str) {
-        let fits = self.used.fetch_add(1, Ordering::Relaxed) < self.max;
-        if !fits || self.queue.try_send(display_safe(text)).is_err() {
-            self.dropped.fetch_add(1, Ordering::Relaxed);
+        let state = &self.0;
+        let fits = state.used.fetch_add(1, Ordering::Relaxed) < state.max;
+        let line = format!("[{}] {}", state.plugin, display_safe(text));
+        if !fits || !state.printer.push(line) {
+            state.dropped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+impl Drop for RelayState {
+    fn drop(&mut self) {
+        let count = self.dropped.load(Ordering::Relaxed);
+        if count > 0 {
+            self.printer
+                .push(format!("[{}] dropped {count} stderr lines", self.plugin));
         }
     }
 }
 
-/// Starts the printer. The receiver gets a message once every `Relay` clone is dropped and
-/// everything queued is printed.
-pub fn start_relay(plugin: String, max: usize, tally: &Tally) -> (Relay, Receiver<()>) {
-    let (queue, lines) = sync_channel::<String>(RELAY_QUEUE);
-    let (done, finished) = channel();
-    let dropped = Arc::new(AtomicUsize::new(0));
-    let counted = Arc::clone(&dropped);
-    let guard = tally.guard();
-    thread::spawn(move || {
-        let _guard = guard;
-        let mut terminal = std::io::stderr();
-        for line in lines {
-            let _ = writeln!(terminal, "[{plugin}] {line}");
-        }
-        let count = counted.swap(0, Ordering::Relaxed);
-        if count > 0 {
-            let _ = writeln!(terminal, "[{plugin}] dropped {count} stderr lines");
-        }
-        let _ = done.send(());
-    });
-    let relay = Relay {
-        queue,
-        dropped,
-        used: Arc::new(AtomicUsize::new(0)),
+pub fn start_relay(printer: &Printer, plugin: String, max: usize) -> Relay {
+    Relay(Arc::new(RelayState {
+        printer: printer.clone(),
+        plugin,
+        dropped: AtomicUsize::new(0),
+        used: AtomicUsize::new(0),
         max,
-    };
-    (relay, finished)
+    }))
 }
 
 /// Drains the connector's stderr into the relay, in bounded pieces, so it never blocks.
@@ -173,7 +245,7 @@ pub fn drain_stderr(stderr: ChildStderr, relay: Relay, tally: &Tally) {
 #[allow(non_snake_case)]
 mod tests {
     use super::*;
-    use std::time::{Duration, Instant};
+    use std::time::Instant;
 
     /// Endless `y\n` lines, counting the bytes handed out.
     struct Endless(Arc<AtomicUsize>);
@@ -218,5 +290,43 @@ mod tests {
             );
             thread::sleep(Duration::from_millis(10));
         }
+    }
+
+    /// A sink that blocks until its sender is dropped, like a terminal nobody reads.
+    struct Blocked(Receiver<()>);
+    impl Write for Blocked {
+        fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+            let _ = self.0.recv();
+            Ok(buf.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    #[test]
+    fn S9m_one_printer_and_a_bounded_queue_serve_many_runs_on_a_blocked_sink() {
+        let (release, blocked) = channel();
+        let printer = Printer::with_sink(Box::new(Blocked(blocked)));
+        let before = PRINTER_THREADS.load(Ordering::SeqCst);
+        for run in 0..20 {
+            let relay = start_relay(&printer, format!("run{run}"), 1000);
+            for _ in 0..1000 {
+                relay.line("noise");
+            }
+        }
+        assert_eq!(PRINTER_THREADS.load(Ordering::SeqCst), before);
+        assert!(
+            printer.queued() <= RELAY_QUEUE,
+            "{} lines queued",
+            printer.queued()
+        );
+        // A stuck printer is waited on once, not once per run.
+        let started = Instant::now();
+        for _ in 0..20 {
+            printer.flush(Duration::from_millis(100));
+        }
+        assert!(started.elapsed() < Duration::from_millis(1000));
+        drop(release);
     }
 }
