@@ -47,6 +47,7 @@ Roadmap slice 1 is the walking skeleton for M1. Slice 2 (agents query Rastro ove
 - **S1** WHEN the owner runs `rastro source add project --connector github --repo o/p --scope personal`, THEN `rastro source list` shows `project` with its connector, selector, scope, freshness rule and window start, and the config file holds it.
 - **S2** WHEN a source is registered but has never synced, THEN `rastro coverage project` reports "never looked".
 - **S3** WHEN `RASTRO_HOME` is set, THEN data and config live under it. Otherwise `XDG_DATA_HOME` and `XDG_CONFIG_HOME` are used, and failing those, `~/.local/share/rastro` and `~/.config/rastro`.
+- **S3a** WHEN anything tries to update or delete stored evidence, THEN the store rejects it and the evidence is unchanged.
 
 **Sync through the plugin host**
 - **S4** WHEN `rastro sync project` runs a connector that submits evidence and a complete coverage report, THEN the evidence is stored, coverage records "found" for the window, and the run log shows `ok` with the plugin version and the core's counts.
@@ -102,7 +103,7 @@ Roadmap slice 1 is the walking skeleton for M1. Slice 2 (agents query Rastro ove
 ## Tickets
 | # | What it delivers | Satisfies | Blocked by | Paths | Owner | Status |
 |---|---|---|---|---|---|---|
-| T1 | Workspace, CI, `rastro-core` config/location, SQLite store with migrations, `rastro source add/list`, `rastro coverage` "never looked", `--json` schema skeleton | S1–S3 | none | Cargo.toml, Cargo.lock, rust-toolchain.toml, .gitignore, .github/workflows/, crates/rastro-core/, crates/rastro-storage-sqlite/, crates/rastro-cli/, schema/, tests/cli/ | agent | TO-DO |
+| T1 | Workspace, CI, `rastro-core` config/location, SQLite store with migrations, `rastro source add/list`, `rastro coverage` "never looked", `--json` schema skeleton | S1–S3a | none | Cargo.toml, Cargo.lock, rust-toolchain.toml, .gitignore, .github/workflows/, crates/rastro-core/, crates/rastro-storage-sqlite/, crates/rastro-cli/, schema/, tests/cli/ | agent | TO-DO |
 | T2 | Plugin SDK + host: spawn, handshake, `evidence.submit`/`coverage.report`/`run.finish`, validation, run log, scripted test connector; basic `rastro search` with citations | S4, S4a, S5, S6, S19, S20 | T1 | crates/rastro-plugin-sdk/, crates/rastro-core/, crates/rastro-storage-sqlite/, crates/rastro-cli/, schema/, tests/ | agent | TO-DO |
 | T3 | Host hardening: version and manifest mismatch, crash, malformed or oversized lines, timeouts, interrupted-run recovery, typed "couldn't look" | S7–S11 | T2 | crates/rastro-core/src/host/, crates/rastro-core/src/runs/, tests/host/, tests/fixtures/scripted-connector/ | agent | TO-DO |
 | T4 | GitHub connector: involvement queries, pagination, comment reads, span mapping, trust classes, auth and rate-limit failures, fixture server | S12–S16 | T2 | crates/rastro-connector-github/, tests/github/ | agent | TO-DO |
