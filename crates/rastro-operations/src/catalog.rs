@@ -1,5 +1,5 @@
 //! The catalog: one entry per operation.
-use crate::requests::*;
+use crate::{requests::*, results::*};
 use clap::{Args, Command};
 use schemars::{JsonSchema, Schema, generate::SchemaSettings, transform::RecursiveTransform};
 use serde::de::DeserializeOwned;
@@ -105,15 +105,150 @@ const fn spec<T: Operation + Args + JsonSchema + DeserializeOwned>() -> Operatio
     }
 }
 
-/// Every operation, in the order the schema lists them.
-pub static CATALOG: [OperationSpec; 6] = [
-    spec::<SourceAddRequest>(),
-    spec::<SourceListRequest>(),
-    spec::<CoverageRequest>(),
-    spec::<SyncRequest>(),
-    spec::<SearchRequest>(),
-    spec::<IndexRebuildRequest>(),
-];
+// Normalize the command tree into variants and operation entries, then generate all dispatch.
+// Grouping is clap structure; the numeric slot preserves the published schema's order.
+macro_rules! operations {
+    (@collect [$($variants:tt)*] [$($groups:tt)*] [$($entries:tt)*]) => {
+        #[derive(clap::Subcommand, Debug)]
+        pub enum Request { $($variants)* }
+        $($groups)*
+        operations!(@generate $($entries)*);
+    };
+    (@collect [$($variants:tt)*] [$($groups:tt)*] [$($entries:tt)*]
+        $(#[$meta:meta])* $group:ident / $enum:ident {
+            $( $variant:ident($input:ident => $output:ident) as $response:ident {
+                $($details:tt)*
+            } ),* $(,)?
+        }
+        $($rest:tt)*
+    ) => {
+        operations!(@collect
+            [$($variants)* $(#[$meta])* $group { #[command(subcommand)] command: $enum },]
+            [$($groups)* #[derive(clap::Subcommand, Debug)] pub enum $enum {
+                $( $variant($input), )*
+            }]
+            [$($entries)* $(
+                ($input => $output, $response, value,
+                 [Request::$group { command: $enum::$variant(value) }],
+                 [Request::$group { command: $enum::$variant(value) }],
+                 { $($details)* })
+            )*]
+            $($rest)*
+        );
+    };
+    (@collect [$($variants:tt)*] [$($groups:tt)*] [$($entries:tt)*]
+        $variant:ident($input:ident => $output:ident) {
+            $($details:tt)*
+        }
+        $($rest:tt)*
+    ) => {
+        operations!(@collect
+            [$($variants)* $variant($input),]
+            [$($groups)*]
+            [$($entries)* ($input => $output, $variant, value,
+                [Request::$variant(value)], [Request::$variant(value)],
+                { $($details)* })]
+            $($rest)*
+        );
+    };
+    (@generate $(
+        ($input:ident => $output:ident, $response:ident, $value:ident,
+         [$pattern:pat], [$constructor:expr], {
+            slot: $slot:literal, name: $name:literal,
+            surfaces: [$($surface:ident),*], read_only: $read_only:literal
+            $(, reader: $reader:ident)?
+         })
+    )*) => {
+        $(impl Operation for $input {
+            const NAME: &'static str = $name;
+            const SURFACES: &'static [Surface] = &[$(Surface::$surface),*];
+            const READ_ONLY: bool = $read_only;
+            type Output = $output;
+            fn into_request(self) -> Request {
+                let $value = self;
+                $constructor
+            }
+            fn run<S: rastro_core::Storage>(self, rastro: &mut rastro_core::Rastro<S>) -> anyhow::Result<Self::Output> {
+                $input::run(self, rastro)
+            }
+            $(fn run_read<S: rastro_core::ReadStorage>(self, reader: &mut rastro_core::Reader<S>) -> anyhow::Result<Self::Output> {
+                $input::$reader(self, reader)
+            })?
+        })*
+
+        impl Request {
+            pub fn name(&self) -> &'static str {
+                match self { $( $pattern => { let _ = $value; $input::NAME }, )* }
+            }
+            /// Runs the operation against an open store.
+            pub fn run<S: rastro_core::Storage>(self, rastro: &mut rastro_core::Rastro<S>) -> anyhow::Result<Response> {
+                match self { $( $pattern => Operation::run($value, rastro).map(Response::$response), )* }
+            }
+            /// Runs on a read-only view; unsupported operations are rejected without writing.
+            pub fn run_read<S: rastro_core::ReadStorage>(self, reader: &mut rastro_core::Reader<S>) -> anyhow::Result<Response> {
+                match self { $( $pattern => Operation::run_read($value, reader).map(Response::$response), )* }
+            }
+        }
+
+        /// What an operation returned.
+        #[derive(Debug)]
+        pub enum Response { $( $response($output), )* }
+        impl Response {
+            pub fn operation(&self) -> &'static str {
+                match self { $( Self::$response(_) => $input::NAME, )* }
+            }
+            /// The `result` member of the envelope.
+            pub fn result(&self) -> Value {
+                match self { $( Self::$response(value) => serde_json::to_value(value), )* }
+                    .expect("results serialise")
+            }
+        }
+
+        /// Every operation, in the order the schema lists them.
+        pub static CATALOG: [OperationSpec; operations!(@count $($input)*)] = {
+            let mut entries = [$(spec::<$input>()),*];
+            let mut occupied = [false; operations!(@count $($input)*)];
+            $(
+                assert!(!occupied[$slot], "duplicate operation schema slot");
+                occupied[$slot] = true;
+                entries[$slot] = spec::<$input>();
+            )*
+            entries
+        };
+    };
+    (@count $($input:ident)*) => { <[()]>::len(&[$(operations!(@unit $input)),*]) };
+    (@unit $input:ident) => { () };
+    ($($tree:tt)*) => { operations!(@collect [] [] [] $($tree)*); };
+}
+
+// Add one entry here, its request/result types, and typed execution methods. `reader` is
+// explicit: SourceList is read-only too, but is not supported by a read-only Reader.
+operations! {
+    /// Register and list sources.
+    Source / SourceRequest {
+        Add(SourceAddRequest => SourceAddResult) as SourceAdd {
+            slot: 0, name: "source.add", surfaces: [Cli], read_only: false
+        },
+        List(SourceListRequest => SourceListResult) as SourceList {
+            slot: 1, name: "source.list", surfaces: [Cli], read_only: true
+        },
+    }
+    Coverage(CoverageRequest => CoverageResult) {
+        slot: 2, name: "coverage", surfaces: [Cli, Mcp], read_only: true, reader: run_read
+    }
+    Sync(SyncRequest => SyncResult) {
+        slot: 3, name: "sync", surfaces: [Cli], read_only: false
+    }
+    /// Maintain the search index.
+    Index / IndexRequest {
+        Rebuild(IndexRebuildRequest => IndexRebuildResult) as IndexRebuild {
+            slot: 5, name: "index.rebuild", surfaces: [Cli], read_only: false
+        },
+    }
+    Search(SearchRequest => SearchResponse) {
+        slot: 4, name: "search", surfaces: [Cli, Mcp], read_only: true, reader: run_read
+    }
+}
 
 pub fn find(name: &str) -> Option<&'static OperationSpec> {
     CATALOG.iter().find(|spec| spec.name == name)
