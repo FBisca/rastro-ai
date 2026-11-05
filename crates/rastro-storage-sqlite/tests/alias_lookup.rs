@@ -138,3 +138,115 @@ fn S6_hidden_alias_claims_over_budget_answer_like_an_unknown_entity() {
     assert_eq!(unknown, Ok(json!([])));
     assert_eq!(run(&mut db, "github:login/shared"), unknown);
 }
+
+/// surfaces/R28: a hidden incoming edge never changes a scoped read's budget outcome
+#[test]
+fn S6_a_hidden_incoming_edge_does_not_change_the_budget_outcome() {
+    let scopes = [Scope("personal".into())];
+    let setup = |hidden_edge: bool| {
+        let home = tempfile::tempdir().unwrap();
+        let mut db = SqliteStorage::open(&home.path().join("db")).unwrap();
+        store(
+            &mut db,
+            "personal",
+            "github:account/1",
+            "rastro:alias",
+            "r",
+            "login",
+        );
+        let mut claim = None;
+        for n in 0..5 {
+            let value = format!("v{n}");
+            let id = store(
+                &mut db,
+                "personal",
+                "github:repo/x",
+                "code:owner",
+                &value,
+                "string",
+            );
+            claim.get_or_insert(id);
+        }
+        if hidden_edge {
+            store_edge(
+                &mut db,
+                "work",
+                "github:repo/x",
+                "code:owner",
+                "github:account/1",
+            );
+        }
+        (home, db, claim.unwrap())
+    };
+    for target in ["github:login/r", "github:account/1"] {
+        let mut answers = vec![];
+        for hidden in [false, true] {
+            let (_home, mut db, _) = setup(hidden);
+            answers.push(
+                db.about_scoped_within(target, &AboutOptions::default(), &scopes, 3)
+                    .map(|c| json!(c.iter().map(|c| json!(c)).collect::<Vec<_>>()))
+                    .map_err(|e| e.to_string()),
+            );
+        }
+        assert!(answers[0].is_ok(), "{target}: {:?}", answers[0]);
+        assert_eq!(answers[0], answers[1], "{target}");
+    }
+}
+
+fn store_edge(db: &mut SqliteStorage, scope: &str, location: &str, predicate: &str, object: &str) {
+    let source = Source::github(format!("claims-{scope}"), "o/p".into(), Scope(scope.into()));
+    db.project_sources(std::slice::from_ref(&source)).unwrap();
+    let run = db
+        .start_run(&source, ("fixture", "1"), time(), (time(), time()))
+        .unwrap();
+    let evidence = Evidence {
+        source: source.name.clone(),
+        scope: source.scope.clone(),
+        location: location.into(),
+        field: format!("/{predicate}"),
+        start: 0,
+        end: object.len() as u64,
+        quote: object.into(),
+        trust_class: TrustClass::Structured,
+        captured_at: time(),
+        source_updated_at: Some(time()),
+        original: None,
+    };
+    db.append_evidence(run, &evidence).unwrap();
+    let (evidence_id, evidence) = db
+        .pending_evidence(("fixture", "1"), &source)
+        .unwrap()
+        .into_iter()
+        .rev()
+        .find(|(_, e)| e.field == evidence.field && e.quote == object)
+        .unwrap();
+    let subject = Entity::new(location.into(), "".into());
+    let target = Entity::new(object.into(), "".into());
+    let object = Object::Entity {
+        id: target.id,
+        identifier: target.identifier,
+        entity_type: target.entity_type,
+    };
+    db.record_claims(
+        run,
+        ("fixture", "1"),
+        &[ObservedClaim {
+            id: claims::claim_id(&subject.id, predicate, &object),
+            subject,
+            predicate: predicate.into(),
+            object,
+            scalar: false,
+            type_ancestors: Vec::new(),
+            supports: BTreeSet::from([Support {
+                evidence_id,
+                portable_key: claims::portable_evidence_key(&evidence),
+                field: evidence.field,
+                start: 0,
+                end: evidence.end,
+                extraction_rule: "fixture-rule".into(),
+            }]),
+        }],
+        None,
+    )
+    .unwrap();
+}

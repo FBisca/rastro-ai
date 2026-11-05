@@ -1486,7 +1486,7 @@ impl Env {
             CLAIM_ENTITY,
             predicate,
             (value, datatype),
-            predicate == "code:state",
+            predicate == "code:state" || predicate == "rastro:alias",
             day,
         )
     }
@@ -1925,6 +1925,30 @@ fn S8_one_location_in_two_scopes_resolves_only_through_the_visible_scope() {
     let mut personal = env.scoped(&["personal"]);
     let mut work = env.scoped(&["work"]);
     // "theirs" is the work login of account 1 and personal-only for account 2.
+    // The personal-only rebuild is the oracle for everything a personal session says.
+    let rebuilt = Env::new();
+    alias_at(&rebuilt, "personal", ACCOUNT, "mine", 0);
+    rebuilt.claim_at(
+        "personal",
+        ACCOUNT,
+        "code:state",
+        ("active", "string"),
+        true,
+        0,
+    );
+    alias_at(&rebuilt, "personal", OTHER_ACCOUNT, "theirs", 0);
+    let mut oracle = rebuilt.scoped(&[]);
+    for entity in [
+        "github:login/mine",
+        "github:login/theirs",
+        "github:login/nobody",
+    ] {
+        assert_eq!(
+            about_text(&mut personal, entity),
+            about_text(&mut oracle, entity),
+            "{entity}"
+        );
+    }
     let by_mine = about_text(&mut personal, "github:login/mine");
     assert_eq!(by_mine, about_text(&mut personal, ACCOUNT));
     assert!(

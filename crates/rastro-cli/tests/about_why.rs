@@ -772,3 +772,22 @@ fn S3_resolving_through_an_old_login_lists_current_aliases_only() {
     assert_eq!(intervals.len(), 1);
     assert_ne!(intervals[0]["end"], Value::Null);
 }
+
+/// claims/R31: one entity holding a login both current and historical resolves directly
+#[test]
+fn S2_an_entity_that_regained_a_login_resolves_directly() {
+    let env = Env::new();
+    let account = "github:account/7";
+    env.claim_for(account, "rastro:alias", alias("login", "a"), later(0));
+    env.claim_for(account, "rastro:alias", alias("login", "b"), later(1));
+    env.claim_for(account, "rastro:alias", alias("login", "a"), later(2));
+    let expected = env.ok(&["about", account]);
+    assert_eq!(
+        env.ok(&["about", "github:login/a"])["claims"],
+        expected["claims"]
+    );
+    assert_eq!(
+        env.ok(&["about", "github:login/b"])["claims"],
+        expected["claims"]
+    );
+}
