@@ -45,6 +45,53 @@ impl ExtractionState {
         }
     }
 }
+/// Where an extractor stands for one (source, scope) pair at its installed version.
+#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ExtractionStatus {
+    /// No installed extractor provides the bound id.
+    NotInstalled,
+    /// Evidence, or the whole replay for a new version, is not yet extracted.
+    Behind,
+    /// A run is in progress.
+    Running,
+    /// The latest run at this version failed; reads serve the last good projection.
+    Failed,
+    /// Every observation of the pair has been extracted at this version.
+    Current,
+}
+impl ExtractionStatus {
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::NotInstalled => "not_installed",
+            Self::Behind => "behind",
+            Self::Running => "running",
+            Self::Failed => "failed",
+            Self::Current => "current",
+        }
+    }
+}
+/// What storage knows of one pair's extractor at one version.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ExtractionFacts {
+    /// An extractor run for the pair has not finished.
+    pub running: bool,
+    /// The latest finished run at this version failed.
+    pub failed: bool,
+    /// Observations lie past the pair's checkpoint at this version.
+    pub pending: bool,
+}
+/// The extraction state of one (source, scope) pair.
+#[derive(Clone, Debug, JsonSchema, Serialize)]
+pub struct ExtractionPair {
+    pub source: String,
+    pub scope: String,
+    pub extractor: String,
+    /// The installed version; `None` when the extractor is not installed.
+    pub extractor_version: Option<String>,
+    pub state: ExtractionStatus,
+}
+
 /// One extractor run over a source's pending evidence. Its counts are of claims.
 #[derive(Debug, JsonSchema, Serialize)]
 pub struct ExtractionReport {
@@ -60,6 +107,45 @@ pub struct ExtractionReport {
 }
 
 impl<S: Storage> Rastro<S> {
+    /// The extraction state of every bound pair at the installed extractor version.
+    pub fn extraction_states(&self) -> Result<Vec<ExtractionPair>> {
+        self.storage
+            .extraction_sources()?
+            .into_iter()
+            .map(|(source, extractor)| {
+                let installed = host::discover(&self.locations, &extractor, "extractor");
+                let version = installed.as_ref().ok().map(|p| p.manifest.version.clone());
+                let state = match (&installed, &version) {
+                    (Err("not_installed"), _) => ExtractionStatus::NotInstalled,
+                    (_, Some(version)) => {
+                        let facts = self
+                            .storage
+                            .extraction_facts(&source, &extractor, version)?;
+                        if facts.running {
+                            ExtractionStatus::Running
+                        } else if facts.failed {
+                            ExtractionStatus::Failed
+                        } else if facts.pending {
+                            ExtractionStatus::Behind
+                        } else {
+                            ExtractionStatus::Current
+                        }
+                    }
+                    // An installed extractor that fails its check cannot run.
+                    (Err(_), None) => ExtractionStatus::Failed,
+                    (Ok(_), None) => unreachable!("an installed extractor has a version"),
+                };
+                Ok(ExtractionPair {
+                    source: source.name,
+                    scope: source.scope.0,
+                    extractor,
+                    extractor_version: version,
+                    state,
+                })
+            })
+            .collect()
+    }
+
     /// Runs the connector of one source, or of every source, one after another.
     pub fn sync(&mut self, name: Option<&str>) -> Result<Vec<RunReport>> {
         self.sync_with_reread(name, false)

@@ -1042,3 +1042,165 @@ fn S16_rebuild_skips_missing_extractors_and_forbidden_historical_pairs() {
     env.ok(&["claims", "rebuild"]);
     assert_eq!(before, env.json(&["why", OPEN]));
 }
+||||||| parent of 4f35bcd (feat(claims): report extraction state per source and extractor version)
+
+
+/// What the core reports for every bound pair: (source, extractor version, state).
+fn extraction_states(env: &Env) -> Vec<(String, String, String)> {
+    let config = env.path("config");
+    fs::create_dir_all(&config).unwrap();
+    let plugins = config.join("plugins");
+    if !plugins.exists() {
+        std::os::unix::fs::symlink(env.home.path().join("dev-plugins"), plugins).unwrap();
+    }
+    let locations = rastro_core::Locations {
+        data: env.path("data"),
+        config,
+    };
+    let storage =
+        rastro_storage_sqlite::SqliteStorage::open(&env.path("data/rastro.sqlite3")).unwrap();
+    let rastro = rastro_core::Rastro::open(locations, storage).unwrap();
+    rastro
+        .extraction_states()
+        .unwrap()
+        .into_iter()
+        .map(|pair| {
+            (
+                pair.source,
+                pair.extractor_version.unwrap_or_default(),
+                pair.state.as_str().to_string(),
+            )
+        })
+        .collect()
+}
+/// The extractor reads its batches, then dies with a non-zero exit.
+fn extractor_crashes(env: &Env) {
+    write_script(
+        &env.path("extractor.jsonl"),
+        &[
+            json!({"do": "initialize"}),
+            json!({"do": "read_batches"}),
+            json!({"do": "exit", "code": 3}),
+        ],
+    );
+}
+/// A sync that is expected to fail: its non-zero exit and its parsed `--json` answer.
+fn failing_sync(env: &Env, source: &str) -> Value {
+    let output = env.rastro(&["sync", source, "--json"]);
+    assert!(!output.status.success(), "sync should exit non-zero");
+    let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+    value["result"].clone()
+}
+
+#[test]
+fn S17_the_next_writing_sync_extracts_evidence_a_failed_sync_kept_even_when_it_accepts_nothing_new()
+{
+    let env = Env::new(Some("test-extractor"));
+    env.add_source("a", "test");
+    env.observe(&[state("open")]);
+    extractor_crashes(&env);
+    failing_sync(&env, "a");
+    assert_eq!((env.count("evidence"), env.count("claim")), (1, 0));
+
+    // The connector now reports the same observation: nothing new is accepted.
+    env.observe(&[state("open")]);
+    env.extract(&[claim(
+        "code:state",
+        literal("open"),
+        "state-field",
+        first_state_support(),
+    )]);
+    let synced = env.json(&["sync", "a"]);
+    let run = &synced["runs"][0];
+    assert_eq!(run["counts"]["accepted"], 0, "{synced}");
+    assert_eq!(run["extraction"]["evidence"], 1, "{synced}");
+    assert_eq!(run["extraction"]["counts"]["accepted"], 1, "{synced}");
+    assert_eq!(env.count("claim"), 1);
+}
+
+#[test]
+fn S18_an_extractor_crash_fails_the_sync_keeps_coverage_and_the_last_projection_and_resumes() {
+    let env = Env::new(Some("test-extractor"));
+    env.add_source("a", "test");
+    sync_state(&env, "a", "open");
+    assert_eq!(extraction_states(&env)[0].2, "current");
+    let before = env.json(&["why", OPEN]);
+    let windows = env.count("coverage");
+
+    env.observe(&[state("closed")]);
+    extractor_crashes(&env);
+    let failed = failing_sync(&env, "a");
+    assert_eq!(failed["runs"][0]["status"], "ok", "{failed}");
+    assert_eq!(
+        failed["runs"][0]["extraction"]["state"], "failed",
+        "{failed}"
+    );
+    // Coverage stays as the connector read it: a new complete window, not "couldn't look".
+    assert_eq!(env.count("coverage"), windows + 1);
+    assert_eq!(
+        env.sql::<String>("SELECT state FROM coverage ORDER BY id DESC LIMIT 1"),
+        "found"
+    );
+    assert_eq!(extraction_states(&env)[0].2, "failed");
+    assert_eq!(env.json(&["why", OPEN]), before);
+    assert_eq!(env.count("claim"), 1);
+
+    // The next sync resumes from the checkpoint: only the evidence the crash left.
+    env.observe(&[state("closed")]);
+    env.extract(&[claim(
+        "code:state",
+        literal("closed"),
+        "state-field",
+        first_state_support(),
+    )]);
+    let synced = env.json(&["sync", "a"]);
+    assert_eq!(synced["runs"][0]["extraction"]["evidence"], 1, "{synced}");
+    assert_eq!(synced["runs"][0]["extraction"]["state"], "current");
+    assert_eq!(env.count("claim"), 2);
+    assert_eq!(extraction_states(&env)[0].2, "current");
+}
+
+#[test]
+fn S18b_a_failed_version_replay_keeps_the_old_versions_claims_and_reads_failed() {
+    let env = Env::new(Some("test-extractor"));
+    env.add_source("a", "test");
+    sync_state(&env, "a", "open");
+    let before = env.json(&["why", OPEN]);
+    let manifest = env.plugin_dir("test-extractor").join("rastro-plugin.toml");
+    let text = fs::read_to_string(&manifest)
+        .unwrap()
+        .replace("0.1.0", "0.2.0");
+    fs::write(manifest, text).unwrap();
+    assert_eq!(extraction_states(&env)[0].2, "behind");
+
+    env.observe(&[state("open")]);
+    extractor_crashes(&env);
+    let failed = failing_sync(&env, "a");
+    assert_eq!(
+        failed["runs"][0]["extraction"]["state"], "failed",
+        "{failed}"
+    );
+    assert_eq!(env.json(&["why", OPEN]), before);
+    assert_eq!(
+        env.count("justification WHERE extractor_version = '0.1.0'"),
+        1
+    );
+    assert_eq!(
+        extraction_states(&env),
+        [("a".to_string(), "0.2.0".to_string(), "failed".to_string())]
+    );
+
+    // Retried, the replay succeeds and retires the old version.
+    env.extract(&[claim(
+        "code:state",
+        literal("open"),
+        "state-field",
+        first_state_support(),
+    )]);
+    env.ok(&["sync", "a"]);
+    assert_eq!(extraction_states(&env)[0].2, "current");
+    assert_eq!(
+        env.count("justification WHERE extractor_version = '0.1.0'"),
+        0
+    );
+}

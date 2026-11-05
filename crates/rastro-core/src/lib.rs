@@ -401,6 +401,14 @@ pub trait Storage {
         claims: &[claims::ObservedClaim],
         checkpoint: Option<&claims::Checkpoint>,
     ) -> Result<Counts>;
+    /// Whether the pair's extractor is running, last failed, or has evidence left to read, at
+    /// this installed version.
+    fn extraction_facts(
+        &self,
+        source: &Source,
+        extractor: &str,
+        version: &str,
+    ) -> Result<runs::ExtractionFacts>;
     /// Bound sources, including retained historical sources, for a complete replay.
     fn extraction_sources(&self) -> Result<Vec<(Source, String)>>;
     /// Creates an empty private projection generation. Audit logs remain outside it.
