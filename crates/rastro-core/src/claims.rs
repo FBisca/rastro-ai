@@ -237,6 +237,19 @@ pub fn intent_justification_id(claim: &str, intent: &str) -> String {
         &[(b'C', claim), (b'I', intent)],
     )
 }
+/// The justification of one later stretch of an owner intent on a claim (a name restored by
+/// undoing a newer one): at ordinal 0 it is [`intent_justification_id`], so a claim held once
+/// keeps its id.
+pub fn intent_justification_id_with_ordinal(claim: &str, intent: &str, ordinal: u64) -> String {
+    if ordinal == 0 {
+        return intent_justification_id(claim, intent);
+    }
+    digest(
+        "j_",
+        "rastro/intent-justification/v1",
+        &[(b'C', claim), (b'I', intent), (b'N', &ordinal.to_string())],
+    )
+}
 /// A group of equivalent claims: the hash of its sorted (member id, revision) pairs. Metadata
 /// only, never a claim id (knowledge §35).
 pub fn group_revision(members: &[(String, String)]) -> String {

@@ -175,8 +175,11 @@ impl Payload {
         }
     }
 }
-/// Who issued an intent, through which surface, seeing which scopes (none listed: every scope).
-/// Audit data, not lasting authorization.
+/// Who issued an intent, through which surface, with which scopes: the surface's own configured
+/// scopes as it issued. For the CLI, the scopes of its configured sources; a scope held only in
+/// storage (a removed source's) is not listed. An empty list means no source was configured, or a
+/// row written before the scopes were recorded. Audit data, not authorization: the CLI is checked
+/// as seeing every scope.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct IssuerContext {
@@ -185,12 +188,14 @@ pub struct IssuerContext {
     pub scopes: Vec<Scope>,
 }
 impl IssuerContext {
-    /// The owner on the command line, seeing every scope.
-    pub fn owner_cli() -> Self {
+    /// The owner on the command line, with the scopes of its configured sources, each once and
+    /// in order.
+    pub fn owner_cli(sources: &[crate::Source]) -> Self {
+        let scopes: BTreeSet<&String> = sources.iter().map(|s| &s.scope.0).collect();
         Self {
             principal: OWNER.into(),
             surface: "cli".into(),
-            scopes: vec![],
+            scopes: scopes.into_iter().map(|s| Scope(s.clone())).collect(),
         }
     }
 }
@@ -384,6 +389,8 @@ pub struct Resolution {
     entities: BTreeMap<String, EntityTarget>,
     intents: BTreeMap<String, Intent>,
     issued: BTreeMap<String, DateTime<Utc>>,
+    /// Intent ids in acceptance order.
+    order: Vec<String>,
 }
 fn sorted(a: &str, b: &str) -> (String, String) {
     if b < a {
@@ -405,6 +412,7 @@ impl Resolution {
             let id = intent.id.clone();
             r.issued.insert(id.clone(), intent.issued_at);
             r.intents.insert(id.clone(), intent.clone());
+            r.order.push(id.clone());
             for entity in intent.targets.entities() {
                 r.entities
                     .entry(entity.id.clone())
@@ -560,7 +568,9 @@ impl Resolution {
     pub fn is_person(&self, id: &str) -> bool {
         self.persons.contains_key(id)
     }
-    /// The claims the effective intents back, each with the intent that backs it.
+    /// The claims the intents back, each with the intent that backs it: what the effective
+    /// intents say, and what an undone link, merge or name, or a name a newer one replaced, said
+    /// until then (its claim stays, superseded, with the time its contribution ended).
     pub fn claims(&self) -> Vec<IntentClaim> {
         let person_object = |id: &str| {
             let entity = &self.entities[id];
@@ -575,7 +585,8 @@ impl Resolution {
                         predicate: &str,
                         object: Object,
                         scalar: bool,
-                        intent: &String| {
+                        intent: &String,
+                        stretch: (DateTime<Utc>, Option<DateTime<Utc>>)| {
             out.push(IntentClaim {
                 id: claims::claim_id(&subject.id, predicate, &object),
                 subject: subject.clone(),
@@ -583,42 +594,179 @@ impl Resolution {
                 object,
                 scalar,
                 intent: intent.clone(),
-                issued_at: self.issued[intent],
+                started_at: stretch.0,
+                ended_at: stretch.1,
             });
         };
-        for (id, person) in &self.persons {
+        for person in self.persons.values() {
             let type_object = Object::Literal {
                 value: PERSON_TYPE.into(),
                 datatype: TYPE_DATATYPE.into(),
             };
+            let created = self.issued[&person.created_by];
             push(
                 &person.entity,
                 TYPE_PREDICATE,
                 type_object,
                 true,
                 &person.created_by,
+                (created, None),
             );
-            if let Some((name, intent)) = self.names.get(id) {
-                let alias = Object::Literal {
-                    value: name.clone(),
-                    datatype: NAME_KIND.into(),
-                };
-                push(&person.entity, ALIAS_PREDICATE, alias, true, intent);
+        }
+        for (person, name, intent, stretch) in self.name_stretches() {
+            let object = Object::Literal {
+                value: name,
+                datatype: NAME_KIND.into(),
+            };
+            push(
+                &self.entities[&person],
+                ALIAS_PREDICATE,
+                object,
+                true,
+                &intent,
+                stretch,
+            );
+        }
+        // A link or merge holds from its intent until its undo, if any.
+        for id in &self.order {
+            let intent = &self.intents[id];
+            let ended = match self.status.get(id) {
+                Some((IntentStatus::Undone, Some(by))) => Some(self.issued[by]),
+                _ => None,
+            };
+            let stretch = (intent.issued_at, ended);
+            match (intent.kind, intent.targets.endpoints()) {
+                (IntentKind::Link, Some([account, person])) => push(
+                    &self.entities[&account.id],
+                    HELD_BY,
+                    person_object(&person.id),
+                    false,
+                    id,
+                    stretch,
+                ),
+                (IntentKind::SameAs, Some([a, b])) => {
+                    let (a, b) = sorted(&a.id, &b.id);
+                    push(
+                        &self.entities[&a],
+                        SAME_AS,
+                        person_object(&b),
+                        false,
+                        id,
+                        stretch,
+                    )
+                }
+                _ => {}
             }
         }
-        for ((account, person), intent) in &self.links {
-            push(
-                &self.entities[account],
-                HELD_BY,
-                person_object(person),
-                false,
-                intent,
+        out
+    }
+    /// Each stretch during which a name intent gave its Person's name, as (Person id, name,
+    /// intent id, (start, end)). Read in acceptance order: a Person's name is its newest name
+    /// intent not yet undone, so a newer name ends the older one's stretch, and undoing the
+    /// newer one starts a new stretch of the older at the undo, leaving a gap (plan D39).
+    /// Undoing a name already replaced ends nothing more: its stretch ended at the replacement.
+    fn name_stretches(&self) -> Vec<NameStretch> {
+        let mut stretches: Vec<NameStretch> = Vec::new();
+        let mut in_force: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for id in &self.order {
+            let intent = &self.intents[id];
+            let (person, change) = match intent.kind {
+                IntentKind::Name => {
+                    let Some(person) = intent.targets.single() else {
+                        continue;
+                    };
+                    (person.id.clone(), (None, Some(id.clone())))
+                }
+                IntentKind::Undo => {
+                    let Some(undone) = intent.undo_of.as_ref().and_then(|u| self.intents.get(u))
+                    else {
+                        continue;
+                    };
+                    let (IntentKind::Name, Some(person)) = (undone.kind, undone.targets.single())
+                    else {
+                        continue;
+                    };
+                    (person.id.clone(), (Some(undone.id.clone()), None))
+                }
+                _ => continue,
+            };
+            let names = in_force.entry(person.clone()).or_default();
+            let before = names.last().cloned();
+            match change {
+                (Some(undone), _) => names.retain(|n| *n != undone),
+                (_, Some(named)) => names.push(named),
+                _ => {}
+            }
+            let after = names.last().cloned();
+            if before == after {
+                continue;
+            }
+            let at = intent.issued_at;
+            if let Some(before) = before
+                && let Some(open) = stretches
+                    .iter_mut()
+                    .rev()
+                    .find(|s| s.2 == before && s.3.1.is_none())
+            {
+                open.3.1 = Some(at);
+            }
+            if let Some(after) = after
+                && let Some(name) = self.intents[&after].payload.name.clone()
+            {
+                stretches.push((person, name, after, (at, None)));
+            }
+        }
+        stretches
+    }
+    /// The Persons a form could name among the `visible` entities: `me`, a Person's id or
+    /// identifier, or any name a Person has or had (`rastro:name/<name>`); with every Person
+    /// merged with them through merges whose two Persons are both visible, and every visible
+    /// account any of them holds. Ids only, for a scoped read's replay roots.
+    pub fn roots(&self, form: &str, visible: &BTreeSet<String>) -> BTreeSet<String> {
+        let mut persons: BTreeSet<String> = BTreeSet::new();
+        if form == ME {
+            persons.extend(self.me.clone());
+        }
+        persons.extend(
+            self.persons
+                .values()
+                .filter(|p| p.entity.id == form || p.entity.identifier == form)
+                .map(|p| p.entity.id.clone()),
+        );
+        if let Some(name) = form.strip_prefix("rastro:name/") {
+            persons.extend(
+                self.intents
+                    .values()
+                    .filter(|i| {
+                        i.kind == IntentKind::Name && i.payload.name.as_deref() == Some(name)
+                    })
+                    .filter_map(|i| i.targets.single().map(|p| p.id.clone())),
             );
         }
-        for ((a, b), intent) in &self.merges {
-            push(&self.entities[a], SAME_AS, person_object(b), false, intent);
+        persons.retain(|p| visible.contains(p));
+        let mut pending: Vec<String> = persons.iter().cloned().collect();
+        while let Some(next) = pending.pop() {
+            for (a, b) in self.merges.keys() {
+                let other = if *a == next {
+                    b
+                } else if *b == next {
+                    a
+                } else {
+                    continue;
+                };
+                if visible.contains(other) && persons.insert(other.clone()) {
+                    pending.push(other.clone());
+                }
+            }
         }
-        out
+        let accounts: Vec<String> = self
+            .links
+            .keys()
+            .filter(|(a, p)| persons.contains(p) && visible.contains(a))
+            .map(|(a, _)| a.clone())
+            .collect();
+        persons.extend(accounts);
+        persons
     }
 }
 /// The core's supertype of every account; a vocabulary declares which of its types are accounts
@@ -661,8 +809,15 @@ pub fn admit_account(identifier: &str, types: &[SeenType]) -> Result<()> {
     )
 }
 
-/// A claim an effective owner intent backs. Its status is `observed`; its justification is of
-/// kind `owner_intent`.
+/// A stretch of a Person's name: (Person id, name, intent id, (start, end)).
+type NameStretch = (
+    String,
+    String,
+    String,
+    (DateTime<Utc>, Option<DateTime<Utc>>),
+);
+/// A claim an owner intent backs. Its justification is of kind `owner_intent`; while any of its
+/// intents holds it is `observed`, and once every one has ended it is `superseded`.
 #[derive(Clone, Debug)]
 pub struct IntentClaim {
     pub id: String,
@@ -671,7 +826,11 @@ pub struct IntentClaim {
     pub object: Object,
     pub scalar: bool,
     pub intent: String,
-    pub issued_at: DateTime<Utc>,
+    /// When this stretch of the intent's contribution began: its issue, or, for a name restored
+    /// by undoing a newer one, that undo.
+    pub started_at: DateTime<Utc>,
+    /// When it ended: an undo, or the newer name that replaced it.
+    pub ended_at: Option<DateTime<Utc>>,
 }
 
 /// Sixteen random bytes in lowercase hex: the random part of a Person id or an intent id.
@@ -702,7 +861,7 @@ fn new_intent(
         format_version: FORMAT_VERSION,
         kind,
         owner_id: OWNER.into(),
-        issuer_context: IssuerContext::owner_cli(),
+        issuer_context: IssuerContext::owner_cli(&[]),
         // Stored to the millisecond, so a retry compares equal to the stored row.
         issued_at: chrono::SubsecRound::trunc_subsecs(crate::coverage::now()?, 3),
         domain_key,
@@ -913,9 +1072,15 @@ impl<S: Storage> Rastro<S> {
             &Resolution,
         ) -> Result<(Vec<Intent>, Option<EntityTarget>, bool)>,
     ) -> Result<Issued> {
-        let (intents, (person, created)) = self.storage.issue_intents(|view| {
+        // The CLI is the owner's own surface: it sees every scope, and records the scopes it is
+        // configured with as the issuer's.
+        let issuer = IssuerContext::owner_cli(&self.config.sources);
+        let (intents, (person, created)) = self.storage.issue_intents(&[], |view| {
             let resolution = Resolution::of(&view.intents()?);
-            let (intents, person, created) = plan(view, &resolution)?;
+            let (mut intents, person, created) = plan(view, &resolution)?;
+            for intent in &mut intents {
+                intent.issuer_context = issuer.clone();
+            }
             Ok((intents, (person, created)))
         })?;
         Ok(Issued {
@@ -998,7 +1163,7 @@ mod tests {
             format_version: FORMAT_VERSION,
             kind,
             owner_id: OWNER.into(),
-            issuer_context: IssuerContext::owner_cli(),
+            issuer_context: IssuerContext::owner_cli(&[]),
             issued_at: "2026-11-05T00:00:00Z".parse().unwrap(),
             domain_key: String::new(),
             targets,

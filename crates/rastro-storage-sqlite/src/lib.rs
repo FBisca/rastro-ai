@@ -24,7 +24,10 @@ mod scoped;
 #[doc(hidden)]
 pub use scoped::{cache_len as scoped_cache_len, clear_cache as clear_scoped_cache};
 
-const MIGRATIONS: [(&str, &str); 9] = [
+/// The migration recording when an intent's contribution ended; an open that applies it replays
+/// the stored intents once all migrations are in.
+const INTENT_END: &str = "202611081000_intent_justification_end";
+const MIGRATIONS: [(&str, &str); 10] = [
     (
         "202611041200_initial",
         include_str!("../migrations/202611041200_initial.sql"),
@@ -60,6 +63,10 @@ const MIGRATIONS: [(&str, &str); 9] = [
     (
         "202611071000_owner_intents",
         include_str!("../migrations/202611071000_owner_intents.sql"),
+    ),
+    (
+        INTENT_END,
+        include_str!("../migrations/202611081000_intent_justification_end.sql"),
     ),
 ];
 
@@ -135,6 +142,7 @@ impl SqliteStorage {
             bail!("database has migration {unknown}, which this version of rastro doesn't know");
         }
         transaction.commit()?;
+        let mut replay = false;
         for (name, sql) in migrations {
             let transaction =
                 connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -145,7 +153,22 @@ impl SqliteStorage {
             )?;
             if !done {
                 transaction.execute_batch(sql)?;
+                replay |= name == INTENT_END;
                 mark(&transaction, name)?;
+            }
+            transaction.commit()?;
+        }
+        if replay {
+            // The intents already stored replay once, after every migration, so today's replay
+            // meets today's schema: what they ended reads as history right after the upgrade,
+            // without waiting for a rebuild. A database with none publishes nothing.
+            let transaction =
+                connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let intents: bool =
+                transaction.query_row("SELECT EXISTS (SELECT 1 FROM intent)", [], |r| r.get(0))?;
+            if intents {
+                identity::apply(&transaction)?;
+                lifecycle::publish(&transaction)?;
             }
             transaction.commit()?;
         }
@@ -211,7 +234,14 @@ impl SqliteStorage {
         scopes: &[Scope],
         budget: usize,
     ) -> Result<Vec<rastro_core::knowledge::ClaimSummary>> {
-        self.read_view(|view| view.about_scoped_within(entity, options, scopes, budget))
+        self.read_view(|view| {
+            Ok(view
+                .about_view_within(entity, options, scopes, budget)?
+                .claims
+                .into_iter()
+                .map(|c| c.summary)
+                .collect())
+        })
     }
 }
 /// A read that failed because SQLite needed to write (to create the WAL side files) becomes a
@@ -687,6 +717,7 @@ impl Storage for SqliteStorage {
     }
     fn issue_intents<T>(
         &mut self,
+        sees: &[Scope],
         plan: impl FnOnce(&dyn Snapshot) -> Result<(Vec<rastro_core::identity::Intent>, T)>,
     ) -> Result<(Vec<rastro_core::identity::Intent>, T)> {
         // One immediate transaction: the plan, the checks, the rows and the claims they back
@@ -695,7 +726,7 @@ impl Storage for SqliteStorage {
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let (intents, out) = plan(&View(&transaction))?;
-        let stored = identity::insert_all(&transaction, intents)?;
+        let stored = identity::insert_all(&transaction, sees, intents)?;
         identity::apply(&transaction)?;
         // An intent write changes the projection, so it publishes like any other projection write.
         lifecycle::publish(&transaction)?;
@@ -780,30 +811,30 @@ impl View<'_> {
     }
 }
 impl View<'_> {
-    fn about_scoped_within(
+    fn about_view_within(
         &self,
         entity: &str,
         options: &rastro_core::knowledge::AboutOptions,
         scopes: &[Scope],
         budget: usize,
-    ) -> Result<Vec<rastro_core::knowledge::ClaimSummary>> {
+    ) -> Result<rastro_core::knowledge::AboutClaims> {
         if scopes.is_empty() {
-            return self.about_claims(entity, options);
+            return self.about_view(entity, options, budget);
         }
         let projection =
             scoped::projection(self.0, scopes, scoped::Target::Entity(entity), budget)?;
         let projection = projection.lock().unwrap_or_else(|e| e.into_inner());
-        View(&projection).about_claims(entity, options)
+        View(&projection).about_view(entity, options, budget)
     }
 }
 impl Snapshot for View<'_> {
-    fn about_scoped(
+    fn about_view(
         &self,
         entity: &str,
         options: &rastro_core::knowledge::AboutOptions,
         scopes: &[Scope],
-    ) -> Result<Vec<rastro_core::knowledge::ClaimSummary>> {
-        self.about_scoped_within(entity, options, scopes, scoped::WORK_BUDGET)
+    ) -> Result<rastro_core::knowledge::AboutClaims> {
+        self.about_view_within(entity, options, scopes, scoped::WORK_BUDGET)
     }
     fn explain_scoped(
         &self,
@@ -830,14 +861,6 @@ impl Snapshot for View<'_> {
         options: &rastro_core::knowledge::WhyOptions,
     ) -> Result<Option<rastro_core::knowledge::Explanation>> {
         self.explanation(claim, options)
-    }
-
-    fn about(
-        &self,
-        entity: &str,
-        options: &rastro_core::knowledge::AboutOptions,
-    ) -> Result<Vec<rastro_core::knowledge::ClaimSummary>> {
-        self.about_claims(entity, options)
     }
 
     fn intents(&self) -> Result<Vec<rastro_core::identity::Intent>> {

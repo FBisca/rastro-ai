@@ -90,10 +90,10 @@ impl Env {
     fn intents(&self) -> i64 {
         self.sql("SELECT count(*) FROM intent")
     }
-    /// A GitHub-shaped account `github:account/<n>`, typed `code:Account`, with a login alias,
-    /// observed by source `project` (scope `personal`), bound to an extractor that isn't
-    /// installed.
-    fn account(&self, n: u32, login: &str) -> String {
+    /// Records one claim, read from `location` and `field` by source `project` (scope
+    /// `personal`), bound to an extractor that isn't installed.
+    fn record(&self, subject: &Entity, predicate: &str, object: Object, at: (&str, &str)) {
+        let (location, field) = at;
         let source = Source::github("project".into(), "o/p".into(), Scope("personal".into()));
         let mut db = self.db();
         db.project_sources(std::slice::from_ref(&source)).unwrap();
@@ -101,74 +101,84 @@ impl Env {
         let run = db
             .start_run(&source, (MISSING, "1"), time(), (time(), time()))
             .unwrap();
-        let location = format!("https://api.github.com/users/{n}");
-        let subject = Entity::new(format!("github:account/{n}"), "code:Account".into());
-        let mut observed = Vec::new();
-        for (field, quote, predicate, object) in [
-            (
-                "/type",
-                "User",
-                claims::TYPE_PREDICATE,
-                Object::Literal {
-                    value: "code:Account".into(),
-                    datatype: claims::TYPE_DATATYPE.into(),
-                },
-            ),
-            (
-                "/login",
-                login,
-                claims::ALIAS_PREDICATE,
-                Object::Literal {
-                    value: login.into(),
-                    datatype: "login".into(),
-                },
-            ),
-        ] {
-            let e = Evidence {
-                source: source.name.clone(),
-                scope: source.scope.clone(),
-                location: location.clone(),
+        let quote = match &object {
+            Object::Literal { value, .. } => value.clone(),
+            Object::Entity { identifier, .. } => identifier.clone(),
+        };
+        let e = Evidence {
+            source: source.name.clone(),
+            scope: source.scope.clone(),
+            location: location.into(),
+            field: field.into(),
+            start: 0,
+            end: quote.len() as u64,
+            quote,
+            trust_class: TrustClass::Structured,
+            captured_at: time(),
+            source_updated_at: Some(time()),
+            original: None,
+        };
+        db.append_evidence(run, &e).unwrap();
+        let (evidence_id, _) = db
+            .pending_evidence((MISSING, "1"), &source)
+            .unwrap()
+            .into_iter()
+            .rev()
+            .find(|(_, item)| item.location == location && item.field == field)
+            .unwrap();
+        // `code:Account` and `tracker:Account` are accounts (S35): their type claims carry the
+        // core's supertype, as their vocabularies declare.
+        let account = matches!(&object, Object::Literal { value, .. }
+            if predicate == claims::TYPE_PREDICATE && value.ends_with(":Account"));
+        let observed = ObservedClaim {
+            id: claims::claim_id(&subject.id, predicate, &object),
+            subject: subject.clone(),
+            predicate: predicate.into(),
+            object,
+            scalar: true,
+            type_ancestors: if account {
+                vec![rastro_core::identity::ACCOUNT_TYPE.into()]
+            } else {
+                Vec::new()
+            },
+            supports: BTreeSet::from([Support {
+                portable_key: claims::portable_evidence_key(&e),
+                evidence_id,
                 field: field.into(),
                 start: 0,
-                end: quote.len() as u64,
-                quote: quote.into(),
-                trust_class: TrustClass::Structured,
-                captured_at: time(),
-                source_updated_at: Some(time()),
-                original: None,
-            };
-            db.append_evidence(run, &e).unwrap();
-            let (evidence_id, _) = db
-                .pending_evidence((MISSING, "1"), &source)
-                .unwrap()
-                .into_iter()
-                .rev()
-                .find(|(_, item)| item.location == location && item.field == field)
-                .unwrap();
-            observed.push(ObservedClaim {
-                id: claims::claim_id(&subject.id, predicate, &object),
-                subject: subject.clone(),
-                predicate: predicate.into(),
-                object,
-                scalar: true,
-                // `code:Account` is an account (S35): its type claim carries the supertype.
-                type_ancestors: if predicate == claims::TYPE_PREDICATE {
-                    vec![rastro_core::identity::ACCOUNT_TYPE.into()]
-                } else {
-                    Vec::new()
-                },
-                supports: BTreeSet::from([Support {
-                    portable_key: claims::portable_evidence_key(&e),
-                    evidence_id,
-                    field: field.into(),
-                    start: 0,
-                    end: e.end,
-                    extraction_rule: "fixture-rule".into(),
-                }]),
-            });
-        }
-        db.record_claims(run, (MISSING, "1"), &observed, None)
+                end: e.end,
+                extraction_rule: "fixture-rule".into(),
+            }]),
+        };
+        db.record_claims(run, (MISSING, "1"), &[observed], None)
             .unwrap();
+    }
+    /// An account `identifier` typed `kind`, with one alias, read at `location`.
+    fn typed_account(&self, identifier: &str, kind: &str, alias: (&str, &str), location: &str) {
+        let subject = Entity::new(identifier.into(), kind.into());
+        let typed = Object::Literal {
+            value: kind.into(),
+            datatype: claims::TYPE_DATATYPE.into(),
+        };
+        self.record(&subject, claims::TYPE_PREDICATE, typed, (location, "/type"));
+        let (alias_kind, value) = alias;
+        let alias = Object::Literal {
+            value: value.into(),
+            datatype: alias_kind.into(),
+        };
+        let field = format!("/{alias_kind}");
+        self.record(&subject, claims::ALIAS_PREDICATE, alias, (location, &field));
+    }
+    /// A GitHub-shaped account `github:account/<n>`, typed `code:Account`, with a login alias,
+    /// observed by source `project` (scope `personal`), bound to an extractor that isn't
+    /// installed.
+    fn account(&self, n: u32, login: &str) -> String {
+        self.typed_account(
+            &format!("github:account/{n}"),
+            "code:Account",
+            ("login", login),
+            &format!("https://api.github.com/users/{n}"),
+        );
         format!("github:login/{login}")
     }
     /// A new named Person; returns its canonical identifier.
@@ -436,13 +446,18 @@ fn S7_a_merge_groups_both_persons_claims_and_its_undo_separates_them() {
         ("rastro:held_by", "github:account/7", a),
         ("rastro:held_by", "github:account/7", s),
         ("rastro:held_by", "github:account/8", s),
+        // A Person's view shows its accounts' claims too (S28).
+        ("rastro:type", "github:account/7", "code:Account"),
+        ("rastro:alias", "github:account/7", "octocat"),
+        ("rastro:type", "github:account/8", "code:Account"),
+        ("rastro:alias", "github:account/8", "hubot"),
     ] {
         assert!(
             shown.contains(&(predicate.into(), subject.to_string(), object.to_string())),
             "{predicate} {subject} {object}: {on_ana}"
         );
     }
-    assert_eq!(shown.len(), 8, "{on_ana}");
+    assert_eq!(shown.len(), 12, "{on_ana}");
     // The two type claims are one group, and so are the two links of octocat; each member keeps
     // its own id, status and revision, and a group counts once toward `limit`.
     let groups = on_ana["groups"].as_array().unwrap();
@@ -485,13 +500,13 @@ fn S7_a_merge_groups_both_persons_claims_and_its_undo_separates_them() {
         });
         about["claims"].as_array().unwrap().len() - grouped
     };
-    assert_eq!(items(&on_ana), 6);
-    let limited = env.ok(&["about", &ana, "--limit", "5"]);
+    assert_eq!(items(&on_ana), 10);
+    let limited = env.ok(&["about", &ana, "--limit", "9"]);
     assert_eq!(limited["truncated"], true, "{limited}");
-    assert_eq!(items(&limited), 5, "{limited}");
-    let six = env.ok(&["about", &ana, "--limit", "6"]);
-    assert_eq!(six["truncated"], false, "{six}");
-    assert_eq!(statements(&six), shown);
+    assert_eq!(items(&limited), 9, "{limited}");
+    let ten = env.ok(&["about", &ana, "--limit", "10"]);
+    assert_eq!(ten["truncated"], false, "{ten}");
+    assert_eq!(statements(&ten), shown);
     // Undo: they separate, and the pair can't be merged again by anything but the owner.
     let undone = env.ok(&["identity", "undo", &merge]);
     assert_eq!(undone["intents"][1]["kind"], "cannot_link", "{undone}");
@@ -635,13 +650,14 @@ fn S10_a_rebuild_with_a_carried_pair_brings_intent_backed_claims_back_identicall
         .to_string();
     env.ok(&["identity", "undo", &undone]);
     let before = rows(&env);
+    // Eight hold; the undone link stays as a ninth, its contribution ended (S36).
     assert!(
         before
             .0
             .iter()
             .filter(|r| r.starts_with("Text(\"intent_justification\")"))
             .count()
-            == 8,
+            == 9,
         "{before:?}"
     );
     let about = (env.about("me"), env.about(&ana), env.about(&hubot));
@@ -686,4 +702,365 @@ fn S7_a_merge_chain_groups_equivalent_claims_but_never_two_merges() {
         assert_eq!(claim["predicate"], "rastro:type", "{about}");
     }
     assert_eq!(statements(&env.about(&c)), statements(&about));
+}
+
+/// A second account kind, shaped like a Linear workspace user (`linear:user/<uuid>`, typed
+/// `tracker:Account`, with an email alias), recorded the same scripted way as the GitHub ones.
+fn tracker_account(env: &Env, uuid: &str, email: &str) -> String {
+    let identifier = format!("linear:user/{uuid}");
+    env.typed_account(
+        &identifier,
+        "tracker:Account",
+        ("email", email),
+        &format!("https://linear.app/users/{uuid}"),
+    );
+    identifier
+}
+/// A pull request `url` authored by the account `author`: a claim with the account as object.
+fn authored(env: &Env, url: &str, author: &str) {
+    let subject = Entity::new(url.into(), "code:PullRequest".into());
+    let object = Object::Entity {
+        id: claims::entity_id(author),
+        identifier: author.into(),
+        entity_type: "code:Account".into(),
+    };
+    env.record(&subject, "code:author", object, (url, "/user/id"));
+}
+/// The `about` items: a lone claim or a group, each counting once toward `limit`.
+fn items(about: &Value) -> usize {
+    let grouped: usize = about["groups"].as_array().map_or(0, |groups| {
+        groups
+            .iter()
+            .map(|g| g["members"].as_array().unwrap().len() - 1)
+            .sum()
+    });
+    about["claims"].as_array().unwrap().len() - grouped
+}
+fn intent_id(written: &Value) -> String {
+    written["intents"][0]["id"].as_str().unwrap().to_string()
+}
+
+/// S28: `about me` with a linked GitHub account and a linked account of a second kind lists the
+/// Person, each linked account with its reason, and the accounts' claims, each citing its own
+/// account; equivalent claims (under a merge) group and count once toward `limit`. The second
+/// kind is a Linear-shaped account recorded through the scripted seam (Linear isn't merged yet).
+#[test]
+fn S28_about_me_lists_the_person_its_linked_accounts_and_their_claims() {
+    let env = Env::new();
+    let octocat = env.account(7, "octocat");
+    let linear = tracker_account(&env, "u-1", "ana@example.org");
+    authored(&env, "https://github.com/o/p/pull/1", "github:account/7");
+    let me = env.ok(&["identity", "me"])["person"]["identifier"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let by_github = intent_id(&env.ok(&["identity", "link", &octocat, "me"]));
+    let by_linear = intent_id(&env.ok(&["identity", "link", &linear, "me"]));
+    // A second Person holding the GitHub account too, merged with `me`: its type and its link
+    // say the same as `me`'s and group with them.
+    let ana = env.person("Ana Silva");
+    let by_ana = intent_id(&env.ok(&["identity", "link", &octocat, &ana]));
+    env.ok(&["identity", "merge", "me", &ana]);
+    let about = env.about("me");
+    assert_eq!(about["resolved"], true, "{about}");
+    let person = &about["person"];
+    assert_eq!(person["identifier"], me.as_str(), "{about}");
+    let accounts = person["accounts"].as_array().unwrap();
+    let shown: Vec<_> = accounts
+        .iter()
+        .map(|a| a["identifier"].as_str().unwrap())
+        .collect();
+    assert_eq!(shown, ["github:account/7", "linear:user/u-1"], "{about}");
+    assert_eq!(accounts[0]["type"], "code:Account");
+    assert_eq!(accounts[1]["type"], "tracker:Account");
+    assert_eq!(accounts[1]["aliases"], json!(["ana@example.org"]));
+    let reasons = |account: &Value| -> Vec<(String, String)> {
+        let mut found: Vec<_> = account["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| {
+                (
+                    r["kind"].as_str().unwrap().to_string(),
+                    r["intent"].as_str().unwrap().to_string(),
+                )
+            })
+            .collect();
+        found.sort();
+        found
+    };
+    let mut github = vec![
+        ("owner_intent".to_string(), by_github),
+        ("owner_intent".to_string(), by_ana),
+    ];
+    github.sort();
+    assert_eq!(reasons(&accounts[0]), github, "{about}");
+    assert_eq!(
+        reasons(&accounts[1]),
+        [("owner_intent".to_string(), by_linear)]
+    );
+    // Each reason names its `held_by` claim, which `why` explains.
+    for reason in accounts[0]["reasons"].as_array().unwrap() {
+        let why = env.ok(&["why", reason["claim"].as_str().unwrap()]);
+        assert_eq!(why["claim"]["predicate"], "rastro:held_by");
+        assert_eq!(why["claim"]["subject"]["identifier"], "github:account/7");
+    }
+    // Every claim of each account is there, citing that account; the Person's own claims cite
+    // none.
+    let github_id = claims::entity_id("github:account/7");
+    let linear_id = claims::entity_id("linear:user/u-1");
+    let cited: Vec<(String, String, String, Value)> = about["claims"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| {
+            let object = match c["object"]["kind"].as_str().unwrap() {
+                "entity" => c["object"]["identifier"].as_str().unwrap().to_string(),
+                _ => c["object"]["value"].as_str().unwrap().to_string(),
+            };
+            (
+                c["predicate"].as_str().unwrap().to_string(),
+                c["subject"]["identifier"].as_str().unwrap().to_string(),
+                object,
+                c.get("account").cloned().unwrap_or(Value::Null),
+            )
+        })
+        .collect();
+    let expect = |predicate: &str, subject: &str, object: &str, account: Value| {
+        assert!(
+            cited.contains(&(
+                predicate.into(),
+                subject.into(),
+                object.into(),
+                account.clone()
+            )),
+            "{predicate} {subject} {object} {account}: {about}"
+        );
+    };
+    let (gh, li) = (json!(github_id), json!(linear_id));
+    expect(
+        "rastro:type",
+        "github:account/7",
+        "code:Account",
+        gh.clone(),
+    );
+    expect("rastro:alias", "github:account/7", "octocat", gh.clone());
+    expect(
+        "code:author",
+        "https://github.com/o/p/pull/1",
+        "github:account/7",
+        gh.clone(),
+    );
+    expect("rastro:held_by", "github:account/7", &me, gh.clone());
+    expect("rastro:held_by", "github:account/7", &ana, gh);
+    expect(
+        "rastro:type",
+        "linear:user/u-1",
+        "tracker:Account",
+        li.clone(),
+    );
+    expect(
+        "rastro:alias",
+        "linear:user/u-1",
+        "ana@example.org",
+        li.clone(),
+    );
+    expect("rastro:held_by", "linear:user/u-1", &me, li);
+    expect("rastro:type", &me, "rastro:Person", Value::Null);
+    expect("rastro:type", &ana, "rastro:Person", Value::Null);
+    expect("rastro:alias", &ana, "Ana Silva", Value::Null);
+    let merge: Vec<_> = cited
+        .iter()
+        .filter(|(p, ..)| p == "rastro:same_as")
+        .map(|(_, s, o, account)| {
+            let mut pair = [s.clone(), o.clone()];
+            pair.sort();
+            (pair, account.clone())
+        })
+        .collect();
+    let mut pair = [me.clone(), ana.clone()];
+    pair.sort();
+    assert_eq!(merge, [(pair, Value::Null)], "{about}");
+    assert_eq!(cited.len(), 12, "{about}");
+    // The two `held_by` of the GitHub account group, and so do the two Person types.
+    let groups = about["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 2, "{about}");
+    assert_eq!(items(&about), 10, "{about}");
+    let limited = env.ok(&["about", "me", "--limit", "9"]);
+    assert_eq!(limited["truncated"], true, "{limited}");
+    assert_eq!(items(&limited), 9, "{limited}");
+    let all = env.ok(&["about", "me", "--limit", "10"]);
+    assert_eq!(all["truncated"], false, "{all}");
+    assert_eq!(all["claims"], about["claims"]);
+    // `about` on the Person's identifier is the same view.
+    assert_eq!(env.about(&me), about);
+    let human = env.human(&["about", "me"]);
+    assert!(
+        human.contains("Person: ") && human.contains("Account: linear:user/u-1"),
+        "{human}"
+    );
+}
+
+/// S29: `about` on an account linked to a Person shows `rastro:held_by` that Person, for either
+/// account kind
+#[test]
+fn S29_about_an_account_shows_the_person_holding_it() {
+    let env = Env::new();
+    let octocat = env.account(7, "octocat");
+    let linear = tracker_account(&env, "u-1", "ana@example.org");
+    let ana = env.person("Ana Silva");
+    env.ok(&["identity", "link", &octocat, &ana]);
+    env.ok(&["identity", "link", &linear, &ana]);
+    for (account, identifier) in [
+        (octocat.as_str(), "github:account/7"),
+        (linear.as_str(), "linear:user/u-1"),
+    ] {
+        let about = env.about(account);
+        assert!(
+            statements(&about).contains(&("rastro:held_by".into(), identifier.into(), ana.clone())),
+            "{about}"
+        );
+        // An account's own view is not a Person view.
+        assert!(about.get("person").is_none(), "{about}");
+    }
+}
+
+/// S32: `about` says whether the identifier resolved: `true` for an entity, a Person and `me`,
+/// `false` for a well-formed identifier that names nothing
+#[test]
+fn S32_about_says_whether_the_identifier_resolved() {
+    let env = Env::new();
+    let octocat = env.account(7, "octocat");
+    let ana = env.person("Ana Silva");
+    env.ok(&["identity", "me"]);
+    for entity in [
+        octocat.as_str(),
+        ana.as_str(),
+        "me",
+        "rastro:name/Ana Silva",
+    ] {
+        assert_eq!(env.about(entity)["resolved"], true, "{entity}");
+    }
+    let fresh = Env::new();
+    fresh.account(1, "hubot");
+    for entity in ["github:login/nobody", "rastro:person/nobody", "me"] {
+        let about = fresh.about(entity);
+        assert_eq!(about["resolved"], false, "{entity}: {about}");
+        assert_eq!(about["claims"], json!([]));
+    }
+}
+
+/// S36: undoing a link or a merge keeps the undone claim as `superseded`, its interval closed at
+/// the undo; `about --history` shows it, plain `about` doesn't, and `why` cites the undone intent
+/// as no longer current
+#[test]
+fn S36_an_undone_link_or_merge_stays_as_a_superseded_claim() {
+    let env = Env::new();
+    let octocat = env.account(7, "octocat");
+    let ana = env.person("Ana");
+    let silva = env.person("Ana Silva");
+    let linked = intent_id(&env.ok(&["identity", "link", &octocat, &ana]));
+    let merged = intent_id(&env.ok(&["identity", "merge", &ana, &silva]));
+    for (undone, entity, predicate) in [
+        (&linked, &octocat, "rastro:held_by"),
+        (&merged, &ana, "rastro:same_as"),
+    ] {
+        let issued = env.ok(&["identity", "history", entity])["intents"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|i| i["id"] == undone.as_str())
+            .unwrap()["issued_at"]
+            .clone();
+        let undo = env.ok(&["identity", "undo", undone]);
+        let at = undo["intents"][0]["issued_at"].clone();
+        let plain = env.about(entity);
+        assert!(
+            !statements(&plain).iter().any(|(p, ..)| p == predicate),
+            "{plain}"
+        );
+        let history = env.ok(&["about", entity, "--history"]);
+        let claim = history["claims"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["predicate"] == predicate)
+            .unwrap_or_else(|| panic!("no {predicate}: {history}"))
+            .clone();
+        assert_eq!(claim["status"], "superseded", "{claim}");
+        assert_eq!(
+            claim["known_intervals"],
+            json!([{"start": issued, "end": at}]),
+            "{claim}"
+        );
+        let why = env.ok(&["why", claim["id"].as_str().unwrap()]);
+        assert_eq!(why["claim"]["status"], "superseded");
+        let support = &why["supports"][0];
+        assert_eq!(support["intent"]["id"], undone.as_str(), "{why}");
+        assert_eq!(support["current"], false, "{why}");
+    }
+    // In the Person's view with history, the undone link still names its account.
+    let view = env.ok(&["about", &ana, "--history"]);
+    let link = view["claims"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["predicate"] == "rastro:held_by")
+        .unwrap_or_else(|| panic!("no held_by: {view}"));
+    assert_eq!(link["status"], "superseded", "{view}");
+    assert_eq!(
+        link["account"],
+        claims::entity_id("github:account/7").as_str(),
+        "{view}"
+    );
+    // Linking again reopens the same claim: a second interval, observed.
+    env.ok(&["identity", "link", &octocat, &ana]);
+    let about = env.about(&octocat);
+    let claim = about["claims"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["predicate"] == "rastro:held_by")
+        .unwrap();
+    assert_eq!(claim["status"], "observed");
+    assert_eq!(claim["known_intervals"].as_array().unwrap().len(), 2);
+    // A rebuild gives the same superseded claims back.
+    let before = rows(&env);
+    env.ok(&["claims", "rebuild"]);
+    assert_eq!(rows(&env), before);
+}
+
+/// S37: an intent records the CLI's configured scopes as its issuer's, and `identity history`
+/// shows them
+#[test]
+fn S37_an_intent_records_the_configured_scopes_of_its_issuer() {
+    let env = Env::new();
+    for (name, scope) in [("one", "work"), ("two", "personal"), ("three", "work")] {
+        env.ok(&[
+            "source",
+            "add",
+            name,
+            "--connector",
+            "github",
+            "--repo",
+            "o/p",
+            "--scope",
+            scope,
+        ]);
+    }
+    let created = env.ok(&["identity", "person", "create", "--name", "Ana"]);
+    let scopes = json!(["personal", "work"]);
+    for intent in created["intents"].as_array().unwrap() {
+        assert_eq!(intent["issuer"]["scopes"], scopes, "{created}");
+        assert_eq!(intent["issuer"]["surface"], "cli");
+    }
+    let person = created["person"]["identifier"].as_str().unwrap();
+    let history = env.ok(&["identity", "history", person]);
+    for intent in history["intents"].as_array().unwrap() {
+        assert_eq!(intent["issuer"]["scopes"], scopes, "{history}");
+    }
+    let human = env.human(&["identity", "history", person]);
+    assert!(human.contains("Scopes: personal, work"), "{human}");
+    let why = env.human(&["why", &claim_id(&env.about(person), "rastro:alias")]);
+    assert!(why.contains("Scopes: personal, work"), "{why}");
 }

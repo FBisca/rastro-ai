@@ -6,7 +6,9 @@ use crate::scoped::VISIBLE_CLAIM;
 use crate::{parse_time, stamp};
 use anyhow::{Context, Result, ensure};
 use rastro_core::Scope;
-use rastro_core::claims::{Object, TYPE_PREDICATE, intent_justification_id, revision_with_links};
+use rastro_core::claims::{
+    Object, TYPE_PREDICATE, intent_justification_id_with_ordinal, revision_with_links,
+};
 use rastro_core::identity::{
     HELD_BY, Intent, IntentKind, Resolution, SAME_AS, SeenType, admit_account,
 };
@@ -90,7 +92,11 @@ fn find(db: &Connection, id: &str) -> Result<Option<Intent>> {
 /// the intents accepted before it, this batch's included; whether the issuer sees its targets is
 /// judged against the state when the batch was issued, so an undo doesn't hide what its own
 /// cannot-link names. Returns them with their acceptance order; a retry stores nothing.
-pub(crate) fn insert_all(db: &Connection, intents: Vec<Intent>) -> Result<Vec<Intent>> {
+pub(crate) fn insert_all(
+    db: &Connection,
+    sees: &[Scope],
+    intents: Vec<Intent>,
+) -> Result<Vec<Intent>> {
     let mut log = load(db)?;
     let issued = Resolution::of(&log);
     let mut stored = Vec::new();
@@ -108,14 +114,13 @@ pub(crate) fn insert_all(db: &Connection, intents: Vec<Intent>) -> Result<Vec<In
             continue;
         }
         Resolution::of(&log).admit(&intent)?;
-        let scopes = &intent.issuer_context.scopes;
         for entity in intent.targets.entities() {
             if intent.kind == IntentKind::CreatePerson || minted.contains(&entity.id) {
                 minted.insert(entity.id.clone());
                 continue;
             }
             ensure!(
-                visible(db, &issued, &entity.id, scopes)?,
+                visible(db, &issued, &entity.id, sees)?,
                 "the issuing context can't see a target of this {} intent",
                 intent.kind.as_str()
             );
@@ -125,7 +130,7 @@ pub(crate) fn insert_all(db: &Connection, intents: Vec<Intent>) -> Result<Vec<In
         if intent.kind == IntentKind::Link
             && let Some(account) = intent.targets.entities().first()
         {
-            admit_account(&account.identifier, &types(db, &account.id, scopes)?)?;
+            admit_account(&account.identifier, &types(db, &account.id, sees)?)?;
         }
         db.execute(
             "INSERT INTO main.intent (id, format_version, kind, owner_id, issuer_context, issued_at,
@@ -191,19 +196,16 @@ pub(crate) fn types(db: &Connection, id: &str, scopes: &[Scope]) -> Result<Vec<S
 /// an incremental write give the same rows.
 pub(crate) fn apply(db: &Connection) -> Result<()> {
     let resolution = Resolution::of(&load(db)?);
+    // The claims intents backed before; any of them nothing justifies afterwards goes. A claim
+    // no intent ever backed is left alone.
+    let before: Vec<String> = db
+        .prepare("SELECT DISTINCT claim_id FROM intent_justification")?
+        .query_map([], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
     db.execute("DELETE FROM intent_justification", [])?;
-    db.execute(
-        &format!(
-            "DELETE FROM claim_link WHERE from_claim IN ({0}) OR to_claim IN ({0})",
-            crate::UNJUSTIFIED
-        ),
-        [],
-    )?;
-    db.execute(
-        &format!("DELETE FROM claim WHERE id IN ({})", crate::UNJUSTIFIED),
-        [],
-    )?;
-    let mut supports = BTreeMap::<String, Vec<(String, String)>>::new();
+    // Each claim's intents, and whether each still holds.
+    let mut supports = BTreeMap::<String, Vec<(String, bool)>>::new();
+    let mut stretches = BTreeMap::<(String, String), u64>::new();
     for claim in resolution.claims() {
         let mut entities = vec![(&claim.subject.id, &claim.subject.identifier)];
         let (object_entity, object_value, object_datatype) = match &claim.object {
@@ -232,28 +234,36 @@ pub(crate) fn apply(db: &Connection) -> Result<()> {
                 claim.scalar
             ],
         )?;
+        let ordinal = stretches
+            .entry((claim.id.clone(), claim.intent.clone()))
+            .or_insert(0u64);
         db.execute(
-            "INSERT OR IGNORE INTO intent_justification (id, claim_id, intent_id) VALUES (?1, ?2, ?3)",
+            "INSERT INTO intent_justification (id, claim_id, intent_id, started_at, ended_at) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
-                intent_justification_id(&claim.id, &claim.intent),
+                intent_justification_id_with_ordinal(&claim.id, &claim.intent, *ordinal),
                 claim.id,
-                claim.intent
+                claim.intent,
+                stamp(claim.started_at),
+                claim.ended_at.map(stamp)
             ],
         )?;
+        *ordinal += 1;
         supports
             .entry(claim.id)
             .or_default()
-            .push((claim.intent, stamp(claim.issued_at)));
+            .push((claim.intent, claim.ended_at.is_none()));
     }
-    // A claim only intents hold is observed from its earliest intent; its revision hashes the
-    // intents, as an evidence claim's hashes its spans.
+    // A claim only intents hold is observed while any of them holds and superseded once none
+    // does; its revision hashes the intents that hold, as an evidence claim's hashes its current
+    // spans, and it is known since the start of its latest interval.
     let mut update = db.prepare_cached(
-        "UPDATE claim SET status = 'observed', revision = ?2, known_since = ?3 WHERE id = ?1
+        "UPDATE claim SET status = ?2, revision = ?3, known_since = ?4 WHERE id = ?1
          AND NOT EXISTS (SELECT 1 FROM justification j WHERE j.claim_id = claim.id)",
     )?;
     for (id, intents) in supports {
         let keys: Vec<_> = intents
             .iter()
+            .filter(|(_, holds)| *holds)
             .map(|(intent, _)| rastro_core::claims::Support {
                 portable_key: intent.clone(),
                 evidence_id: 0,
@@ -263,42 +273,51 @@ pub(crate) fn apply(db: &Connection) -> Result<()> {
                 extraction_rule: String::new(),
             })
             .collect();
-        let since = intents.iter().map(|(_, at)| at).min().cloned();
+        let status = if keys.is_empty() {
+            "superseded"
+        } else {
+            "observed"
+        };
+        let since = crate::lifecycle::intervals(db, &id)?
+            .last()
+            .map(|i| stamp(i.start))
+            .unwrap_or_default();
         update.execute(params![
             id,
-            revision_with_links("observed", &keys, &[]),
-            since.unwrap_or_default()
+            status,
+            revision_with_links(status, &keys, &[]),
+            since
         ])?;
     }
+    let gone = format!(
+        "SELECT value FROM json_each(?1) WHERE value IN ({})",
+        crate::UNJUSTIFIED
+    );
+    let before = serde_json::to_string(&before)?;
+    db.execute(
+        &format!("DELETE FROM claim_link WHERE from_claim IN ({gone}) OR to_claim IN ({gone})"),
+        [&before],
+    )?;
+    db.execute(
+        &format!("DELETE FROM claim WHERE id IN ({gone})"),
+        [&before],
+    )?;
     db.execute("DELETE FROM entity WHERE id NOT IN (SELECT subject FROM claim UNION SELECT object_entity FROM claim WHERE object_entity IS NOT NULL)", [])?;
     Ok(())
 }
 
-/// Whether a scope set (empty: every scope) can see an entity. An account is visible where a
-/// justification of a claim about it is; a Person where at least one of its linked accounts is,
-/// and `me` everywhere (ADR 0010, Visibility).
+/// Whether a scope set (empty: every scope) can see an entity, by the rule of [`Sight`].
 pub(crate) fn visible(
     db: &Connection,
     resolution: &Resolution,
     id: &str,
     scopes: &[Scope],
 ) -> Result<bool> {
-    if scopes.is_empty() {
-        return Ok(true);
+    let mut sight = Sight::new(db, scopes)?;
+    if resolution.is_person(id) {
+        return Ok(sight.persons(resolution)?.contains(id));
     }
-    let scopes = serde_json::to_string(scopes)?;
-    if let Some(person) = resolution.persons.get(id) {
-        if person.me {
-            return Ok(true);
-        }
-        for (account, _) in resolution.links.keys().filter(|(_, p)| p == id) {
-            if account_visible(db, account, &scopes)? {
-                return Ok(true);
-            }
-        }
-        return Ok(false);
-    }
-    account_visible(db, id, &scopes)
+    sight.account(id)
 }
 fn account_visible(db: &Connection, id: &str, scopes: &str) -> Result<bool> {
     let sql = format!(
@@ -320,22 +339,9 @@ pub(crate) fn copy_visible(db: &Connection, target: &Connection, scopes: &[Scope
     )?;
     let intents = load(db)?;
     let resolution = Resolution::of(&intents);
-    let scope_set = serde_json::to_string(scopes)?;
-    let mut accounts = BTreeMap::<String, bool>::new();
-    let mut account = |id: &str| -> Result<bool> {
-        if let Some(&seen) = accounts.get(id) {
-            return Ok(seen);
-        }
-        let seen = scopes.is_empty() || account_visible(db, id, &scope_set)?;
-        accounts.insert(id.into(), seen);
-        Ok(seen)
-    };
-    let mut persons: BTreeSet<String> = resolution.me.iter().cloned().collect();
-    for (a, p) in resolution.links.keys() {
-        if account(a)? {
-            persons.insert(p.clone());
-        }
-    }
+    let mut sight = Sight::new(db, scopes)?;
+    let persons = sight.persons(&resolution)?;
+    let mut account = |id: &str| sight.account(id);
     let claims: Vec<(String, String, String, Option<String>)> = db
         .prepare(
             "SELECT c.id, c.predicate, c.subject, c.object_entity FROM claim c
@@ -345,8 +351,10 @@ pub(crate) fn copy_visible(db: &Connection, target: &Connection, scopes: &[Scope
         .collect::<Result<_, _>>()?;
     let mut shown = Vec::new();
     for (id, predicate, subject, object) in claims {
+        // A link or a merge only where both its ends are: an effective link makes its Person
+        // visible, but an undone one doesn't.
         let seen = match (predicate.as_str(), object) {
-            (HELD_BY, Some(_)) => account(&subject)?,
+            (HELD_BY, Some(person)) => account(&subject)? && persons.contains(&person),
             (SAME_AS, Some(other)) => persons.contains(&subject) && persons.contains(&other),
             _ => persons.contains(&subject),
         };
@@ -370,9 +378,10 @@ pub(crate) fn copy_visible(db: &Connection, target: &Connection, scopes: &[Scope
                 .collect::<Result<Vec<_>, _>>()?,
         ))?;
     }
-    let justifications: Vec<(String, String, String)> = db
-        .prepare("SELECT id, claim_id, intent_id FROM intent_justification WHERE claim_id IN (SELECT value FROM json_each(?1))")?
-        .query_map([&shown], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+    type Stretch = (String, String, String, Option<String>, Option<String>);
+    let justifications: Vec<Stretch> = db
+        .prepare("SELECT id, claim_id, intent_id, started_at, ended_at FROM intent_justification WHERE claim_id IN (SELECT value FROM json_each(?1))")?
+        .query_map([&shown], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
         .collect::<Result<_, _>>()?;
     let mut needed: BTreeSet<String> = resolution
         .me
@@ -380,14 +389,20 @@ pub(crate) fn copy_visible(db: &Connection, target: &Connection, scopes: &[Scope
         .map(|me| resolution.persons[me].created_by.clone())
         .into_iter()
         .collect();
-    for (id, claim, intent) in &justifications {
+    for (id, claim, intent, started_at, ended_at) in &justifications {
         target.execute(
-            "INSERT OR IGNORE INTO intent_justification (id, claim_id, intent_id) VALUES (?1, ?2, ?3)",
-            params![id, claim, intent],
+            "INSERT OR IGNORE INTO intent_justification (id, claim_id, intent_id, started_at, ended_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, claim, intent, started_at, ended_at],
         )?;
         needed.insert(intent.clone());
     }
     for intent in intents.iter().filter(|i| needed.contains(&i.id)) {
+        // The issuer's recorded scopes are shown only as far as this scope set sees: a scope the
+        // reader can't see is never named.
+        let mut issuer = intent.issuer_context.clone();
+        if !scopes.is_empty() {
+            issuer.scopes.retain(|scope| scopes.contains(scope));
+        }
         target.execute(
             &format!("INSERT INTO intent ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"),
             params![
@@ -396,7 +411,7 @@ pub(crate) fn copy_visible(db: &Connection, target: &Connection, scopes: &[Scope
                 intent.format_version,
                 intent.kind.as_str(),
                 intent.owner_id,
-                serde_json::to_string(&intent.issuer_context)?,
+                serde_json::to_string(&issuer)?,
                 stamp(intent.issued_at),
                 intent.domain_key,
                 serde_json::to_string(&intent.targets)?,
@@ -424,4 +439,64 @@ pub(crate) fn me(db: &Connection) -> Result<Option<String>> {
     };
     let targets: rastro_core::identity::Targets = serde_json::from_str(&targets)?;
     Ok(targets.entities().first().map(|e| e.id.clone()))
+}
+
+/// The entities a scoped `about` on `form` replays besides the form's own: when the form may
+/// name a Person the scope set sees, that Person, the visible Persons merged with it through
+/// merges whose two Persons are visible, and the visible accounts they hold (rule of [`Sight`]).
+pub(crate) fn roots(db: &Connection, form: &str, scopes: &[Scope]) -> Result<BTreeSet<String>> {
+    let resolution = Resolution::of(&load(db)?);
+    let mut sight = Sight::new(db, scopes)?;
+    let mut visible = sight.persons(&resolution)?;
+    for (account, _) in resolution.links.keys() {
+        if sight.account(account)? {
+            visible.insert(account.clone());
+        }
+    }
+    Ok(resolution.roots(form, &visible))
+}
+
+/// What a scope set sees of identity, by one rule for the issuer's check and every scoped read:
+/// an account where a justification of a claim about it is visible; a Person where an effective
+/// link holds it to a visible account, and `me` everywhere (ADR 0010, Visibility). The empty set
+/// is every scope, and sees every account and every Person.
+struct Sight<'a> {
+    db: &'a Connection,
+    scopes: Option<String>,
+    accounts: BTreeMap<String, bool>,
+}
+impl<'a> Sight<'a> {
+    fn new(db: &'a Connection, scopes: &[Scope]) -> Result<Self> {
+        Ok(Self {
+            db,
+            scopes: (!scopes.is_empty())
+                .then(|| serde_json::to_string(scopes))
+                .transpose()?,
+            accounts: BTreeMap::new(),
+        })
+    }
+    fn account(&mut self, id: &str) -> Result<bool> {
+        if let Some(&seen) = self.accounts.get(id) {
+            return Ok(seen);
+        }
+        let seen = match &self.scopes {
+            None => true,
+            Some(scopes) => account_visible(self.db, id, scopes)?,
+        };
+        self.accounts.insert(id.into(), seen);
+        Ok(seen)
+    }
+    fn persons(&mut self, resolution: &Resolution) -> Result<BTreeSet<String>> {
+        // Every scope sees every Person.
+        if self.scopes.is_none() {
+            return Ok(resolution.persons.keys().cloned().collect());
+        }
+        let mut persons: BTreeSet<String> = resolution.me.iter().cloned().collect();
+        for (a, p) in resolution.links.keys() {
+            if self.account(a)? {
+                persons.insert(p.clone());
+            }
+        }
+        Ok(persons)
+    }
 }

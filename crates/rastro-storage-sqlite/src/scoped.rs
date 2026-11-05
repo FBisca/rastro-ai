@@ -92,7 +92,7 @@ pub(crate) const VISIBLE_CLAIM: &str = "EXISTS (SELECT 1 FROM justification j WH
 /// The claim `c` is backed by an owner intent.
 const INTENT_BACKED: &str =
     "EXISTS (SELECT 1 FROM intent_justification ij WHERE ij.claim_id = c.id)";
-const OVER_BUDGET: &str = "this read is too large to answer within its work budget";
+pub(crate) const OVER_BUDGET: &str = "this read is too large to answer within its work budget";
 
 /// Empties the process-local scoped cache; a benchmark's cold samples start from here.
 #[doc(hidden)]
@@ -148,14 +148,21 @@ fn build(
         Target::Entity(entity) => (
             // Alias roots are the matching alias claims with a fully visible justification;
             // stored status is full-scope, so it plays no part here. The replay applies the
-            // status set, the ambiguity and its marks.
+            // status set, the ambiguity and its marks. A form that may name a visible Person
+            // also roots the visible Persons merged with it and the visible accounts they hold
+            // (`?3`), so a Person's view replays its accounts and nothing past a hidden Person.
             format!(
                 "SELECT id FROM entity WHERE id = ?1 OR identifier = ?1 UNION SELECT subject FROM ({}) a \
-                 WHERE EXISTS (SELECT 1 FROM justification j WHERE j.claim_id = a.claim AND {VISIBLE_JUSTIFICATION})",
+                 WHERE EXISTS (SELECT 1 FROM justification j WHERE j.claim_id = a.claim AND {VISIBLE_JUSTIFICATION}) \
+                 UNION SELECT value FROM json_each(?3)",
                 super::knowledge::ALIAS_CLAIMS
             ),
             "SELECT subject, predicate FROM claim c WHERE subject IN roots AND {VISIBLE_CLAIM} UNION ALL SELECT subject, predicate FROM claim c WHERE object_entity IN roots AND {VISIBLE_CLAIM}",
-            vec![entity.to_string(), scopes.clone()],
+            vec![
+                entity.to_string(),
+                scopes.clone(),
+                serde_json::to_string(&super::identity::roots(db, entity, scope_set)?)?,
+            ],
         ),
         // A claim's own slot only, plus its endpoints' type and alias claims below.
         Target::Claim(claim) => (

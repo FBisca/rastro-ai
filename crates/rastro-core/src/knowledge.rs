@@ -32,14 +32,83 @@ pub struct ClaimSummary {
 }
 #[derive(Debug, JsonSchema, Serialize)]
 pub struct About {
+    /// Whether the identifier named an entity this read can see. A well-formed identifier that
+    /// names nothing visible (unknown, or hidden-only) is `false`, with the unknown-entity answer.
+    pub resolved: bool,
     // Every claim shown, each with its own id; a group's members are all listed here.
-    pub claims: Vec<ClaimSummary>,
+    pub claims: Vec<AboutClaim>,
     pub truncated: bool,
     pub coverage: Vec<Coverage>,
     pub extraction: Vec<crate::runs::ExtractionPair>,
     /// Equivalent claims under a merge, grouped. A group counts once toward `limit`.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub groups: Vec<ClaimGroup>,
+    /// When the identifier names a Person: the Person and each account it holds. The claims of
+    /// those accounts are among `claims`, each naming its account.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub person: Option<PersonView>,
+}
+// One claim of an `about` answer. No doc comment: the schema keeps the claim's description.
+#[derive(Debug, JsonSchema, Serialize)]
+pub struct AboutClaim {
+    #[serde(flatten)]
+    pub summary: ClaimSummary,
+    /// In a Person's view, the entity id of the linked account this claim is about; absent for
+    /// the Person's own claims and outside a Person's view.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub account: Option<String>,
+}
+/// A Person, as `about` shows it: the accounts it holds (or a Person merged with it holds),
+/// each with the reasons it is linked.
+#[derive(Debug, JsonSchema, Serialize)]
+pub struct PersonView {
+    pub id: String,
+    pub identifier: String,
+    /// Ordered by identifier.
+    pub accounts: Vec<LinkedAccount>,
+}
+#[derive(Debug, JsonSchema, Serialize)]
+pub struct LinkedAccount {
+    pub id: String,
+    pub identifier: String,
+    /// The account's displayed type.
+    #[serde(rename = "type")]
+    pub entity_type: String,
+    /// Its current aliases.
+    pub aliases: Vec<String>,
+    /// Why it is linked: one entry per current justification of each of its `rastro:held_by`
+    /// claims to the Person or a Person merged with it.
+    pub reasons: Vec<LinkReason>,
+}
+/// One reason an account is linked to a Person.
+#[derive(Debug, JsonSchema, Serialize)]
+pub struct LinkReason {
+    pub kind: LinkReasonKind,
+    /// The `rastro:held_by` claim the reason justifies; `why` explains it.
+    pub claim: String,
+    /// The justification's id, as `why` lists it.
+    pub justification: String,
+    /// The owner intent, for a reason of kind `owner_intent`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub intent: Option<String>,
+}
+/// How an account came to be linked: the owner said so, an equal verified email, or the account
+/// owns the source's token.
+#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LinkReasonKind {
+    OwnerIntent,
+    VerifiedEmail,
+    TokenOwner,
+}
+/// What storage reads for `about`, before grouping and `limit`.
+#[derive(Debug, Default)]
+pub struct AboutClaims {
+    pub resolved: bool,
+    /// Ordered newest first, then by id. For a Person, every claim of its view; otherwise up to
+    /// one more than `limit`.
+    pub claims: Vec<AboutClaim>,
+    pub person: Option<PersonView>,
 }
 /// Claims that say the same thing once merged Persons are taken as one (knowledge §35). There is
 /// no representative claim: each member keeps its own id, status and revision.
@@ -66,11 +135,16 @@ fn validate_entity(entity: &str) -> Result<()> {
 /// among them group, an item (a lone claim or a group, placed at its newest member) counts once
 /// toward `limit`, and every member of a kept item is listed.
 fn answer(
-    claims: Vec<ClaimSummary>,
+    read: AboutClaims,
     limit: usize,
     coverage: Vec<Coverage>,
     extraction: Vec<crate::runs::ExtractionPair>,
 ) -> About {
+    let AboutClaims {
+        resolved,
+        claims,
+        person,
+    } = read;
     use crate::claims::Object;
     use std::collections::BTreeMap;
     let mut parent = BTreeMap::<String, String>::new();
@@ -81,7 +155,7 @@ fn answer(
         }
         id
     }
-    for c in claims.iter().map(|s| &s.claim) {
+    for c in claims.iter().map(|s| &s.summary.claim) {
         if let (crate::identity::SAME_AS, "observed", Object::Entity { id, .. }) =
             (c.predicate.as_str(), c.status.as_str(), &c.object)
         {
@@ -92,10 +166,10 @@ fn answer(
             }
         }
     }
-    let mut items: Vec<Vec<ClaimSummary>> = vec![];
+    let mut items: Vec<Vec<AboutClaim>> = vec![];
     let mut index = BTreeMap::<(String, String, String, String), usize>::new();
     for summary in claims {
-        let c = &summary.claim;
+        let c = &summary.summary.claim;
         let object = match &c.object {
             Object::Entity { id, .. } => (String::new(), root(&parent, id)),
             Object::Literal { value, datatype } => (datatype.clone(), value.clone()),
@@ -133,9 +207,9 @@ fn answer(
             let members: Vec<_> = members
                 .iter()
                 .map(|m| GroupMember {
-                    claim: m.claim.id.clone(),
-                    status: m.claim.status.clone(),
-                    revision: m.claim.revision.clone(),
+                    claim: m.summary.claim.id.clone(),
+                    status: m.summary.claim.status.clone(),
+                    revision: m.summary.claim.revision.clone(),
                 })
                 .collect();
             let pairs: Vec<_> = members
@@ -154,11 +228,13 @@ fn answer(
         })
         .collect();
     About {
+        resolved,
         claims: items.into_iter().flatten().collect(),
         truncated,
         coverage,
         extraction,
         groups,
+        person,
     }
 }
 impl<S: ReadStorage> Reader<S> {
@@ -174,8 +250,8 @@ impl<S: ReadStorage> Reader<S> {
             &self.scopes,
             |view, unfinished, live| {
                 let claims = match view {
-                    Some(view) => view.about_scoped(entity, options, &self.scopes)?,
-                    None => vec![],
+                    Some(view) => view.about_view(entity, options, &self.scopes)?,
+                    None => AboutClaims::default(),
                 };
                 let coverage = read_only::coverage_of(
                     view,
@@ -217,7 +293,7 @@ impl<S: Storage> Rastro<S> {
                 &[],
             )?;
             Ok(answer(
-                view.about(entity, options)?,
+                view.about_view(entity, options, &[])?,
                 options.limit,
                 coverage,
                 extraction,
