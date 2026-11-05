@@ -199,10 +199,39 @@ fn S19_a_new_observation_on_a_hub_replays_only_its_slots_and_equals_a_rebuild() 
         _ => panic!("new location must append"),
     };
     let extra = claim_for("code:Account", eid, &fresh);
+    let database = rusqlite::Connection::open(home.path().join("db")).unwrap();
+    let max_rowid = |table: &str| -> i64 {
+        database
+            .query_row(
+                &format!("SELECT coalesce(max(rowid), 0) FROM {table}"),
+                [],
+                |r| r.get(0),
+            )
+            .unwrap()
+    };
+    let (occurrences, justifications) = (max_rowid("occurrence"), max_rowid("justification"));
     let t = std::time::Instant::now();
     db.record_claims(run, ("x", "1"), std::slice::from_ref(&extra), None)
         .unwrap();
     let elapsed = t.elapsed();
+    // Structure, not time: only the new location's slot replays, so a handful of rows are
+    // written, not one per location of the hub.
+    for (table, before) in [
+        ("occurrence", occurrences),
+        ("justification", justifications),
+    ] {
+        let written: i64 = database
+            .query_row(
+                &format!("SELECT count(*) FROM {table} WHERE rowid > ?1"),
+                [before],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert!(
+            written <= 4,
+            "{table}: {written} rows rewritten for one observation"
+        );
+    }
     eprintln!("N={n} S19 incremental 1 claim: {elapsed:?}");
     assert!(
         elapsed < std::time::Duration::from_millis(500),

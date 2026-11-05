@@ -29,7 +29,7 @@ impl View<'_> {
     /// types, the one with the newest known time, ties broken by the lowest claim id.
     fn displayed_type(&self, entity: &str) -> Result<String> {
         let mut types: Vec<(String, String, BTreeSet<String>, String)> = vec![];
-        let mut statement = self.0.prepare_cached("SELECT id, object_value, type_ancestors, known_since FROM claim WHERE subject = ?1 AND predicate = 'rastro:type' AND status = 'observed' AND object_value IS NOT NULL")?;
+        let mut statement = self.0.prepare_cached(&format!("SELECT id, object_value, type_ancestors, known_since FROM claim WHERE subject = ?1 AND predicate = 'rastro:type' AND status IN {CURRENT} AND object_value IS NOT NULL"))?;
         let mut rows = statement.query([entity])?;
         while let Some(row) = rows.next()? {
             types.push((
