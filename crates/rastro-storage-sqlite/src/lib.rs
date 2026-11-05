@@ -49,8 +49,8 @@ const MIGRATIONS: [(&str, &str); 8] = [
         include_str!("../migrations/202611061000_claims_projection.sql"),
     ),
     (
-        "202611061100_claim_lifecycle",
-        include_str!("../migrations/202611061100_claim_lifecycle.sql"),
+        "202611061200_knowledge_v2",
+        include_str!("../migrations/202611061200_knowledge_v2.sql"),
     ),
 ];
 

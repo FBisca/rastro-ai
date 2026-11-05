@@ -248,6 +248,7 @@ fn converse<S: Storage>(
                         source: run.source.name.clone(),
                         scope: run.source.scope.clone(),
                         last: (e.captured_at, *id),
+                        vocabulary_version: run.vocabulary.version.clone(),
                     });
                     let claims: Vec<ObservedClaim> =
                         std::mem::take(&mut accepted).into_values().collect();

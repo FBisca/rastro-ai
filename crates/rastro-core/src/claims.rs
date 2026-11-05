@@ -10,6 +10,8 @@ use std::collections::{BTreeSet, HashMap};
 
 /// The longest identifier, predicate or literal value a claim may carry, in UTF-8 bytes.
 pub const MAX_TERM_BYTES: usize = 4096;
+pub const TYPE_PREDICATE: &str = "rastro:type";
+pub const ALIAS_PREDICATE: &str = "rastro:alias";
 
 /// An entity: one exact canonical identifier, with its type.
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
@@ -46,6 +48,7 @@ pub enum Object {
 /// A byte range of one observation's field that supports a claim.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Support {
+    pub portable_key: String,
     pub evidence_id: i64,
     pub field: String,
     pub start: u64,
@@ -70,6 +73,7 @@ pub struct Checkpoint {
     pub source: String,
     pub scope: Scope,
     pub last: (DateTime<Utc>, i64),
+    pub vocabulary_version: String,
 }
 
 /// Canonical encoding, version 1: a domain tag, then each part as one tag byte, its length in
@@ -106,40 +110,98 @@ pub fn revision(status: &str, supports: &[Support]) -> String {
     revision_with_links(status, supports, &[])
 }
 
-/// Extends the v1 encoding with sorted (kind, target) link parts.
+/// Revision v2 hashes a set of portable spans, never local ids or interpretation versions.
 pub fn revision_with_links(
     status: &str,
     supports: &[Support],
     links: &[(String, String)],
 ) -> String {
-    let mut supports = supports.to_vec();
-    supports.sort();
-    let numbers: Vec<_> = supports
-        .iter()
-        .map(|s| {
-            [
-                s.evidence_id.to_string(),
-                s.start.to_string(),
-                s.end.to_string(),
-            ]
-        })
-        .collect();
-    let mut parts = vec![(b'A', status)];
-    for (support, [evidence, start, end]) in supports.iter().zip(&numbers) {
-        parts.extend([
-            (b'V', &**evidence),
-            (b'F', &*support.field),
-            (b'B', &**start),
-            (b'N', &**end),
-            (b'R', &*support.extraction_rule),
-        ]);
-    }
-    let mut links = links.to_vec();
-    links.sort();
-    for (kind, target) in &links {
+    let keys: BTreeSet<_> = supports.iter().map(|s| s.portable_key.as_str()).collect();
+    let mut parts = vec![(b'A', status), (b'T', "unknown")];
+    parts.extend(keys.into_iter().map(|key| (b'V', key)));
+    let links: BTreeSet<_> = links.iter().collect();
+    for (kind, target) in links {
         parts.extend([(b'K', kind.as_str()), (b'C', target.as_str())]);
     }
-    digest("r_", "rastro/revision/v1", &parts)
+    digest("r_", "rastro/revision/v2", &parts)
+}
+
+/// Portable identity of an observation; capture order never depends on a local row id.
+pub fn portable_evidence_key(evidence: &Evidence) -> String {
+    portable_span_key(evidence, evidence.start, evidence.end)
+}
+pub fn portable_span_key(e: &Evidence, start: u64, end: u64) -> String {
+    let quote = &e.quote[(start - e.start) as usize..(end - e.start) as usize];
+    digest(
+        "v_",
+        "rastro/evidence/v1",
+        &[
+            (b'S', &e.source),
+            (b'C', &e.scope.0),
+            (b'L', &e.location),
+            (b'F', &e.field),
+            (b'B', &start.to_string()),
+            (b'N', &end.to_string()),
+            (b'Q', quote),
+            (
+                b'T',
+                &e.captured_at
+                    .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+            ),
+        ],
+    )
+}
+/// One submission is one derivation. Rule and sorted span keys distinguish alternatives.
+pub fn derivation_key(supports: &BTreeSet<Support>) -> String {
+    let keys: BTreeSet<_> = supports
+        .iter()
+        .map(|s| (&s.extraction_rule, &s.portable_key))
+        .collect();
+    let parts: Vec<_> = keys
+        .iter()
+        .flat_map(|(rule, key)| [(b'R', rule.as_str()), (b'V', key.as_str())])
+        .collect();
+    digest("d_", "rastro/derivation/v1", &parts)
+}
+pub fn justification_id(claim: &str, extractor: &str, derivation: &str) -> String {
+    digest(
+        "j_",
+        "rastro/justification/v1",
+        &[(b'C', claim), (b'E', extractor), (b'D', derivation)],
+    )
+}
+pub fn occurrence_id(justification: &str, captured: &str, portable_key: &str) -> String {
+    digest(
+        "o_",
+        "rastro/occurrence/v1",
+        &[
+            (b'J', justification),
+            (b'T', captured),
+            (b'V', portable_key),
+        ],
+    )
+}
+/// Stored derivation identity and provenance; spans in this bundle are all required.
+#[derive(Clone, Debug)]
+pub struct Justification {
+    pub id: String,
+    pub claim_id: String,
+    pub extractor: String,
+    pub extractor_version: String,
+    pub derivation_key: String,
+    pub spans: BTreeSet<Support>,
+}
+#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+pub struct EventKey {
+    pub captured_at: DateTime<Utc>,
+    pub portable_key: String,
+}
+#[derive(Clone, Debug)]
+pub struct Occurrence {
+    pub id: String,
+    pub justification_id: String,
+    pub start: EventKey,
+    pub end: Option<EventKey>,
 }
 
 /// Checks a submission against what this run delivered, the extractor's declared rules and
@@ -231,6 +293,7 @@ pub fn validate(
             return Err("support span lies outside its evidence".into());
         }
         supports.insert(Support {
+            portable_key: portable_span_key(evidence, support.start, support.end),
             evidence_id: support.evidence_id,
             field: support.field,
             start: support.start,
@@ -308,6 +371,25 @@ pub struct Why {
 #[allow(non_snake_case)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn S8a_revision_ignores_local_ids_and_rules() {
+        let first = Support {
+            portable_key: "portable-span".into(),
+            evidence_id: 1,
+            field: "/state".into(),
+            start: 0,
+            end: 4,
+            extraction_rule: "a".into(),
+        };
+        let mut replay = first.clone();
+        replay.evidence_id = 42;
+        replay.extraction_rule = "b".into();
+        assert_eq!(
+            revision("observed", &[first]),
+            revision("observed", &[replay])
+        );
+    }
 
     /// The canonical encoding is fixed: these ids (checked against an independent SHA-256 of
     /// the encoding) must never change within version 1.

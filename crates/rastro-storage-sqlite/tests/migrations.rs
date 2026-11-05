@@ -181,3 +181,32 @@ fn S3_evidence_captured_with_an_earlier_clock_is_still_extracted() {
     assert_eq!(locations, ["https://x/2"]);
     assert!(pending[0].1.captured_at >= first.captured_at);
 }
+
+#[test]
+fn S16b_knowledge_projection_has_insert_only_publications() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("rastro.sqlite3");
+    SqliteStorage::open(&path).unwrap();
+    let db = Connection::open(path).unwrap();
+    db.execute("INSERT INTO projection_publication (extractor_versions, vocabulary_versions, evidence_high_water) VALUES ('{}', '{}', '[]')", []).unwrap();
+    assert!(
+        db.execute(
+            "UPDATE projection_publication SET evidence_high_water = '[]'",
+            []
+        )
+        .is_err()
+    );
+    assert!(
+        db.execute("DELETE FROM projection_publication", [])
+            .is_err()
+    );
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM pragma_table_info('entity') WHERE name = 'type'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+}

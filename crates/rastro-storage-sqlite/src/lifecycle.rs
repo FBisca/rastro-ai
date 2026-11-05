@@ -54,7 +54,7 @@ pub(crate) fn refresh(db: &Connection) -> Result<()> {
         context: (r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?),
         scalar: r.get(8)?, captured: r.get(9)?,
         updated: r.get::<_, Option<String>>(13)?.map(|v| v.parse().expect("validated evidence timestamp")),
-        support: Support { evidence_id: r.get(10)?, field: r.get(6)?,
+        support: Support { portable_key: String::new(), evidence_id: r.get(10)?, field: r.get(6)?,
             extraction_rule: r.get(7)?, start: r.get::<_, i64>(11)? as u64,
             end: r.get::<_, i64>(12)? as u64 },
     }))?.collect::<Result<Vec<_>, _>>()?;
