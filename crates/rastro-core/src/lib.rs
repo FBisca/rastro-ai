@@ -63,6 +63,18 @@ pub struct Source {
 }
 
 impl Source {
+    /// A source with the default freshness rule and window, and no options yet.
+    pub fn new(name: String, connector: String, scope: Scope) -> Self {
+        Self {
+            name,
+            connector,
+            selector: BTreeMap::new(),
+            scope,
+            freshness_rule: "1h".into(),
+            window_start: Utc::now() - Duration::days(90),
+            keep_original: false,
+        }
+    }
     pub fn github(name: String, repo: String, scope: Scope) -> Self {
         Self {
             name,
@@ -449,9 +461,7 @@ impl<S: Storage> Rastro<S> {
     }
     pub fn add_source(&mut self, source: Source) -> Result<Source> {
         source.validate()?;
-        if let Some(manifest) = host::source_manifest(&self.locations, &source.connector) {
-            manifest.check_source_options(&source.selector)?;
-        }
+        host::check_source_options(&self.locations, &source, None)?;
         let _lock = self.locations.config_lock()?;
         self.config = Config::load(&self.locations)?;
         ensure!(

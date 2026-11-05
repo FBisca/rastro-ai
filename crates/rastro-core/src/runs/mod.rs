@@ -163,7 +163,17 @@ impl<S: Storage> Rastro<S> {
         self.storage.interrupt_unfinished_runs(Utc::now())?;
         let mut reports = Vec::new();
         for source in &sources {
-            let plugin = host::discover(&self.locations, &source.connector, "connector");
+            let plugin = host::discover(&self.locations, &source.connector, "connector").and_then(
+                |plugin| {
+                    // A stored source is checked like a new one, before the connector runs.
+                    host::check_source_options(&self.locations, source, Some(&plugin.manifest))
+                        .map_err(|error| {
+                            eprintln!("source {}: {error:#}", source.name);
+                            "protocol"
+                        })?;
+                    Ok(plugin)
+                },
+            );
             let from = if reread {
                 source.window_start
             } else {

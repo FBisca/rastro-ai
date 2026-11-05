@@ -349,7 +349,7 @@ fn S1_declared_options_are_required_and_unknown_options_are_refused() {
     let home = TempDir::new().unwrap();
     let plugin = home.path().join("config/plugins/test");
     std::fs::create_dir_all(&plugin).unwrap();
-    std::fs::write(plugin.join("rastro-plugin.toml"), format!("{}\n[[source_options]]\nname = \"workspace\"\nrequired = true\npattern = \".+\"\nhelp = \"Workspace identifier\"\n", include_str!("../../rastro-test-connector/rastro-plugin.toml"))).unwrap();
+    std::fs::write(plugin.join("rastro-plugin.toml"), format!("{}\n[[source_options]]\nname = \"workspace\"\nrequired = true\npattern = \".+\"\nhelp = \"Workspace identifier\"\n\n[[source_options]]\nname = \"region\"\nhelp = \"Region\"\n", include_str!("../../rastro-test-connector/rastro-plugin.toml"))).unwrap();
     for options in [vec![], vec!["--option", "other=value"]] {
         let output = command(home.path())
             .args([
@@ -413,4 +413,110 @@ fn S2_github_repo_shorthand_uses_the_manifest_pattern() {
         error["error"].as_str().unwrap().contains("pattern"),
         "{error}"
     );
+}
+
+#[test]
+fn S1_a_declared_option_is_saved_listed_and_survives_reload() {
+    let home = TempDir::new().unwrap();
+    let plugin = home.path().join("config/plugins/test");
+    std::fs::create_dir_all(&plugin).unwrap();
+    std::fs::write(
+        plugin.join("rastro-plugin.toml"),
+        format!(
+            "{}\n[[source_options]]\nname = \"workspace\"\nrequired = true\n",
+            include_str!("../../rastro-test-connector/rastro-plugin.toml")
+                .replace("[[source_options]]", "[[ignored]]")
+                .split("[[ignored]]")
+                .next()
+                .unwrap()
+        ),
+    )
+    .unwrap();
+    run(
+        &mut command(home.path()),
+        &[
+            "source",
+            "add",
+            "w",
+            "--connector",
+            "test",
+            "--scope",
+            "personal",
+            "--option",
+            "workspace=x",
+        ],
+    );
+    for _ in 0..2 {
+        let listed: Value = serde_json::from_str(&run(
+            &mut command(home.path()),
+            &["source", "list", "--json"],
+        ))
+        .unwrap();
+        assert_eq!(listed["result"]["sources"][0]["selector"]["workspace"], "x");
+    }
+}
+
+#[test]
+fn S1_a_manifest_declaring_no_options_refuses_any_option_and_an_empty_name() {
+    let home = TempDir::new().unwrap();
+    let plugin = home.path().join("config/plugins/test");
+    std::fs::create_dir_all(&plugin).unwrap();
+    let manifest = include_str!("../../rastro-test-connector/rastro-plugin.toml")
+        .split("[[source_options]]")
+        .next()
+        .unwrap();
+    std::fs::write(plugin.join("rastro-plugin.toml"), manifest).unwrap();
+    for option in ["anything=1", "=x"] {
+        let output = command(home.path())
+            .args([
+                "source",
+                "add",
+                "w",
+                "--connector",
+                "test",
+                "--scope",
+                "personal",
+                "--json",
+                "--option",
+                option,
+            ])
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{option}");
+    }
+    let listed: Value = serde_json::from_str(&run(
+        &mut command(home.path()),
+        &["source", "list", "--json"],
+    ))
+    .unwrap();
+    assert!(listed["result"]["sources"].as_array().unwrap().is_empty());
+}
+
+#[test]
+fn S2_the_bundled_github_declaration_checks_the_repo_when_no_plugin_is_installed() {
+    let home = TempDir::new().unwrap();
+    for repo in ["invalid", "../x", "o/..", "a b/c"] {
+        let output = command(home.path())
+            .args([
+                "source",
+                "add",
+                "bad",
+                "--connector",
+                "github",
+                "--repo",
+                repo,
+                "--scope",
+                "personal",
+                "--json",
+            ])
+            .output()
+            .unwrap();
+        assert!(!output.status.success(), "{repo}");
+        let error: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(
+            error["error"].as_str().unwrap().contains("pattern"),
+            "{error}"
+        );
+    }
+    run(&mut command(home.path()), ADD);
 }

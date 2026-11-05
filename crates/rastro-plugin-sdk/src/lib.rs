@@ -361,7 +361,7 @@ pub struct Manifest {
     #[serde(default)]
     pub default_extractor: Option<String>,
     /// On a connector: the options a source of it takes (`source add --option key=value`).
-    /// A manifest declaring none leaves source options unchecked.
+    /// A manifest declaring none refuses any option.
     #[serde(default)]
     pub source_options: Vec<SourceOption>,
 }
@@ -377,32 +377,53 @@ pub struct SourceOption {
     #[serde(default)]
     pub help: String,
 }
+impl SourceOption {
+    /// The declared pattern, anchored over the whole value. The raw pattern must parse as one
+    /// expression on its own, so it can't escape the anchors.
+    fn matcher(&self) -> Result<regex::Regex> {
+        let pattern = self.pattern.as_deref().unwrap_or(".*");
+        regex::Regex::new(pattern)
+            .and_then(|_| regex::Regex::new(&format!("^(?:{pattern})$")))
+            .with_context(|| format!("option {} declares an invalid pattern", self.name))
+    }
+}
 impl Manifest {
     /// Checks the options of a source against those declared. Refusals name the declared options.
     pub fn check_source_options(
         &self,
         options: &std::collections::BTreeMap<String, String>,
     ) -> Result<()> {
-        if self.source_options.is_empty() {
-            return Ok(());
-        }
-        let declared = self
-            .source_options
-            .iter()
-            .map(|o| {
-                let required = if o.required { ", required" } else { "" };
-                format!("{} ({}{required})", o.name, o.help)
-            })
-            .collect::<Vec<_>>()
-            .join("; ");
+        Self::check_options(&self.id, &self.source_options, options)
+    }
+    /// Checks `options` against `declared` options of connector `connector`.
+    pub fn check_options(
+        connector: &str,
+        declared_options: &[SourceOption],
+        options: &std::collections::BTreeMap<String, String>,
+    ) -> Result<()> {
+        let declared = if declared_options.is_empty() {
+            "none".to_string()
+        } else {
+            declared_options
+                .iter()
+                .map(|o| {
+                    let required = if o.required { ", required" } else { "" };
+                    format!("{} ({}{required})", o.name, o.help)
+                })
+                .collect::<Vec<_>>()
+                .join("; ")
+        };
+        anyhow::ensure!(
+            options.keys().all(|key| !key.is_empty()),
+            "option names must not be empty; declared options: {declared}"
+        );
         for key in options.keys() {
             anyhow::ensure!(
-                self.source_options.iter().any(|o| &o.name == key),
-                "connector {} does not declare option {key}; declared options: {declared}",
-                self.id
+                declared_options.iter().any(|o| &o.name == key),
+                "connector {connector} does not declare option {key}; declared options: {declared}"
             );
         }
-        for option in &self.source_options {
+        for option in declared_options {
             let Some(value) = options.get(&option.name) else {
                 anyhow::ensure!(
                     !option.required,
@@ -427,7 +448,11 @@ impl Manifest {
     }
 
     pub fn parse(text: &str) -> Result<Self> {
-        toml::from_str(text).context("invalid rastro-plugin.toml")
+        let manifest: Self = toml::from_str(text).context("invalid rastro-plugin.toml")?;
+        for option in &manifest.source_options {
+            option.matcher()?;
+        }
+        Ok(manifest)
     }
 }
 

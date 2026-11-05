@@ -226,9 +226,8 @@ impl SourceAddRequest {
                 "option repo given twice"
             );
         }
-        let mut source = Source::github(self.name, String::new(), Scope(self.scope));
+        let mut source = Source::new(self.name, self.connector, Scope(self.scope));
         source.selector = selector;
-        source.connector = self.connector;
         source.freshness_rule = self.freshness_rule;
         source.keep_original = self.keep_original;
         if let Some(start) = self.window_start {

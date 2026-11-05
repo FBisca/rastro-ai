@@ -20,5 +20,5 @@ actions = []
 [[source_options]]
 name = "repo"
 required = true
-pattern = "[^/\\s]+/[^/\\s]+"
+pattern = '[A-Za-z0-9-]+/[A-Za-z0-9._-]*[A-Za-z0-9_-][A-Za-z0-9._-]*'
 help = "Repository as owner/repository"
