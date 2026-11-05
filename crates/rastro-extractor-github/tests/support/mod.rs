@@ -240,7 +240,7 @@ impl Env {
     }
     /// `rastro why` on that claim.
     pub fn why(&self, subject: &str, predicate: &str, object: &str) -> Value {
-        self.json(&["why", &self.claim(subject, predicate, object)])
+        self.json(&["why", &self.claim(subject, predicate, object), "--full"])
     }
 }
 

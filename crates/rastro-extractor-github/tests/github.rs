@@ -42,7 +42,19 @@ fn world(title: &str, body: &str) -> World {
 
 /// The one support of a `why`, or all of them by field.
 fn supports(why: &Value) -> Vec<Value> {
-    why["supports"].as_array().unwrap().clone()
+    // One entry per span, with the rule of the support that holds it.
+    why["supports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|support| {
+            support["spans"].as_array().unwrap().iter().map(|span| {
+                let mut span = span.clone();
+                span["extraction_rule"] = support["extraction_rule"].clone();
+                span
+            })
+        })
+        .collect()
 }
 /// (field, start, end, quote, rule) of each support, sorted.
 fn cited(why: &Value) -> BTreeSet<(String, u64, u64, String, String)> {
@@ -406,7 +418,11 @@ fn S13_a_rename_across_many_labelled_pull_requests_projects_like_a_rebuild() {
         env.column("SELECT id FROM claim ORDER BY id")
             .iter()
             .map(|id| {
-                let mut why = env.json(&["why", id]);
+                let mut why = env.json(&["why", id, "--full"]);
+                // Coverage and run state belong to syncs, not to the projection.
+                let why_object = why.as_object_mut().unwrap();
+                why_object.remove("coverage");
+                why_object.remove("extraction");
                 for support in why["supports"].as_array_mut().unwrap() {
                     support.as_object_mut().unwrap().remove("run_id");
                 }
