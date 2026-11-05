@@ -3,6 +3,7 @@ pub mod coverage;
 pub mod evidence;
 pub mod files;
 pub mod host;
+pub mod knowledge;
 pub mod read_only;
 pub mod runs;
 pub mod search;

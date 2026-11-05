@@ -15,6 +15,7 @@ const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 /// What `PRAGMA user_version` 1 and 2 meant, before migrations were tracked by name. Frozen.
 const LEGACY: [&str; 2] = ["202611041200_initial", "202611041500_evidence_insert_guard"];
 
+mod knowledge;
 /// `(name, sql)`, named `YYYYMMDDHHmm_<what>` so migrations from different branches
 /// order by time. Never edit one that has shipped; add a new one.
 mod lifecycle;
@@ -802,6 +803,22 @@ impl View<'_> {
     }
 }
 impl Snapshot for View<'_> {
+    fn explain(
+        &self,
+        claim: &str,
+        options: &rastro_core::knowledge::WhyOptions,
+    ) -> Result<Option<rastro_core::knowledge::Explanation>> {
+        self.explanation(claim, options)
+    }
+
+    fn about(
+        &self,
+        entity: &str,
+        options: &rastro_core::knowledge::AboutOptions,
+    ) -> Result<Vec<rastro_core::knowledge::ClaimSummary>> {
+        self.about_claims(entity, options)
+    }
+
     fn stored_pairs(&self, scopes: &[Scope]) -> Result<Vec<Pair>> {
         // A source row or a run names a pair: every window and every evidence row comes from
         // a run, so those legs would add nothing. The rule is the one last stored for the

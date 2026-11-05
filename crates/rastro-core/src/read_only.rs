@@ -55,6 +55,23 @@ pub struct UnfinishedRun {
 
 /// What storage can answer inside one read transaction.
 pub trait Snapshot {
+    fn explain(
+        &self,
+        _claim: &str,
+        _options: &crate::knowledge::WhyOptions,
+    ) -> Result<Option<crate::knowledge::Explanation>> {
+        anyhow::bail!("storage does not support why")
+    }
+
+    /// Unscoped stored claim state, ready for later scoped recomputation.
+    fn about(
+        &self,
+        _entity: &str,
+        _options: &crate::knowledge::AboutOptions,
+    ) -> Result<Vec<crate::knowledge::ClaimSummary>> {
+        anyhow::bail!("storage does not support about")
+    }
+
     /// What storage recorded for the source, before the freshness rule is applied.
     fn coverage(&self, pair: &Pair, all_windows: bool) -> Result<Coverage>;
     /// Allowed (source, scope) pairs storage holds anything for, with stored freshness rules.
@@ -129,10 +146,10 @@ impl Locations {
 
 /// A read-only view of the store, as of the config read when it was opened.
 pub struct Reader<S> {
-    locations: Locations,
-    config: Config,
-    storage: Option<S>,
-    scopes: Vec<Scope>,
+    pub(crate) locations: Locations,
+    pub(crate) config: Config,
+    pub(crate) storage: Option<S>,
+    pub(crate) scopes: Vec<Scope>,
 }
 
 impl<S: ReadStorage> Rastro<S> {
@@ -243,7 +260,7 @@ impl<S: ReadStorage> Reader<S> {
     }
 }
 
-fn snapshot<S: ReadStorage, T>(
+pub(crate) fn snapshot<S: ReadStorage, T>(
     locations: &Locations,
     storage: &mut Option<S>,
     scopes: &[Scope],

@@ -1,7 +1,6 @@
 //! Result types: what each operation returns, serialised into the envelope's `result`.
 pub use crate::catalog::Response;
 use crate::envelope;
-use rastro_core::claims::{ClaimView, SupportView};
 use rastro_core::runs::{ExtractionState, RunReport};
 use rastro_core::{Coverage, Source, search::SearchResult};
 use schemars::JsonSchema;
@@ -41,12 +40,8 @@ pub struct IndexRebuildResult {
 pub struct ClaimsRebuildResult {
     pub claims: usize,
 }
-/// A claim and every support it has, each citing its evidence.
-#[derive(Debug, JsonSchema, Serialize)]
-pub struct WhyResult {
-    pub claim: Box<ClaimView>,
-    pub supports: Vec<SupportView>,
-}
+/// A claim and bounded complete justifications, each citing every required span.
+pub type WhyResult = rastro_core::knowledge::Explanation;
 
 impl Response {
     pub fn envelope(&self) -> Value {
@@ -66,6 +61,8 @@ impl Response {
         }
     }
 }
+
+pub type AboutResult = rastro_core::knowledge::About;
 
 #[cfg(test)]
 mod tests {
@@ -92,25 +89,39 @@ mod tests {
             }),
             Response::IndexRebuild(IndexRebuildResult { indexed: 0 }),
             Response::Why(WhyResult {
-                claim: Box::new(ClaimView {
-                    id: "c".into(),
-                    subject: rastro_core::claims::Entity::new("s".into(), "t".into()),
-                    predicate: "p".into(),
-                    object: rastro_core::claims::Object::Literal {
-                        value: "v".into(),
-                        datatype: "string".into(),
+                claim: Box::new(rastro_core::knowledge::ClaimSummary {
+                    subject_aliases: vec![],
+                    object_aliases: vec![],
+                    support_count: 0,
+                    claim: rastro_core::claims::ClaimView {
+                        id: "c".into(),
+                        subject: rastro_core::claims::Entity::new("s".into(), "t".into()),
+                        predicate: "p".into(),
+                        object: rastro_core::claims::Object::Literal {
+                            value: "v".into(),
+                            datatype: "string".into(),
+                        },
+                        status: "observed".into(),
+                        revision: "r".into(),
+                        known_intervals: vec![],
+                        valid_time: rastro_core::claims::ValidTime::Unknown,
+                        conflicts_with: vec![],
+                        supersedes: vec![],
+                        superseded_by: vec![],
                     },
-                    status: "observed".into(),
-                    revision: "r".into(),
-                    known_intervals: vec![],
-                    valid_time: rastro_core::claims::ValidTime::Unknown,
-                    conflicts_with: vec![],
-                    supersedes: vec![],
-                    superseded_by: vec![],
                 }),
                 supports: vec![],
+                truncated: false,
+                coverage: vec![],
+                extraction: vec![],
             }),
             Response::ClaimsRebuild(ClaimsRebuildResult { claims: 0 }),
+            Response::About(AboutResult {
+                claims: vec![],
+                truncated: false,
+                coverage: vec![],
+                extraction: vec![],
+            }),
         ];
         let arguments = |name: &str| match name {
             "source.add" => {
@@ -118,6 +129,7 @@ mod tests {
             }
             "search" => serde_json::json!({"text": "x"}),
             "why" => serde_json::json!({"claim": "c"}),
+            "about" => serde_json::json!({"entity": "github:account/1"}),
             _ => serde_json::json!({}),
         };
         for (spec, response) in CATALOG.iter().zip(&responses) {

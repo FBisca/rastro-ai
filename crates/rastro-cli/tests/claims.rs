@@ -211,7 +211,7 @@ fn S3_a_bound_extractor_turns_its_sources_evidence_into_claims_read_through_why(
     // Only the bound source's evidence reached the extractor.
     assert_eq!(env.count("claim"), 1);
     let id: String = env.sql("SELECT id FROM claim");
-    let why = env.json(&["why", &id]);
+    let why = env.json(&["why", &id, "--full"]);
     let claim = &why["claim"];
     assert_eq!(claim["id"], id.as_str());
     assert_eq!(claim["subject"]["identifier"], PR);
@@ -224,7 +224,7 @@ fn S3_a_bound_extractor_turns_its_sources_evidence_into_claims_read_through_why(
     assert_eq!(supports.len(), 1, "{why}");
     let evidence: i64 =
         env.sql("SELECT id FROM evidence WHERE source = 'project' AND field = '/state'");
-    let s = &supports[0];
+    let s = &supports[0]["spans"][0];
     assert_eq!(s["evidence_id"], evidence);
     assert_eq!(
         (&s["source"], &s["scope"], &s["location"], &s["field"]),
@@ -240,7 +240,7 @@ fn S3_a_bound_extractor_turns_its_sources_evidence_into_claims_read_through_why(
         (&json!(0), &json!(4), &json!("open"))
     );
     assert_eq!(s["trust_class"], "structured");
-    assert_eq!(s["extraction_rule"], "state-field");
+    assert_eq!(supports[0]["extraction_rule"], "state-field");
     let human = env.ok(&["why", &id]);
     assert!(
         human.contains("code:state") && human.contains("/state"),
@@ -538,6 +538,7 @@ fn S7_two_sources_observing_the_same_pr_state_share_one_entity_and_one_claim() {
         .as_array()
         .unwrap()
         .iter()
+        .flat_map(|s| s["spans"].as_array().unwrap())
         .map(|s| s["source"].as_str().unwrap().to_string())
         .collect();
     sources.sort();
@@ -668,7 +669,9 @@ fn S10_missing_null_and_not_returned_never_supersede() {
     for observations in [vec![body("field omitted")], vec![null], vec![]] {
         env.observe(&observations);
         env.json(&["sync", "a"]);
-        assert_eq!(before, env.json(&["why", OPEN]));
+        let after_read = env.json(&["why", OPEN]);
+        assert_eq!(before["claim"], after_read["claim"]);
+        assert_eq!(before["supports"], after_read["supports"]);
     }
 }
 #[test]
@@ -680,11 +683,11 @@ fn S12_known_time_uses_evidence_capture_and_valid_time_is_unknown() {
     assert_eq!(first["claim"]["valid_time"], "unknown");
     assert_eq!(
         first["claim"]["known_intervals"][0]["start"],
-        first["supports"][0]["captured_at"]
+        first["supports"][0]["spans"][0]["captured_at"]
     );
     assert_ne!(
         first["claim"]["known_intervals"][0]["start"],
-        first["supports"][0]["source_updated_at"]
+        first["supports"][0]["spans"][0]["source_updated_at"]
     );
     assert!(first["claim"]["known_intervals"][0]["end"].is_null());
     sync_state(&env, "a", "closed");
@@ -692,7 +695,7 @@ fn S12_known_time_uses_evidence_capture_and_valid_time_is_unknown() {
     let new = env.json(&["why", &state_id("closed")]);
     assert_eq!(
         old["claim"]["known_intervals"][0]["end"],
-        new["supports"][0]["captured_at"]
+        new["supports"][0]["spans"][0]["captured_at"]
     );
 }
 #[test]
@@ -753,10 +756,8 @@ fn lifecycle_projection(env: &Env) -> Vec<Value> {
         .iter()
         .map(|id| {
             let mut why = env.json(&["why", id]);
-            // Extractor run metadata belongs to the audit log, outside the projection.
-            for support in why["supports"].as_array_mut().unwrap() {
-                support.as_object_mut().unwrap().remove("run_id");
-            }
+            why.as_object_mut().unwrap().remove("coverage");
+            why.as_object_mut().unwrap().remove("extraction");
             why
         })
         .collect()
@@ -939,7 +940,9 @@ fn assert_atomic_replay(vocabulary_only: bool) {
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(10));
     }
-    assert_eq!(before, env.json(&["why", OPEN]));
+    let after_read = env.json(&["why", OPEN]);
+    assert_eq!(before["claim"], after_read["claim"]);
+    assert_eq!(before["supports"], after_read["supports"]);
     fs::write(release, "").unwrap();
     let output = sync.wait_with_output().unwrap();
     assert!(
@@ -1040,7 +1043,9 @@ fn S16_rebuild_skips_missing_extractors_and_forbidden_historical_pairs() {
     drop(db);
     fs::remove_file(env.path("extractor.jsonl")).unwrap();
     env.ok(&["claims", "rebuild"]);
-    assert_eq!(before, env.json(&["why", OPEN]));
+    let after = env.json(&["why", OPEN]);
+    assert_eq!(before["claim"], after["claim"]);
+    assert_eq!(before["supports"], after["supports"]);
 }
 
 /// What the core reports for every bound pair: (source, extractor version, state).
@@ -1154,7 +1159,10 @@ fn S18_an_extractor_crash_fails_the_sync_keeps_coverage_and_the_last_projection_
         "found"
     );
     assert_eq!(extraction_states(&env)[0].2, "failed");
-    assert_eq!(env.json(&["why", OPEN]), before);
+    let after = env.json(&["why", OPEN]);
+    assert_eq!(after["claim"], before["claim"]);
+    assert_eq!(after["supports"], before["supports"]);
+    assert_eq!(after["extraction"][0]["state"], "failed");
     assert_eq!(env.count("claim"), 1);
 
     // The next sync resumes from the checkpoint: only the evidence the crash left.
@@ -1192,7 +1200,10 @@ fn S18b_a_failed_version_replay_keeps_the_old_versions_claims_and_reads_failed()
         failed["runs"][0]["extraction"]["state"], "failed",
         "{failed}"
     );
-    assert_eq!(env.json(&["why", OPEN]), before);
+    let after = env.json(&["why", OPEN]);
+    assert_eq!(after["claim"], before["claim"]);
+    assert_eq!(after["supports"], before["supports"]);
+    assert_eq!(after["extraction"][0]["state"], "failed");
     assert_eq!(
         env.count("justification WHERE extractor_version = '0.1.0'"),
         1
@@ -1356,7 +1367,10 @@ fn S18_an_extractor_that_reports_failure_after_claims_stores_nothing_and_the_nex
         "{failed}"
     );
     assert_eq!(env.count("claim"), claims);
-    assert_eq!(env.json(&["why", OPEN]), before);
+    let after = env.json(&["why", OPEN]);
+    assert_eq!(after["claim"], before["claim"]);
+    assert_eq!(after["supports"], before["supports"]);
+    assert_eq!(after["extraction"][0]["state"], "failed");
     assert_eq!(extraction_states(&env)[0].2, "failed");
 
     env.observe(&[state("closed")]);
