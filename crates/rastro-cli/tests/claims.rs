@@ -280,6 +280,29 @@ fn a_bound_extractor_turns_its_sources_evidence_into_claims_read_through_why() {
     assert_eq!(env.count("coverage WHERE source = 'project'"), 1);
 }
 
+/// evidence/R74: a sync's run carries an `extraction` object only for a source bound to an
+/// extractor
+#[test]
+fn a_sync_result_carries_extraction_only_for_a_bound_source() {
+    let env = Env::new(Some("test-extractor"));
+    env.connector("other", None);
+    env.add_source("project", "test");
+    env.add_source("elsewhere", "other");
+    env.observe(&[state("open")]);
+    let runs = env.json(&["sync"])["runs"].clone();
+    let runs = runs.as_array().unwrap();
+    for key in [
+        "run_id",
+        "extractor",
+        "extractor_version",
+        "state",
+        "counts",
+    ] {
+        assert!(runs[0]["extraction"].get(key).is_some(), "{key}: {runs:?}");
+    }
+    assert!(runs[1].get("extraction").is_none(), "{runs:?}");
+}
+
 /// claims/R2: a claim whose support is untrusted, undelivered, outside its evidence or from a rule
 /// not declared deterministic is rejected, counted, and leaves nothing behind
 #[test]
