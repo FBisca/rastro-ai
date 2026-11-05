@@ -520,3 +520,50 @@ fn S2_the_bundled_github_declaration_checks_the_repo_when_no_plugin_is_installed
     }
     run(&mut command(home.path()), ADD);
 }
+
+/// S39: a connector whose manifest declares `single_source` refuses a second source with an
+/// error naming the existing one, in any scope, and nothing is saved; a connector that doesn't
+/// declare it takes several
+#[test]
+fn S39_a_single_source_connector_refuses_a_second_source_naming_the_first() {
+    let manifest = include_str!("../../rastro-test-connector/rastro-plugin.toml")
+        .split("[[source_options]]")
+        .next()
+        .unwrap();
+    for single in [false, true] {
+        let home = TempDir::new().unwrap();
+        let plugin = home.path().join("config/plugins/test");
+        std::fs::create_dir_all(&plugin).unwrap();
+        let declared = if single { "single_source = true\n" } else { "" };
+        std::fs::write(
+            plugin.join("rastro-plugin.toml"),
+            format!("{declared}{manifest}"),
+        )
+        .unwrap();
+        let add = |name: &str, scope: &str| {
+            command(home.path())
+                .args(["source", "add", name, "--connector", "test"])
+                .args(["--scope", scope, "--json"])
+                .output()
+                .unwrap()
+        };
+        let config = || std::fs::read_to_string(home.path().join("config/config.toml")).unwrap();
+        assert!(add("first", "personal").status.success());
+        if !single {
+            assert!(add("second", "personal").status.success());
+            continue;
+        }
+        let before = config();
+        for scope in ["personal", "work"] {
+            let output = add("second", scope);
+            assert!(!output.status.success(), "{scope}");
+            let error: Value = serde_json::from_slice(&output.stdout).unwrap();
+            let message = error["error"].as_str().unwrap();
+            assert!(
+                message.contains("connector test") && message.contains("source first"),
+                "{error}"
+            );
+            assert_eq!(config(), before);
+        }
+    }
+}

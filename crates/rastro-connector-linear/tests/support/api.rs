@@ -104,8 +104,14 @@ pub fn days_ago(days: i64) -> String {
 pub fn user(id: &str, name: &str, email: &str, active: bool) -> Value {
     json!({
         "id": id, "name": name, "displayName": name.split(' ').next().unwrap().to_lowercase(),
-        "email": email, "active": active, "updatedAt": days_ago(30),
+        "email": email, "active": active, "app": false, "updatedAt": days_ago(30),
     })
+}
+/// An app (integration) user: Linear flags it `app`.
+pub fn app_user(id: &str, name: &str) -> Value {
+    let mut app = user(id, name, &format!("{}@apps.example.com", id), true);
+    app["app"] = json!(true);
+    app
 }
 /// The slug Linear makes from a title: lowercase words joined by `-`.
 pub fn slug(title: &str) -> String {
@@ -132,8 +138,8 @@ pub fn issue(
         "url": format!("https://linear.app/acme/issue/{identifier}/{}", slug(title)),
         "createdAt": days_ago(3), "updatedAt": days_ago(1),
         "state": {"name": "In Progress", "type": "started"},
-        "creator": creator.map(|id| json!({"id": id})),
-        "assignee": assignee.map(|id| json!({"id": id})),
+        "creator": creator.map(|id| json!({"id": id, "app": false})),
+        "assignee": assignee.map(|id| json!({"id": id, "app": false})),
         "team": {"id": "0b5a8c1e-0000-4000-8000-0000000000e1", "key": "ENG", "name": "Engineering"},
     })
 }

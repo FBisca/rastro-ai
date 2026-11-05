@@ -78,6 +78,12 @@ pub(crate) fn check_source_options(
     Manifest::check_options(&source.connector, declared, &source.selector)
 }
 
+/// Whether the installed connector's manifest declares it takes a single source. A connector
+/// that isn't installed can't say, so it isn't limited here.
+pub(crate) fn single_source(locations: &Locations, connector: &str) -> bool {
+    find(locations, connector).is_some_and(|(manifest, _)| manifest.single_source)
+}
+
 /// The manifest whose `id` is `id`, before any check of what it provides.
 pub(crate) fn find(locations: &Locations, id: &str) -> Option<(Manifest, PathBuf)> {
     let mut roots = vec![locations.plugins()];

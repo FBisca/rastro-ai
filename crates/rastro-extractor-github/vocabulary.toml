@@ -6,11 +6,15 @@
 #
 # Canonical identifiers (decisions/knowledge.md §24): an account is `github:account/<numeric
 # id>`; a pull request, issue, comment or repository is its normalised `html_url`.
+#
+# Accounts (decisions/vocabulary.md §27): `code:Account` names the core's `rastro:Account` as its
+# supertype, so only it may be held by a Person. A bot, a pull request or a repository may not.
 namespace = "code"
-version = "0.1.0"
+version = "0.2.0"
 
 [[types]]
 id = "code:Account"
+supertype = "rastro:Account"
 definition = "A GitHub user account, identified by its numeric id, whatever its login is now."
 not_to_confuse_with = "A Person: an account doesn't prove a human, and one human may hold several accounts (slice 4 links them). Not a code:Bot, nor an organization."
 examples = ["github:account/583231, `/user/type` User, login octocat"]

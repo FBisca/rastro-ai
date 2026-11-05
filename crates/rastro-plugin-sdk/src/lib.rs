@@ -364,6 +364,11 @@ pub struct Manifest {
     /// A manifest declaring none refuses any option.
     #[serde(default)]
     pub source_options: Vec<SourceOption>,
+    /// On a connector: it takes one source at most, because what it reads doesn't depend on the
+    /// source (one credential reads the same data whatever the source says), so a second source
+    /// would read the same data into another scope. `source add` refuses a second one.
+    #[serde(default)]
+    pub single_source: bool,
 }
 /// One option a connector's sources take.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -485,7 +490,8 @@ pub struct Definition {
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct TypeDefinition {
     pub id: String,
-    /// A broader type of this vocabulary. A type and its supertype (at any distance) don't
+    /// A broader type of this vocabulary, or the core's `rastro:Account` ([`ACCOUNT_TYPE`]),
+    /// which declares the type an account. A type and its supertype (at any distance) don't
     /// conflict when two submissions type one entity with them (decisions/vocabulary.md §15).
     #[serde(default)]
     pub supertype: Option<String>,
@@ -552,6 +558,10 @@ pub struct AliasKind {
 /// The prefix the core owns: its meta-predicates and datatypes live under it, so no
 /// vocabulary may define a name there.
 pub const CORE_PREFIX: &str = "rastro:";
+/// The core's supertype of every account (decisions/vocabulary.md §27): a vocabulary declares
+/// which of its types are accounts by naming it as their `supertype`. Only an account is held
+/// by a Person.
+pub const ACCOUNT_TYPE: &str = "rastro:Account";
 /// The literal datatypes a predicate's range may name (lexical identity, vocabulary.md §14).
 pub const DATATYPES: [&str; 5] = ["string", "integer", "number", "boolean", "datetime"];
 impl Vocabulary {
@@ -641,9 +651,10 @@ impl Vocabulary {
         }
         for t in &self.types {
             if let Some(up) = &t.supertype {
+                // The core's account supertype is the one type outside the file it may name.
                 anyhow::ensure!(
-                    self.has_type(up) && *up != t.id,
-                    "type {:?} has supertype {up:?}, which this vocabulary doesn't define",
+                    (self.has_type(up) || up == ACCOUNT_TYPE) && *up != t.id,
+                    "type {:?} has supertype {up:?}, which is neither a type this vocabulary defines nor the core's {ACCOUNT_TYPE}",
                     t.id
                 );
             }
@@ -903,6 +914,28 @@ evidence_requirement = "r"
             "{}",
             error(&dangling)
         );
+    }
+
+    /// S35: a vocabulary declares which of its types are accounts by the core's supertype
+    /// `rastro:Account`, the one core type it may name as a supertype
+    #[test]
+    fn S35_a_vocabulary_declares_its_accounts_by_the_cores_account_supertype() {
+        let text = format!(
+            "namespace = \"x\"\nversion = \"1\"\npredicates = []\n\
+             [[types]]\nid = \"x:Account\"\nsupertype = \"rastro:Account\"\n{WORDS}\
+             [[types]]\nid = \"x:Admin\"\nsupertype = \"x:Account\"\n{WORDS}\
+             [[types]]\nid = \"x:Bot\"\n{WORDS}"
+        );
+        let parsed = Vocabulary::parse(&text).unwrap();
+        assert_eq!(parsed.ancestors("x:Account"), [ACCOUNT_TYPE]);
+        assert_eq!(parsed.ancestors("x:Admin"), [ACCOUNT_TYPE, "x:Account"]);
+        assert!(parsed.ancestors("x:Bot").is_empty());
+        // Two account types are not each other's supertype: they still conflict on one entity.
+        assert!(!parsed.related("x:Account", "x:Bot"));
+        for other in ["rastro:Person", "rastro:Thing", "rastro:account"] {
+            let named = text.replacen("rastro:Account", other, 1);
+            assert!(error(&named).contains(other), "{other}: {}", error(&named));
+        }
     }
 
     /// claims/R20: a supertype cycle is refused

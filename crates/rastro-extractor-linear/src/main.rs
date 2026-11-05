@@ -1,10 +1,10 @@
 //! The Linear extractor: deterministic rules that turn the Linear connector's structured
 //! evidence into `tracker` claims (ADR 0008; decisions/vocabulary.md §24–§26).
 //!
-//! It reads only `structured` observations of six fields: `/id`, `/name`, `/email`, `/active`,
-//! `/creator/id` and `/assignee/id`, plus the location they were observed at. It never reads a
-//! title, a description or any other field, so no claim and no alias comes from text a person
-//! wrote in an issue.
+//! It reads only `structured` observations of nine fields: `/id`, `/app`, `/name`, `/email`,
+//! `/active`, `/creator/id`, `/creator/app`, `/assignee/id` and `/assignee/app`, plus the
+//! location they were observed at. It never reads a title, a description or any other field, so
+//! no claim and no alias comes from text a person wrote in an issue.
 //!
 //! # The location rule
 //! A location names a record when it is exactly `linear:user/<uuid>` or `linear:issue/<uuid>`,
@@ -19,18 +19,25 @@
 //! all in one submission: together they are one justification.
 //!
 //! # The rules (the manifest's `extraction_rules`, all deterministic)
-//! - `account`: a user's `/id` → its `rastro:type` claim, `tracker:Account`. Nothing is typed
-//!   Person: a workspace user is an account.
+//! - `account`: a user's `/id` → its `rastro:type` claim: `tracker:Bot` when the latest `/app`
+//!   delivered at that location quotes `true` (Linear's app, or integration, user), otherwise
+//!   `tracker:Account`, with that `/app` as a support when there is one. A user's flag never
+//!   changes, so the latest one types it from its first observation on, a user first read
+//!   before the connector read the flag included: one run never types it both ways. Nothing is
+//!   typed Person: a workspace user is an account, an app user a bot.
 //! - `email`: `/email` with `/id` → a `rastro:alias` of kind `email`, when the address has one
-//!   `@` with text on both sides and no whitespace.
-//! - `name`: `/name` with `/id` → a `rastro:alias` of kind `name`. The display name is a handle
-//!   and is not read.
-//! - `active`: `/active` `true` or `false` with `/id` → `tracker:active`.
+//!   `@` with text on both sides and no whitespace. Accounts only.
+//! - `name`: `/name` with `/id` → a `rastro:alias` of kind `name`, for an account or a bot. The
+//!   display name is a handle and is not read.
+//! - `active`: `/active` `true` or `false` with `/id` → `tracker:active`. Accounts only.
 //! - `issue`: an issue's `/id` → its `rastro:type` claim, `tracker:Issue`.
 //! - `creator` and `assignee`: `/creator/id` or `/assignee/id` naming a uuid, with the issue's
-//!   `/id` → `tracker:creator` or `tracker:assignee` `linear:user/<uuid>`, and that account's
-//!   `rastro:type` claim supported by the field alone. A null creator or assignee records no
-//!   evidence, so no claim.
+//!   `/id` → `tracker:creator` or `tracker:assignee` `linear:user/<uuid>`, and that user's
+//!   `rastro:type` claim supported by the field: `tracker:Bot` when `/creator/app` or
+//!   `/assignee/app` beside it quotes `true`, otherwise `tracker:Account`, with that flag as a
+//!   support when there is one. The connector reads an actor's flag just before its id, so a flag
+//!   newer than the id belongs to the next actor: until that id arrives, the actor is not
+//!   claimed. A null creator or assignee records no evidence, so no claim.
 //!
 //! Observations are read in replay order. At each one, the claims its location supports given
 //! the latest observation of each field so far are sent, each once per run.
@@ -46,19 +53,23 @@ use std::{
 };
 
 /// The fields any rule reads. Everything else is skipped unread.
-const FIELDS: [&str; 6] = [
+const FIELDS: [&str; 9] = [
     "/id",
+    "/app",
     "/name",
     "/email",
     "/active",
     "/creator/id",
+    "/creator/app",
     "/assignee/id",
+    "/assignee/app",
 ];
 /// Core meta-predicates (see the core's `claims` module).
 const TYPE: &str = "rastro:type";
 const ALIAS: &str = "rastro:alias";
 const TYPE_DATATYPE: &str = "rastro:type";
 const ACCOUNT: &str = "tracker:Account";
+const BOT: &str = "tracker:Bot";
 const ISSUE: &str = "tracker:Issue";
 
 /// A Linear id: a lowercase hyphenated UUID, `8-4-4-4-12` hex digits.
@@ -127,24 +138,67 @@ fn claim(
     }
 }
 
-/// The claims a location supports, given the latest observation of each field there.
-fn claims_at(location: &str, fields: &BTreeMap<&str, &BatchItem>) -> Vec<ClaimSubmit> {
-    let Some((kind, uuid_text)) = record(location) else {
+/// An `app` flag: the observation and whether it says the user is an app. Anything but `true`
+/// or `false` is no flag.
+fn flag(item: &BatchItem) -> Option<(&BatchItem, bool)> {
+    match item.span.quote.as_str() {
+        "true" => Some((item, true)),
+        "false" => Some((item, false)),
+        _ => None,
+    }
+}
+/// A user's type given its flag, and the supports the flag adds.
+fn user_type(app: Option<(&BatchItem, bool)>) -> (&'static str, Vec<&BatchItem>) {
+    match app {
+        Some((item, true)) => (BOT, vec![item]),
+        Some((item, false)) => (ACCOUNT, vec![item]),
+        None => (ACCOUNT, vec![]),
+    }
+}
+/// The latest observation of each field at one location, with its place in replay order.
+type Fields<'a> = BTreeMap<&'a str, (usize, &'a BatchItem)>;
+
+/// The claims a location supports, given the latest observation of each field there and, at a
+/// user, the latest `/app` flag the run delivers there.
+fn claims_at(location: &str, fields: &Fields, app: Option<&BatchItem>) -> Vec<ClaimSubmit> {
+    let Some((record_kind, uuid_text)) = record(location) else {
         return vec![];
     };
-    let quote = |field: &str| fields.get(field).map(|i| (*i, i.span.quote.as_str()));
+    let quote = |field: &str| fields.get(field).map(|(_, i)| (*i, i.span.quote.as_str()));
     let Some((id, _)) = quote("/id").filter(|(_, q)| *q == uuid_text) else {
         return vec![];
     };
+    let (kind, flagged) = if record_kind == ACCOUNT {
+        user_type(app.and_then(flag))
+    } else {
+        (ISSUE, vec![])
+    };
     let subject = || entity(location, kind);
-    let rule = if kind == ACCOUNT { "account" } else { "issue" };
+    let rule = if record_kind == ACCOUNT {
+        "account"
+    } else {
+        "issue"
+    };
     let mut claims = vec![claim(
         subject(),
         TYPE,
         literal(kind, TYPE_DATATYPE),
         rule,
-        &[id],
+        &[&[id][..], &flagged].concat(),
     )];
+    if kind == BOT {
+        // An app keeps its name; an email or an active state is an account's.
+        if let Some((item, full)) = quote("/name").filter(|(_, q)| name(q)) {
+            claims.push(claim(
+                subject(),
+                ALIAS,
+                literal(full, "name"),
+                "name",
+                &[id, item],
+            ));
+        }
+        return claims;
+    }
     if kind == ACCOUNT {
         if let Some((item, address)) = quote("/email").filter(|(_, q)| email(q)) {
             claims.push(claim(
@@ -175,31 +229,42 @@ fn claims_at(location: &str, fields: &BTreeMap<&str, &BatchItem>) -> Vec<ClaimSu
         }
         return claims;
     }
-    for (field, predicate, rule) in [
-        ("/creator/id", "tracker:creator", "creator"),
-        ("/assignee/id", "tracker:assignee", "assignee"),
+    for (field, app_field, predicate, rule) in [
+        ("/creator/id", "/creator/app", "tracker:creator", "creator"),
+        (
+            "/assignee/id",
+            "/assignee/app",
+            "tracker:assignee",
+            "assignee",
+        ),
     ] {
-        let Some((item, user)) = quote(field).filter(|(_, q)| uuid(q)) else {
+        let Some(&(seen, item)) = fields.get(field).filter(|(_, i)| uuid(&i.span.quote)) else {
             continue;
         };
-        let account = format!("linear:user/{user}");
+        let app = fields.get(app_field);
+        // A flag newer than the id is the next actor's, whose id is still to come.
+        if app.is_some_and(|(flag_seen, _)| *flag_seen > seen) {
+            continue;
+        }
+        let (user_kind, flagged) = user_type(app.and_then(|(_, i)| flag(i)));
+        let user = format!("linear:user/{}", item.span.quote);
         claims.extend([
             claim(
                 subject(),
                 predicate,
                 ClaimObject::Entity {
-                    identifier: account.clone(),
-                    entity_type: ACCOUNT.into(),
+                    identifier: user.clone(),
+                    entity_type: user_kind.into(),
                 },
                 rule,
-                &[id, item],
+                &[&[id, item][..], &flagged].concat(),
             ),
             claim(
-                entity(&account, ACCOUNT),
+                entity(&user, user_kind),
                 TYPE,
-                literal(ACCOUNT, TYPE_DATATYPE),
+                literal(user_kind, TYPE_DATATYPE),
                 rule,
-                &[item],
+                &[&[item][..], &flagged].concat(),
             ),
         ]);
     }
@@ -208,17 +273,26 @@ fn claims_at(location: &str, fields: &BTreeMap<&str, &BatchItem>) -> Vec<ClaimSu
 
 /// Every claim the observations support, in replay order, each sent once.
 fn extract(items: &[BatchItem]) -> Vec<ClaimSubmit> {
-    let mut latest: BTreeMap<&str, BTreeMap<&str, &BatchItem>> = BTreeMap::new();
+    let read = |item: &&BatchItem| item.trust_class == "structured";
+    // A user's app flag never changes: the latest one delivered types it all run long.
+    let apps: BTreeMap<&str, &BatchItem> = items
+        .iter()
+        .filter(read)
+        .filter(|i| i.span.field == "/app" && flag(i).is_some())
+        .map(|i| (i.location.as_str(), i))
+        .collect();
+    let mut latest: BTreeMap<&str, Fields> = BTreeMap::new();
     let mut sent = BTreeSet::new();
     let mut claims = Vec::new();
-    for item in items {
+    for (seen, item) in items.iter().enumerate() {
         let field = item.span.field.as_str();
-        if item.trust_class != "structured" || !FIELDS.contains(&field) {
+        if !read(&item) || !FIELDS.contains(&field) {
             continue;
         }
         let fields = latest.entry(&item.location).or_default();
-        fields.insert(field, item);
-        for claim in claims_at(&item.location, fields) {
+        fields.insert(field, (seen, item));
+        let app = apps.get(item.location.as_str()).copied();
+        for claim in claims_at(&item.location, fields, app) {
             if sent.insert(serde_json::to_string(&claim).unwrap_or_default()) {
                 claims.push(claim);
             }
@@ -273,6 +347,7 @@ mod tests {
 
     const USER: &str = "0b5a8c1e-0000-4000-8000-000000000002";
     const OTHER: &str = "0b5a8c1e-0000-4000-8000-000000000003";
+    const THIRD: &str = "0b5a8c1e-0000-4000-8000-000000000004";
     const ITEM: &str = "0b5a8c1e-0000-4000-8000-0000000000a1";
 
     fn observed(id: i64, location: &str, field: &str, quote: &str, trust: &str) -> BatchItem {
@@ -403,5 +478,115 @@ mod tests {
                 .iter()
                 .all(|c| !c.subject.entity_type.contains("Person"))
         );
+    }
+
+    /// The user types a run sends, by subject identifier.
+    fn types(claims: &[ClaimSubmit]) -> BTreeSet<(String, String)> {
+        claims
+            .iter()
+            .filter(|c| c.predicate == TYPE)
+            .map(|c| (c.subject.identifier.clone(), c.subject.entity_type.clone()))
+            .collect()
+    }
+
+    /// S38: an app user is typed `tracker:Bot`, never `tracker:Account`, whether its `/app`
+    /// flag was read before or after its `/id` (a user first read before the connector read the
+    /// flag included); it keeps its name, and nothing an account has
+    #[test]
+    fn S38_an_app_user_is_a_bot_never_an_account() {
+        let location = format!("linear:user/{USER}");
+        let app = |id: i64, value: &str| observed(id, &location, "/app", value, "structured");
+        let read_later = [user(&location, USER), vec![app(5, "true")]].concat();
+        let read_first = [vec![app(0, "true")], user(&location, USER)].concat();
+        for items in [read_later, read_first] {
+            let claims = extract(&items);
+            assert_eq!(types(&claims), [(location.clone(), BOT.to_string())].into());
+            assert!(claims.iter().all(|c| c.subject.entity_type == BOT));
+            let said: BTreeSet<_> = claims
+                .iter()
+                .map(|c| {
+                    (
+                        c.predicate.as_str(),
+                        serde_json::to_string(&c.object).unwrap(),
+                    )
+                })
+                .map(|(p, o)| format!("{p} {o}"))
+                .collect();
+            assert_eq!(said.len(), 2, "{said:?}");
+            assert!(said.iter().any(|s| s.contains("Ana Silva")), "{said:?}");
+        }
+        // A user Linear flags `false`, or one read before the flag, is an account.
+        for items in [
+            user(&location, USER),
+            [user(&location, USER), vec![app(5, "false")]].concat(),
+        ] {
+            let claims = extract(&items);
+            assert_eq!(claims.len(), 4);
+            assert_eq!(
+                types(&claims),
+                [(location.clone(), ACCOUNT.to_string())].into()
+            );
+        }
+    }
+
+    /// S38: an issue's creator or assignee is typed `tracker:Bot` by the issue's own `/…/app`
+    /// flag, and one actor's flag is never paired with another actor's id, even when the
+    /// assignee changes from an app to a person
+    #[test]
+    fn S38_an_issue_actors_app_flag_types_it_and_never_another_actor() {
+        let issue = format!("linear:issue/{ITEM}");
+        let at =
+            |id: i64, field: &str, quote: &str| observed(id, &issue, field, quote, "structured");
+        let items = [
+            at(1, "/id", ITEM),
+            at(2, "/creator/app", "true"),
+            at(3, "/creator/id", USER),
+            at(4, "/assignee/app", "true"),
+            at(5, "/assignee/id", OTHER),
+            // Reassigned to a person: the flag is read just before the new id.
+            at(6, "/assignee/app", "false"),
+            at(7, "/assignee/id", THIRD),
+        ];
+        let claims = extract(&items);
+        let users = |id: &str| format!("linear:user/{id}");
+        assert_eq!(
+            types(&claims),
+            [
+                (issue.clone(), ISSUE.to_string()),
+                (users(USER), BOT.to_string()),
+                (users(OTHER), BOT.to_string()),
+                (users(THIRD), ACCOUNT.to_string()),
+            ]
+            .into()
+        );
+        let creator: Vec<_> = claims
+            .iter()
+            .filter(|c| c.predicate == "tracker:creator")
+            .collect();
+        assert_eq!(creator.len(), 1);
+        assert!(
+            matches!(&creator[0].object, ClaimObject::Entity { entity_type, .. } if entity_type == BOT)
+        );
+        let spans: Vec<_> = creator[0]
+            .supports
+            .iter()
+            .map(|s| (s.evidence_id, s.field.as_str()))
+            .collect();
+        assert_eq!(spans, [(1, "/id"), (3, "/creator/id"), (2, "/creator/app")]);
+    }
+
+    /// S38: the `tracker` vocabulary declares `tracker:Account` an account and `tracker:Bot`
+    /// not, so a link to a bot is refused
+    #[test]
+    fn S38_the_tracker_vocabulary_declares_an_account_but_never_a_bot() {
+        let vocabulary =
+            rastro_plugin_sdk::Vocabulary::parse(include_str!("../vocabulary.toml")).unwrap();
+        let account = |t: &str| {
+            vocabulary
+                .ancestors(t)
+                .contains(&rastro_plugin_sdk::ACCOUNT_TYPE.to_string())
+        };
+        assert!(vocabulary.has_type(BOT));
+        assert!(account(ACCOUNT) && !account(BOT) && !account(ISSUE));
     }
 }

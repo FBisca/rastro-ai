@@ -621,6 +621,32 @@ impl Resolution {
         out
     }
 }
+/// The core's supertype of every account; a vocabulary declares which of its types are accounts
+/// by naming it as their `supertype` (decisions/vocabulary.md §27).
+pub const ACCOUNT_TYPE: &str = rastro_plugin_sdk::ACCOUNT_TYPE;
+
+/// Refuses holding an entity that isn't typed as an account: the account side of a link, by the
+/// owner or automatic, has a current type, and each of its current types is an account (has
+/// `rastro:Account` among its supertypes). An entity two sources type differently, an account
+/// and something else, is not held while they disagree. `types` are its current `rastro:type`
+/// values, each with the supertypes its claim carries. Storage checks every link intent with
+/// it; automatic links use the same rule.
+pub fn admit_account(identifier: &str, types: &[(String, Vec<String>)]) -> Result<()> {
+    const ONLY: &str = "only an account is held by a Person";
+    ensure!(!types.is_empty(), "{identifier} has no type; {ONLY}");
+    let others: BTreeSet<&str> = types
+        .iter()
+        .filter(|(_, ancestors)| !ancestors.iter().any(|a| a == ACCOUNT_TYPE))
+        .map(|(t, _)| t.as_str())
+        .collect();
+    ensure!(
+        others.is_empty(),
+        "{identifier} is a {}, which no vocabulary declares an account; {ONLY}",
+        others.into_iter().collect::<Vec<_>>().join(" and a ")
+    );
+    Ok(())
+}
+
 /// A claim an effective owner intent backs. Its status is `observed`; its justification is of
 /// kind `owner_intent`.
 #[derive(Clone, Debug)]
@@ -1116,6 +1142,46 @@ mod tests {
                     .check()
                     .is_err()
             );
+        }
+    }
+
+    /// S35: only an entity whose current types are all accounts may be held; an untyped one, a
+    /// pull request, a repository or a bot may not, and the refusal names why
+    #[test]
+    fn S35_only_an_entity_typed_as_an_account_may_be_held() {
+        let typed = |types: &[(&str, &[&str])]| -> Vec<(String, Vec<String>)> {
+            types
+                .iter()
+                .map(|(t, up)| (t.to_string(), up.iter().map(|u| u.to_string()).collect()))
+                .collect()
+        };
+        for ok in [
+            typed(&[("code:Account", &[ACCOUNT_TYPE])]),
+            typed(&[("tracker:Account", &[ACCOUNT_TYPE])]),
+            typed(&[("x:Admin", &["x:Account", ACCOUNT_TYPE])]),
+        ] {
+            assert!(admit_account("e", &ok).is_ok(), "{ok:?}");
+        }
+        for (types, reason) in [
+            (typed(&[]), "has no type"),
+            (typed(&[("code:PullRequest", &[])]), "code:PullRequest"),
+            (typed(&[("code:Repository", &[])]), "code:Repository"),
+            (typed(&[("tracker:Bot", &[])]), "tracker:Bot"),
+            // An account another source calls a bot is not held while they disagree.
+            (
+                typed(&[("code:Account", &[ACCOUNT_TYPE]), ("code:Bot", &[])]),
+                "code:Bot",
+            ),
+        ] {
+            let error = admit_account("https://github.com/o/p/pull/1", &types)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(reason), "{error}");
+            assert!(
+                error.contains("only an account is held by a Person"),
+                "{error}"
+            );
+            assert!(error.contains("https://github.com/o/p/pull/1"), "{error}");
         }
     }
 

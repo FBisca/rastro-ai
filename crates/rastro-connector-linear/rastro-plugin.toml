@@ -10,7 +10,10 @@ dependencies = []
 # Every Linear source is bound to this extractor.
 default_extractor = "rastro-extractor-linear"
 
-# A source is the workspace the API key belongs to, so it declares no options.
+# A source is the workspace the API key belongs to, so it declares no options. One key reads
+# one workspace whatever the source says, so a second source would read the same workspace into
+# another scope: Linear takes a single source until keys are per source.
+single_source = true
 
 [permissions]
 # `viewer` is the one observation of whose API key it is.

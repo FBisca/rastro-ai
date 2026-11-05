@@ -123,6 +123,7 @@ fn S20_the_connector_reads_users_involved_issues_and_the_key_user_with_fixed_que
         rows(&user),
         expect(&[
             ["/active", "false", "structured"],
+            ["/app", "false", "structured"],
             ["/displayName", "bob", "structured"],
             ["/email", "bob@example.com", "structured"],
             ["/id", BOB, "structured"],
@@ -137,8 +138,10 @@ fn S20_the_connector_reads_users_involved_issues_and_the_key_user_with_fixed_que
     assert_eq!(
         rows(&issue),
         expect(&[
+            ["/assignee/app", "false", "structured"],
             ["/assignee/id", VIEWER, "structured"],
             ["/createdAt", &created, "structured"],
+            ["/creator/app", "false", "structured"],
             ["/creator/id", ANA, "structured"],
             ["/description", INJECTION, "untrusted content"],
             ["/id", ISSUE, "structured"],
@@ -292,4 +295,86 @@ fn S22_failures_map_to_typed_reasons_in_coverage() {
     let env = support::env("https://api.linear.app.example.com");
     env.sync(&[]);
     assert_eq!(coverage(&env), [["couldn't look", "protocol"]]);
+}
+
+/// S38: WHEN a sync reads an app (integration) user, THEN its `app` flag is recorded at the
+/// user, and an issue records its creator's and assignee's flags, each just before the id it
+/// belongs to. Linear's field is `app` on `User`; the API here is scripted, so that name is
+/// unverified against the live API
+#[test]
+fn S38_the_connector_records_each_users_and_each_issue_actors_app_flag() {
+    const APP: &str = "0b5a8c1e-0000-4000-8000-000000000009";
+    let mut world = world();
+    world.users.push(app_user(APP, "GitHub"));
+    world.issues[0]["creator"] = json!({"id": APP, "app": true});
+    let fixture = Fixture::start(world);
+    let env = env(&fixture.base);
+    assert_eq!(env.sync(&[])["status"], "ok");
+    let quote = |location: &str, field: &str| {
+        env.column(&format!(
+            "SELECT quote || ' ' || trust_class FROM evidence WHERE location = '{location}' AND field = '{field}'"
+        ))
+    };
+    assert_eq!(
+        quote(&format!("linear:user/{APP}"), "/app"),
+        ["true structured"]
+    );
+    assert_eq!(
+        quote(&format!("linear:user/{ANA}"), "/app"),
+        ["false structured"]
+    );
+    let issue = format!("linear:issue/{ISSUE}");
+    assert_eq!(quote(&issue, "/creator/app"), ["true structured"]);
+    assert_eq!(quote(&issue, "/assignee/app"), ["false structured"]);
+    // Each flag is read just before its id, so an extractor reading in order never pairs one
+    // actor's flag with another's id.
+    let order = env.column(&format!(
+        "SELECT field FROM evidence WHERE location = '{issue}' AND field LIKE '/%/%' ORDER BY id"
+    ));
+    let position = |field: &str| order.iter().position(|f| f == field).unwrap();
+    for actor in ["creator", "assignee"] {
+        assert_eq!(
+            position(&format!("/{actor}/app")) + 1,
+            position(&format!("/{actor}/id")),
+            "{order:?}"
+        );
+    }
+    let requests = fixture.requests();
+    let query = |name: &str| &requests.iter().find(|r| r.operation == name).unwrap().query;
+    assert!(query("Users").contains(" app "), "{}", query("Users"));
+    for actor in ["creator { id app }", "assignee { id app }"] {
+        assert!(query("Issues").contains(actor), "{}", query("Issues"));
+    }
+}
+
+/// S39: WHEN `rastro source add --connector linear` runs while a Linear source exists, THEN it
+/// is refused with an error naming the existing source, and nothing is saved
+#[test]
+fn S39_a_second_linear_source_is_refused_naming_the_existing_one() {
+    let fixture = Fixture::start(world());
+    let env = env(&fixture.base);
+    let config = || std::fs::read_to_string(env.home.path().join("config/config.toml")).unwrap();
+    let before = config();
+    for scope in ["work", "personal"] {
+        let out = env.run(&[
+            "source",
+            "add",
+            "second",
+            "--connector",
+            "linear",
+            "--scope",
+            scope,
+            "--json",
+        ]);
+        assert!(!out.status.success(), "{scope}");
+        let refused: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+        let error = refused["error"].as_str().unwrap_or_default();
+        assert!(
+            error.contains("linear") && error.contains("source l"),
+            "{refused}"
+        );
+        assert_eq!(config(), before);
+    }
+    let listed = env.json(&["source", "list"]);
+    assert_eq!(listed["sources"].as_array().unwrap().len(), 1, "{listed}");
 }
