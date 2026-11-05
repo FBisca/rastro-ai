@@ -665,15 +665,6 @@ impl Storage for SqliteStorage {
         transaction.commit()?;
         Ok(counts)
     }
-    fn extraction_facts(
-        &self,
-        source: &Source,
-        extractor: &str,
-        version: &str,
-        vocabulary_version: &str,
-    ) -> Result<rastro_core::runs::ExtractionFacts> {
-        View(&self.connection).extraction_facts(source, extractor, version, vocabulary_version)
-    }
     fn extraction_sources(&self) -> Result<Vec<(Source, String)>> {
         View(&self.connection).extraction_sources(&[])
     }

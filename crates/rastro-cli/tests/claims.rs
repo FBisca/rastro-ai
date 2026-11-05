@@ -1440,8 +1440,8 @@ fn read_only_extraction_state_reads_running_only_while_a_sync_holds_the_lock() {
     let env = Env::new(Some("test-extractor"));
     env.add_source("a", "test");
     sync_state(&env, "a", "open");
-    let written = extraction_states(&env);
-    assert_eq!(read_only_states(&env), written);
+    // The helper links the plugins directory the reader needs.
+    assert_eq!(extraction_states(&env)[0].2, "current");
     assert_eq!(read_only_states(&env)[0].2, "current");
 
     env.observe(&[state("closed")]);

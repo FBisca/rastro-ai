@@ -8,17 +8,23 @@ use std::collections::BTreeSet;
 
 /// Every justification of a claim, uncapped and with full citations.
 fn explained(db: &SqliteStorage, claim: &str) -> Explanation {
-    db.snapshot(|view| {
-        view.explain(
-            claim,
-            &WhyOptions {
-                limit: 1000,
-                full: true,
-            },
-        )
-    })
-    .unwrap()
-    .unwrap()
+    let explained = db
+        .snapshot(|view| {
+            view.explain(
+                claim,
+                &WhyOptions {
+                    limit: 10_000,
+                    full: true,
+                },
+            )
+        })
+        .unwrap()
+        .unwrap();
+    assert!(
+        !explained.truncated,
+        "the explanation must list every support"
+    );
+    explained
 }
 fn time() -> DateTime<Utc> {
     "2026-11-01T00:00:00Z".parse().unwrap()
