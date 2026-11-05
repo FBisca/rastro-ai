@@ -25,8 +25,8 @@ impl View<'_> {
         Ok(self.0.prepare(&format!("SELECT DISTINCT object_value FROM claim WHERE subject = ?1 AND predicate = 'rastro:alias' AND status IN {CURRENT} ORDER BY object_value"))?
             .query_map([entity], |row| row.get(0))?.collect::<Result<_, _>>()?)
     }
-    /// The entity's displayed type: the most specific live type; among unrelated (conflicting)
-    /// types, the one with the newest known time, ties broken by the lowest claim id.
+    /// The entity's displayed type: the most specific type of the compatible family whose newest
+    /// member is newest; a tie goes to the lowest claim id.
     fn displayed_type(&self, entity: &str) -> Result<String> {
         let mut types: Vec<(String, String, BTreeSet<String>, String)> = vec![];
         let mut statement = self.0.prepare_cached(&format!("SELECT id, object_value, type_ancestors, known_since FROM claim WHERE subject = ?1 AND predicate = 'rastro:type' AND status IN {CURRENT} AND object_value IS NOT NULL"))?;
@@ -39,18 +39,30 @@ impl View<'_> {
                 row.get(3)?,
             ));
         }
-        let specific: Vec<_> = types
+        // Each most specific type (one no other live type descends from) heads a family: itself
+        // plus the live ancestors it carries. A family ranks by its newest member's known time,
+        // ties to the lowest id of its head. Branching subtypes of one supertype are separate
+        // families that each count the shared ancestor's time, so no family needs a single head.
+        let family = |ancestors: &BTreeSet<String>, since: &String| {
+            types
+                .iter()
+                .filter(|(_, value, _, _)| ancestors.contains(value))
+                .map(|t| &t.3)
+                .chain([since])
+                .max()
+                .cloned()
+                .unwrap_or_default()
+        };
+        Ok(types
             .iter()
             .filter(|(_, value, _, _)| {
                 !types
                     .iter()
                     .any(|(_, _, ancestors, _)| ancestors.contains(value))
             })
-            .collect();
-        Ok(specific
-            .into_iter()
-            .max_by(|a, b| (&a.3, std::cmp::Reverse(&a.0)).cmp(&(&b.3, std::cmp::Reverse(&b.0))))
-            .map(|(_, value, _, _)| value.clone())
+            .map(|(id, value, ancestors, since)| (family(ancestors, since), id, value))
+            .max_by(|a, b| (&a.0, std::cmp::Reverse(a.1)).cmp(&(&b.0, std::cmp::Reverse(b.1))))
+            .map(|(_, _, value)| value.clone())
             .unwrap_or_default())
     }
     fn entity(&self, id: &str) -> Result<Entity> {

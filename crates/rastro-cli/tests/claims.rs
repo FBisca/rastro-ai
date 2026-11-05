@@ -706,6 +706,33 @@ fn S17_conflicting_types_display_the_newest_known_type() {
     }
 }
 
+/// vocabulary/S17: a conflict next to a compatible family; the family with the newest member
+/// wins and shows its most specific type
+#[test]
+fn S17_the_family_with_the_newest_member_wins_and_shows_its_most_specific_type() {
+    let env = two_type_sources();
+    env.add_source("c", "test");
+    type_pr_at(&env, "a", PR, "code:Draft", 1);
+    type_pr_at(&env, "b", ELSEWHERE, "code:Repository", 2);
+    type_pr_at(
+        &env,
+        "c",
+        "https://github.com/o/p/pull/3",
+        "code:PullRequest",
+        3,
+    );
+    for kind in ["code:Draft", "code:PullRequest", "code:Repository"] {
+        let why = env.json(&["why", &type_claim(&env, kind)]);
+        assert_eq!(
+            why["claim"]["subject"]["type"], "code:Draft",
+            "{kind}: {why}"
+        );
+    }
+    let about = env.json(&["about", PR]).to_string();
+    assert!(about.contains("\"type\":\"code:Draft\""), "{about}");
+    assert!(!about.contains("\"type\":\"code:Repository\""), "{about}");
+}
+
 /// vocabulary/S18: the same location's type changing supersedes the old type claim
 #[test]
 fn S18_a_changed_type_at_one_location_supersedes_the_old_one() {
