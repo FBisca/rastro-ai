@@ -56,6 +56,7 @@ Architecture: `../adr/0008-extractor-role-and-protocol.md`, `../adr/0009-claims-
 30. **Repository rename or transfer, and URL redirects,** give a new canonical identifier, so a new entity.
 31. **List removal is unsupported.** List evidence stays per-index (`../specs/evidence.md` R38), so a removed element is not seen as removed.
 32. **Rank leakage across scopes remains** as in `surfaces.md` §21; a scope isn't an isolation boundary until slice 14.
+49. **A cold scoped read can miss its benchmark (accepted 2026-11-05).** On the gate's fixture (a 20k-item hub in a 100k-claim database), a scoped `about` took 372–415 ms p95 for one scope and 633–668 ms for two, cold, against a 200 ms target. Warm reads took 1.5–3.6 ms. Cost grows with hub size, and real hubs today are about 400 items. Exact recompute stays the only mechanism, with a per-scope-set cache and a work budget that fails honestly (`../adr/0009-claims-projection.md`). Revisit before roadmap slice 14 makes scopes an isolation boundary; persisted per-scope projections ("lenses") are the candidate.
 
 ## Added 2026-11-05 (knowledge graph deep dive)
 Research and options: `../research/kg-deep-dive/` (`40-decision-brief.md`, `42-proposed-decisions.md`, owner log `41-owner-decisions.md`). Architecture: amendments of 2026-11-05 to `../adr/0008-extractor-role-and-protocol.md`, `../adr/0009-claims-projection.md` and `../adr/0002-sqlite-fts5-storage.md`. Observed-only stays the rule for the next slice (§23); the meaning of later slices is decided now so the schema stays open. Where an entry changes an older one, it names it.
@@ -77,7 +78,7 @@ Research and options: `../research/kg-deep-dive/` (`40-decision-brief.md`, `42-p
 37. **History is stored per occurrence. Amends §25 and §26.**
     - An *occurrence* is one stretch during which one justification holds a claim. A claim's known interval is built from occurrences, not from accumulated claim-to-claim links. `superseded_by` marks only the current transition.
     - Transitions are ordered by event order: the observation's `captured_at`, then a portable key of the evidence, with the local evidence id only as the local tie-break. Equal timestamps are allowed; a closed occurrence and a later recurrence at the same `captured_at` stay separate. Intervals are half-open and may be zero-length.
-    - *Corrected 2026-11-05 (awaiting the owner's confirmation):* within one `captured_at`, order is the order the evidence was stored, which an export keeps. The portable key serves identity only. See the 2026-11-05 correction in ADR 0009.
+    - *Corrected 2026-11-05 (confirmed by the owner):* within one `captured_at`, order is the order the evidence was stored, which an export keeps. The portable key serves identity only. See the 2026-11-05 correction in ADR 0009.
     - A claim is present when any of its justifications has an open occurrence, judged on event order, not timestamp.
     - Valid time stays `unknown` (§25). It is reported as `unknown`, with no stored column.
 38. **Justification replaces claim support. Clarifies §5, §6 and §14.**
