@@ -409,6 +409,33 @@ fn related_types_do_not_conflict_but_unrelated_types_and_replacement_do() {
     assert!(old.claim.claim.superseded_by.contains(&bot));
 }
 
+/// S17: conflicting types with equal known times display the lowest claim id
+#[test]
+fn S17_equal_known_times_display_the_lowest_claim_id() {
+    let home = tempfile::tempdir().unwrap();
+    let mut db = SqliteStorage::open(&home.path().join("db")).unwrap();
+    let account = store(
+        &mut db,
+        &evidence("a", "Account"),
+        "rastro:type",
+        "code:Account",
+    );
+    let bot = store(&mut db, &evidence("b", "Bot"), "rastro:type", "code:Bot");
+    let shown = explained(&db, &account).claim.claim.subject.entity_type;
+    let expected = if account < bot {
+        "code:Account"
+    } else {
+        "code:Bot"
+    };
+    assert_eq!(shown, expected);
+    assert!(
+        explained(&db, &bot)
+            .claim
+            .claim
+            .conflicts_with
+            .contains(&account)
+    );
+}
 /// S12: a claim justified by a carried-over pair and a rebuilt pair equals the incremental one,
 /// whichever is staged first, and the carried pair keeps its checkpoint
 #[test]
