@@ -100,7 +100,7 @@ pub fn extract<S: Storage>(
 
 /// The extractor's own vocabulary: a file inside its directory, defining a namespace it lists
 /// among its dependencies, every type and predicate named in that namespace.
-fn vocabulary(plugin: &Plugin) -> Result<Vocabulary> {
+pub(crate) fn vocabulary(plugin: &Plugin) -> Result<Vocabulary> {
     let file = plugin
         .manifest
         .vocabulary

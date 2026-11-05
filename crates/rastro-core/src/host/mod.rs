@@ -24,6 +24,7 @@ use std::{
 mod extract;
 mod io;
 pub use extract::extract;
+pub(crate) use extract::vocabulary;
 
 pub struct Plugin {
     pub manifest: Manifest,
@@ -39,6 +40,15 @@ pub fn discover(
     id: &str,
     kind: &str,
 ) -> std::result::Result<Plugin, &'static str> {
+    let (manifest, dir) = find(locations, id).ok_or("not_installed")?;
+    check(manifest, dir, kind).map_err(|error| {
+        eprintln!("plugin {id} fails its check: {error:#}");
+        "protocol"
+    })
+}
+
+/// The manifest whose `id` is `id`, before any check of what it provides.
+pub(crate) fn find(locations: &Locations, id: &str) -> Option<(Manifest, PathBuf)> {
     let mut roots = vec![locations.plugins()];
     if let Some(path) = env::var_os("RASTRO_PLUGIN_PATH") {
         roots.extend(env::split_paths(&path));
@@ -57,18 +67,13 @@ pub fn discover(
                 continue;
             };
             match Manifest::parse(&text) {
-                Ok(manifest) if manifest.id == id => {
-                    return check(manifest, dir, kind).map_err(|error| {
-                        eprintln!("plugin {id} fails its check: {error:#}");
-                        "protocol"
-                    });
-                }
+                Ok(manifest) if manifest.id == id => return Some((manifest, dir)),
                 Ok(_) => {}
                 Err(error) => eprintln!("skipping {}", parse_diagnostic(&dir, &text, &error)),
             }
         }
     }
-    Err("not_installed")
+    None
 }
 
 /// Where a manifest failed to parse, without quoting any of it: its text can hold values
