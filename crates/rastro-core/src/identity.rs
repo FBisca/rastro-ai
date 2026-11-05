@@ -175,8 +175,9 @@ impl Payload {
         }
     }
 }
-/// Who issued an intent, through which surface, seeing which scopes (none listed: every scope).
-/// Audit data, not lasting authorization.
+/// Who issued an intent, through which surface, with which scopes: the surface's own configured
+/// scopes as it issued (for the CLI, its sources' scopes). Audit data, not lasting authorization.
+/// Rows written before the scopes were recorded list none.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct IssuerContext {
@@ -185,12 +186,14 @@ pub struct IssuerContext {
     pub scopes: Vec<Scope>,
 }
 impl IssuerContext {
-    /// The owner on the command line, seeing every scope.
-    pub fn owner_cli() -> Self {
+    /// The owner on the command line, with the scopes of its configured sources, each once and
+    /// in order.
+    pub fn owner_cli(sources: &[crate::Source]) -> Self {
+        let scopes: BTreeSet<&String> = sources.iter().map(|s| &s.scope.0).collect();
         Self {
             principal: OWNER.into(),
             surface: "cli".into(),
-            scopes: vec![],
+            scopes: scopes.into_iter().map(|s| Scope(s.clone())).collect(),
         }
     }
 }
@@ -560,7 +563,9 @@ impl Resolution {
     pub fn is_person(&self, id: &str) -> bool {
         self.persons.contains_key(id)
     }
-    /// The claims the effective intents back, each with the intent that backs it.
+    /// The claims the intents back, each with the intent that backs it: what the effective
+    /// intents say, and what an undone link, merge or name, or a name a newer one replaced, said
+    /// until then (its claim stays, superseded, with the time its contribution ended).
     pub fn claims(&self) -> Vec<IntentClaim> {
         let person_object = |id: &str| {
             let entity = &self.entities[id];
@@ -570,12 +575,17 @@ impl Resolution {
                 entity_type: PERSON_TYPE.into(),
             }
         };
+        let name_object = |name: &str| Object::Literal {
+            value: name.into(),
+            datatype: NAME_KIND.into(),
+        };
         let mut out = Vec::new();
         let mut push = |subject: &EntityTarget,
                         predicate: &str,
                         object: Object,
                         scalar: bool,
-                        intent: &String| {
+                        intent: &String,
+                        ended_at: Option<DateTime<Utc>>| {
             out.push(IntentClaim {
                 id: claims::claim_id(&subject.id, predicate, &object),
                 subject: subject.clone(),
@@ -584,6 +594,7 @@ impl Resolution {
                 scalar,
                 intent: intent.clone(),
                 issued_at: self.issued[intent],
+                ended_at,
             });
         };
         for (id, person) in &self.persons {
@@ -597,13 +608,17 @@ impl Resolution {
                 type_object,
                 true,
                 &person.created_by,
+                None,
             );
             if let Some((name, intent)) = self.names.get(id) {
-                let alias = Object::Literal {
-                    value: name.clone(),
-                    datatype: NAME_KIND.into(),
-                };
-                push(&person.entity, ALIAS_PREDICATE, alias, true, intent);
+                push(
+                    &person.entity,
+                    ALIAS_PREDICATE,
+                    name_object(name),
+                    true,
+                    intent,
+                    None,
+                );
             }
         }
         for ((account, person), intent) in &self.links {
@@ -613,16 +628,117 @@ impl Resolution {
                 person_object(person),
                 false,
                 intent,
+                None,
             );
         }
         for ((a, b), intent) in &self.merges {
-            push(&self.entities[a], SAME_AS, person_object(b), false, intent);
+            push(
+                &self.entities[a],
+                SAME_AS,
+                person_object(b),
+                false,
+                intent,
+                None,
+            );
+        }
+        for (id, (status, by)) in &self.status {
+            let ended = match (status, by) {
+                (IntentStatus::Undone | IntentStatus::Superseded, Some(by)) => self.issued[by],
+                _ => continue,
+            };
+            let intent = &self.intents[id];
+            match (
+                intent.kind,
+                intent.targets.endpoints(),
+                intent.targets.single(),
+            ) {
+                (IntentKind::Link, Some([account, person]), _) => push(
+                    &self.entities[&account.id],
+                    HELD_BY,
+                    person_object(&person.id),
+                    false,
+                    id,
+                    Some(ended),
+                ),
+                (IntentKind::SameAs, Some([a, b]), _) => {
+                    let (a, b) = sorted(&a.id, &b.id);
+                    push(
+                        &self.entities[&a],
+                        SAME_AS,
+                        person_object(&b),
+                        false,
+                        id,
+                        Some(ended),
+                    )
+                }
+                (IntentKind::Name, _, Some(person)) => {
+                    if let Some(name) = &intent.payload.name {
+                        push(
+                            &self.entities[&person.id],
+                            ALIAS_PREDICATE,
+                            name_object(name),
+                            true,
+                            id,
+                            Some(ended),
+                        );
+                    }
+                }
+                _ => {}
+            }
         }
         out
     }
+    /// The Persons a form could name, before visibility: `me`, a Person's id or identifier, or
+    /// any name a Person has or had (`rastro:name/<name>`); with every Person merged with them,
+    /// and every account any of them holds. Ids only, for a scoped read's replay roots.
+    pub fn roots(&self, form: &str) -> BTreeSet<String> {
+        let mut persons: BTreeSet<String> = BTreeSet::new();
+        if form == ME {
+            persons.extend(self.me.clone());
+        }
+        persons.extend(
+            self.persons
+                .values()
+                .filter(|p| p.entity.id == form || p.entity.identifier == form)
+                .map(|p| p.entity.id.clone()),
+        );
+        if let Some(name) = form.strip_prefix("rastro:name/") {
+            persons.extend(
+                self.intents
+                    .values()
+                    .filter(|i| {
+                        i.kind == IntentKind::Name && i.payload.name.as_deref() == Some(name)
+                    })
+                    .filter_map(|i| i.targets.single().map(|p| p.id.clone())),
+            );
+        }
+        let mut pending: Vec<String> = persons.iter().cloned().collect();
+        while let Some(next) = pending.pop() {
+            for (a, b) in self.merges.keys() {
+                let other = if *a == next {
+                    b
+                } else if *b == next {
+                    a
+                } else {
+                    continue;
+                };
+                if persons.insert(other.clone()) {
+                    pending.push(other.clone());
+                }
+            }
+        }
+        let accounts: Vec<String> = self
+            .links
+            .keys()
+            .filter(|(_, p)| persons.contains(p))
+            .map(|(a, _)| a.clone())
+            .collect();
+        persons.extend(accounts);
+        persons
+    }
 }
-/// A claim an effective owner intent backs. Its status is `observed`; its justification is of
-/// kind `owner_intent`.
+/// A claim an owner intent backs. Its justification is of kind `owner_intent`; while any of its
+/// intents holds it is `observed`, and once every one has ended it is `superseded`.
 #[derive(Clone, Debug)]
 pub struct IntentClaim {
     pub id: String,
@@ -632,6 +748,8 @@ pub struct IntentClaim {
     pub scalar: bool,
     pub intent: String,
     pub issued_at: DateTime<Utc>,
+    /// When the intent's contribution ended: its undo, or the newer name that replaced it.
+    pub ended_at: Option<DateTime<Utc>>,
 }
 
 /// Sixteen random bytes in lowercase hex: the random part of a Person id or an intent id.
@@ -662,7 +780,7 @@ fn new_intent(
         format_version: FORMAT_VERSION,
         kind,
         owner_id: OWNER.into(),
-        issuer_context: IssuerContext::owner_cli(),
+        issuer_context: IssuerContext::owner_cli(&[]),
         // Stored to the millisecond, so a retry compares equal to the stored row.
         issued_at: chrono::SubsecRound::trunc_subsecs(crate::coverage::now()?, 3),
         domain_key,
@@ -873,9 +991,15 @@ impl<S: Storage> Rastro<S> {
             &Resolution,
         ) -> Result<(Vec<Intent>, Option<EntityTarget>, bool)>,
     ) -> Result<Issued> {
-        let (intents, (person, created)) = self.storage.issue_intents(|view| {
+        // The CLI is the owner's own surface: it sees every scope, and records the scopes it is
+        // configured with as the issuer's.
+        let issuer = IssuerContext::owner_cli(&self.config.sources);
+        let (intents, (person, created)) = self.storage.issue_intents(&[], |view| {
             let resolution = Resolution::of(&view.intents()?);
-            let (intents, person, created) = plan(view, &resolution)?;
+            let (mut intents, person, created) = plan(view, &resolution)?;
+            for intent in &mut intents {
+                intent.issuer_context = issuer.clone();
+            }
             Ok((intents, (person, created)))
         })?;
         Ok(Issued {
@@ -958,7 +1082,7 @@ mod tests {
             format_version: FORMAT_VERSION,
             kind,
             owner_id: OWNER.into(),
-            issuer_context: IssuerContext::owner_cli(),
+            issuer_context: IssuerContext::owner_cli(&[]),
             issued_at: "2026-11-05T00:00:00Z".parse().unwrap(),
             domain_key: String::new(),
             targets,

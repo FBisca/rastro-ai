@@ -1,5 +1,99 @@
 {
   "$defs": {
+    "AboutClaim": {
+      "additionalProperties": false,
+      "description": "A claim as `why` shows it.",
+      "properties": {
+        "account": {
+          "description": "In a Person's view, the entity id of the linked account this claim is about; absent for\nthe Person's own claims and outside a Person's view.",
+          "type": "string"
+        },
+        "conflicts_with": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "known_intervals": {
+          "items": {
+            "$ref": "#/$defs/KnownInterval"
+          },
+          "type": "array"
+        },
+        "object": {
+          "$ref": "#/$defs/Object"
+        },
+        "object_aliases": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "predicate": {
+          "type": "string"
+        },
+        "revision": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "observed",
+            "superseded"
+          ],
+          "type": "string"
+        },
+        "subject": {
+          "$ref": "#/$defs/Entity"
+        },
+        "subject_aliases": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "superseded_by": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "supersedes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "support_count": {
+          "description": "Number of live justifications, independent of the explanation page limit.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "valid_time": {
+          "$ref": "#/$defs/ValidTime"
+        }
+      },
+      "required": [
+        "id",
+        "subject",
+        "predicate",
+        "object",
+        "status",
+        "revision",
+        "known_intervals",
+        "valid_time",
+        "conflicts_with",
+        "supersedes",
+        "superseded_by",
+        "subject_aliases",
+        "object_aliases",
+        "support_count"
+      ],
+      "type": "object"
+    },
     "Citation": {
       "additionalProperties": false,
       "properties": {
@@ -656,7 +750,7 @@
     },
     "IssuerContext": {
       "additionalProperties": false,
-      "description": "Who issued an intent, through which surface, seeing which scopes (none listed: every scope).\nAudit data, not lasting authorization.",
+      "description": "Who issued an intent, through which surface, with which scopes: the surface's own configured\nscopes as it issued (for the CLI, its sources' scopes). Audit data, not lasting authorization.\nRows written before the scopes were recorded list none.",
       "properties": {
         "principal": {
           "type": "string"
@@ -753,6 +847,79 @@
       "required": [
         "start",
         "end"
+      ],
+      "type": "object"
+    },
+    "LinkReason": {
+      "additionalProperties": false,
+      "description": "One reason an account is linked to a Person.",
+      "properties": {
+        "claim": {
+          "description": "The `rastro:held_by` claim the reason justifies; `why` explains it.",
+          "type": "string"
+        },
+        "intent": {
+          "description": "The owner intent, for a reason of kind `owner_intent`.",
+          "type": "string"
+        },
+        "justification": {
+          "description": "The justification's id, as `why` lists it.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/LinkReasonKind"
+        }
+      },
+      "required": [
+        "kind",
+        "claim",
+        "justification"
+      ],
+      "type": "object"
+    },
+    "LinkReasonKind": {
+      "description": "How an account came to be linked: the owner said so, an equal verified email, or the account\nowns the source's token.",
+      "enum": [
+        "owner_intent",
+        "verified_email",
+        "token_owner"
+      ],
+      "type": "string"
+    },
+    "LinkedAccount": {
+      "additionalProperties": false,
+      "properties": {
+        "aliases": {
+          "description": "Its current aliases.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "identifier": {
+          "type": "string"
+        },
+        "reasons": {
+          "description": "Why it is linked: one entry per current justification of each of its `rastro:held_by`\nclaims to the Person or a Person merged with it.",
+          "items": {
+            "$ref": "#/$defs/LinkReason"
+          },
+          "type": "array"
+        },
+        "type": {
+          "description": "The account's displayed type.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "identifier",
+        "type",
+        "aliases",
+        "reasons"
       ],
       "type": "object"
     },
@@ -864,6 +1031,31 @@
       "required": [
         "id",
         "identifier"
+      ],
+      "type": "object"
+    },
+    "PersonView": {
+      "additionalProperties": false,
+      "description": "A Person, as `about` shows it: the accounts it holds (or a Person merged with it holds),\neach with the reasons it is linked.",
+      "properties": {
+        "accounts": {
+          "description": "Ordered by identifier.",
+          "items": {
+            "$ref": "#/$defs/LinkedAccount"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "identifier": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "identifier",
+        "accounts"
       ],
       "type": "object"
     },
@@ -1413,7 +1605,7 @@
               "properties": {
                 "claims": {
                   "items": {
-                    "$ref": "#/$defs/ClaimSummary"
+                    "$ref": "#/$defs/AboutClaim"
                   },
                   "type": "array"
                 },
@@ -1436,11 +1628,27 @@
                   },
                   "type": "array"
                 },
+                "person": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/PersonView"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "When the identifier names a Person: the Person and each account it holds. The claims of\nthose accounts are among `claims`, each naming its account."
+                },
+                "resolved": {
+                  "description": "Whether the identifier named an entity this read can see. A well-formed identifier that\nnames nothing visible (unknown, or hidden-only) is `false`, with the unknown-entity answer.",
+                  "type": "boolean"
+                },
                 "truncated": {
                   "type": "boolean"
                 }
               },
               "required": [
+                "resolved",
                 "claims",
                 "truncated",
                 "coverage",
@@ -2124,7 +2332,7 @@
         "properties": {
           "claims": {
             "items": {
-              "$ref": "#/$defs/ClaimSummary"
+              "$ref": "#/$defs/AboutClaim"
             },
             "type": "array"
           },
@@ -2147,11 +2355,27 @@
             },
             "type": "array"
           },
+          "person": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/PersonView"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "When the identifier names a Person: the Person and each account it holds. The claims of\nthose accounts are among `claims`, each naming its account."
+          },
+          "resolved": {
+            "description": "Whether the identifier named an entity this read can see. A well-formed identifier that\nnames nothing visible (unknown, or hidden-only) is `false`, with the unknown-entity answer.",
+            "type": "boolean"
+          },
           "truncated": {
             "type": "boolean"
           }
         },
         "required": [
+          "resolved",
           "claims",
           "truncated",
           "coverage",

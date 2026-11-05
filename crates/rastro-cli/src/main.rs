@@ -167,9 +167,71 @@ fn claim_line(summary: &rastro_core::knowledge::ClaimSummary) -> String {
         summary.support_count
     )
 }
+fn scopes_shown(scopes: &[rastro_core::Scope]) -> String {
+    if scopes.is_empty() {
+        return "none".into();
+    }
+    scopes
+        .iter()
+        .map(|s| display_safe(&s.0))
+        .collect::<Vec<_>>()
+        .join(", ")
+}
 fn about_text(about: &rastro_operations::results::AboutResult) -> String {
-    let mut lines: Vec<_> = about.claims.iter().map(claim_line).collect();
-    if lines.is_empty() {
+    let mut lines = Vec::new();
+    if !about.resolved {
+        lines.push("No entity matches".into());
+    }
+    let mut accounts = std::collections::BTreeMap::new();
+    if let Some(person) = &about.person {
+        lines.push(format!(
+            "Person: {} | Id: {}",
+            display_safe(&person.identifier),
+            person.id
+        ));
+        for account in &person.accounts {
+            accounts.insert(account.id.as_str(), account.identifier.as_str());
+            let mut line = format!(
+                "  Account: {} | Type: {}",
+                display_safe(&account.identifier),
+                display_safe(&account.entity_type)
+            );
+            if !account.aliases.is_empty() {
+                line += &format!(
+                    " | Aliases: {}",
+                    account
+                        .aliases
+                        .iter()
+                        .map(|a| display_safe(a))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            for reason in &account.reasons {
+                let kind = serde_json::to_value(reason.kind)
+                    .ok()
+                    .and_then(|v| v.as_str().map(String::from))
+                    .unwrap_or_default();
+                line += &format!(" | Linked by: {kind}");
+                if let Some(intent) = &reason.intent {
+                    line += &format!(" {}", display_safe(intent));
+                }
+                line += &format!(" (claim {})", reason.claim);
+            }
+            lines.push(line);
+        }
+    }
+    for claim in &about.claims {
+        let mut line = claim_line(&claim.summary);
+        if let Some(account) = &claim.account {
+            line += &format!(
+                " | Account: {}",
+                display_safe(accounts.get(account.as_str()).copied().unwrap_or(account))
+            );
+        }
+        lines.push(line);
+    }
+    if about.resolved && about.claims.is_empty() {
         lines.push("No claims found".into());
     }
     for group in &about.groups {
@@ -216,14 +278,16 @@ fn why_text(why: &WhyResult) -> String {
     for support in &why.supports {
         if let Some(intent) = &support.intent {
             lines.push(format!(
-                "  Justification: {} | Kind: {} | Intent: {} {} | Issued: {} | Issuer: {} via {}",
+                "  Justification: {} | Kind: {} | Intent: {} {} | Issued: {} | Issuer: {} via {} | Scopes: {} | Current: {}",
                 support.justification_id,
                 display_safe(&support.justification_kind),
                 display_safe(&support.extraction_rule),
                 display_safe(&intent.id),
                 stamp(intent.issued_at),
                 display_safe(&intent.issuer.principal),
-                display_safe(&intent.issuer.surface)
+                display_safe(&intent.issuer.surface),
+                scopes_shown(&intent.issuer.scopes),
+                support.current
             ));
             continue;
         }
@@ -308,7 +372,13 @@ fn intent_line(intent: &rastro_core::identity::IntentView) -> String {
     if let Some(undone) = &intent.undo_of {
         line += &format!(" | Undoes: {}", display_safe(undone));
     }
-    line += &format!(" | Domain: {}", display_safe(&intent.domain_key));
+    line += &format!(
+        " | Domain: {} | Issuer: {} via {} | Scopes: {}",
+        display_safe(&intent.domain_key),
+        display_safe(&intent.issuer.principal),
+        display_safe(&intent.issuer.surface),
+        scopes_shown(&intent.issuer.scopes)
+    );
     line
 }
 fn intents_text(intents: &[rastro_core::identity::IntentView], none: &str) -> String {

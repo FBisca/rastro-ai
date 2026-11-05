@@ -135,8 +135,13 @@ fn link(id: &str, account: &EntityTarget, person: &EntityTarget, scopes: &[&str]
         scopes,
     )
 }
+/// Accepts intents as their issuer, who sees the scopes its context lists (none: every scope).
 fn issue(db: &mut SqliteStorage, intents: Vec<Intent>) -> anyhow::Result<Vec<Intent>> {
-    db.issue_intents(|_| Ok((intents, ())))
+    let sees = intents
+        .first()
+        .map(|i| i.issuer_context.scopes.clone())
+        .unwrap_or_default();
+    db.issue_intents(&sees, |_| Ok((intents, ())))
         .map(|(stored, ())| stored)
 }
 fn count(path: &std::path::Path) -> i64 {
@@ -211,11 +216,12 @@ fn S11_an_intent_written_after_a_cached_scoped_read_shows_in_the_next_one() {
     let mut after = read(&db);
     after.sort();
     assert_eq!(after, ["rastro:held_by", "rastro:type"]);
-    // The Person is visible in `personal` now, through its linked account.
+    // The Person is visible in `personal` now, through its linked account, whose claims its
+    // view shows (S28).
     let person = db
         .snapshot(|view| view.about_scoped(&ana.identifier, &AboutOptions::default(), &scopes))
         .unwrap();
-    assert_eq!(person.len(), 2);
+    assert_eq!(person.len(), 3);
     // A scope that can't see the account sees neither the link nor the Person.
     let work = [Scope("work".into())];
     let hidden = db
@@ -291,9 +297,10 @@ fn S10_a_sync_keeps_the_claims_intents_back() {
             .unwrap()
             .len()
     };
-    assert_eq!(claims(&db), 2);
+    // The Person's type, its link and, in its view, the linked account's type (S28).
+    assert_eq!(claims(&db), 3);
     account(&mut db, 2, "personal");
-    assert_eq!(claims(&db), 2);
+    assert_eq!(claims(&db), 3);
 }
 
 /// `me` is visible in every scope; a Person with no linked account in none but the unscoped read
@@ -453,4 +460,155 @@ fn S11_an_intent_write_publishes_the_projection() {
     let before = publications();
     issue(&mut db, vec![create("i_1", &person(1))]).unwrap();
     assert_eq!(publications(), before + 1);
+}
+
+fn me(n: u32) -> (EntityTarget, Intent) {
+    let me = person(n);
+    let mut minted = create(&format!("i_me{n}"), &me);
+    minted.domain_key = rastro_core::identity::ME_DOMAIN.into();
+    (me, minted)
+}
+fn named(id: &str, person: &EntityTarget, name: &str, minutes: i64) -> Intent {
+    let mut named = intent(
+        id,
+        IntentKind::Name,
+        Targets::Entity {
+            version: SHAPE_VERSION,
+            entity: person.clone(),
+        },
+        &[],
+    );
+    named.payload.name = Some(name.into());
+    named.issued_at = time() + chrono::Duration::minutes(minutes);
+    named
+}
+
+/// S33: `about me` whose accounts' claims exceed the work budget fails with the budget error,
+/// scoped or not, instead of answering partially; a merged Person's whole class is under the
+/// same budget
+#[test]
+fn S33_about_me_over_the_work_budget_fails_instead_of_answering_partially() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("db");
+    let mut db = SqliteStorage::open(&path).unwrap();
+    let octocat = account(&mut db, 1, "personal");
+    let hubot = account(&mut db, 2, "personal");
+    let (me, minted) = me(9);
+    let ana = person(1);
+    issue(
+        &mut db,
+        vec![
+            minted,
+            create("i_1", &ana),
+            link("i_2", &octocat, &me, &[]),
+            link("i_3", &hubot, &ana, &[]),
+        ],
+    )
+    .unwrap();
+    let personal = [Scope("personal".into())];
+    let options = AboutOptions::default();
+    // One visible span per account: `me` alone costs one, merged with Ana two.
+    for scopes in [&[][..], &personal[..]] {
+        assert_eq!(
+            db.about_scoped_within("me", &options, scopes, 1)
+                .unwrap()
+                .len(),
+            3,
+            "{scopes:?}"
+        );
+        let error = db
+            .about_scoped_within("me", &options, scopes, 0)
+            .unwrap_err();
+        assert!(error.to_string().contains("work budget"), "{error}");
+    }
+    let merge = {
+        let mut m = cannot_link("i_4", &me, &ana, &[]);
+        m.kind = IntentKind::SameAs;
+        m.domain_key = m.expected_domain().unwrap();
+        m
+    };
+    issue(&mut db, vec![merge]).unwrap();
+    for scopes in [&[][..], &personal[..]] {
+        let error = db
+            .about_scoped_within("me", &options, scopes, 1)
+            .unwrap_err();
+        assert!(
+            error.to_string().contains("work budget"),
+            "{scopes:?}: {error}"
+        );
+        assert!(db.about_scoped_within("me", &options, scopes, 2).is_ok());
+    }
+}
+
+/// S36: naming a Person again keeps the older name as a superseded alias, its interval closed at
+/// the newer name's time; the older name still resolves to the Person (historical), and so does
+/// the newer (current)
+#[test]
+fn S36_an_older_name_stays_superseded_and_still_resolves() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("db");
+    let mut db = SqliteStorage::open(&path).unwrap();
+    let ana = person(1);
+    issue(
+        &mut db,
+        vec![
+            create("i_1", &ana),
+            named("i_2", &ana, "Ana", 1),
+            named("i_3", &ana, "Ana Silva", 2),
+        ],
+    )
+    .unwrap();
+    let history = AboutOptions {
+        history: true,
+        ..AboutOptions::default()
+    };
+    let claims = db
+        .snapshot(|view| view.about(&ana.identifier, &history))
+        .unwrap();
+    let name = |value: &str| {
+        claims
+            .iter()
+            .find(|c| {
+                c.claim.predicate == claims::ALIAS_PREDICATE
+                    && matches!(&c.claim.object, Object::Literal { value: v, .. } if v == value)
+            })
+            .unwrap_or_else(|| panic!("no name {value}"))
+    };
+    let older = name("Ana");
+    assert_eq!(older.claim.status, "superseded");
+    assert_eq!(older.claim.known_intervals.len(), 1);
+    assert_eq!(
+        older.claim.known_intervals[0].start,
+        time() + chrono::Duration::minutes(1)
+    );
+    assert_eq!(
+        older.claim.known_intervals[0].end,
+        Some(time() + chrono::Duration::minutes(2))
+    );
+    let newer = name("Ana Silva");
+    assert_eq!(newer.claim.status, "observed");
+    assert_eq!(newer.claim.known_intervals[0].end, None);
+    // Without history only the current name shows.
+    let current = db
+        .snapshot(|view| view.about(&ana.identifier, &AboutOptions::default()))
+        .unwrap();
+    assert_eq!(
+        current
+            .iter()
+            .filter(|c| c.claim.predicate == claims::ALIAS_PREDICATE)
+            .count(),
+        1
+    );
+    // Both names resolve to the Person.
+    for form in ["rastro:name/Ana", "rastro:name/Ana Silva"] {
+        let found = db
+            .snapshot(|view| view.resolve_entity(form))
+            .unwrap()
+            .map(|(id, _)| id);
+        assert_eq!(found.as_deref(), Some(ana.id.as_str()), "{form}");
+        let claims = db
+            .snapshot(|view| view.about(form, &AboutOptions::default()))
+            .unwrap();
+        assert!(!claims.is_empty(), "{form}");
+    }
 }

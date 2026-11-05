@@ -462,14 +462,15 @@ fn recompute(
     replay.rollup(db, subject, predicate)
 }
 pub(crate) fn intervals(db: &Connection, id: &str) -> Result<Vec<KnownInterval>> {
-    // An owner intent holds its claim from the time it was issued, with no end while it stands.
+    // An owner intent holds its claim from the time it was issued until it was undone or, for a
+    // name, replaced; with no end while it stands.
     let rows = db
         .prepare(
             "SELECT captured_at, evidence_id, end, end_evidence_id FROM (
         SELECT o.captured_at, o.evidence_id, o.end, o.end_evidence_id, o.id FROM occurrence o
         JOIN justification j ON j.id = o.justification_id WHERE j.claim_id = ?1
-        UNION ALL SELECT i.issued_at, 0, NULL, NULL, ij.id FROM intent_justification ij
-        JOIN intent i ON i.id = ij.intent_id WHERE ij.claim_id = ?1)
+        UNION ALL SELECT i.issued_at, 0, ij.ended_at, CASE WHEN ij.ended_at IS NULL THEN NULL ELSE 0 END, ij.id
+        FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id WHERE ij.claim_id = ?1)
         ORDER BY captured_at, evidence_id, id",
         )?
         .query_map([id], |r| {

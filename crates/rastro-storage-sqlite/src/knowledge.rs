@@ -1,7 +1,9 @@
 //! Queries over the published, unscoped projection. Never mutates lifecycle state.
 use super::*;
+use anyhow::ensure;
 use rastro_core::knowledge::{
-    AboutOptions, Citation, ClaimSummary, Explanation, JustificationView, WhyOptions,
+    AboutClaim, AboutClaims, AboutOptions, Citation, ClaimSummary, Explanation, JustificationView,
+    LinkReason, LinkReasonKind, LinkedAccount, PersonView, WhyOptions,
 };
 use std::collections::BTreeSet;
 
@@ -74,7 +76,7 @@ impl View<'_> {
         Ok(Entity::new(identifier, self.displayed_type(id)?))
     }
     fn summary(&self, id: &str) -> Result<Option<ClaimSummary>> {
-        let row = self.0.query_row("SELECT subject, predicate, object_entity, object_value, object_datatype, status, revision, (SELECT count(*) FROM justification WHERE claim_id = c.id AND current = 1) + (SELECT count(*) FROM intent_justification WHERE claim_id = c.id) FROM claim c WHERE id = ?1", [id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Option<String>>(3)?, row.get::<_, Option<String>>(4)?, row.get::<_, String>(5)?, row.get::<_, String>(6)?, row.get::<_, i64>(7)?))).optional()?;
+        let row = self.0.query_row("SELECT subject, predicate, object_entity, object_value, object_datatype, status, revision, (SELECT count(*) FROM justification WHERE claim_id = c.id AND current = 1) + (SELECT count(*) FROM intent_justification WHERE claim_id = c.id AND ended_at IS NULL) FROM claim c WHERE id = ?1", [id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Option<String>>(3)?, row.get::<_, Option<String>>(4)?, row.get::<_, String>(5)?, row.get::<_, String>(6)?, row.get::<_, i64>(7)?))).optional()?;
         let Some((subject, predicate, object_entity, value, datatype, status, revision, count)) =
             row
         else {
@@ -175,50 +177,157 @@ impl View<'_> {
         }
         Ok(class)
     }
-    pub(super) fn about_claims(
+    /// Whether the entity is a Person: an owner intent types it `rastro:Person`.
+    fn is_person(&self, entity: &str) -> Result<bool> {
+        Ok(self.0.query_row(
+            "SELECT EXISTS (SELECT 1 FROM claim c WHERE c.subject = ?1 AND c.predicate = 'rastro:type' \
+             AND c.object_value = ?2 AND EXISTS (SELECT 1 FROM intent_justification ij WHERE ij.claim_id = c.id))",
+            params![entity, rastro_core::identity::PERSON_TYPE],
+            |r| r.get(0),
+        )?)
+    }
+    /// What `about` reads. An entity that isn't a Person gives its one-hop claims, up to one more
+    /// than `limit`. A Person gives its view: the claims of its merge class and of every account
+    /// the class holds through an observed `rastro:held_by`, each account's claims naming it, all
+    /// of them read so equivalents can group; their justification spans count against `budget`,
+    /// and a view past it fails instead of answering partially.
+    pub(super) fn about_view(
         &self,
         entity: &str,
         options: &AboutOptions,
-    ) -> Result<Vec<ClaimSummary>> {
+        budget: usize,
+    ) -> Result<AboutClaims> {
         let Some(entity) = self.resolve(entity)? else {
-            return Ok(vec![]);
+            return Ok(AboutClaims::default());
         };
         let since = options.since.map(crate::stamp);
-        // A merged Person answers for its whole merge class; its equivalent claims are grouped
-        // on read, a group counting once toward the limit, so every claim of the class is read.
-        let class = self.merge_class(&entity)?;
-        let ids = if class.len() == 1 {
+        let summaries = |ids: Vec<String>, accounts: &BTreeSet<String>| {
+            ids.into_iter()
+                .map(|id| {
+                    let summary = self
+                        .summary(&id)?
+                        .ok_or_else(|| anyhow::anyhow!("claim missing in snapshot"))?;
+                    let object = match &summary.claim.object {
+                        Object::Entity { id, .. } => Some(id),
+                        Object::Literal { .. } => None,
+                    };
+                    let account = [Some(&summary.claim.subject.id), object]
+                        .into_iter()
+                        .flatten()
+                        .find(|e| accounts.contains(*e))
+                        .cloned();
+                    Ok(AboutClaim { summary, account })
+                })
+                .collect::<Result<Vec<_>>>()
+        };
+        if !self.is_person(&entity)? {
             let mut statement = self.0.prepare(
                 "SELECT id FROM claim WHERE (subject = ?1 OR object_entity = ?1) \
                  AND (?2 OR status = 'observed') AND (?3 IS NULL OR known_since >= ?3) \
                  ORDER BY known_since DESC, id LIMIT ?4",
             )?;
-            statement
+            let ids = statement
                 .query_map(
                     params![entity, options.history, since, (options.limit + 1) as i64],
                     |row| row.get::<_, String>(0),
                 )?
-                .collect::<Result<Vec<_>, _>>()?
-        } else {
-            let mut statement = self.0.prepare(
-                "SELECT id FROM claim WHERE (subject IN (SELECT value FROM json_each(?1)) \
-                 OR object_entity IN (SELECT value FROM json_each(?1))) \
-                 AND (?2 OR status = 'observed') AND (?3 IS NULL OR known_since >= ?3) \
-                 ORDER BY known_since DESC, id",
-            )?;
-            statement
-                .query_map(
-                    params![serde_json::to_string(&class)?, options.history, since],
-                    |row| row.get::<_, String>(0),
+                .collect::<Result<Vec<_>, _>>()?;
+            return Ok(AboutClaims {
+                resolved: true,
+                claims: summaries(ids, &BTreeSet::new())?,
+                person: None,
+            });
+        }
+        let class = self.merge_class(&entity)?;
+        let accounts: BTreeSet<String> = self
+            .0
+            .prepare(
+                "SELECT DISTINCT subject FROM claim WHERE predicate = ?2 AND status = 'observed' \
+                 AND object_entity IN (SELECT value FROM json_each(?1))",
+            )?
+            .query_map(
+                params![
+                    serde_json::to_string(&class)?,
+                    rastro_core::identity::HELD_BY
+                ],
+                |r| r.get(0),
+            )?
+            .collect::<Result<_, _>>()?;
+        let view: BTreeSet<&String> = class.iter().chain(&accounts).collect();
+        let view = serde_json::to_string(&view)?;
+        const TOUCHING: &str = "SELECT id FROM claim WHERE subject IN (SELECT value FROM json_each(?1)) \
+             UNION SELECT id FROM claim WHERE object_entity IN (SELECT value FROM json_each(?1))";
+        let work: i64 = self.0.query_row(
+            &format!(
+                "SELECT count(*) FROM (SELECT 1 FROM justification_span s JOIN justification j \
+                 ON j.id = s.justification_id WHERE j.claim_id IN ({TOUCHING}) LIMIT ?2)"
+            ),
+            params![view, budget.saturating_add(1) as i64],
+            |r| r.get(0),
+        )?;
+        ensure!(work as usize <= budget, crate::scoped::OVER_BUDGET);
+        let ids = self
+            .0
+            .prepare(&format!(
+                "SELECT c.id FROM claim c WHERE c.id IN ({TOUCHING}) \
+                 AND (?2 OR c.status = 'observed') AND (?3 IS NULL OR c.known_since >= ?3) \
+                 ORDER BY c.known_since DESC, c.id"
+            ))?
+            .query_map(params![view, options.history, since], |row| {
+                row.get::<_, String>(0)
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        let claims = summaries(ids, &accounts)?;
+        let mut linked = Vec::new();
+        for account in &accounts {
+            let Entity {
+                id,
+                identifier,
+                entity_type,
+            } = self.entity(account)?;
+            // Today a link's only reason is an owner intent that still holds.
+            let reasons = self
+                .0
+                .prepare(
+                    "SELECT c.id, ij.id, ij.intent_id FROM claim c JOIN intent_justification ij ON ij.claim_id = c.id \
+                     WHERE c.subject = ?1 AND c.predicate = ?3 AND c.status = 'observed' AND ij.ended_at IS NULL \
+                     AND c.object_entity IN (SELECT value FROM json_each(?2)) ORDER BY c.id, ij.id",
                 )?
-                .collect::<Result<Vec<_>, _>>()?
-        };
-        ids.into_iter()
-            .map(|id| {
-                self.summary(&id)?
-                    .ok_or_else(|| anyhow::anyhow!("claim missing in snapshot"))
-            })
-            .collect()
+                .query_map(
+                    params![
+                        account,
+                        serde_json::to_string(&class)?,
+                        rastro_core::identity::HELD_BY
+                    ],
+                    |r| {
+                        Ok(LinkReason {
+                            kind: LinkReasonKind::OwnerIntent,
+                            claim: r.get(0)?,
+                            justification: r.get(1)?,
+                            intent: Some(r.get(2)?),
+                        })
+                    },
+                )?
+                .collect::<Result<_, _>>()?;
+            linked.push(LinkedAccount {
+                aliases: self.aliases(&id)?,
+                id,
+                identifier,
+                entity_type,
+                reasons,
+            });
+        }
+        linked.sort_by(|a, b| a.identifier.cmp(&b.identifier));
+        let person = self.entity(&entity)?;
+        Ok(AboutClaims {
+            resolved: true,
+            claims,
+            person: Some(PersonView {
+                id: person.id,
+                identifier: person.identifier,
+                accounts: linked,
+            }),
+        })
     }
 
     pub(super) fn explanation(
@@ -245,18 +354,20 @@ impl View<'_> {
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
-        // An owner intent's justification: always current while the intent stands.
-        let mut statement = self.0.prepare("SELECT ij.id, i.id, i.kind, i.format_version, i.issued_at, i.issuer_context FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id WHERE ij.claim_id = ?1 ORDER BY ij.id LIMIT ?2")?;
+        // An owner intent's justification: current while the intent stands, not once it was
+        // undone or its name replaced.
+        let mut statement = self.0.prepare("SELECT ij.id, i.id, i.kind, i.format_version, i.issued_at, i.issuer_context, ij.ended_at IS NULL FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id WHERE ij.claim_id = ?1 ORDER BY ij.ended_at IS NULL DESC, ij.id LIMIT ?2")?;
         let rows = statement
             .query_map(params![claim.claim.id, (options.limit + 1) as i64], |row| {
                 Ok((
                     [row.get::<_, String>(0)?, row.get(1)?, row.get(2)?],
                     row.get::<_, i64>(3)?,
                     [row.get::<_, String>(4)?, row.get(5)?],
+                    row.get::<_, bool>(6)?,
                 ))
             })?
             .collect::<Result<Vec<_>, _>>()?;
-        for ([id, intent, kind], version, [issued_at, issuer]) in rows {
+        for ([id, intent, kind], version, [issued_at, issuer], current) in rows {
             supports.push(JustificationView {
                 justification_id: id,
                 justification_kind: rastro_core::identity::OWNER_INTENT.into(),
@@ -264,7 +375,7 @@ impl View<'_> {
                 extractor_version: version.to_string(),
                 extraction_rule: kind,
                 vocabulary_version: String::new(),
-                current: true,
+                current,
                 spans: vec![],
                 intent: Some(rastro_core::knowledge::IntentCitation {
                     id: intent,

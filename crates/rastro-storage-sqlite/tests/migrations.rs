@@ -49,7 +49,7 @@ fn stored_evidence_rejects_updates_and_deletes() {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 9);
+        assert_eq!(version, 10);
     }
 }
 
@@ -91,7 +91,7 @@ fn migrations_apply_once_in_timestamp_order_and_unknown_ones_are_refused() {
         .unwrap();
     connection.pragma_update(None, "user_version", 1).unwrap();
     SqliteStorage::open(&legacy).unwrap();
-    assert_eq!(names(&connection).len(), 9);
+    assert_eq!(names(&connection).len(), 10);
 }
 
 /// evidence/R5: legacy user version maps to the migrations it meant

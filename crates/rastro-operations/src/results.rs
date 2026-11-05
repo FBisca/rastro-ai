@@ -187,11 +187,13 @@ mod tests {
                 pairs: vec![],
             }),
             Response::About(AboutResult {
+                resolved: false,
                 claims: vec![],
                 truncated: false,
                 coverage: vec![],
                 extraction: vec![],
                 groups: vec![],
+                person: None,
             }),
             Response::IdentityMe(person()),
             Response::IdentityPersonCreate(person()),

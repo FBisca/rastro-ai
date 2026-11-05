@@ -2127,3 +2127,367 @@ fn a_malformed_entity_form_is_a_tool_error_over_mcp() {
         );
     }
 }
+
+impl Env {
+    /// Runs a CLI command with `--json` and returns its `result`.
+    fn json(&self, args: &[&str]) -> Value {
+        let output = self.command(args).arg("--json").output().unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?}: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice::<Value>(&output.stdout).unwrap()["result"].clone()
+    }
+    /// An account `identifier` typed `kind` with a login, read in `scope`.
+    fn account_in(&self, scope: &str, identifier: &str, kind: &str, login: &str, day: i64) {
+        self.claim_at(
+            scope,
+            identifier,
+            "rastro:type",
+            (kind, "rastro:type"),
+            true,
+            day,
+        );
+        alias_at(self, scope, identifier, login, day);
+    }
+    /// Accepts owner intents through the storage seam, issued by an issuer that sees every scope.
+    fn issue(&self, intents: Vec<rastro_core::identity::Intent>) {
+        use rastro_core::Storage;
+        let mut db = rastro_storage_sqlite::SqliteStorage::open(&self.database()).unwrap();
+        db.issue_intents(&[], |_| Ok((intents, ()))).unwrap();
+    }
+}
+/// The identifiers of the accounts a Person view lists.
+fn linked(about: &Value) -> Vec<String> {
+    about["person"]["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["identifier"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// S30: a scoped read that can't see any of a Person's linked accounts answers for it exactly as
+/// for an unknown entity; `about me` in any scope shows only the visible accounts and claims
+#[test]
+fn S30_a_person_is_visible_only_where_one_of_its_linked_accounts_is() {
+    let env = Env::new();
+    env.account_in("personal", ACCOUNT, "code:Account", "octocat", 0);
+    env.account_in(
+        "work",
+        "linear:user/u-1",
+        "tracker:Account",
+        "ana-at-work",
+        0,
+    );
+    env.json(&["identity", "me"]);
+    let ana = env.json(&["identity", "person", "create", "--name", "Ana"])["person"]["identifier"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    env.json(&["identity", "link", ACCOUNT, "me"]);
+    env.json(&["identity", "link", "linear:user/u-1", "me"]);
+    env.json(&["identity", "link", "linear:user/u-1", &ana]);
+    let mut personal = env.scoped(&["personal"]);
+    let mut work = env.scoped(&["work"]);
+    let mut everything = env.scoped(&[]);
+    // Ana is held only through the work account: in `personal` she is unknown, by any form.
+    let unknown = about_text(&mut personal, "rastro:person/nobody");
+    assert_eq!(unknown["resolved"], false, "{unknown}");
+    for form in [ana.as_str(), "rastro:name/Ana"] {
+        assert_eq!(about_text(&mut personal, form), unknown, "{form}");
+    }
+    for session in [&mut work, &mut everything] {
+        let seen = about_text(session, &ana);
+        assert_eq!(seen["resolved"], true, "{seen}");
+        assert_eq!(linked(&seen), ["linear:user/u-1"], "{seen}");
+    }
+    // `me` is everywhere, with only what the scope sees.
+    let mine = about_text(&mut personal, "me");
+    assert_eq!(linked(&mine), [ACCOUNT], "{mine}");
+    assert!(!mine.to_string().contains("u-1"), "{mine}");
+    assert!(!mine.to_string().contains("ana-at-work"), "{mine}");
+    assert!(mine.to_string().contains("octocat"), "{mine}");
+    let at_work = about_text(&mut work, "me");
+    assert_eq!(linked(&at_work), ["linear:user/u-1"], "{at_work}");
+    assert!(!at_work.to_string().contains("octocat"), "{at_work}");
+    assert!(at_work.to_string().contains("ana-at-work"), "{at_work}");
+    // The work account's link to Ana shows only where the account is visible.
+    let account = about_text(&mut work, "linear:user/u-1");
+    assert!(account.to_string().contains(&ana), "{account}");
+    let all = about_text(&mut everything, "me");
+    assert_eq!(linked(&all), [ACCOUNT, "linear:user/u-1"], "{all}");
+}
+
+/// S32: over MCP, `about` says `resolved: false` for a hidden-only entity and for an unknown one,
+/// and `resolved: true` where the entity is visible
+#[test]
+fn S32_mcp_about_says_whether_the_identifier_resolved() {
+    let env = Env::new();
+    env.account_in("personal", ACCOUNT, "code:Account", "octocat", 0);
+    env.account_in("work", OTHER_ACCOUNT, "code:Account", "hubot", 0);
+    let mut personal = env.scoped(&["personal"]);
+    let mut everything = env.scoped(&[]);
+    for (scoped, entity, resolved) in [
+        (true, ACCOUNT, true),
+        (true, "github:login/octocat", true),
+        (true, OTHER_ACCOUNT, false),
+        (true, "github:login/hubot", false),
+        (true, "github:login/nobody", false),
+        (false, OTHER_ACCOUNT, true),
+        (false, "github:login/nobody", false),
+    ] {
+        let session = if scoped {
+            &mut personal
+        } else {
+            &mut everything
+        };
+        let about = about_text(session, entity);
+        assert_eq!(about["resolved"], resolved, "{entity}: {about}");
+    }
+}
+
+/// S31: the random scope-set oracle with owner intents: Persons, names, links (some undone) and a
+/// merge. Each scoped answer, a link shown only where both its ends are, equals a rebuild that
+/// holds only the visible evidence and the visible intents. (Automatic links don't exist yet.)
+#[test]
+fn S31_random_scope_sets_with_intents_equal_a_per_scope_rebuild() {
+    use rastro_core::claims::entity_id;
+    use rastro_core::identity::{
+        EntityTarget, FORMAT_VERSION, Intent, IntentKind, IssuerContext, ME_DOMAIN, OWNER, Payload,
+        SHAPE_VERSION, Targets,
+    };
+    let scopes = ["personal", "work", "health"];
+    let target = |identifier: &str, role: &str| EntityTarget {
+        id: entity_id(identifier),
+        identifier: identifier.into(),
+        role: role.into(),
+    };
+    let base: chrono::DateTime<chrono::Utc> = "2026-11-02T00:00:00Z".parse().unwrap();
+    let intent = |n: usize, kind: IntentKind, targets: Targets, name: Option<&str>| {
+        let mut i = Intent {
+            id: format!("i_{n}"),
+            append_seq: 0,
+            format_version: FORMAT_VERSION,
+            kind,
+            owner_id: OWNER.into(),
+            issuer_context: IssuerContext {
+                principal: OWNER.into(),
+                surface: "test".into(),
+                scopes: vec![],
+            },
+            issued_at: base + chrono::Duration::minutes(n as i64),
+            domain_key: String::new(),
+            targets,
+            payload: Payload {
+                version: SHAPE_VERSION,
+                name: name.map(Into::into),
+            },
+            undo_of: None,
+            supersedes: None,
+        };
+        i.domain_key = i.expected_domain().unwrap_or_default();
+        i
+    };
+    let pair = |symmetric: bool, a: &EntityTarget, b: &EntityTarget| {
+        let endpoints = if symmetric && b.id < a.id {
+            [b.clone(), a.clone()]
+        } else {
+            [a.clone(), b.clone()]
+        };
+        Targets::Pair {
+            version: SHAPE_VERSION,
+            symmetric,
+            endpoints,
+        }
+    };
+    let mut seed = 0x5131_u64;
+    let mut next = || {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        seed >> 33
+    };
+    let accounts: Vec<(String, &str)> = (1..=4)
+        .map(|n| (format!("github:account/{n}"), scopes[next() as usize % 3]))
+        .collect();
+    let persons = [
+        target("rastro:person/me", "person"),
+        target("rastro:person/p1", "person"),
+        target("rastro:person/p2", "person"),
+    ];
+    // Each intent with the accounts and Persons it needs visible to be shown.
+    let mut log: Vec<(Intent, Vec<String>, Vec<usize>)> = Vec::new();
+    let mut n = 0;
+    let mut add =
+        |log: &mut Vec<_>, kind, targets, name, accounts: Vec<String>, needs: Vec<usize>| {
+            n += 1;
+            log.push((intent(n, kind, targets, name), accounts, needs));
+        };
+    let mut me = intent(
+        0,
+        IntentKind::CreatePerson,
+        Targets::Entity {
+            version: SHAPE_VERSION,
+            entity: persons[0].clone(),
+        },
+        None,
+    );
+    me.domain_key = ME_DOMAIN.into();
+    log.push((me, vec![], vec![]));
+    for (p, name) in [(1, "P1"), (2, "P2")] {
+        let entity = Targets::Entity {
+            version: SHAPE_VERSION,
+            entity: persons[p].clone(),
+        };
+        add(
+            &mut log,
+            IntentKind::CreatePerson,
+            entity.clone(),
+            None,
+            vec![],
+            vec![p],
+        );
+        add(
+            &mut log,
+            IntentKind::Name,
+            entity.clone(),
+            Some(name),
+            vec![],
+            vec![p],
+        );
+    }
+    // P1 is named again: the older name stays, superseded.
+    add(
+        &mut log,
+        IntentKind::Name,
+        Targets::Entity {
+            version: SHAPE_VERSION,
+            entity: persons[1].clone(),
+        },
+        Some("P1 again"),
+        vec![],
+        vec![1],
+    );
+    let mut links = Vec::new();
+    for (account, _) in &accounts {
+        let holder = next() as usize % 3;
+        let a = target(account, "account");
+        add(
+            &mut log,
+            IntentKind::Link,
+            pair(false, &a, &persons[holder]),
+            None,
+            vec![account.clone()],
+            vec![holder],
+        );
+        links.push((log.last().unwrap().0.clone(), account.clone(), holder));
+        if next() % 3 == 0 {
+            let other = (holder + 1) % 3;
+            add(
+                &mut log,
+                IntentKind::Link,
+                pair(false, &a, &persons[other]),
+                None,
+                vec![account.clone()],
+                vec![other],
+            );
+        }
+    }
+    // One link is undone (with its cannot-link), and P1 and P2 merge.
+    let (undone, account, holder) = links[next() as usize % links.len()].clone();
+    let mut undo = intent(90, IntentKind::Undo, undone.targets.clone(), None);
+    undo.domain_key = undone.domain_key.clone();
+    undo.undo_of = Some(undone.id.clone());
+    log.push((undo, vec![account.clone()], vec![holder]));
+    let a = target(&account, "account");
+    log.push((
+        intent(
+            91,
+            IntentKind::CannotLink,
+            pair(true, &a, &persons[holder]),
+            None,
+        ),
+        vec![account.clone()],
+        vec![holder],
+    ));
+    log.push((
+        intent(
+            92,
+            IntentKind::SameAs,
+            pair(true, &persons[1], &persons[2]),
+            None,
+        ),
+        vec![],
+        vec![1, 2],
+    ));
+    let undone_id = undone.id.clone();
+    for mask in 1..8u8 {
+        let visible: Vec<_> = scopes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| (mask & (1 << i) != 0).then_some(*s))
+            .collect();
+        let shown = |account: &str| {
+            accounts
+                .iter()
+                .any(|(a, scope)| a == account && visible.contains(scope))
+        };
+        // A Person is visible through an effective link to a visible account; `me` always.
+        let mut seen = [true, false, false];
+        for (intent, accounts, needs) in &log {
+            if intent.kind == IntentKind::Link
+                && intent.id != undone_id
+                && accounts.iter().all(|a| shown(a))
+            {
+                seen[needs[0]] = true;
+            }
+        }
+        let all = Env::new();
+        let rebuilt = Env::new();
+        for (day, (account, scope)) in accounts.iter().enumerate() {
+            all.account_in(
+                scope,
+                account,
+                "code:Account",
+                &format!("login{day}"),
+                day as i64,
+            );
+            if visible.contains(scope) {
+                rebuilt.account_in(
+                    scope,
+                    account,
+                    "code:Account",
+                    &format!("login{day}"),
+                    day as i64,
+                );
+            }
+        }
+        all.issue(log.iter().map(|(i, ..)| i.clone()).collect());
+        rebuilt.issue(
+            log.iter()
+                .filter(|(_, accounts, needs)| {
+                    accounts.iter().all(|a| shown(a)) && needs.iter().all(|&p| seen[p])
+                })
+                .map(|(i, ..)| i.clone())
+                .collect(),
+        );
+        let mut scoped = all.scoped(&visible);
+        let mut oracle = rebuilt.scoped(&[]);
+        let mut forms: Vec<String> = vec![
+            "me".into(),
+            "rastro:name/P1".into(),
+            "rastro:name/P1 again".into(),
+            "rastro:name/P2".into(),
+        ];
+        forms.extend(persons.iter().map(|p| p.identifier.clone()));
+        forms.extend(accounts.iter().map(|(a, _)| a.clone()));
+        for form in forms {
+            assert_eq!(
+                about_text(&mut scoped, &form),
+                about_text(&mut oracle, &form),
+                "mask {mask} {form}"
+            );
+        }
+    }
+}
