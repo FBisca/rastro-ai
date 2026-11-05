@@ -162,6 +162,15 @@ impl SqliteStorage {
 /// Reads through one connection; for a read-only open, inside one transaction.
 struct View<'a>(&'a Connection);
 
+/// The observations of a pair past an extractor version's checkpoint (`?1` source, `?2` scope,
+/// `?3` extractor, `?4` version, `?5` vocabulary version or NULL for any): what the next run
+/// reads and what makes the pair `behind`.
+const PENDING_EVIDENCE: &str = "FROM evidence e
+    LEFT JOIN extraction_checkpoint c ON c.extractor = ?3 AND c.extractor_version = ?4
+        AND c.source = e.source AND c.scope = e.scope
+        AND (?5 IS NULL OR c.vocabulary_version = ?5)
+    WHERE e.source = ?1 AND e.scope = ?2 AND (c.source IS NULL OR e.id > c.last_evidence_id)";
+
 impl ReadStorage for SqliteStorage {
     fn read<T>(&mut self, work: impl FnOnce(&dyn Snapshot) -> Result<T>) -> Result<T> {
         // A deferred transaction pins its snapshot at the first read, which is the migration
@@ -613,7 +622,7 @@ impl Storage for SqliteStorage {
         View(&self.connection).extraction_facts(source, extractor, version)
     }
     fn extraction_sources(&self) -> Result<Vec<(Source, String)>> {
-        View(&self.connection).extraction_sources()
+        View(&self.connection).extraction_sources(&[])
     }
     fn begin_claims_rebuild(&mut self) -> Result<()> {
         lifecycle::begin_rebuild(&self.connection)
@@ -964,37 +973,47 @@ impl Snapshot for View<'_> {
         extractor: &str,
         version: &str,
     ) -> Result<rastro_core::runs::ExtractionFacts> {
-        let ask = |query: &str| -> Result<bool> {
-            Ok(self.0.query_row(
-                query,
-                params![source.name, source.scope.0, extractor, version],
-                |row| row.get(0),
-            )?)
-        };
+        let (name, scope) = (&source.name, &source.scope.0);
+        // Any version's unfinished run counts: only one extractor run of a pair is live.
+        let running = self.0.query_row(
+            "SELECT EXISTS (SELECT 1 FROM runs WHERE role = 'extractor'
+             AND source = ?1 AND scope = ?2 AND plugin_id = ?3 AND finished_at IS NULL)",
+            params![name, scope, extractor],
+            |row| row.get(0),
+        )?;
+        // Only the latest finished run at this version decides: a retry that succeeds clears it.
+        let failed = self.0.query_row(
+            "SELECT COALESCE((SELECT status = 'failed' FROM runs
+             WHERE role = 'extractor' AND source = ?1 AND scope = ?2 AND plugin_id = ?3
+             AND plugin_version = ?4 AND finished_at IS NOT NULL
+             ORDER BY id DESC LIMIT 1), 0)",
+            params![name, scope, extractor, version],
+            |row| row.get(0),
+        )?;
+        let pending = self.0.query_row(
+            &format!("SELECT EXISTS (SELECT 1 {PENDING_EVIDENCE})"),
+            params![name, scope, extractor, version, None::<&str>],
+            |row| row.get(0),
+        )?;
         Ok(rastro_core::runs::ExtractionFacts {
-            running: ask("SELECT EXISTS (SELECT 1 FROM runs WHERE role = 'extractor'
-                 AND source = ?1 AND scope = ?2 AND plugin_id = ?3 AND ?4 = ?4 AND finished_at IS NULL)")?,
-            failed: ask("SELECT COALESCE((SELECT status = 'failed' FROM runs
-                 WHERE role = 'extractor' AND source = ?1 AND scope = ?2 AND plugin_id = ?3
-                 AND plugin_version = ?4 AND finished_at IS NOT NULL
-                 ORDER BY id DESC LIMIT 1), 0)")?,
-            pending: ask("SELECT EXISTS (SELECT 1 FROM evidence e
-                 LEFT JOIN extraction_checkpoint c ON c.extractor = ?3 AND c.extractor_version = ?4
-                     AND c.source = e.source AND c.scope = e.scope
-                 WHERE e.source = ?1 AND e.scope = ?2
-                 AND (c.source IS NULL OR e.id > c.last_evidence_id))")?,
+            running,
+            failed,
+            pending,
         })
     }
-    fn extraction_sources(&self) -> Result<Vec<(Source, String)>> {
+    fn extraction_sources(&self, scopes: &[Scope]) -> Result<Vec<(Source, String)>> {
+        let scopes = scope_parameter(scopes)?;
         let rows = self
             .0
             .prepare(
                 "SELECT s.name, p.scope, s.extractor, s.connector, s.selector,
             s.freshness_rule, s.window_start, s.keep_original FROM sources s JOIN
             (SELECT name AS source, scope FROM sources UNION SELECT source, scope FROM evidence) p
-            ON p.source = s.name WHERE s.extractor IS NOT NULL ORDER BY s.name, p.scope",
+            ON p.source = s.name WHERE s.extractor IS NOT NULL
+            AND (?1 IS NULL OR p.scope IN (SELECT value FROM json_each(?1)))
+            ORDER BY s.name, p.scope",
             )?
-            .query_map([], |r| {
+            .query_map([scopes], |r| {
                 Ok((
                     r.get::<_, String>(0)?,
                     r.get::<_, String>(1)?,
@@ -1095,16 +1114,11 @@ impl SqliteStorage {
         source: &Source,
         vocabulary_version: Option<&str>,
     ) -> Result<Vec<(i64, Evidence)>> {
-        let mut statement = self.connection.prepare(
+        let mut statement = self.connection.prepare(&format!(
             "SELECT e.id, e.location, e.field, e.start, e.end, e.quote, e.trust_class,
-             e.captured_at, e.source_updated_at FROM evidence e
-             LEFT JOIN extraction_checkpoint c ON c.extractor = ?3 AND c.extractor_version = ?4
-                 AND c.source = e.source AND c.scope = e.scope
-                 AND (?5 IS NULL OR c.vocabulary_version = ?5)
-             WHERE e.source = ?1 AND e.scope = ?2 AND (c.source IS NULL
-                 OR e.id > c.last_evidence_id)
-             ORDER BY e.captured_at, e.id",
-        )?;
+             e.captured_at, e.source_updated_at {PENDING_EVIDENCE}
+             ORDER BY e.captured_at, e.id"
+        ))?;
         let rows = statement.query_map(
             params![
                 source.name,

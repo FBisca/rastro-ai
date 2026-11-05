@@ -25,7 +25,10 @@ impl Snapshot for Fake {
     fn unfinished_runs(&self, _: &[Scope]) -> Result<Vec<UnfinishedRun>> {
         Ok(vec![])
     }
-    fn extraction_sources(&self) -> Result<Vec<(rastro_core::Source, String)>> {
+    fn extraction_sources(
+        &self,
+        _: &[rastro_core::Scope],
+    ) -> Result<Vec<(rastro_core::Source, String)>> {
         Ok(vec![])
     }
     fn extraction_facts(

@@ -72,7 +72,8 @@ pub trait Snapshot {
     /// An empty scope set allows every scope. Filter before loading rows.
     fn unfinished_runs(&self, scopes: &[Scope]) -> Result<Vec<UnfinishedRun>>;
     /// Bound sources, including retained historical ones, with their bound extractor id.
-    fn extraction_sources(&self) -> Result<Vec<(Source, String)>>;
+    /// An empty scope set allows every scope. Filter before loading rows.
+    fn extraction_sources(&self, scopes: &[Scope]) -> Result<Vec<(Source, String)>>;
     /// Whether the pair's extractor is running, last failed, or has evidence left to read.
     fn extraction_facts(
         &self,
@@ -187,7 +188,8 @@ impl<S: ReadStorage> Reader<S> {
         })
     }
     /// The extraction state of every bound pair in scope, read without writing. A run left
-    /// unfinished reads `running`; recovery to `failed` waits for the next writing open.
+    /// unfinished reads `running` while a sync holds the lock and `failed` (interrupted)
+    /// when none does.
     pub fn extraction_states(&mut self) -> Result<Vec<crate::runs::ExtractionPair>> {
         let Self {
             locations,
@@ -195,22 +197,18 @@ impl<S: ReadStorage> Reader<S> {
             scopes,
             ..
         } = self;
-        let Some(storage) = storage else {
-            return Ok(Vec::new());
-        };
-        storage.read(|view| {
-            let mut pairs = Vec::new();
-            for (source, extractor) in view.extraction_sources()? {
-                if scopes.is_empty() || scopes.contains(&source.scope) {
-                    pairs.push(crate::runs::extraction_pair(
-                        locations,
-                        &source,
-                        &extractor,
-                        |version| view.extraction_facts(&source, &extractor, version),
-                    )?);
-                }
-            }
-            Ok(pairs)
+        snapshot_live(locations, storage, scopes, |view, _, live| {
+            let Some(view) = view else {
+                return Ok(Vec::new());
+            };
+            view.extraction_sources(scopes)?
+                .into_iter()
+                .map(|(source, extractor)| {
+                    crate::runs::extraction_pair(locations, &source, &extractor, live, |version| {
+                        view.extraction_facts(&source, &extractor, version)
+                    })
+                })
+                .collect()
         })
     }
     /// Full-text search over evidence quotes, each hit with its source's coverage.
@@ -244,8 +242,21 @@ fn snapshot<S: ReadStorage, T>(
     scopes: &[Scope],
     work: impl FnOnce(Option<&dyn Snapshot>, &[UnfinishedRun]) -> Result<T>,
 ) -> Result<T> {
+    snapshot_live(locations, storage, scopes, |view, unfinished, _| {
+        work(view, unfinished)
+    })
+}
+
+/// Like [`snapshot`], and tells `work` whether a sync held `sync.lock` when the snapshot was
+/// pinned.
+pub(crate) fn snapshot_live<S: ReadStorage, T>(
+    locations: &Locations,
+    storage: &mut Option<S>,
+    scopes: &[Scope],
+    work: impl FnOnce(Option<&dyn Snapshot>, &[UnfinishedRun], bool) -> Result<T>,
+) -> Result<T> {
     let Some(storage) = storage else {
-        return work(None, &[]);
+        return work(None, &[], false);
     };
     // Taken before the snapshot and held through it: while it is held no sync can start, so
     // an unfinished run seen in the snapshot belongs to no live sync.
@@ -269,7 +280,7 @@ fn snapshot<S: ReadStorage, T>(
         } else {
             view.unfinished_runs(scopes)?
         };
-        work(Some(view), &unfinished)
+        work(Some(view), &unfinished, live)
     })
 }
 

@@ -1042,8 +1042,6 @@ fn S16_rebuild_skips_missing_extractors_and_forbidden_historical_pairs() {
     env.ok(&["claims", "rebuild"]);
     assert_eq!(before, env.json(&["why", OPEN]));
 }
-||||||| parent of 4f35bcd (feat(claims): report extraction state per source and extractor version)
-
 
 /// What the core reports for every bound pair: (source, extractor version, state).
 fn extraction_states(env: &Env) -> Vec<(String, String, String)> {
@@ -1073,14 +1071,28 @@ fn extraction_states(env: &Env) -> Vec<(String, String, String)> {
         })
         .collect()
 }
-/// The extractor reads its batches, then dies with a non-zero exit.
+/// The extractor reads its batches, submits its claims, then dies with a non-zero exit, so a
+/// partial commit would show.
 fn extractor_crashes(env: &Env) {
     write_script(
         &env.path("extractor.jsonl"),
         &[
             json!({"do": "initialize"}),
             json!({"do": "read_batches"}),
+            json!({"do": "state_claims"}),
             json!({"do": "exit", "code": 3}),
+        ],
+    );
+}
+/// The extractor submits its claims, then reports the run failed and exits cleanly.
+fn extractor_reports_failure(env: &Env) {
+    write_script(
+        &env.path("extractor.jsonl"),
+        &[
+            json!({"do": "initialize"}),
+            json!({"do": "read_batches"}),
+            json!({"do": "state_claims"}),
+            json!({"do": "finish", "status": "failed"}),
         ],
     );
 }
@@ -1186,6 +1198,11 @@ fn S18b_a_failed_version_replay_keeps_the_old_versions_claims_and_reads_failed()
         1
     );
     assert_eq!(
+        env.count("justification WHERE extractor_version = '0.2.0'"),
+        0,
+        "nothing of the crashed replay is visible"
+    );
+    assert_eq!(
         extraction_states(&env),
         [("a".to_string(), "0.2.0".to_string(), "failed".to_string())]
     );
@@ -1230,7 +1247,7 @@ fn read_only_states(env: &Env) -> Vec<(String, String, String)> {
 }
 
 #[test]
-fn S18_read_only_extraction_state_matches_and_reads_an_unfinished_run_as_running_without_writing() {
+fn S18_read_only_extraction_state_reads_running_only_while_a_sync_holds_the_lock() {
     let env = Env::new(Some("test-extractor"));
     env.add_source("a", "test");
     sync_state(&env, "a", "open");
@@ -1243,7 +1260,8 @@ fn S18_read_only_extraction_state_matches_and_reads_an_unfinished_run_as_running
     failing_sync(&env, "a");
     assert_eq!(read_only_states(&env)[0].2, "failed");
 
-    // A run a crashed core left unfinished reads running; reading must not recover it.
+    // A run left unfinished reads running while a sync holds the lock, and failed
+    // (interrupted) when none does; reading never recovers it.
     let db = Connection::open(env.path("data/rastro.sqlite3")).unwrap();
     db.execute(
         "INSERT INTO runs (source, scope, plugin_id, plugin_version, started_at, status, role)
@@ -1252,6 +1270,134 @@ fn S18_read_only_extraction_state_matches_and_reads_an_unfinished_run_as_running
         [],
     )
     .unwrap();
+    assert_eq!(read_only_states(&env)[0].2, "failed");
+    let lock = fs::File::open(env.path("data/sync.lock")).unwrap();
+    lock.lock().unwrap();
     assert_eq!(read_only_states(&env)[0].2, "running");
+    drop(lock);
     assert_eq!(env.count("runs WHERE finished_at IS NULL"), 1);
+}
+
+#[test]
+fn S18_a_scoped_reader_sees_only_the_extraction_state_of_its_scopes() {
+    let env = Env::new(Some("test-extractor"));
+    env.add_source("a", "test");
+    sync_state(&env, "a", "open");
+    extraction_states(&env);
+    let scoped = |scopes: &[&str]| {
+        let locations = rastro_core::Locations {
+            data: env.path("data"),
+            config: env.path("config"),
+        };
+        rastro_core::Rastro::open_read_only_scoped(
+            locations,
+            rastro_storage_sqlite::SqliteStorage::open_read_only,
+            scopes
+                .iter()
+                .map(|s| rastro_core::Scope(s.to_string()))
+                .collect(),
+        )
+        .unwrap()
+        .extraction_states()
+        .unwrap()
+        .len()
+    };
+    assert_eq!(scoped(&["personal"]), 1);
+    assert_eq!(scoped(&["work"]), 0);
+}
+
+#[test]
+fn S18_not_installed_outranks_an_unfinished_run_and_a_failed_check_still_names_its_version() {
+    let env = Env::new(Some("missing-extractor"));
+    env.add_source("a", "test");
+    env.observe(&[state("open")]);
+    env.json(&["sync", "a"]);
+    let db = Connection::open(env.path("data/rastro.sqlite3")).unwrap();
+    db.execute(
+        "INSERT INTO runs (source, scope, plugin_id, plugin_version, started_at, status, role)
+         VALUES ('a', 'personal', 'missing-extractor', '', '2026-11-05T00:00:00.000Z',
+         'running', 'extractor')",
+        [],
+    )
+    .unwrap();
+    let lock = fs::File::open(env.path("data/sync.lock")).unwrap();
+    lock.lock().unwrap();
+    assert_eq!(read_only_states(&env)[0].2, "not_installed");
+    drop(lock);
+
+    // An installed extractor that fails its check reads failed, with the version it declares.
+    let env = Env::new(Some("test-extractor"));
+    env.add_source("a", "test");
+    sync_state(&env, "a", "open");
+    let manifest = env.plugin_dir("test-extractor").join("rastro-plugin.toml");
+    let text = fs::read_to_string(&manifest)
+        .unwrap()
+        .replace("\"extractor\", ", "");
+    fs::write(manifest, text).unwrap();
+    assert_eq!(
+        extraction_states(&env),
+        [("a".to_string(), "0.1.0".to_string(), "failed".to_string())]
+    );
+}
+
+#[test]
+fn S18_an_extractor_that_reports_failure_after_claims_stores_nothing_and_the_next_sync_resumes() {
+    let env = Env::new(Some("test-extractor"));
+    env.add_source("a", "test");
+    sync_state(&env, "a", "open");
+    let before = env.json(&["why", OPEN]);
+    let claims = env.count("claim");
+
+    env.observe(&[state("closed")]);
+    extractor_reports_failure(&env);
+    let failed = failing_sync(&env, "a");
+    assert_eq!(
+        failed["runs"][0]["extraction"]["state"], "failed",
+        "{failed}"
+    );
+    assert_eq!(env.count("claim"), claims);
+    assert_eq!(env.json(&["why", OPEN]), before);
+    assert_eq!(extraction_states(&env)[0].2, "failed");
+
+    env.observe(&[state("closed")]);
+    env.extract(&[claim(
+        "code:state",
+        literal("closed"),
+        "state-field",
+        first_state_support(),
+    )]);
+    let synced = env.json(&["sync", "a"]);
+    assert_eq!(synced["runs"][0]["extraction"]["evidence"], 1, "{synced}");
+    assert_eq!(env.count("claim"), claims + 1);
+    assert_eq!(extraction_states(&env)[0].2, "current");
+}
+
+#[test]
+fn S17_evidence_stored_before_the_connector_failed_is_extracted_by_the_next_sync() {
+    let env = Env::new(Some("test-extractor"));
+    env.add_source("a", "test");
+    // The connector submits evidence, then fails its run.
+    let message = json!({"jsonrpc": "2.0", "method": "evidence.submit", "params": state("open")});
+    write_script(
+        &env.path("connector.jsonl"),
+        &[
+            json!({"do": "initialize"}),
+            json!({"do": "send", "message": message}),
+            json!({"do": "exit", "code": 1}),
+        ],
+    );
+    extractor_crashes(&env);
+    assert!(!env.rastro(&["sync", "a"]).status.success());
+    assert_eq!((env.count("evidence"), env.count("claim")), (1, 0));
+
+    env.observe(&[state("open")]);
+    env.extract(&[claim(
+        "code:state",
+        literal("open"),
+        "state-field",
+        first_state_support(),
+    )]);
+    let synced = env.json(&["sync", "a"]);
+    assert_eq!(synced["runs"][0]["extraction"]["evidence"], 1, "{synced}");
+    assert_eq!(env.count("claim"), 1);
 }

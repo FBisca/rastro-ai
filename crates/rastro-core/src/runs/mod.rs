@@ -74,7 +74,7 @@ impl ExtractionStatus {
 /// What storage knows of one pair's extractor at one version.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct ExtractionFacts {
-    /// An extractor run for the pair has not finished.
+    /// An extractor run for the pair, of any version, has not finished.
     pub running: bool,
     /// The latest finished run at this version failed.
     pub failed: bool,
@@ -113,7 +113,7 @@ impl<S: Storage> Rastro<S> {
             .extraction_sources()?
             .into_iter()
             .map(|(source, extractor)| {
-                extraction_pair(&self.locations, &source, &extractor, |version| {
+                extraction_pair(&self.locations, &source, &extractor, true, |version| {
                     self.storage.extraction_facts(&source, &extractor, version)
                 })
             })
@@ -246,22 +246,28 @@ impl<S: Storage> Rastro<S> {
 
 pub use crate::search::{SearchResult, SearchResults};
 
-/// The state of one pair at the installed version of its extractor.
+/// The state of one pair at the installed version of its extractor. `live` says whether a
+/// sync holds the lock now: a run left unfinished while none does was interrupted, so it reads
+/// `failed`, as the next writing open records it.
 pub fn extraction_pair(
     locations: &crate::Locations,
     source: &Source,
     extractor: &str,
+    live: bool,
     facts: impl FnOnce(&str) -> Result<ExtractionFacts>,
 ) -> Result<ExtractionPair> {
     let installed = host::discover(locations, extractor, "extractor");
-    let version = installed.as_ref().ok().map(|p| p.manifest.version.clone());
+    // Even an extractor that fails its check has a version to name.
+    let version = host::find(locations, extractor).map(|(manifest, _)| manifest.version);
     let state = match (&installed, &version) {
         (Err("not_installed"), _) => ExtractionStatus::NotInstalled,
-        (_, Some(version)) => {
+        // An installed extractor that fails its check cannot run.
+        (Err(_), _) | (_, None) => ExtractionStatus::Failed,
+        (Ok(_), Some(version)) => {
             let facts = facts(version)?;
-            if facts.running {
+            if facts.running && live {
                 ExtractionStatus::Running
-            } else if facts.failed {
+            } else if facts.running || facts.failed {
                 ExtractionStatus::Failed
             } else if facts.pending {
                 ExtractionStatus::Behind
@@ -269,8 +275,6 @@ pub fn extraction_pair(
                 ExtractionStatus::Current
             }
         }
-        // An installed extractor that fails its check cannot run.
-        _ => ExtractionStatus::Failed,
     };
     Ok(ExtractionPair {
         source: source.name.clone(),

@@ -349,8 +349,11 @@ impl Snapshot for InterleavedView<'_> {
         self.interleave();
         self.inner.unfinished_runs(scopes)
     }
-    fn extraction_sources(&self) -> Result<Vec<(rastro_core::Source, String)>> {
-        self.inner.extraction_sources()
+    fn extraction_sources(
+        &self,
+        scopes: &[rastro_core::Scope],
+    ) -> Result<Vec<(rastro_core::Source, String)>> {
+        self.inner.extraction_sources(scopes)
     }
     fn extraction_facts(
         &self,
