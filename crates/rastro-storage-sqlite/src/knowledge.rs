@@ -3,6 +3,7 @@ use super::*;
 use rastro_core::knowledge::{
     AboutOptions, Citation, ClaimSummary, Explanation, JustificationView, WhyOptions,
 };
+use std::collections::BTreeSet;
 
 /// Claims of `rastro:alias` (id, subject, subject identifier, status) matching a canonical alias `<namespace>:<kind>/<value>` in `?1`.
 /// Split on the first `:` then the first `/`; kind and value compare exactly (no case folding), and
@@ -24,9 +25,41 @@ impl View<'_> {
         Ok(self.0.prepare(&format!("SELECT DISTINCT object_value FROM claim WHERE subject = ?1 AND predicate = 'rastro:alias' AND status IN {CURRENT} ORDER BY object_value"))?
             .query_map([entity], |row| row.get(0))?.collect::<Result<_, _>>()?)
     }
+    /// The entity's displayed type: the most specific live type; among unrelated (conflicting)
+    /// types, the one with the newest known time, ties broken by the lowest claim id.
+    fn displayed_type(&self, entity: &str) -> Result<String> {
+        let mut types: Vec<(String, String, BTreeSet<String>, String)> = vec![];
+        let mut statement = self.0.prepare_cached("SELECT id, object_value, type_ancestors, known_since FROM claim WHERE subject = ?1 AND predicate = 'rastro:type' AND status = 'observed' AND object_value IS NOT NULL")?;
+        let mut rows = statement.query([entity])?;
+        while let Some(row) = rows.next()? {
+            types.push((
+                row.get(0)?,
+                row.get(1)?,
+                serde_json::from_str(&row.get::<_, String>(2)?)?,
+                row.get(3)?,
+            ));
+        }
+        let specific: Vec<_> = types
+            .iter()
+            .filter(|(_, value, _, _)| {
+                !types
+                    .iter()
+                    .any(|(_, _, ancestors, _)| ancestors.contains(value))
+            })
+            .collect();
+        Ok(specific
+            .into_iter()
+            .max_by(|a, b| (&a.3, std::cmp::Reverse(&a.0)).cmp(&(&b.3, std::cmp::Reverse(&b.0))))
+            .map(|(_, value, _, _)| value.clone())
+            .unwrap_or_default())
+    }
     fn entity(&self, id: &str) -> Result<Entity> {
-        let (identifier, entity_type) = self.0.query_row("SELECT identifier, coalesce((SELECT object_value FROM claim WHERE subject = e.id AND predicate = 'rastro:type' AND status = 'observed' ORDER BY id LIMIT 1), '') FROM entity e WHERE id = ?1", [id], |row| Ok((row.get(0)?, row.get(1)?)))?;
-        Ok(Entity::new(identifier, entity_type))
+        let identifier: String =
+            self.0
+                .query_row("SELECT identifier FROM entity WHERE id = ?1", [id], |row| {
+                    row.get(0)
+                })?;
+        Ok(Entity::new(identifier, self.displayed_type(id)?))
     }
     fn summary(&self, id: &str) -> Result<Option<ClaimSummary>> {
         let row = self.0.query_row("SELECT subject, predicate, object_entity, object_value, object_datatype, status, revision, (SELECT count(*) FROM justification WHERE claim_id = c.id AND current = 1) FROM claim c WHERE id = ?1", [id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Option<String>>(3)?, row.get::<_, Option<String>>(4)?, row.get::<_, String>(5)?, row.get::<_, String>(6)?, row.get::<_, i64>(7)?))).optional()?;

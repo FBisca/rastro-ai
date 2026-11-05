@@ -1496,6 +1496,20 @@ impl Env {
         scope: &str,
         location: &str,
         predicate: &str,
+        object: (&str, &str),
+        scalar: bool,
+        day: i64,
+    ) -> String {
+        self.claim_about(scope, location, location, predicate, object, scalar, day)
+    }
+    /// The same, about the entity `subject` named by evidence at `location`.
+    #[allow(clippy::too_many_arguments)]
+    fn claim_about(
+        &self,
+        scope: &str,
+        subject: &str,
+        location: &str,
+        predicate: &str,
         (value, datatype): (&str, &str),
         scalar: bool,
         day: i64,
@@ -1533,7 +1547,7 @@ impl Env {
             .rev()
             .find(|(_, e)| e.field == evidence.field && e.quote == value)
             .unwrap();
-        let subject = Entity::new(location.into(), "".into());
+        let subject = Entity::new(subject.into(), "".into());
         let object = Object::Literal {
             value: value.into(),
             datatype: datatype.into(),
@@ -1740,6 +1754,48 @@ fn scoped_about_resolves_a_canonical_alias_only_through_visible_claims() {
         json!({"entity": "https:login/secret"}),
     );
     assert!(!all["claims"].as_array().unwrap().is_empty());
+}
+
+/// claims/S20: one location observed in two scopes with different types; a scoped read's type
+/// conflicts and displayed type come only from the visible scope's justifications
+#[test]
+fn S20_a_scoped_read_takes_type_conflicts_and_displayed_type_from_visible_scopes_only() {
+    let env = Env::new();
+    let entity = "github:account/1";
+    let (here, there) = ("https://example.org/a", "https://example.org/b");
+    let typed = |scope: &str, location: &str, kind: &str, day: i64| {
+        env.claim_about(
+            scope,
+            entity,
+            location,
+            "rastro:type",
+            (kind, "rastro:type"),
+            true,
+            day,
+        )
+    };
+    // personal: Bot at `here`, User at `there`, unrelated, User newer. work: the same location
+    // `here`, observed later still, says Secret and would both supersede Bot and win the display.
+    let bot = typed("personal", here, "code:Bot", 0);
+    let user = typed("personal", there, "code:User", 1);
+    let secret = typed("work", here, "code:Secret", 5);
+    let mut everything = env.scoped(&[]);
+    let full = claim_result(&mut everything, "why", json!({"claim": bot}));
+    assert_eq!(full["claim"]["status"], "superseded", "{full}");
+    assert_eq!(full["claim"]["subject"]["type"], "code:Secret", "{full}");
+    let mut session = env.scoped(&["personal"]);
+    let seen = claim_result(&mut session, "why", json!({"claim": bot}));
+    assert_eq!(seen["claim"]["status"], "observed", "{seen}");
+    assert_eq!(seen["claim"]["conflicts_with"], json!([user]), "{seen}");
+    assert_eq!(seen["claim"]["superseded_by"], json!([]), "{seen}");
+    assert_eq!(seen["claim"]["subject"]["type"], "code:User", "{seen}");
+    let about = claim_result(&mut session, "about", json!({"entity": entity}));
+    assert!(!about.to_string().contains("Secret"), "{about}");
+    assert!(about.to_string().contains("code:User"), "{about}");
+    let mut work = env.scoped(&["work"]);
+    let only = claim_result(&mut work, "why", json!({"claim": secret}));
+    assert_eq!(only["claim"]["conflicts_with"], json!([]), "{only}");
+    assert_eq!(only["claim"]["subject"]["type"], "code:Secret", "{only}");
 }
 
 fn portable_answer(mut value: Value) -> Value {
