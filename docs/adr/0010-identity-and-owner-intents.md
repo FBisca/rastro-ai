@@ -17,11 +17,10 @@ The core owns the `rastro:` prefix, so the identity predicates are core (`../dec
 |---|---|---|
 | `rastro:held_by` | account → Person | The account belongs to the Person. A link, not a Merge |
 | `rastro:same_as` | Person ↔ Person | Two Persons are one. A merge, reversible (`../decisions/knowledge.md` §34) |
-| `rastro:cannot_link` | endpoint ↔ endpoint | The owner's refusal to join two endpoints |
 
 - Accounts never merge with each other, and an account is never merged into a Person (`../decisions/knowledge.md` §34; glossary). A shared account may be held by two Persons (`../decisions/vocabulary.md` §14).
 - `rastro:same_as` is symmetric, so its pair target is sorted; `rastro:held_by` is directed, so its pair keeps the endpoint roles.
-- A cannot-link is materialized as a `rastro:cannot_link` claim. It records the owner's refusal, not a fact about the world: it applies in every scope and survives a rebuild (`../decisions/knowledge.md` §34).
+- A cannot-link is not a claim and has no predicate. It is an owner intent of kind `cannot_link`, read by resolution and by the automatic-link veto, and listed by `rastro identity history`. It never enters the projection, so no read leaks a hidden endpoint through it. It records the owner's refusal, not a fact about the world: it applies in every scope and survives a rebuild (`../decisions/knowledge.md` §34).
 
 ## The owner-intent table
 
@@ -30,7 +29,7 @@ An owner intent is a durable, insert-only input, outside the rebuildable project
 | Column | Contract |
 |---|---|
 | `id` | Portable and immutable; a retry reuses it |
-| `append_seq` | Unique acceptance order; the export keeps the relative order |
+| `append_seq` | Unique acceptance order |
 | `format_version` | Positive; the canonical encoding version |
 | `kind` | Validated by the core; no SQL enum |
 | `owner_id` | The owner the intent belongs to |
@@ -43,39 +42,39 @@ An owner intent is a durable, insert-only input, outside the rebuildable project
 | `supersedes` | The earlier intent this one replaces; nullable self-reference |
 
 - No foreign key to entities, claims or occurrences: the projection is disposable, so a reference into it would break on every rebuild.
-- No update and no delete, except through the controlled forget path of slice 14.
+- No update and no delete. The migration that adds the table ships its insert-only triggers without a forget path: forgetting an intent waits for slice 14's controlled purge, the owner's accepted limit (plan D22). This departs from `0009-claims-projection.md`, which expected each new table with its forget path; see its 2026-11-05 amendment note.
 - The kinds this slice enables are `create_person`, `name`, `link`, `cannot_link`, `same_as` and `undo`. The slice-7 kinds (claim and claim set) arrive later without a schema rewrite (`../decisions/knowledge.md` §42).
 
 **Reserved target shapes.** The envelope is fixed now; slice 7 fills the rest.
 
 - **Entity**: id, canonical identifier, role.
-- **Pair**: two endpoints with roles; sorted only for a symmetric relation (`rastro:same_as`, `rastro:cannot_link`).
+- **Pair**: two endpoints with roles; sorted only for a symmetric relation (`rastro:same_as`, and the `cannot_link` domain key).
 - **Claim**: id, the reviewed revision, the full statement snapshot, a nullable versioned lifecycle binding, the anchor.
 - **Claim set**: the exact unique members with those same fields, and the anchor. The group fingerprint is metadata, never a claim id (`../decisions/knowledge.md` §35).
-
-Every row is validated atomically: valid JSON shapes, non-empty ids and kinds, unique set members, a valid anchor, and a hash that agrees with the snapshot.
 
 ## Resolution
 
 Resolution is per `domain_key`, not "the latest intent wins per target". Creating, naming, linking and merging never overwrite one another; each kind has its own domain.
 
-| Kind | Domain key | Resolution inside the domain |
+| Kind | Domain | Resolution inside the domain |
 |---|---|---|
-| `create_person` | `person/<person id>`, the id the intent mints; `person/me` is reserved for the owner's | One Person per domain. A second `me` returns the same Person and records no intent |
-| `name` | `person/<person id>/name` | Scalar: the newest name wins, the older one is superseded |
-| `link` | `held_by/<account id>/<person id>` | One link per pair. A different Person is a different domain |
-| `cannot_link` | `cannot_link/<endpoint a>/<endpoint b>` | One refusal per pair |
-| `same_as` | `same_as/<person a>/<person b>` | One merge per pair |
-| `undo` | the domain of the intent it undoes | Removes only that intent's contribution |
+| `create_person` | The Person the intent mints; `me` is reserved for the owner's | One Person per domain. A second `me` returns the same Person and records no intent |
+| `name` | The Person's name | Set at build (build notes) |
+| `link` | The (account, Person) pair. A different Person is a different domain | One link per pair |
+| `cannot_link` | The pair of endpoints, sorted | One refusal per pair |
+| `same_as` | The (Person, Person) pair, sorted | One merge per pair |
+| `undo` | The domain of the intent it undoes | Removes only that intent's contribution |
+
+The exact `domain_key` formats are set at build.
 
 - An undo names one earlier intent (`undo_of`) and removes only its contribution. The other intents stand.
 - Undoing a link records a cannot-link for the (account, Person) pair; undoing a merge records one for the (Person, Person) pair. A rebuild therefore never re-creates what the owner undid (`../decisions/knowledge.md` §34).
 - An explicit link or merge by the owner is the only thing that clears a cannot-link, and only for the pair it names. The refusal stays in the history, marked reversed.
-- An intent is refused when it is invalid: a `held_by` from a Person, a merge of two accounts or of an entity with itself, a target that does not exist, an undo of a missing or already-undone intent. Nothing is stored.
+- An intent is refused when it is invalid: a `held_by` from a Person, a merge of two accounts or of an entity with itself, a target that does not exist, an undo of a missing or already-undone intent, an undo of a `cannot_link` intent (only an explicit owner link or merge clears one). Nothing is stored.
 
 ## Intent-backed claims
 
-- A Person (its `rastro:type` claim), its name, a link, a merge and a cannot-link are claims in the projection, derived from the intent table. Their status is `observed` and their justification has kind `owner_intent`, carrying the intent's id, time and issuer; `why` shows it (`../decisions/knowledge.md` §48).
+- A Person (its `rastro:type` claim), its name, a link and a merge are claims in the projection, derived from the intent table. Their status is `observed` and their justification has kind `owner_intent`, carrying the intent's id, time and issuer; `why` shows it (`../decisions/knowledge.md` §48).
 - The `confirmed` status stays in slice 7, with the scoped-replay fix it needs (`../decisions/knowledge.md` §48). Today's scoped replay forces `observed`, so this slice is consistent with it.
 - **No lifecycle binding.** An identity intent targets entities, not the lifecycle state of a claim, so it carries no lifecycle binding and never lapses. This is the exemption from `../decisions/knowledge.md` §42 that §48 asks the slice-4 ADR to record. The fingerprint is defined in slice 7.
 
@@ -84,7 +83,7 @@ Resolution is per `domain_key`, not "the latest intent wins per target". Creatin
 - A Person exists only through an owner intent in this slice: `rastro identity me`, `rastro identity person create`, or a yes to a candidate. The address-book and Rule paths `../decisions/knowledge.md` §36 allows wait for later.
 - A Person's id is `rastro:person/<random id>`, minted by the intent that creates it. It is never derived from a name or an email (`../decisions/knowledge.md` §36).
 - A Person's name is a `name` alias, written `rastro:name/<name>`. Two Persons sharing a name give the ambiguous-alias error (`../decisions/vocabulary.md` §21).
-- `me` is a reserved entity form: `about me` resolves to the owner's Person.
+- `me` is a reserved entity form: `about me` resolves to the owner's Person. It is a fourth accepted form beside the three of `../decisions/surfaces.md` §34, and lifts `../decisions/knowledge.md` §24's "no `about(me)`" (`../decisions/surfaces.md` §38).
 - `rastro identity me` mints the owner's Person once. A second run returns the same Person and records no new intent.
 
 ## Automatic links
@@ -102,7 +101,7 @@ An automatic link is not an intent: it is derived from evidence on every project
 - An automatic link never mints a Person. Without a link, an account is just an account.
 - Equal emails over non-overlapping intervals never link.
 
-**The veto.** A cannot-link vetoes an automatic link, and the veto follows the merge group: a refusal between an account and a Person in that group (its merged Persons, or the accounts held by them) blocks the link, and a refusal between two accounts blocks any link that would put both in one group. Only an explicit owner link or merge clears it.
+**The veto.** A cannot-link vetoes an automatic link, and the veto holds through a `same_as` chain (transitive merges): a refusal between account B and Person P, or between B and any Person reachable from P through any number of `same_as` merges, blocks the link of B to P. Only an explicit owner link or merge clears it.
 
 ## Visibility
 
@@ -114,14 +113,14 @@ An automatic link is not an intent: it is derived from evidence on every project
 ## Rebuild, replay and cache
 
 - The intent table sits outside the swapped projection tables (`0009-claims-projection.md`), so a rebuild never discards it and an older binary ignores it.
-- A rebuild replays the evidence, carries over the pairs that cannot replay (`../decisions/knowledge.md` §50), then replays the intents, then resolves the overlays (links, merges, cannot-links) before publication.
+- A rebuild replays the evidence, carries over the pairs that cannot replay (`../decisions/knowledge.md` §50), then replays the intents, then resolves links and merges, with the cannot-link veto, before publication.
 - The intent-backed claims come out identical to the incremental projection: same ids, same order, and the intent table unchanged, rows and order.
-- An intent write invalidates the scoped-read cache: today's cache has no intent watermark (`../decisions/knowledge.md` §44).
+- An intent write invalidates the scoped-read cache. Today's cache is keyed by projection high-water marks (`0009-claims-projection.md`, the 2026-11-05 benchmark gate result; `../decisions/knowledge.md` §49) and has no intent watermark.
 
 ## Presenting a group
 
 - A group of equivalent claims carries its member claim ids, each with its own status and revision; its revision is the hash of the sorted (member id, revision) pairs; it counts as one toward `limit` (`../decisions/knowledge.md` §35).
-- The group shows the first status present among its members in the precedence order of `../decisions/knowledge.md` §42: retracted, confirmed, observed, hypothesis, superseded. Today only `observed` and `superseded` exist, so a group with one observed member shows `observed` whatever the others are. Every member keeps its own status and revision in the result.
+- Today only `observed` and `superseded` exist: a group with one observed member shows `observed`. Every member keeps its own status and revision in the result. How the other statuses rank in a group is set in slice 7 (`../decisions/knowledge.md` §42).
 - A group is never presented as one claim with the weakest status, and there is no representative id (`../decisions/knowledge.md` §35).
 
 ## Precious inputs, export and forgetting
@@ -151,3 +150,11 @@ An automatic link is not an intent: it is derived from evidence on every project
 ## Deferred to slice 7
 
 The lifecycle fingerprint, lapse and stale, the precedence rules, the `confirmed` status and the scoped-replay fix, the claim and claim-set kinds, and the expansion of an intent into several claims (`../decisions/knowledge.md` §42, §48).
+
+## Build notes awaiting the owner's confirmation
+
+- A Person's name: the newest `name` intent wins and the older one is superseded.
+- A cannot-link between two accounts (a no to a candidate) also blocks any automatic link that would put both under one Person.
+- Draft `domain_key` formats: `person/<id>` (`person/me` reserved), `person/<id>/name`, `held_by/<account>/<person>`, `cannot_link/<a>/<b>`, `same_as/<a>/<b>`.
+- Every row is validated atomically: JSON shapes, non-empty ids and kinds, unique set members, a valid anchor, and a hash that agrees with the snapshot.
+- The slice-13 export keeps the intents' relative acceptance order.

@@ -56,6 +56,7 @@ Status stays accepted. Knowledge graph deep dive (`../research/kg-deep-dive/42-p
   - `extraction_checkpoint`.
   - `projection_publication`: insert-only log, outside the swapped tables.
   - Aliases are `rastro:alias` claims with an index on (`rastro:alias`, value); there is no alias table. Not in this migration: intents, rules, artifacts, merge, premise, valid-time and lens tables. Each arrives in its own additive migration with its own insert-only triggers and forget path.
+    - *Amended 2026-11-05 (roadmap slice 4):* the `intent` table (`0010-identity-and-owner-intents.md`) ships with its insert-only triggers but without a forget path. Forgetting an intent waits for slice 14's controlled purge, the owner's accepted limit (plan D22 of `../plans/2026-11-05-second-source-one-identity.plan.md`).
 - **Slot.** A scalar slot is (source, scope, location, field, subject, predicate). The field group for conflicts between extractors is the slot without the rule.
 - **Portable evidence key** = hash(source, scope, location, field, start, end, quote, `captured_at`), computed at projection time and stored on the span. No hash uses a local evidence id.
 - **Event order and occurrences.** Replay order is the event key (`captured_at`, portable evidence key); the local evidence id is only the local tie-break. Known intervals are half-open and may be zero-length; a closed occurrence and a recurrence at equal `captured_at` are separate rows. Claim presence is computed on event order.

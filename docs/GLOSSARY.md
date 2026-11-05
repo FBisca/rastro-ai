@@ -54,4 +54,4 @@ The core's own language. Code, docs, plugins and the interface all use these wor
 | **Agent tool** | Any runtime that does judgment: Claude Code, Codex, a local model… | Operation, MCP tool |
 | **Quarantine** | A plugin that reads untrusted content can't hold action permissions | |
 | **Share** | Scoped claims sent to another owner, who receives them as evidence from a person | Export |
-| **Export** | Evidence, confirmations, rules and outcomes in an open format, from which the knowledge can be rebuilt | |
+| **Export** | Evidence, confirmations, rules, outcomes and owner intents in an open format, from which the knowledge can be rebuilt | |
