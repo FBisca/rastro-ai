@@ -392,6 +392,16 @@ pub trait Storage {
         let _ = vocabulary_version;
         self.pending_evidence(extractor, source)
     }
+    /// At each of these locations of the source (and its scope), the latest observation of
+    /// every field with evidence no newer than `high_water` (`captured_at`, evidence id), in
+    /// replay order, each with its id. A pure function of the stored evidence and the mark, so
+    /// a replay computes the same set.
+    fn location_context(
+        &self,
+        source: &Source,
+        locations: &[String],
+        high_water: (DateTime<Utc>, i64),
+    ) -> Result<Vec<(i64, Evidence)>>;
     /// Publishes accepted AND derivations and their checkpoint atomically. A successful
     /// version replay retires the pair's old justifications in the same transaction.
     /// Counts new and unchanged derivations; types and aliases are claims.

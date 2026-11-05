@@ -367,35 +367,225 @@ impl Manifest {
     }
 }
 
-/// A vocabulary file: one namespace's entity types and predicates.
+/// A vocabulary file: one namespace's entity types, predicates and alias kinds, each defined
+/// in words (decisions/vocabulary.md §4, §5, §10).
 #[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
 pub struct Vocabulary {
     pub namespace: String,
     pub version: String,
-    pub types: Vec<String>,
+    pub types: Vec<TypeDefinition>,
     pub predicates: Vec<Predicate>,
+    /// Kinds of alias its extractors may record, such as a login.
+    #[serde(default)]
+    pub aliases: Vec<AliasKind>,
+}
+/// What a term means, in the words extractors and reviewers judge claims against. Every field
+/// is required and non-empty.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct Definition {
+    /// One sentence.
+    pub definition: String,
+    pub not_to_confuse_with: String,
+    pub examples: Vec<String>,
+    pub counter_examples: Vec<String>,
+    /// The evidence a claim using the term needs.
+    pub evidence_requirement: String,
+}
+/// An entity type.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct TypeDefinition {
+    pub id: String,
+    /// A broader type of this vocabulary. A type and its supertype (at any distance) don't
+    /// conflict when two submissions type one entity with them (decisions/vocabulary.md §15).
+    #[serde(default)]
+    pub supertype: Option<String>,
+    #[serde(flatten)]
+    pub about: Definition,
+    /// Fields this format doesn't define; a file holding any is refused.
+    #[serde(flatten, skip_serializing)]
+    unknown: Unknown,
 }
 /// A predicate: the subject types it applies to, and the object types or literal datatypes
 /// it takes.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct Predicate {
-    #[serde(default)]
-    pub cardinality: Cardinality,
     pub id: String,
     pub domain: Vec<String>,
     pub range: Vec<String>,
+    /// Required, with no default. Report-only: two live values for a scalar are a conflict,
+    /// never a rejection (decisions/vocabulary.md §16).
+    pub cardinality: Cardinality,
+    #[serde(flatten)]
+    pub about: Definition,
+    #[serde(flatten, skip_serializing)]
+    unknown: Unknown,
+    pub freshness: Freshness,
+    pub authority: Authority,
+    /// Its default sensitivity, in words.
+    pub sensitivity: String,
 }
-/// Number of current values per subject and observation context.
-#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+/// How many values a predicate takes for one subject and observation context.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Cardinality {
     One,
-    #[default]
     Many,
 }
+/// Fields a vocabulary entry doesn't define, kept only to refuse the file and name them.
+/// (`deny_unknown_fields` can't be combined with the flattened definition.)
+#[derive(Clone, Debug, Default, Deserialize)]
+struct Unknown(std::collections::BTreeMap<String, toml::Value>);
+/// How long an observation stays fresh.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Freshness {
+    /// The source's own freshness rule.
+    Source,
+}
+/// Which observation wins when sources disagree.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Authority {
+    /// The newer comparable observation (decisions/knowledge.md §26).
+    NewerComparableObservation,
+}
+/// A kind of alias, and the entity types it names.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct AliasKind {
+    pub kind: String,
+    pub domain: Vec<String>,
+    #[serde(flatten)]
+    pub about: Definition,
+    #[serde(flatten, skip_serializing)]
+    unknown: Unknown,
+}
+/// The prefix the core owns: its meta-predicates and datatypes live under it, so no
+/// vocabulary may define a name there.
+pub const CORE_PREFIX: &str = "rastro:";
 impl Vocabulary {
+    /// Parses a vocabulary file and refuses one with a term left undefined.
     pub fn parse(text: &str) -> Result<Self> {
-        toml::from_str(text).context("invalid vocabulary")
+        let vocabulary: Self = toml::from_str(text).context("invalid vocabulary")?;
+        vocabulary.check()?;
+        Ok(vocabulary)
+    }
+    pub fn has_type(&self, id: &str) -> bool {
+        self.types.iter().any(|t| t.id == id)
+    }
+    /// Whether two types are one or each other's supertype, at any distance: two submissions
+    /// typing an entity with them agree. Types it doesn't define are related only if equal.
+    pub fn related(&self, a: &str, b: &str) -> bool {
+        let above = |from: &str, target: &str| {
+            let mut at = from;
+            // A chain is at most as long as the file; `check` refuses cycles.
+            for _ in 0..=self.types.len() {
+                let Some(up) = self
+                    .types
+                    .iter()
+                    .find(|t| t.id == at)
+                    .and_then(|t| t.supertype.as_deref())
+                else {
+                    return false;
+                };
+                if up == target {
+                    return true;
+                }
+                at = up;
+            }
+            false
+        };
+        a == b || above(a, b) || above(b, a)
+    }
+    /// Whether the type has a supertype or is the supertype of another type of this file.
+    pub fn has_relatives(&self, id: &str) -> bool {
+        self.types
+            .iter()
+            .any(|t| (t.id == id && t.supertype.is_some()) || t.supertype.as_deref() == Some(id))
+    }
+    fn check(&self) -> Result<()> {
+        let reserved = |name: &str| name.starts_with(CORE_PREFIX) || name == "rastro";
+        anyhow::ensure!(
+            !reserved(&self.namespace),
+            "vocabulary namespace {:?} is under the core's `rastro:` prefix",
+            self.namespace
+        );
+        let names = self.types.iter().map(|t| &t.id);
+        let names = names.chain(self.predicates.iter().map(|p| &p.id));
+        let names = names.chain(self.aliases.iter().map(|a| &a.kind));
+        if let Some(name) = names.into_iter().find(|n| reserved(n)) {
+            anyhow::bail!("vocabulary defines {name:?}, a name under the core's `rastro:` prefix");
+        }
+        let unknown = self.types.iter().map(|t| (&t.id, &t.unknown));
+        let unknown = unknown.chain(self.predicates.iter().map(|p| (&p.id, &p.unknown)));
+        let unknown = unknown.chain(self.aliases.iter().map(|a| (&a.kind, &a.unknown)));
+        for (id, Unknown(fields)) in unknown {
+            if let Some(field) = fields.keys().next() {
+                anyhow::bail!("vocabulary term {id:?} has an unknown field {field:?}");
+            }
+        }
+        for t in &self.types {
+            if let Some(up) = &t.supertype {
+                anyhow::ensure!(
+                    self.has_type(up) && *up != t.id,
+                    "type {:?} has supertype {up:?}, which this vocabulary doesn't define",
+                    t.id
+                );
+            }
+            // A cycle never reaches a root: `related` is bounded, but a file with one is wrong.
+            let mut at = &t.id;
+            for _ in 0..=self.types.len() {
+                match self
+                    .types
+                    .iter()
+                    .find(|x| &x.id == at)
+                    .and_then(|x| x.supertype.as_ref())
+                {
+                    Some(up) => at = up,
+                    None => break,
+                }
+                anyhow::ensure!(*at != t.id, "type {:?} is its own supertype", t.id);
+            }
+        }
+        let terms = self.types.iter().map(|t| (&t.id, &t.about, None));
+        let terms = terms.chain(
+            self.predicates
+                .iter()
+                .map(|p| (&p.id, &p.about, Some((&p.domain, &p.sensitivity)))),
+        );
+        let terms = terms.chain(self.aliases.iter().map(|a| (&a.kind, &a.about, None)));
+        for (id, about, predicate) in terms {
+            let blank = |text: &String| text.trim().is_empty();
+            let none = |list: &Vec<String>| list.is_empty() || list.iter().any(blank);
+            let missing = [
+                ("id", blank(id)),
+                ("definition", blank(&about.definition)),
+                ("not_to_confuse_with", blank(&about.not_to_confuse_with)),
+                ("examples", none(&about.examples)),
+                ("counter_examples", none(&about.counter_examples)),
+                ("evidence_requirement", blank(&about.evidence_requirement)),
+                ("sensitivity", predicate.is_some_and(|(_, s)| blank(s))),
+            ];
+            if let Some((field, _)) = missing.iter().find(|(_, missing)| *missing) {
+                anyhow::bail!("vocabulary term {id:?} has no {field}");
+            }
+        }
+        let domains = self
+            .predicates
+            .iter()
+            .map(|p| (&p.id, &p.domain, Some(&p.range)));
+        let domains = domains.chain(self.aliases.iter().map(|a| (&a.kind, &a.domain, None)));
+        for (id, domain, range) in domains {
+            anyhow::ensure!(!domain.is_empty(), "vocabulary term {id:?} has no domain");
+            anyhow::ensure!(
+                range.is_none_or(|r| !r.is_empty()),
+                "vocabulary term {id:?} has no range"
+            );
+            if let Some(t) = domain.iter().find(|t| !self.has_type(t)) {
+                anyhow::bail!("vocabulary term {id:?} applies to {t:?}, which it doesn't define");
+            }
+        }
+        Ok(())
     }
 }
 
@@ -436,5 +626,136 @@ impl<R: BufRead, W: Write> Transport<R, W> {
     }
     pub fn into_writer(self) -> W {
         self.writer
+    }
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod tests {
+    use super::*;
+
+    const WORDS: &str = r#"definition = "d"
+not_to_confuse_with = "n"
+examples = ["e"]
+counter_examples = ["c"]
+evidence_requirement = "r"
+"#;
+    fn vocabulary(predicate_extra: &str) -> String {
+        format!(
+            "namespace = \"x\"\nversion = \"1\"\n[[types]]\nid = \"x:T\"\n{WORDS}\
+             [[predicates]]\nid = \"x:p\"\ndomain = [\"x:T\"]\nrange = [\"string\"]\n{WORDS}\
+             {predicate_extra}"
+        )
+    }
+    const POLICY: &str = "cardinality = \"one\"\nfreshness = \"source\"\nauthority = \"newer_comparable_observation\"\nsensitivity = \"s\"\n";
+    fn error(text: &str) -> String {
+        format!("{:#}", Vocabulary::parse(text).unwrap_err())
+    }
+
+    #[test]
+    fn S15_a_vocabulary_with_every_definition_field_loads() {
+        let parsed = Vocabulary::parse(&vocabulary(POLICY)).unwrap();
+        assert!(parsed.has_type("x:T"));
+        assert_eq!(parsed.predicates[0].freshness, Freshness::Source);
+        assert_eq!(parsed.predicates[0].cardinality, Cardinality::One);
+        assert_eq!(parsed.types[0].supertype, None);
+        let many = POLICY.replace("\"one\"", "\"many\"");
+        let parsed = Vocabulary::parse(&vocabulary(&many)).unwrap();
+        assert_eq!(parsed.predicates[0].cardinality, Cardinality::Many);
+    }
+
+    #[test]
+    fn S15a_a_vocabulary_missing_a_definition_field_is_refused() {
+        for (field, line) in [
+            ("not_to_confuse_with", "not_to_confuse_with = \"n\"\n"),
+            ("counter_examples", "counter_examples = [\"c\"]\n"),
+        ] {
+            let text = vocabulary(POLICY).replacen(line, "", 2);
+            let error = error(&text);
+            assert!(error.contains(field), "{error}");
+        }
+        let blank = vocabulary(POLICY).replacen("definition = \"d\"", "definition = \" \"", 1);
+        assert!(Vocabulary::parse(&blank).is_err());
+        let empty = vocabulary(POLICY).replacen("examples = [\"e\"]", "examples = []", 1);
+        assert!(Vocabulary::parse(&empty).is_err());
+        for policy in ["cardinality", "freshness", "authority", "sensitivity"] {
+            let text: String = POLICY
+                .lines()
+                .filter(|l| !l.starts_with(policy))
+                .map(|l| format!("{l}\n"))
+                .collect();
+            let error = error(&vocabulary(&text));
+            assert!(error.contains(policy), "{policy}: {error}");
+        }
+        let unknown = POLICY.replace("\"source\"", "\"forever\"");
+        assert!(Vocabulary::parse(&vocabulary(&unknown)).is_err());
+        let foreign = vocabulary(POLICY).replace("domain = [\"x:T\"]", "domain = [\"y:U\"]");
+        assert!(Vocabulary::parse(&foreign).is_err());
+    }
+
+    #[test]
+    fn S15a_an_unknown_field_or_a_bad_cardinality_is_refused_naming_it() {
+        let top = format!("flavour = \"x\"\n{}", vocabulary(POLICY));
+        assert!(error(&top).contains("flavour"), "{}", error(&top));
+        for place in ["id = \"x:T\"\n", "id = \"x:p\"\n"] {
+            let text = vocabulary(POLICY).replacen(place, &format!("{place}colour = \"red\"\n"), 1);
+            assert!(error(&text).contains("colour"), "{}", error(&text));
+        }
+        let alias = format!(
+            "{}[[aliases]]\nkind = \"k\"\ndomain = [\"x:T\"]\nshade = 1\n{WORDS}",
+            vocabulary(POLICY)
+        );
+        assert!(error(&alias).contains("shade"), "{}", error(&alias));
+        let bad = POLICY.replace("\"one\"", "\"several\"");
+        assert!(Vocabulary::parse(&vocabulary(&bad)).is_err());
+    }
+
+    #[test]
+    fn S15a_a_name_under_the_rastro_prefix_is_refused() {
+        let named = |id: &str| vocabulary(POLICY).replacen("x:T", id, 2);
+        assert!(
+            error(&named("rastro:T")).contains("rastro:"),
+            "{}",
+            error(&named("rastro:T"))
+        );
+        let predicate = vocabulary(POLICY).replacen("x:p", "rastro:p", 1);
+        assert!(
+            error(&predicate).contains("rastro:p"),
+            "{}",
+            error(&predicate)
+        );
+        let alias = format!(
+            "{}[[aliases]]\nkind = \"rastro:alias\"\ndomain = [\"x:T\"]\n{WORDS}",
+            vocabulary(POLICY)
+        );
+        assert!(error(&alias).contains("rastro:alias"), "{}", error(&alias));
+        let namespace =
+            vocabulary(POLICY).replacen("namespace = \"x\"", "namespace = \"rastro\"", 1);
+        assert!(
+            error(&namespace).contains("rastro"),
+            "{}",
+            error(&namespace)
+        );
+    }
+
+    #[test]
+    fn S4c_a_supertype_relates_two_types_so_they_do_not_conflict() {
+        let text = format!(
+            "namespace = \"x\"\nversion = \"1\"\npredicates = []\n\
+             [[types]]\nid = \"x:Account\"\n{WORDS}\
+             [[types]]\nid = \"x:Bot\"\nsupertype = \"x:Account\"\n{WORDS}\
+             [[types]]\nid = \"x:Item\"\n{WORDS}"
+        );
+        let parsed = Vocabulary::parse(&text).unwrap();
+        assert!(parsed.related("x:Bot", "x:Account") && parsed.related("x:Account", "x:Bot"));
+        assert!(parsed.related("x:Item", "x:Item"));
+        assert!(!parsed.related("x:Bot", "x:Item"));
+        // A supertype must be a type the file defines.
+        let dangling = text.replace("supertype = \"x:Account\"", "supertype = \"x:Nothing\"");
+        assert!(
+            error(&dangling).contains("x:Nothing"),
+            "{}",
+            error(&dangling)
+        );
     }
 }

@@ -11,7 +11,7 @@ use rastro_plugin_sdk::{
     SourceScope, Span, Vocabulary,
 };
 use std::{
-    collections::HashMap,
+    collections::{BTreeSet, HashMap},
     fs,
     path::{Component, Path},
     process::Command,
@@ -62,11 +62,13 @@ pub fn extract<S: Storage>(
                 source,
             )?;
             evidence = pending.len();
+            let context = context(storage, source, &pending)?;
             let run = Run {
                 plugin,
                 vocabulary,
                 source,
                 run_id,
+                context,
                 pending,
             };
             drive(storage, &run, &mut counts)
@@ -98,6 +100,38 @@ pub fn extract<S: Storage>(
     })
 }
 
+/// Companion fields delivered at most per pending observation, so context stays bounded.
+const CONTEXT_PER_EVIDENCE: usize = 4;
+
+/// Location context: for the records the pending evidence changes, the other fields of the
+/// same source, scope and location, as they stood at the batch's high-water mark (its last
+/// observation). Fields that have pending evidence arrive as that evidence. Bounded: past
+/// `CONTEXT_PER_EVIDENCE` per pending observation only the observations nearest the mark are
+/// kept. The set is a function of the stored evidence and the mark, so a replay delivers the
+/// same one.
+fn context<S: Storage>(
+    storage: &S,
+    source: &Source,
+    pending: &[(i64, Evidence)],
+) -> Result<Vec<(i64, Evidence)>> {
+    let Some((_, e)) = pending.last() else {
+        return Ok(vec![]);
+    };
+    // The mark is the checkpoint's: the newest time and the highest local id of the batch.
+    let mark = pending.iter().map(|(id, _)| *id).max().unwrap_or_default();
+    let at: BTreeSet<&str> = pending.iter().map(|(_, e)| &*e.location).collect();
+    let at: Vec<String> = at.into_iter().map(String::from).collect();
+    let changed: BTreeSet<(&str, &str)> = pending
+        .iter()
+        .map(|(_, e)| (&*e.location, &*e.field))
+        .collect();
+    let mut context = storage.location_context(source, &at, (e.captured_at, mark))?;
+    context.retain(|(_, e)| !changed.contains(&(&*e.location, &*e.field)));
+    let keep = CONTEXT_PER_EVIDENCE * pending.len();
+    context.drain(..context.len().saturating_sub(keep));
+    Ok(context)
+}
+
 /// The extractor's own vocabulary: a file inside its directory, defining a namespace it lists
 /// among its dependencies, every type and predicate named in that namespace.
 pub(crate) fn vocabulary(plugin: &Plugin) -> Result<Vocabulary> {
@@ -119,7 +153,7 @@ pub(crate) fn vocabulary(plugin: &Plugin) -> Result<Vocabulary> {
         "vocabulary {namespace} isn't among the dependencies"
     );
     let prefix = format!("{namespace}:");
-    let ids = vocabulary.types.iter();
+    let ids = vocabulary.types.iter().map(|t| &t.id);
     let ids = ids.chain(vocabulary.predicates.iter().map(|p| &p.id));
     for id in ids {
         ensure!(
@@ -136,7 +170,20 @@ struct Run<'a> {
     vocabulary: &'a Vocabulary,
     source: &'a Source,
     run_id: i64,
+    /// What was already known at the locations with pending evidence: the latest observation
+    /// up to the checkpoint of each field there that has no pending one. A field re-observed
+    /// unchanged adds no evidence, so without this an extractor would see a changed login
+    /// without the account id beside it. It is delivered, ahead of the pending evidence, like
+    /// any other.
+    context: Vec<(i64, Evidence)>,
     pending: Vec<(i64, Evidence)>,
+}
+impl Run<'_> {
+    /// Everything delivered, in replay order: the context precedes the checkpoint, the
+    /// pending evidence follows it.
+    fn delivered(&self) -> impl Iterator<Item = &(i64, Evidence)> {
+        self.context.iter().chain(&self.pending)
+    }
 }
 
 /// Spawns the extractor and talks to it until `run.finish`. A storage error fails the run as
@@ -171,7 +218,7 @@ fn converse<S: Storage>(
     let end = Instant::now() + limits.extraction_time;
     let cap = limits
         .max_claims
-        .unwrap_or(MIN_CLAIMS.max(CLAIMS_PER_EVIDENCE * run.pending.len()));
+        .unwrap_or(MIN_CLAIMS.max(CLAIMS_PER_EVIDENCE * run.delivered().count()));
     let init = ExtractorInitializeParams {
         protocol: PROTOCOL_VERSION.into(),
         manifest_id: manifest.id.clone(),
@@ -189,7 +236,7 @@ fn converse<S: Storage>(
         return Ok(Err(reason));
     }
     // Every batch is queued at once; the extractor's claims are read while it takes them in.
-    let items: Vec<_> = run.pending.iter().map(item).collect();
+    let items: Vec<_> = run.delivered().map(item).collect();
     let mut batches: Vec<_> = items.chunks(BATCH).collect();
     if batches.is_empty() {
         batches.push(&[]);
@@ -204,7 +251,7 @@ fn converse<S: Storage>(
             return Ok(Err(reason));
         }
     }
-    let delivered: HashMap<i64, Evidence> = run.pending.iter().cloned().collect();
+    let delivered: HashMap<i64, Evidence> = run.delivered().cloned().collect();
     // Preserve each submission as a separate AND derivation.
     let mut accepted: Vec<ObservedClaim> = Vec::new();
     loop {
@@ -247,7 +294,10 @@ fn converse<S: Storage>(
                         vocabulary_version: run.vocabulary.version.clone(),
                         last_portable_key: claims::portable_evidence_key(e),
                     });
-                    let claims: Vec<ObservedClaim> = std::mem::take(&mut accepted);
+                    // The submission is validated together: an endpoint's type comes from a
+                    // `rastro:type` claim in it, never from what an earlier run stored.
+                    let (claims, ungrounded) = claims::ground(std::mem::take(&mut accepted));
+                    counts.rejected += ungrounded;
                     let stored = storage.record_claims(
                         run.run_id,
                         (&manifest.id, &manifest.version),

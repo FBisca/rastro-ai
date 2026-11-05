@@ -1,0 +1,109 @@
+# The `code` vocabulary: what Rastro may say about code hosting, as read from GitHub.
+#
+# Every type, predicate and alias kind says what it means, what it isn't, examples and
+# counter-examples, and the evidence it needs. Predicates also give their domain and range,
+# cardinality, freshness, authority and sensitivity. The core refuses a claim outside this file.
+#
+# Canonical identifiers (decisions/knowledge.md §24): an account is `github:account/<numeric
+# id>`; a pull request, issue, comment or repository is its normalised `html_url`.
+namespace = "code"
+version = "0.1.0"
+
+[[types]]
+id = "code:Account"
+definition = "A GitHub user account, identified by its numeric id, whatever its login is now."
+not_to_confuse_with = "A Person: an account doesn't prove a human, and one human may hold several accounts (slice 4 links them). Not a code:Bot, nor an organization."
+examples = ["github:account/583231, `/user/type` User, login octocat"]
+counter_examples = ["the login `octocat` on its own (an alias, not the account)", "github:account/49699333 with `/user/type` Bot (a code:Bot)", "an organization that owns a repository"]
+evidence_requirement = "A structured `/user/id` observation at an item or comment, with `/user/type` User at the same location and observation."
+
+[[types]]
+id = "code:Bot"
+definition = "A GitHub account GitHub itself marks as a bot (`/user/type` Bot), identified by its numeric id."
+not_to_confuse_with = "A code:Account a human uses to run scripts: only GitHub's own `type` makes a bot. Never a Person."
+examples = ["github:account/49699333, `/user/type` Bot, login dependabot[bot]"]
+counter_examples = ["an account whose login ends in -bot but whose `/user/type` is User", "a comment whose body says it was written by a bot"]
+evidence_requirement = "A structured `/user/id` observation with `/user/type` Bot at the same location."
+
+[[types]]
+id = "code:Repository"
+definition = "A GitHub repository, identified by `https://<host>/<owner>/<repo>` taken from the canonical html_url of an item in it."
+not_to_confuse_with = "A project or product (a standard-vocabulary Project may span several repositories); a fork, which is its own repository."
+examples = ["https://github.com/rust-lang/rust"]
+counter_examples = ["https://github.com/rust-lang (an owner)", "https://github.com/rust-lang/rust/pull/1 (a pull request)", "a repository name quoted in an issue body"]
+evidence_requirement = "The canonical html_url location of a structured observation of a pull request or issue in it."
+
+[[types]]
+id = "code:PullRequest"
+definition = "A GitHub pull request, identified by its html_url `https://<host>/<owner>/<repo>/pull/<number>`."
+not_to_confuse_with = "A code:Issue (GitHub numbers both in one sequence, but the URL path tells them apart); a commit or a branch."
+examples = ["https://github.com/o/p/pull/12"]
+counter_examples = ["https://github.com/o/p/issues/12", "https://github.com/o/p/pull/12#issuecomment-1 (a comment on it)", "a pull request number written in a title"]
+evidence_requirement = "A structured observation (`/state` or `/user/*`) whose location is a canonical `/pull/<number>` html_url."
+
+[[types]]
+id = "code:Issue"
+definition = "A GitHub issue, identified by its html_url `https://<host>/<owner>/<repo>/issues/<number>`."
+not_to_confuse_with = "A code:PullRequest; a task or Commitment (an issue may hold neither, or several)."
+examples = ["https://github.com/o/p/issues/7"]
+counter_examples = ["https://github.com/o/p/pull/7", "https://github.com/o/p/issues/7#issuecomment-3 (a comment on it)"]
+evidence_requirement = "A structured observation (`/state` or `/user/*`) whose location is a canonical `/issues/<number>` html_url."
+
+[[types]]
+id = "code:Comment"
+definition = "A comment on a GitHub issue or pull request, identified by its html_url with its `#issuecomment-<id>` fragment."
+not_to_confuse_with = "The issue or pull request it is on (the URL without the fragment); a review or a review comment on a diff line."
+examples = ["https://github.com/o/p/issues/7#issuecomment-1001", "https://github.com/o/p/pull/12#issuecomment-1002"]
+counter_examples = ["https://github.com/o/p/issues/7", "https://github.com/o/p/pull/12#discussion_r5 (a diff comment, not read)"]
+evidence_requirement = "A structured `/user/*` observation whose location is a canonical html_url with an `#issuecomment-<digits>` fragment."
+
+[[predicates]]
+id = "code:state"
+definition = "Whether a pull request or issue is open or closed, exactly as GitHub's `state` field says. One value per subject and observation context (source, scope, location, field)."
+not_to_confuse_with = "Merged (a merged pull request is `closed`); a project-board column; whether work is done (a closed issue may be unresolved)."
+examples = ["https://github.com/o/p/pull/12 code:state \"open\"", "a merged pull request: code:state \"closed\""]
+counter_examples = ["\"merged\" (not a GitHub state)", "\"closed\" read from a comment saying \"closing this\"", "a state for a comment"]
+evidence_requirement = "A structured `/state` observation at the item's location whose quote is exactly `open` or `closed`."
+domain = ["code:PullRequest", "code:Issue"]
+range = ["string"]
+cardinality = "one"
+freshness = "source"
+authority = "newer_comparable_observation"
+sensitivity = "As sensitive as the repository: visible only in the source's scope."
+
+[[predicates]]
+id = "code:author"
+definition = "The account that opened a pull request or issue, or wrote a comment, as GitHub's `user` field names it. One value per subject and observation context."
+not_to_confuse_with = "An assignee, reviewer, committer or someone mentioned; a Person (an account isn't a human); the login text alone."
+examples = ["https://github.com/o/p/issues/7 code:author github:account/583231", "a dependabot pull request: code:author github:account/49699333 (a code:Bot)"]
+counter_examples = ["an author guessed for a deleted account (`user` null records nothing)", "\"by @alice\" written in a body", "the account that merged the pull request"]
+evidence_requirement = "Structured `/user/id` and `/user/type` observations at the subject's location; `/user/type` must be User or Bot."
+domain = ["code:PullRequest", "code:Issue", "code:Comment"]
+range = ["code:Account", "code:Bot"]
+cardinality = "one"
+freshness = "source"
+authority = "newer_comparable_observation"
+sensitivity = "Personal: it says who wrote what. Visible only in the source's scope."
+
+[[predicates]]
+id = "code:in_repository"
+definition = "The repository a pull request or issue belongs to, read from its canonical html_url `https://<host>/<owner>/<repo>/...`. One value per subject and observation context."
+not_to_confuse_with = "A fork the pull request comes from; a repository named in a body; the source a Rastro sync is bound to."
+examples = ["https://github.com/o/p/pull/12 code:in_repository https://github.com/o/p"]
+counter_examples = ["a repository mentioned in a title", "a comment's repository (comments are linked through their issue, not this predicate)"]
+evidence_requirement = "A structured `/state` observation at the item's canonical html_url location."
+domain = ["code:PullRequest", "code:Issue"]
+range = ["code:Repository"]
+cardinality = "one"
+freshness = "source"
+authority = "newer_comparable_observation"
+sensitivity = "As sensitive as the repository: visible only in the source's scope."
+
+[[aliases]]
+kind = "login"
+definition = "A GitHub login an account had when it was observed. A rename adds a login; the old one stays an alias of the same account."
+not_to_confuse_with = "The account's identity (its numeric id): two accounts may hold one login at different times. Never looked up on its own."
+examples = ["octocat for github:account/583231", "dependabot[bot] for github:account/49699333"]
+counter_examples = ["@octocat mentioned in a body", "a display name", "a login with no `/user/id` beside it"]
+evidence_requirement = "A structured `/user/login` observation, with `/user/id` at the same location."
+domain = ["code:Account", "code:Bot"]

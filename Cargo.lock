@@ -1168,6 +1168,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "rastro-extractor-github"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "rastro-plugin-sdk",
+ "rusqlite",
+ "serde_json",
+ "tempfile",
+ "tiny_http",
+ "toml",
+]
+
+[[package]]
 name = "rastro-operations"
 version = "0.1.0"
 dependencies = [

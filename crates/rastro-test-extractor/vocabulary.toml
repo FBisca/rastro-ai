@@ -1,15 +1,47 @@
 # A tiny slice of `code`, enough for tests to emit valid and invalid claims.
 namespace = "code"
 version = "0.1.0"
-types = ["code:PullRequest", "code:Repository"]
+
+[[types]]
+id = "code:PullRequest"
+definition = "A pull request, for tests."
+not_to_confuse_with = "An issue."
+examples = ["https://github.com/o/p/pull/1"]
+counter_examples = ["https://github.com/o/p/issues/1"]
+evidence_requirement = "Any structured observation at its location."
+
+[[types]]
+id = "code:Repository"
+definition = "A repository, for tests."
+not_to_confuse_with = "A pull request."
+examples = ["https://github.com/o/p"]
+counter_examples = ["https://github.com/o/p/pull/1"]
+evidence_requirement = "Any structured observation in it."
 
 [[predicates]]
 id = "code:state"
 cardinality = "one"
 domain = ["code:PullRequest"]
 range = ["string"]
+definition = "A pull request's state, for tests."
+not_to_confuse_with = "Merged."
+examples = ["open"]
+counter_examples = ["merged"]
+evidence_requirement = "A structured `/state` observation."
+freshness = "source"
+authority = "newer_comparable_observation"
+sensitivity = "Test data."
 
 [[predicates]]
 id = "code:in_repository"
 domain = ["code:PullRequest"]
 range = ["code:Repository"]
+definition = "The repository a pull request is in, for tests."
+not_to_confuse_with = "A fork."
+examples = ["https://github.com/o/p"]
+counter_examples = ["a repository named in a body"]
+evidence_requirement = "Any structured observation at the pull request."
+cardinality = "one"
+freshness = "source"
+authority = "newer_comparable_observation"
+sensitivity = "Test data."
