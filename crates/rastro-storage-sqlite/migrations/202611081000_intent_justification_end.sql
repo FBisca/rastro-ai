@@ -1,5 +1,7 @@
--- An owner intent's contribution to a claim ends when the intent is undone, or when a newer name
--- replaces a Person's name; the claim then stays in the projection, superseded, its interval
--- closed at that time. NULL while the contribution holds. Part of the disposable projection:
--- `claims rebuild` (or the next intent write) fills it from the intent table.
+-- An owner intent holds a claim over stretches: from its issue until it is undone, or until a
+-- newer name replaces a Person's name; a name restored by undoing a newer one holds again from
+-- that undo, a new row. A claim no stretch holds stays in the projection, superseded. `ended_at`
+-- is NULL while the stretch holds. Part of the disposable projection: applying this migration
+-- replays the stored intents, as `claims rebuild` and every intent write do.
+ALTER TABLE intent_justification ADD COLUMN started_at TEXT;
 ALTER TABLE intent_justification ADD COLUMN ended_at TEXT;

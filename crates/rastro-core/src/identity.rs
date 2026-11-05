@@ -176,8 +176,10 @@ impl Payload {
     }
 }
 /// Who issued an intent, through which surface, with which scopes: the surface's own configured
-/// scopes as it issued (for the CLI, its sources' scopes). Audit data, not lasting authorization.
-/// Rows written before the scopes were recorded list none.
+/// scopes as it issued. For the CLI, the scopes of its configured sources; a scope held only in
+/// storage (a removed source's) is not listed. An empty list means no source was configured, or a
+/// row written before the scopes were recorded. Audit data, not authorization: the CLI is checked
+/// as seeing every scope.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct IssuerContext {
@@ -578,17 +580,13 @@ impl Resolution {
                 entity_type: PERSON_TYPE.into(),
             }
         };
-        let name_object = |name: &str| Object::Literal {
-            value: name.into(),
-            datatype: NAME_KIND.into(),
-        };
         let mut out = Vec::new();
         let mut push = |subject: &EntityTarget,
                         predicate: &str,
                         object: Object,
                         scalar: bool,
                         intent: &String,
-                        ended_at: Option<DateTime<Utc>>| {
+                        stretch: (DateTime<Utc>, Option<DateTime<Utc>>)| {
             out.push(IntentClaim {
                 id: claims::claim_id(&subject.id, predicate, &object),
                 subject: subject.clone(),
@@ -596,81 +594,57 @@ impl Resolution {
                 object,
                 scalar,
                 intent: intent.clone(),
-                issued_at: self.issued[intent],
-                ended_at,
+                started_at: stretch.0,
+                ended_at: stretch.1,
             });
         };
-        for (id, person) in &self.persons {
+        for person in self.persons.values() {
             let type_object = Object::Literal {
                 value: PERSON_TYPE.into(),
                 datatype: TYPE_DATATYPE.into(),
             };
+            let created = self.issued[&person.created_by];
             push(
                 &person.entity,
                 TYPE_PREDICATE,
                 type_object,
                 true,
                 &person.created_by,
-                None,
-            );
-            if let Some((name, intent)) = self.names.get(id) {
-                push(
-                    &person.entity,
-                    ALIAS_PREDICATE,
-                    name_object(name),
-                    true,
-                    intent,
-                    None,
-                );
-            }
-        }
-        for ((account, person), intent) in &self.links {
-            push(
-                &self.entities[account],
-                HELD_BY,
-                person_object(person),
-                false,
-                intent,
-                None,
+                (created, None),
             );
         }
-        for ((a, b), intent) in &self.merges {
-            push(
-                &self.entities[a],
-                SAME_AS,
-                person_object(b),
-                false,
-                intent,
-                None,
-            );
-        }
-        for (id, (status, by)) in &self.status {
-            let ended = match (status, by) {
-                (IntentStatus::Undone | IntentStatus::Superseded, Some(by)) => self.issued[by],
-                _ => continue,
+        for (person, name, intent, stretch) in self.name_stretches() {
+            let object = Object::Literal {
+                value: name,
+                datatype: NAME_KIND.into(),
             };
+            push(
+                &self.entities[&person],
+                ALIAS_PREDICATE,
+                object,
+                true,
+                &intent,
+                stretch,
+            );
+        }
+        // A link or merge holds from its intent until its undo, if any.
+        for id in &self.order {
             let intent = &self.intents[id];
-            // An undone name a newer name had already replaced ended at the replacement.
-            let ended = match (status, intent.kind, by) {
-                (IntentStatus::Undone, IntentKind::Name, Some(by)) => self
-                    .replacing_name(id, by)
-                    .map_or(ended, |at| at.min(ended)),
-                _ => ended,
+            let ended = match self.status.get(id) {
+                Some((IntentStatus::Undone, Some(by))) => Some(self.issued[by]),
+                _ => None,
             };
-            match (
-                intent.kind,
-                intent.targets.endpoints(),
-                intent.targets.single(),
-            ) {
-                (IntentKind::Link, Some([account, person]), _) => push(
+            let stretch = (intent.issued_at, ended);
+            match (intent.kind, intent.targets.endpoints()) {
+                (IntentKind::Link, Some([account, person])) => push(
                     &self.entities[&account.id],
                     HELD_BY,
                     person_object(&person.id),
                     false,
                     id,
-                    Some(ended),
+                    stretch,
                 ),
-                (IntentKind::SameAs, Some([a, b]), _) => {
+                (IntentKind::SameAs, Some([a, b])) => {
                     let (a, b) = sorted(&a.id, &b.id);
                     push(
                         &self.entities[&a],
@@ -678,39 +652,71 @@ impl Resolution {
                         person_object(&b),
                         false,
                         id,
-                        Some(ended),
+                        stretch,
                     )
-                }
-                (IntentKind::Name, _, Some(person)) => {
-                    if let Some(name) = &intent.payload.name {
-                        push(
-                            &self.entities[&person.id],
-                            ALIAS_PREDICATE,
-                            name_object(name),
-                            true,
-                            id,
-                            Some(ended),
-                        );
-                    }
                 }
                 _ => {}
             }
         }
         out
     }
-    /// When a name intent accepted after `name` and before `undo` first named the same Person.
-    fn replacing_name(&self, name: &str, undo: &str) -> Option<DateTime<Utc>> {
-        let person = self.intents[name].targets.single()?.id.clone();
-        self.order
-            .iter()
-            .skip_while(|id| *id != name)
-            .skip(1)
-            .take_while(|id| *id != undo)
-            .map(|id| &self.intents[id])
-            .find(|i| {
-                i.kind == IntentKind::Name && i.targets.single().is_some_and(|p| p.id == person)
-            })
-            .map(|i| i.issued_at)
+    /// Each stretch during which a name intent gave its Person's name, as (Person id, name,
+    /// intent id, (start, end)). Read in acceptance order: a Person's name is its newest name
+    /// intent not yet undone, so a newer name ends the older one's stretch, and undoing the
+    /// newer one starts a new stretch of the older at the undo, leaving a gap (plan D39).
+    /// Undoing a name already replaced ends nothing more: its stretch ended at the replacement.
+    fn name_stretches(&self) -> Vec<NameStretch> {
+        let mut stretches: Vec<NameStretch> = Vec::new();
+        let mut in_force: BTreeMap<String, Vec<String>> = BTreeMap::new();
+        for id in &self.order {
+            let intent = &self.intents[id];
+            let (person, change) = match intent.kind {
+                IntentKind::Name => {
+                    let Some(person) = intent.targets.single() else {
+                        continue;
+                    };
+                    (person.id.clone(), (None, Some(id.clone())))
+                }
+                IntentKind::Undo => {
+                    let Some(undone) = intent.undo_of.as_ref().and_then(|u| self.intents.get(u))
+                    else {
+                        continue;
+                    };
+                    let (IntentKind::Name, Some(person)) = (undone.kind, undone.targets.single())
+                    else {
+                        continue;
+                    };
+                    (person.id.clone(), (Some(undone.id.clone()), None))
+                }
+                _ => continue,
+            };
+            let names = in_force.entry(person.clone()).or_default();
+            let before = names.last().cloned();
+            match change {
+                (Some(undone), _) => names.retain(|n| *n != undone),
+                (_, Some(named)) => names.push(named),
+                _ => {}
+            }
+            let after = names.last().cloned();
+            if before == after {
+                continue;
+            }
+            let at = intent.issued_at;
+            if let Some(before) = before
+                && let Some(open) = stretches
+                    .iter_mut()
+                    .rev()
+                    .find(|s| s.2 == before && s.3.1.is_none())
+            {
+                open.3.1 = Some(at);
+            }
+            if let Some(after) = after
+                && let Some(name) = self.intents[&after].payload.name.clone()
+            {
+                stretches.push((person, name, after, (at, None)));
+            }
+        }
+        stretches
     }
     /// The Persons a form could name among the `visible` entities: `me`, a Person's id or
     /// identifier, or any name a Person has or had (`rastro:name/<name>`); with every Person
@@ -763,6 +769,13 @@ impl Resolution {
         persons
     }
 }
+/// A stretch of a Person's name: (Person id, name, intent id, (start, end)).
+type NameStretch = (
+    String,
+    String,
+    String,
+    (DateTime<Utc>, Option<DateTime<Utc>>),
+);
 /// A claim an owner intent backs. Its justification is of kind `owner_intent`; while any of its
 /// intents holds it is `observed`, and once every one has ended it is `superseded`.
 #[derive(Clone, Debug)]
@@ -773,8 +786,10 @@ pub struct IntentClaim {
     pub object: Object,
     pub scalar: bool,
     pub intent: String,
-    pub issued_at: DateTime<Utc>,
-    /// When the intent's contribution ended: its undo, or the newer name that replaced it.
+    /// When this stretch of the intent's contribution began: its issue, or, for a name restored
+    /// by undoing a newer one, that undo.
+    pub started_at: DateTime<Utc>,
+    /// When it ended: an undo, or the newer name that replaced it.
     pub ended_at: Option<DateTime<Utc>>,
 }
 

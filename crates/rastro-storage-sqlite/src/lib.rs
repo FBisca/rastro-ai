@@ -151,9 +151,13 @@ impl SqliteStorage {
             )?;
             if !done {
                 transaction.execute_batch(sql)?;
-                if name == INTENT_END {
+                let intents: bool = name == INTENT_END
+                    && transaction
+                        .query_row("SELECT EXISTS (SELECT 1 FROM intent)", [], |r| r.get(0))?;
+                if intents {
                     // The intents already stored replay once, so what they ended reads as
-                    // history right after the upgrade, without waiting for a rebuild.
+                    // history right after the upgrade, without waiting for a rebuild. A database
+                    // with none has nothing to replay and publishes nothing.
                     identity::apply(&transaction)?;
                     lifecycle::publish(&transaction)?;
                 }

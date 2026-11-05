@@ -750,7 +750,7 @@
     },
     "IssuerContext": {
       "additionalProperties": false,
-      "description": "Who issued an intent, through which surface, with which scopes: the surface's own configured\nscopes as it issued (for the CLI, its sources' scopes). Audit data, not lasting authorization.\nRows written before the scopes were recorded list none.",
+      "description": "Who issued an intent, through which surface, with which scopes: the surface's own configured\nscopes as it issued. For the CLI, the scopes of its configured sources; a scope held only in\nstorage (a removed source's) is not listed. An empty list means no source was configured, or a\nrow written before the scopes were recorded. Audit data, not authorization: the CLI is checked\nas seeing every scope.",
       "properties": {
         "principal": {
           "type": "string"

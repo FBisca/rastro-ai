@@ -2259,7 +2259,7 @@ fn why_text(session: &mut Session, claim: &str) -> Value {
 }
 
 /// S31: the scope-set oracle with owner intents, over every scope set: Persons, names (one named
-/// again), links (one undone, with its cannot-link), and a merge chain P1–P2–P3 whose accounts
+/// again; one renamed and the rename undone, leaving a gap), links (one undone, with its cannot-link), and a merge chain P1–P2–P3 whose accounts
 /// sit in three scopes, so every scope set meets a merge with one end hidden and, without
 /// `work`, a chain through a hidden middle Person. A seed places a fourth account and extra
 /// links. Each scoped `about` (with and without history) and each `why` on an intent-backed
@@ -2381,6 +2381,20 @@ fn S31_random_scope_sets_with_intents_equal_a_per_scope_rebuild() {
         vec![],
         vec![1],
     );
+    // P2 is named again and that name is undone: P2's first name holds again, after a gap.
+    add(
+        &mut log,
+        IntentKind::Name,
+        entity(&persons[2]),
+        Some("P2 again"),
+        vec![],
+        vec![2],
+    );
+    let renamed = log.last().unwrap().0.clone();
+    let mut unnamed = intent(80, IntentKind::Undo, renamed.targets.clone(), None);
+    unnamed.domain_key = renamed.domain_key.clone();
+    unnamed.undo_of = Some(renamed.id.clone());
+    log.push((unnamed, vec![], vec![2]));
     let mut links = Vec::new();
     for (i, (account, _)) in accounts.iter().enumerate() {
         let holder = if i < 3 { i + 1 } else { next() as usize % 4 };
@@ -2513,6 +2527,7 @@ fn S31_random_scope_sets_with_intents_equal_a_per_scope_rebuild() {
             "rastro:name/P1",
             "rastro:name/P1 again",
             "rastro:name/P2",
+            "rastro:name/P2 again",
             "rastro:name/P3",
         ]
         .map(String::from)

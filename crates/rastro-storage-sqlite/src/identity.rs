@@ -4,7 +4,7 @@
 use crate::{parse_time, stamp};
 use anyhow::{Context, Result, ensure};
 use rastro_core::Scope;
-use rastro_core::claims::{Object, intent_justification_id, revision_with_links};
+use rastro_core::claims::{Object, intent_justification_id_with_ordinal, revision_with_links};
 use rastro_core::identity::{HELD_BY, Intent, IntentKind, Resolution, SAME_AS};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::{BTreeMap, BTreeSet};
@@ -158,6 +158,7 @@ pub(crate) fn apply(db: &Connection) -> Result<()> {
     db.execute("DELETE FROM intent_justification", [])?;
     // Each claim's intents, and whether each still holds.
     let mut supports = BTreeMap::<String, Vec<(String, bool)>>::new();
+    let mut stretches = BTreeMap::<(String, String), u64>::new();
     for claim in resolution.claims() {
         let mut entities = vec![(&claim.subject.id, &claim.subject.identifier)];
         let (object_entity, object_value, object_datatype) = match &claim.object {
@@ -186,15 +187,20 @@ pub(crate) fn apply(db: &Connection) -> Result<()> {
                 claim.scalar
             ],
         )?;
+        let ordinal = stretches
+            .entry((claim.id.clone(), claim.intent.clone()))
+            .or_insert(0u64);
         db.execute(
-            "INSERT OR IGNORE INTO intent_justification (id, claim_id, intent_id, ended_at) VALUES (?1, ?2, ?3, ?4)",
+            "INSERT INTO intent_justification (id, claim_id, intent_id, started_at, ended_at) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![
-                intent_justification_id(&claim.id, &claim.intent),
+                intent_justification_id_with_ordinal(&claim.id, &claim.intent, *ordinal),
                 claim.id,
                 claim.intent,
+                stamp(claim.started_at),
                 claim.ended_at.map(stamp)
             ],
         )?;
+        *ordinal += 1;
         supports
             .entry(claim.id)
             .or_default()
@@ -338,9 +344,10 @@ pub(crate) fn copy_visible(db: &Connection, target: &Connection, scopes: &[Scope
                 .collect::<Result<Vec<_>, _>>()?,
         ))?;
     }
-    let justifications: Vec<(String, String, String, Option<String>)> = db
-        .prepare("SELECT id, claim_id, intent_id, ended_at FROM intent_justification WHERE claim_id IN (SELECT value FROM json_each(?1))")?
-        .query_map([&shown], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+    type Stretch = (String, String, String, Option<String>, Option<String>);
+    let justifications: Vec<Stretch> = db
+        .prepare("SELECT id, claim_id, intent_id, started_at, ended_at FROM intent_justification WHERE claim_id IN (SELECT value FROM json_each(?1))")?
+        .query_map([&shown], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
         .collect::<Result<_, _>>()?;
     let mut needed: BTreeSet<String> = resolution
         .me
@@ -348,10 +355,10 @@ pub(crate) fn copy_visible(db: &Connection, target: &Connection, scopes: &[Scope
         .map(|me| resolution.persons[me].created_by.clone())
         .into_iter()
         .collect();
-    for (id, claim, intent, ended_at) in &justifications {
+    for (id, claim, intent, started_at, ended_at) in &justifications {
         target.execute(
-            "INSERT OR IGNORE INTO intent_justification (id, claim_id, intent_id, ended_at) VALUES (?1, ?2, ?3, ?4)",
-            params![id, claim, intent, ended_at],
+            "INSERT OR IGNORE INTO intent_justification (id, claim_id, intent_id, started_at, ended_at) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id, claim, intent, started_at, ended_at],
         )?;
         needed.insert(intent.clone());
     }

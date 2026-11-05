@@ -716,3 +716,67 @@ fn S36_undoing_an_already_replaced_name_ends_it_at_the_replacement() {
     assert_eq!(status, "observed");
     assert_eq!(intervals[0].start, time() + chrono::Duration::minutes(2));
 }
+
+/// S36a: undoing a newer name leaves a gap in the older one: name A at t1, B at t2, undo B at t3
+/// gives A [t1, t2) and [t3, open), and B [t2, t3)
+#[test]
+fn S36a_undoing_a_newer_name_leaves_a_gap_in_the_older_one() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("db");
+    let mut db = SqliteStorage::open(&path).unwrap();
+    let ana = person(1);
+    let newer = named("i_3", &ana, "Ana Silva", 2);
+    let mut undone = undo("i_4", &newer, &[]);
+    undone.issued_at = time() + chrono::Duration::minutes(3);
+    issue(
+        &mut db,
+        vec![
+            create("i_1", &ana),
+            named("i_2", &ana, "Ana", 1),
+            newer,
+            undone,
+        ],
+    )
+    .unwrap();
+    let history = AboutOptions {
+        history: true,
+        ..AboutOptions::default()
+    };
+    let claims = db
+        .snapshot(|view| view.about(&ana.identifier, &history))
+        .unwrap();
+    let at = |minutes: i64| time() + chrono::Duration::minutes(minutes);
+    let intervals = |value: &str| {
+        let claim = claims
+            .iter()
+            .find(|c| matches!(&c.claim.object, Object::Literal { value: v, .. } if v == value))
+            .unwrap_or_else(|| panic!("no name {value}"));
+        (
+            claim.claim.status.clone(),
+            claim
+                .claim
+                .known_intervals
+                .iter()
+                .map(|i| (i.start, i.end))
+                .collect::<Vec<_>>(),
+        )
+    };
+    assert_eq!(
+        intervals("Ana"),
+        (
+            "observed".to_string(),
+            vec![(at(1), Some(at(2))), (at(3), None)]
+        )
+    );
+    assert_eq!(
+        intervals("Ana Silva"),
+        ("superseded".to_string(), vec![(at(2), Some(at(3)))])
+    );
+    // A rebuild gives the same intervals back.
+    db.begin_claims_rebuild().unwrap();
+    db.finish_claims_rebuild(true).unwrap();
+    let again = db
+        .snapshot(|view| view.about(&ana.identifier, &history))
+        .unwrap();
+    assert_eq!(format!("{again:?}"), format!("{claims:?}"));
+}
