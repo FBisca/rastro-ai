@@ -1,8 +1,74 @@
 //! Exact replay in private memory. No stored status, occurrence, revision or link is copied.
 //! The source connection stays in its pinned read transaction throughout the computation.
 use super::*;
-use rusqlite::{params_from_iter, types::Value};
+use anyhow::ensure;
+use rusqlite::params_from_iter;
 use std::collections::BTreeSet;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{Arc, Mutex};
+
+/// Most candidate claims one scoped read may replay. Past it the read fails with an
+/// operation error; it never answers from a weaker or partial replay.
+static WORK_BUDGET: AtomicUsize = AtomicUsize::new(200_000);
+const CACHE_ENTRIES: usize = 4;
+
+/// A finished replay is exact for one visible scope set, one target and one state of the
+/// database, so it can be reused until any of those changes.
+#[derive(PartialEq, Eq)]
+struct Key {
+    database: String,
+    scopes: BTreeSet<String>,
+    target: (bool, String),
+    publication: i64,
+    evidence: i64,
+    justification: i64,
+}
+type Shared = Arc<Mutex<Connection>>;
+static CACHE: Mutex<Vec<(Key, Shared)>> = Mutex::new(Vec::new());
+
+fn key(db: &Connection, scopes: &[Scope], target: &Target<'_>) -> Result<Option<Key>> {
+    let Some(database) = db.path().filter(|p| !p.is_empty()) else {
+        return Ok(None);
+    };
+    let high = |sql: &str| db.query_row(sql, [], |r| r.get::<_, Option<i64>>(0));
+    Ok(Some(Key {
+        database: database.to_string(),
+        scopes: scopes.iter().map(|s| s.0.clone()).collect(),
+        target: match target {
+            Target::Entity(value) => (true, value.to_string()),
+            Target::Claim(value) => (false, value.to_string()),
+        },
+        publication: high("SELECT max(id) FROM projection_publication")?.unwrap_or(0),
+        evidence: high("SELECT max(id) FROM evidence")?.unwrap_or(0),
+        justification: high("SELECT max(rowid) FROM justification")?.unwrap_or(0),
+    }))
+}
+
+/// The cache holds only the output of the exact recompute; a miss recomputes.
+pub(super) fn projection(db: &Connection, scopes: &[Scope], target: Target<'_>) -> Result<Shared> {
+    let key = key(db, scopes, &target)?;
+    if let Some(key) = &key {
+        let cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if let Some((_, hit)) = cache.iter().find(|(k, _)| k == key) {
+            return Ok(hit.clone());
+        }
+    }
+    let built = Arc::new(Mutex::new(build(db, scopes, target)?));
+    if let Some(key) = key {
+        let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+        if cache.len() >= CACHE_ENTRIES {
+            cache.remove(0);
+        }
+        cache.push((key, built.clone()));
+    }
+    Ok(built)
+}
+
+/// Empties the process-local scoped cache; a benchmark's cold samples start from here.
+#[doc(hidden)]
+pub fn clear_cache() {
+    CACHE.lock().unwrap_or_else(|e| e.into_inner()).clear();
+}
 
 pub(super) enum Target<'a> {
     Entity(&'a str),
@@ -22,10 +88,11 @@ fn copy(
     let mut insert = target.prepare(&format!("INSERT INTO {table} VALUES ({placeholders})"))?;
     let mut rows = source.query(params_from_iter(arguments))?;
     while let Some(row) = rows.next()? {
-        let values = (0..columns)
-            .map(|i| row.get::<_, Value>(i))
-            .collect::<Result<Vec<_>, _>>()?;
-        insert.execute(params_from_iter(values))?;
+        insert.execute(params_from_iter(
+            (0..columns)
+                .map(|i| row.get_ref(i).map(rusqlite::types::ToSqlOutput::Borrowed))
+                .collect::<Result<Vec<_>, _>>()?,
+        ))?;
     }
     Ok(())
 }
@@ -37,11 +104,7 @@ fn ids(db: &Connection, sql: &str) -> Result<String> {
     Ok(serde_json::to_string(&rows)?)
 }
 
-pub(super) fn projection(
-    db: &Connection,
-    scopes: &[Scope],
-    target: Target<'_>,
-) -> Result<Connection> {
+fn build(db: &Connection, scopes: &[Scope], target: Target<'_>) -> Result<Connection> {
     // Replay complete subject/predicate components, including competing claims. One-hop
     // candidates are selected before replay, but status, recency and the limit are not.
     let (root, argument) = match target {
@@ -60,6 +123,12 @@ pub(super) fn projection(
         .prepare(&candidate_sql)?
         .query_map([argument], |r| r.get::<_, String>(0))?
         .collect::<Result<Vec<_>, _>>()?;
+    let budget = WORK_BUDGET.load(Ordering::Relaxed);
+    ensure!(
+        candidates.len() <= budget,
+        "scoped read needs {} candidate claims, past its work budget of {budget}; narrow the request or read an unscoped view",
+        candidates.len()
+    );
     let candidates = serde_json::to_string(&candidates)?;
     let scopes = serde_json::to_string(scopes)?;
     let result = Connection::open_in_memory()?;
@@ -124,49 +193,62 @@ pub(super) fn projection(
 // multi-span/alternative/replacement components through the lifecycle oracle.
 fn replay(db: &Connection) -> Result<()> {
     use rastro_core::claims::{Support, occurrence_id_with_ordinal, revision_with_links};
-    let mut affected = db
-        .prepare("SELECT DISTINCT subject, predicate FROM claim")?
+    use rusqlite::functions::FunctionFlags;
+    let flags = FunctionFlags::SQLITE_UTF8 | FunctionFlags::SQLITE_DETERMINISTIC;
+    db.create_scalar_function("single_revision", 1, flags, |ctx| {
+        let support = Support {
+            evidence_id: 0,
+            portable_key: ctx.get::<String>(0)?,
+            field: String::new(),
+            start: 0,
+            end: 0,
+            extraction_rule: String::new(),
+        };
+        Ok(revision_with_links(
+            "observed",
+            std::slice::from_ref(&support),
+            &[],
+        ))
+    })?;
+    db.create_scalar_function("single_occurrence", 3, flags, |ctx| {
+        Ok(occurrence_id_with_ordinal(
+            &ctx.get::<String>(0)?,
+            &ctx.get::<String>(1)?,
+            &ctx.get::<String>(2)?,
+            0,
+        ))
+    })?;
+    let step = |_name: &str, sql: &str| db.execute_batch(sql);
+    step(
+        "single",
+        "CREATE TEMP TABLE single AS SELECT c.subject AS subject, c.predicate AS predicate, c.id AS claim, j.id AS justification, s.evidence_id AS evidence_id, s.portable_key AS portable_key, s.field AS field, e.source AS source, e.scope AS scope, e.location AS location, e.captured_at AS captured_at, e.source_updated_at AS source_updated_at FROM claim c JOIN justification j ON j.claim_id = c.id JOIN justification_span s ON s.justification_id = j.id JOIN evidence e ON e.id = s.evidence_id GROUP BY c.subject, c.predicate HAVING count(*) = 1",
+    )?;
+    step(
+        "idx",
+        "CREATE INDEX single_by_claim ON single (claim); CREATE INDEX single_by_slot ON single (subject, predicate)",
+    )?;
+    step(
+        "claim",
+        "UPDATE claim SET status = 'observed', revision = single_revision(single.portable_key), known_since = single.captured_at FROM single WHERE claim.id = single.claim",
+    )?;
+    step(
+        "just",
+        "UPDATE justification SET current = 1 WHERE id IN (SELECT justification FROM single)",
+    )?;
+    step(
+        "occ",
+        "INSERT INTO occurrence (id, justification_id, source, scope, location, field, captured_at, source_updated_at, portable_key, evidence_id) SELECT single_occurrence(justification, captured_at, portable_key), justification, source, scope, location, field, captured_at, source_updated_at, portable_key, evidence_id FROM single",
+    )?;
+    let affected = db
+        .prepare("SELECT DISTINCT subject, predicate FROM claim WHERE NOT EXISTS (SELECT 1 FROM single WHERE single.subject = claim.subject AND single.predicate = claim.predicate)")?
         .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
         .collect::<Result<BTreeSet<_>, _>>()?;
-    let mut rows = db.prepare("SELECT c.subject,c.predicate,c.id,j.id,s.evidence_id,s.portable_key,s.field,s.start,s.end,j.extraction_rule,e.source,e.scope,e.location,e.captured_at,e.source_updated_at FROM claim c JOIN justification j ON j.claim_id = c.id JOIN justification_span s ON s.justification_id = j.id JOIN evidence e ON e.id = s.evidence_id GROUP BY c.subject,c.predicate HAVING count(*) = 1")?;
-    let mut rows = rows.query([])?;
-    let mut claim =
-        db.prepare("UPDATE claim SET status='observed', revision=?2, known_since=?3 WHERE id=?1")?;
-    let mut current = db.prepare("UPDATE justification SET current=1 WHERE id=?1")?;
-    let mut occurrence = db.prepare("INSERT INTO occurrence (id,justification_id,source,scope,location,field,captured_at,source_updated_at,portable_key,evidence_id) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9,?10)")?;
-    while let Some(row) = rows.next()? {
-        let subject: String = row.get(0)?;
-        let predicate: String = row.get(1)?;
-        let id: String = row.get(2)?;
-        let justification: String = row.get(3)?;
-        let support = Support {
-            evidence_id: row.get(4)?,
-            portable_key: row.get(5)?,
-            field: row.get(6)?,
-            start: row.get::<_, i64>(7)? as u64,
-            end: row.get::<_, i64>(8)? as u64,
-            extraction_rule: row.get(9)?,
-        };
-        let captured: String = row.get(13)?;
-        claim.execute(params![
-            id,
-            revision_with_links("observed", std::slice::from_ref(&support), &[]),
-            captured
-        ])?;
-        current.execute([&justification])?;
-        occurrence.execute(params![
-            occurrence_id_with_ordinal(&justification, &captured, &support.portable_key, 0),
-            justification,
-            row.get::<_, String>(10)?,
-            row.get::<_, String>(11)?,
-            row.get::<_, String>(12)?,
-            support.field,
-            captured,
-            row.get::<_, Option<String>>(14)?,
-            support.portable_key,
-            support.evidence_id
-        ])?;
-        affected.remove(&(subject, predicate));
-    }
+    db.execute_batch("DROP TABLE single")?;
     lifecycle::refresh(db, &affected)
+}
+
+/// Sets the most candidate claims one scoped read may replay (tests only).
+#[doc(hidden)]
+pub fn set_work_budget(claims: usize) {
+    WORK_BUDGET.store(claims, Ordering::Relaxed);
 }

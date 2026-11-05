@@ -20,6 +20,8 @@ mod knowledge;
 /// order by time. Never edit one that has shipped; add a new one.
 mod lifecycle;
 mod scoped;
+#[doc(hidden)]
+pub use scoped::{clear_cache as clear_scoped_cache, set_work_budget as set_scoped_work_budget};
 
 const MIGRATIONS: [(&str, &str); 8] = [
     (
@@ -887,6 +889,7 @@ impl Snapshot for View<'_> {
             return self.about_claims(entity, options);
         }
         let projection = scoped::projection(self.0, scopes, scoped::Target::Entity(entity))?;
+        let projection = projection.lock().unwrap_or_else(|e| e.into_inner());
         View(&projection).about_claims(entity, options)
     }
     fn explain_scoped(
@@ -899,6 +902,7 @@ impl Snapshot for View<'_> {
             return self.explanation(claim, options);
         }
         let projection = scoped::projection(self.0, scopes, scoped::Target::Claim(claim))?;
+        let projection = projection.lock().unwrap_or_else(|e| e.into_inner());
         View(&projection).explanation(claim, options)
     }
 
