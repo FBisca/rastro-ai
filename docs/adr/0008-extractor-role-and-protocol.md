@@ -75,4 +75,4 @@ Status stays accepted. Knowledge graph deep dive (`../research/kg-deep-dive/42-p
 ## Amended 2026-11-05 (claims hardening)
 Status stays accepted. Product meaning in `../decisions/surfaces.md` §34 and §36 and `../decisions/vocabulary.md` §23.
 - **Identifier grammar at submit.** `claim.submit` rejects a subject or object identifier outside the entity-form grammar of `surfaces.md` §34, using the same function as the read side; the claim is counted rejected. Otherwise an extractor could mint an entity that `about` cannot reach.
-- **Alias checks.** Vocabulary load rejects an alias kind containing `/`, `:` or whitespace. Submit rejects an alias claim whose value is empty or contains whitespace anywhere (awaiting the owner's confirmation, `../decisions/vocabulary.md` §23). Lookup doesn't check kinds against installed vocabularies.
+- **Alias checks.** Vocabulary load rejects an empty alias kind or one containing `/`, `:` or whitespace. Submit rejects an alias claim whose value is empty, whitespace-only, or has whitespace at either end; inner whitespace is allowed (`../decisions/vocabulary.md` §23). Lookup doesn't check kinds against installed vocabularies.

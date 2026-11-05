@@ -1723,8 +1723,23 @@ fn scoped_replay_filters_metadata_and_hidden_replacements_before_limit() {
         assert!(!answer.to_string().contains("hidden:"));
         assert!(!answer.to_string().contains("Secret"));
     }
+    // Non-vacuous: with every scope visible the same form resolves.
+    assert!(
+        !claim_result(
+            &mut everything,
+            "about",
+            json!({"entity": "https:string/hidden:alias"})
+        )["claims"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(
-        claim_result(&mut session, "about", json!({"entity": "hidden:alias"}))["claims"],
+        claim_result(
+            &mut session,
+            "about",
+            json!({"entity": "https:string/hidden:alias"})
+        )["claims"],
         json!([])
     );
 }
@@ -2082,5 +2097,28 @@ fn S7_random_scope_sets_equal_visible_rebuild_when_queried_by_alias() {
                 "mask {mask} {login}"
             );
         }
+    }
+}
+
+/// An entity form outside the three accepted ones is a tool result with `isError`, not a
+/// JSON-RPC error.
+#[test]
+fn S21_a_malformed_entity_form_is_a_tool_error_over_mcp() {
+    let env = seeded();
+    let mut session = env.start();
+    session.initialize();
+    for bad in [
+        "foo:bar",
+        "github:login/",
+        "git hub:login/x",
+        "e_0000000000000000000000000000000A",
+    ] {
+        let call = session.call("about", json!({"entity": bad}));
+        assert!(call.get("error").is_none(), "{bad}: {call}");
+        let message = tool_error(&call, "about");
+        assert!(
+            message.contains("<namespace>:<kind>/<value>"),
+            "{bad}: {message}"
+        );
     }
 }

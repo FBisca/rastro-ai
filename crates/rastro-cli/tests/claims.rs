@@ -1985,3 +1985,117 @@ fn S14_rebuilding_a_copy_of_the_real_database_without_its_extractor_keeps_every_
     assert!(output.status.success(), "{said}");
     assert_eq!(claims(), before, "{said}");
 }
+
+fn entity_type(identifier: &str, kind: &str) -> Value {
+    json!({"subject": {"identifier": identifier, "type": kind}, "predicate": "rastro:type",
+        "object": {"kind": "literal", "value": kind, "datatype": "rastro:type"},
+        "extraction_rule": "state-field", "supports": [first_state_support()]})
+}
+
+#[test]
+fn S24_a_claim_with_an_identifier_outside_the_accepted_forms_is_rejected_and_counted() {
+    let env = Env::new(Some("test-extractor"));
+    env.add_source("project", "test");
+    env.observe(&[state("open")]);
+    let repo = "https://github.com/o/p";
+    let in_repository = |object: &str| {
+        let object = json!({"kind": "entity", "identifier": object, "type": "code:Repository"});
+        claim(
+            "code:in_repository",
+            object,
+            "state-field",
+            first_state_support(),
+        )
+    };
+    let mut bad_subject = claim(
+        "code:state",
+        literal("open"),
+        "state-field",
+        first_state_support(),
+    );
+    bad_subject["subject"]["identifier"] = json!("foo:bar");
+    // Typed in the same submission, so only the subject's form can reject these. The object
+    // check is covered by the `validate` unit test in the core.
+    env.extract(&[
+        typed_pr(),
+        entity_type(repo, "code:Repository"),
+        in_repository(repo),
+        entity_type("foo:bar", "code:PullRequest"),
+        bad_subject,
+        entity_type("github:login", "code:Repository"),
+        in_repository("github:login"),
+    ]);
+    let synced = env.json(&["sync"]);
+    assert_eq!(
+        synced["runs"][0]["extraction"]["counts"],
+        json!({"submitted": 7, "accepted": 3, "rejected": 4, "unchanged": 0}),
+        "{synced}"
+    );
+}
+
+#[test]
+fn S25_alias_kinds_and_values_are_checked_and_inner_whitespace_is_accepted() {
+    let original = include_str!("../../rastro-test-extractor/vocabulary.toml");
+    let with_kind = |kind: &str| {
+        format!(
+            "{original}\n[[aliases]]\nkind = \"{kind}\"\ndomain = [\"code:PullRequest\"]\n\
+             definition = \"A name.\"\nnot_to_confuse_with = \"A login.\"\nexamples = [\"Ana\"]\n\
+             counter_examples = [\"x\"]\nevidence_requirement = \"A structured field.\"\n"
+        )
+    };
+    for kind in ["", "a/b", "a:b", "a b"] {
+        let env = Env::new(Some("test-extractor"));
+        let vocabulary = with_kind(kind);
+        fs::write(
+            env.plugin_dir("test-extractor").join("vocabulary.toml"),
+            vocabulary,
+        )
+        .unwrap();
+        env.add_source("project", "test");
+        env.observe(&[state("open")]);
+        let output = env.command(&["sync", "--json"]).output().unwrap();
+        let synced: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert_eq!(
+            synced["result"]["runs"][0]["extraction"]["state"], "failed",
+            "{kind}"
+        );
+        assert_eq!(env.count("claim"), 0, "{kind}");
+    }
+    let env = Env::new(Some("test-extractor"));
+    fs::write(
+        env.plugin_dir("test-extractor").join("vocabulary.toml"),
+        with_kind("name"),
+    )
+    .unwrap();
+    env.add_source("project", "test");
+    env.observe(&[
+        state("open"),
+        observation(PR, "/a", "Felippe Bisca", "structured"),
+        observation(PR, "/b", "   ", "structured"),
+        observation(PR, "/c", " x", "structured"),
+        observation(PR, "/d", "x ", "structured"),
+    ]);
+    let account = "github:account/7";
+    let named = |n: usize, value: &str, field: &str| {
+        json!({"subject": {"identifier": account, "type": "code:PullRequest"},
+            "predicate": "rastro:alias",
+            "object": {"kind": "literal", "value": value, "datatype": "name"},
+            "extraction_rule": "state-field",
+            "supports": [support(json!(format!("$evidence:{n}")), field, json!(format!("$end:{n}")))]})
+    };
+    env.extract_raw(&[
+        entity_type(account, "code:PullRequest"),
+        named(1, "Felippe Bisca", "/a"),
+        named(2, "   ", "/b"),
+        named(3, " x", "/c"),
+        named(4, "x ", "/d"),
+    ]);
+    let synced = env.json(&["sync"]);
+    assert_eq!(
+        synced["runs"][0]["extraction"]["counts"],
+        json!({"submitted": 5, "accepted": 2, "rejected": 3, "unchanged": 0}),
+        "{synced}"
+    );
+    let about = env.json(&["about", "github:name/Felippe Bisca"]);
+    assert_eq!(about["claims"].as_array().unwrap().len(), 2, "{about}");
+}
