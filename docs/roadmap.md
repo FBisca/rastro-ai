@@ -12,7 +12,7 @@ Status: `todo` · `planning` · `doing` · `done`
 | 1 | **Cited search over one real source** | Run `rastro sync` and `rastro search "x"` over a source you actually use and get evidence back with its citation (source, location, span, capture time). `rastro coverage` tells you when it couldn't look, so silence never passes for "nothing". Walking skeleton: Rust core library, CLI, append-only evidence store, the connector as an out-of-process plugin | — | knowledge §1–3, §11, §15; plugins §1, §4; surfaces §1, §8 | done (`plans/2026-11-04-cited-search-github.plan.md`, spec `specs/evidence.md`) |
 | 2 | **Agents can ask** | Point Claude Code or Codex at Rastro's MCP server and have them call `search` and `coverage`, generated from the same schema as the CLI | 1 | surfaces §2–5, §11–18; plugins §6; knowledge §21 | done (`plans/2026-11-04-agents-can-ask.plan.md`, spec `specs/surfaces.md`) |
 | 3 | **Claims and `about`** | Ask `about(entity)` and `why(claim)` and get observed claims from structured evidence, each traceable to its evidence | 2 | knowledge §5, §7 | done (`plans/2026-11-04-claims-and-about.plan.md`, spec `specs/claims.md`) |
-| 4 | **A second source, one identity** | Add a second source and see one person seen in both as one entity. Exact identifiers merge on their own, fuzzy matches ask you, and you can undo a merge | 3 | knowledge §4; vocabulary §8 | todo |
+| 4 | **A second source, one identity** | Add a second source and see one person seen in both as one entity. Exact identifiers link on their own, fuzzy matches ask you, and you can undo a merge | 3 | knowledge §4; vocabulary §8 | doing (`plans/2026-11-05-second-source-one-identity.plan.md`) |
 
 ## M2: Commitments I can trust
 **Client use: a daily commitments review** that never shows you what's already done or tracked. It replaces the prototype's proposed tasks.
@@ -45,7 +45,7 @@ Status: `todo` · `planning` · `doing` · `done`
 
 | # | Slice | Outcome: from here on you can… | Builds on | Concept / decisions | Status |
 |---|---|---|---|---|---|
-| 13 | **Export and rebuild** | Export evidence, confirmations, rules and outcomes; rebuild the knowledge anywhere; swap an extractor and replay | 7 | knowledge §12; sharing §1; vocabulary §6 | todo |
+| 13 | **Export and rebuild** | Export evidence, confirmations, rules, outcomes and owner intents; rebuild the knowledge anywhere; swap an extractor and replay | 7 | knowledge §12, §53; sharing §1; vocabulary §6 | todo |
 | 14 | **Scopes and forgetting** | Grant scopes per plugin and renderer, and forget evidence with that carrying through to everything derived from it | 7 | knowledge §2, §14; renderers §3 | todo |
 | 15 | **Plugin install and permissions** | Install a plugin in one step, approve its permissions, see permission diffs on update, revoke them. Starter pack included | 2 | plugins §4–5, §11 | todo |
 | 16 | **Sharing** | Share scoped claims with another owner, who receives them as evidence from a person and accepts them explicitly | 13, 14 | sharing (all) | todo |

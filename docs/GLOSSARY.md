@@ -32,7 +32,7 @@ The core's own language. Code, docs, plugins and the interface all use these wor
 | **Context** | What a level hangs on: a person, project, source or channel. The most specific match wins | |
 | **Cell** | One action × context pair, with its level and the trust behind it | |
 | **Proposal / Question** | One pending Propose or Ask | |
-| **Intent** | A typed input from the owner: `confirm`, `accept`, `edit`, `reject`, `answer`, `undo`, `stop`, `promote`, `missed` | |
+| **Intent** | A typed input from the owner: `confirm`, `accept`, `edit`, `reject`, `answer`, `undo`, `stop`, `promote`, `missed`; identity adds `create_person`, `name`, `link`, `cannot_link`, `same_as` | |
 | **Outcome** | What happened to a proposal, question, action run or notification. Recorded as evidence | |
 | **Missed** | The owner reports something Rastro should have caught | |
 | **Trust** | Should it act alone? Derived from outcomes, per cell | Usefulness |
@@ -54,4 +54,4 @@ The core's own language. Code, docs, plugins and the interface all use these wor
 | **Agent tool** | Any runtime that does judgment: Claude Code, Codex, a local model… | Operation, MCP tool |
 | **Quarantine** | A plugin that reads untrusted content can't hold action permissions | |
 | **Share** | Scoped claims sent to another owner, who receives them as evidence from a person | Export |
-| **Export** | Evidence, confirmations, rules and outcomes in an open format, from which the knowledge can be rebuilt | |
+| **Export** | Evidence, confirmations, rules, outcomes and owner intents in an open format, from which the knowledge can be rebuilt | |

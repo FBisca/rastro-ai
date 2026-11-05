@@ -18,3 +18,7 @@ Status: agreed 2026-11-04. North star: `../concept.md` §1 and §7.
     - a statement-node JSON-LD 1.1 serializer sits at the edge;
     - which plugin owns a namespace prefix when two vocabularies collide (two `code` vocabularies) is decided then, and Share disambiguates by vocabulary id and version;
     - cross-machine tie-breaks at equal `captured_at` are settled with export in slice 13; import preserves export order.
+
+## Added 2026-11-05 (roadmap slice 4)
+Architecture: `../adr/0010-identity-and-owner-intents.md`.
+9. **Owner intents export too (amends §1).** Evidence, confirmations, rules, outcomes and owner intents export; derived automatic links don't (`knowledge.md` §53).
