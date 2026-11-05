@@ -4,19 +4,24 @@ use rastro_core::knowledge::{
     AboutOptions, Citation, ClaimSummary, Explanation, JustificationView, WhyOptions,
 };
 
-/// Subjects of `rastro:alias` claims matching a canonical alias `<namespace>:<kind>/<value>` in `?1`.
+/// Claims of `rastro:alias` (id, subject, subject identifier, status) matching a canonical alias `<namespace>:<kind>/<value>` in `?1`.
 /// Split on the first `:` then the first `/`; kind and value compare exactly (no case folding), and
 /// the subject's identifier must start with `<namespace>:`. Anything else matches nothing.
-pub(super) const ALIAS_SUBJECTS: &str = "SELECT c.subject, e.identifier FROM claim c JOIN entity e ON e.id = c.subject \
- WHERE c.predicate = 'rastro:alias' AND c.status = 'observed' AND instr(?1, ':') > 1 \
+/// No status is tested here: a scoped read selects roots without stored (full-scope) status.
+pub(super) const ALIAS_CLAIMS: &str = "SELECT c.id AS claim, c.subject, e.identifier, c.status FROM claim c JOIN entity e ON e.id = c.subject \
+ WHERE c.predicate = 'rastro:alias' AND instr(?1, ':') > 1 \
  AND instr(substr(?1, instr(?1, ':') + 1), '/') > 1 \
  AND c.object_datatype = substr(substr(?1, instr(?1, ':') + 1), 1, instr(substr(?1, instr(?1, ':') + 1), '/') - 1) \
  AND c.object_value = substr(substr(?1, instr(?1, ':') + 1), instr(substr(?1, instr(?1, ':') + 1), '/') + 1) \
  AND c.object_value <> '' \
  AND substr(e.identifier, 1, instr(?1, ':')) = substr(?1, 1, instr(?1, ':'))";
+/// Lookup counts every status except these; a superseded alias is the historical candidate.
+const NOT_LOOKED_UP: &str = "('hypothesis', 'retracted')";
+/// Statuses that mark a candidate (and an alias shown on a claim) as current.
+const CURRENT: &str = "('observed', 'confirmed')";
 impl View<'_> {
     fn aliases(&self, entity: &str) -> Result<Vec<String>> {
-        Ok(self.0.prepare("SELECT DISTINCT object_value FROM claim WHERE subject = ?1 AND predicate = 'rastro:alias' AND status = 'observed' ORDER BY object_value")?
+        Ok(self.0.prepare(&format!("SELECT DISTINCT object_value FROM claim WHERE subject = ?1 AND predicate = 'rastro:alias' AND status IN {CURRENT} ORDER BY object_value"))?
             .query_map([entity], |row| row.get(0))?.collect::<Result<_, _>>()?)
     }
     fn entity(&self, id: &str) -> Result<Entity> {
@@ -83,19 +88,22 @@ impl View<'_> {
         let resolved = match exact {
             Some(id) => Some(id),
             None => {
-                let candidates = self.0.prepare(&format!("SELECT DISTINCT s.subject, s.identifier FROM ({ALIAS_SUBJECTS}) s ORDER BY s.subject"))?
-                    .query_map([entity], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?.collect::<Result<Vec<_>, _>>()?;
+                let candidates = self.0.prepare(&format!("SELECT s.subject, s.identifier, max(s.status IN {CURRENT}) FROM ({ALIAS_CLAIMS}) s WHERE s.status NOT IN {NOT_LOOKED_UP} GROUP BY s.subject ORDER BY s.subject"))?
+                    .query_map([entity], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, bool>(2)?)))?.collect::<Result<Vec<_>, _>>()?;
                 if candidates.len() > 1 {
                     bail!(
                         "ambiguous alias {entity}; candidates: {}",
                         candidates
                             .iter()
-                            .map(|(id, identifier)| format!("{id} ({identifier})"))
+                            .map(|(id, identifier, current)| format!(
+                                "{id} ({identifier}): {}",
+                                if *current { "current" } else { "historical" }
+                            ))
                             .collect::<Vec<_>>()
                             .join(", ")
                     );
                 }
-                candidates.into_iter().next().map(|(id, _)| id)
+                candidates.into_iter().next().map(|(id, _, _)| id)
             }
         };
         let Some(entity) = resolved else {

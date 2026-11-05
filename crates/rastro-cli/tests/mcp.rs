@@ -1481,6 +1481,25 @@ impl Env {
         datatype: &str,
         day: i64,
     ) -> String {
+        self.claim_at(
+            scope,
+            CLAIM_ENTITY,
+            predicate,
+            (value, datatype),
+            predicate == "code:state",
+            day,
+        )
+    }
+    /// A claim about `location`, read in `scope` on `day`; a scalar's newer read supersedes.
+    fn claim_at(
+        &self,
+        scope: &str,
+        location: &str,
+        predicate: &str,
+        (value, datatype): (&str, &str),
+        scalar: bool,
+        day: i64,
+    ) -> String {
         use rastro_core::claims::{self, Entity, Object, ObservedClaim, Support};
         use rastro_core::{Evidence, Scope, Source, Storage, TrustClass};
         let source = Source::github(format!("claims-{scope}"), "o/p".into(), Scope(scope.into()));
@@ -1496,7 +1515,7 @@ impl Env {
         let evidence = Evidence {
             source: source.name.clone(),
             scope: source.scope.clone(),
-            location: CLAIM_ENTITY.into(),
+            location: location.into(),
             field: format!("/{predicate}"),
             start: 0,
             end: value.len() as u64,
@@ -1514,7 +1533,7 @@ impl Env {
             .rev()
             .find(|(_, e)| e.field == evidence.field && e.quote == value)
             .unwrap();
-        let subject = Entity::new(CLAIM_ENTITY.into(), "".into());
+        let subject = Entity::new(location.into(), "".into());
         let object = Object::Literal {
             value: value.into(),
             datatype: datatype.into(),
@@ -1528,7 +1547,7 @@ impl Env {
                 subject,
                 predicate: predicate.into(),
                 object,
-                scalar: predicate == "code:state",
+                scalar,
                 type_ancestors: Vec::new(),
                 supports: std::collections::BTreeSet::from([Support {
                     evidence_id,
@@ -1817,5 +1836,171 @@ fn random_scope_sets_equal_visible_rebuild_and_ignore_hidden_inputs() {
         db.execute("DELETE FROM justification_span WHERE evidence_id IN (SELECT id FROM evidence WHERE scope = ?1)", [hidden]).unwrap();
         db.execute("DELETE FROM justification WHERE NOT EXISTS (SELECT 1 FROM justification_span s WHERE s.justification_id = justification.id)", []).unwrap();
         assert_eq!(before, claim_result(&mut scoped, "about", args));
+    }
+}
+
+const ACCOUNT: &str = "github:account/1";
+const OTHER_ACCOUNT: &str = "github:account/2";
+fn alias_at(env: &Env, scope: &str, account: &str, login: &str, day: i64) -> String {
+    env.claim_at(scope, account, "rastro:alias", (login, "login"), true, day)
+}
+/// The answer of a session over `env` to `about` on `entity`, as a result or an error text.
+fn about_text(session: &mut Session, entity: &str) -> Value {
+    let response = session.call(
+        "about",
+        json!({"entity": entity, "history": true, "limit": 50}),
+    );
+    if response["result"]["isError"] == true {
+        return response["result"]["structuredContent"]["error"].clone();
+    }
+    portable_answer(ok_result(&response["result"])["result"].clone())
+}
+
+/// claims/R31: a hidden-scope read of the same location never supersedes a visible alias
+#[test]
+fn S5_a_hidden_supersession_does_not_drop_a_visible_alias() {
+    let env = Env::new();
+    alias_at(&env, "personal", ACCOUNT, "old", 0);
+    env.claim_at(
+        "personal",
+        ACCOUNT,
+        "code:state",
+        ("active", "string"),
+        true,
+        0,
+    );
+    alias_at(&env, "work", ACCOUNT, "new", 1);
+    // Another account really holds "old" as current, so marks are observable.
+    alias_at(&env, "personal", OTHER_ACCOUNT, "old", 0);
+    // Non-vacuous: with everything visible the work read supersedes the personal "old".
+    let mut all = env.scoped(&[]);
+    let text = about_text(&mut all, "github:login/old");
+    assert!(
+        text.as_str()
+            .unwrap()
+            .contains("(github:account/1): historical"),
+        "{text}"
+    );
+    // The oracle holds only the personal evidence.
+    let rebuilt = Env::new();
+    alias_at(&rebuilt, "personal", ACCOUNT, "old", 0);
+    rebuilt.claim_at(
+        "personal",
+        ACCOUNT,
+        "code:state",
+        ("active", "string"),
+        true,
+        0,
+    );
+    alias_at(&rebuilt, "personal", OTHER_ACCOUNT, "old", 0);
+    let mut oracle = rebuilt.scoped(&[]);
+    let expected = about_text(&mut oracle, "github:login/old");
+    assert!(
+        expected
+            .as_str()
+            .unwrap()
+            .contains("(github:account/1): current"),
+        "{expected}"
+    );
+    let mut scoped = env.scoped(&["personal"]);
+    assert_eq!(about_text(&mut scoped, "github:login/old"), expected);
+    assert!(!expected.to_string().contains("new"));
+}
+
+/// claims/R31: one location read in two scopes with different logins; the visible one decides
+#[test]
+fn S8_one_location_in_two_scopes_resolves_only_through_the_visible_scope() {
+    let env = Env::new();
+    alias_at(&env, "personal", ACCOUNT, "mine", 0);
+    env.claim_at(
+        "personal",
+        ACCOUNT,
+        "code:state",
+        ("active", "string"),
+        true,
+        0,
+    );
+    alias_at(&env, "work", ACCOUNT, "theirs", 1);
+    alias_at(&env, "personal", OTHER_ACCOUNT, "theirs", 0);
+    let mut personal = env.scoped(&["personal"]);
+    let mut work = env.scoped(&["work"]);
+    // "theirs" is the work login of account 1 and personal-only for account 2.
+    let by_mine = about_text(&mut personal, "github:login/mine");
+    assert_eq!(by_mine, about_text(&mut personal, ACCOUNT));
+    assert!(
+        by_mine["claims"].as_array().unwrap().len() >= 2,
+        "{by_mine}"
+    );
+    let theirs = about_text(&mut personal, "github:login/theirs");
+    assert_eq!(theirs, about_text(&mut personal, OTHER_ACCOUNT));
+    assert_eq!(
+        about_text(&mut work, "github:login/mine"),
+        about_text(&mut work, "github:login/nobody")
+    );
+    // Both scopes together: "theirs" is held by both accounts, current on account 1 only
+    // through the work read, and account 2 holds it too.
+    let mut both = env.scoped(&["personal", "work"]);
+    let text = about_text(&mut both, "github:login/theirs");
+    assert!(
+        text.as_str()
+            .unwrap()
+            .contains("(github:account/1): current"),
+        "{text}"
+    );
+    assert!(
+        text.as_str()
+            .unwrap()
+            .contains("(github:account/2): current"),
+        "{text}"
+    );
+}
+
+/// surfaces/R28: the random scope-set oracle also queries by alias
+#[test]
+fn S7_random_scope_sets_equal_visible_rebuild_when_queried_by_alias() {
+    let scopes = ["personal", "work", "health"];
+    let mut seed = 0x51_u64;
+    let mut rows = Vec::new();
+    for day in 0..8 {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        let account = if seed & 2 == 0 {
+            ACCOUNT
+        } else {
+            OTHER_ACCOUNT
+        };
+        let login = ["ana", "bea", "cy"][(seed >> 40) as usize % 3];
+        rows.push((scopes[(seed >> 32) as usize % 3], account, login, day));
+    }
+    let mut masks = std::collections::BTreeSet::new();
+    while masks.len() < 7 {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        masks.insert(((seed >> 32) % 7 + 1) as u8);
+    }
+    for mask in masks {
+        let visible: Vec<_> = scopes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| (mask & (1 << i) != 0).then_some(*s))
+            .collect();
+        let all = Env::new();
+        let rebuilt = Env::new();
+        for (scope, account, login, day) in &rows {
+            alias_at(&all, scope, account, login, *day);
+            all.claim_at(scope, account, "code:state", (login, "string"), true, *day);
+            if visible.contains(scope) {
+                alias_at(&rebuilt, scope, account, login, *day);
+                rebuilt.claim_at(scope, account, "code:state", (login, "string"), true, *day);
+            }
+        }
+        let mut scoped = all.scoped(&visible);
+        let mut oracle = rebuilt.scoped(&[]);
+        for login in ["ana", "bea", "cy"] {
+            let entity = format!("github:login/{login}");
+            assert_eq!(
+                about_text(&mut scoped, &entity),
+                about_text(&mut oracle, &entity),
+                "mask {mask} {login}"
+            );
+        }
     }
 }
