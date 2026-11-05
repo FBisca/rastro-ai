@@ -63,7 +63,27 @@ pub trait Snapshot {
         anyhow::bail!("storage does not support why")
     }
 
-    /// Unscoped stored claim state, ready for later scoped recomputation.
+    /// Exact claim state from the visible justifications. Empty scopes allow all.
+    fn explain_scoped(
+        &self,
+        claim: &str,
+        options: &crate::knowledge::WhyOptions,
+        scopes: &[Scope],
+    ) -> Result<Option<crate::knowledge::Explanation>> {
+        anyhow::ensure!(scopes.is_empty(), "storage does not support scoped why");
+        self.explain(claim, options)
+    }
+    fn about_scoped(
+        &self,
+        entity: &str,
+        options: &crate::knowledge::AboutOptions,
+        scopes: &[Scope],
+    ) -> Result<Vec<crate::knowledge::ClaimSummary>> {
+        anyhow::ensure!(scopes.is_empty(), "storage does not support scoped about");
+        self.about(entity, options)
+    }
+
+    /// Unscoped stored claim state.
     fn about(
         &self,
         _entity: &str,

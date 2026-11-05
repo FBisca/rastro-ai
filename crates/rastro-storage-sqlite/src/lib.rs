@@ -19,6 +19,9 @@ mod knowledge;
 /// `(name, sql)`, named `YYYYMMDDHHmm_<what>` so migrations from different branches
 /// order by time. Never edit one that has shipped; add a new one.
 mod lifecycle;
+mod scoped;
+#[doc(hidden)]
+pub use scoped::{cache_len as scoped_cache_len, clear_cache as clear_scoped_cache};
 
 const MIGRATIONS: [(&str, &str); 8] = [
     (
@@ -174,6 +177,11 @@ const PENDING_EVIDENCE: &str = "FROM evidence e
 
 impl ReadStorage for SqliteStorage {
     fn read<T>(&mut self, work: impl FnOnce(&dyn Snapshot) -> Result<T>) -> Result<T> {
+        self.read_view(|view| work(view))
+    }
+}
+impl SqliteStorage {
+    fn read_view<T>(&mut self, work: impl FnOnce(&View) -> Result<T>) -> Result<T> {
         // A deferred transaction pins its snapshot at the first read, which is the migration
         // check below, so everything `work` reads is as of that moment.
         let transaction = self
@@ -182,6 +190,19 @@ impl ReadStorage for SqliteStorage {
             .map_err(unreadable)?;
         check_migrations(&transaction, &MIGRATIONS).map_err(unreadable)?;
         work(&View(&transaction))
+    }
+
+    /// A scoped `about` under an explicit work budget, measured in visible justification
+    /// spans (tests only; the trait method uses the default budget).
+    #[doc(hidden)]
+    pub fn about_scoped_within(
+        &mut self,
+        entity: &str,
+        options: &rastro_core::knowledge::AboutOptions,
+        scopes: &[Scope],
+        budget: usize,
+    ) -> Result<Vec<rastro_core::knowledge::ClaimSummary>> {
+        self.read_view(|view| view.about_scoped_within(entity, options, scopes, budget))
     }
 }
 /// A read that failed because SQLite needed to write (to create the WAL side files) becomes a
@@ -875,7 +896,51 @@ impl View<'_> {
         .transpose()
     }
 }
+impl View<'_> {
+    fn about_scoped_within(
+        &self,
+        entity: &str,
+        options: &rastro_core::knowledge::AboutOptions,
+        scopes: &[Scope],
+        budget: usize,
+    ) -> Result<Vec<rastro_core::knowledge::ClaimSummary>> {
+        if scopes.is_empty() {
+            return self.about_claims(entity, options);
+        }
+        let projection =
+            scoped::projection(self.0, scopes, scoped::Target::Entity(entity), budget)?;
+        let projection = projection.lock().unwrap_or_else(|e| e.into_inner());
+        View(&projection).about_claims(entity, options)
+    }
+}
 impl Snapshot for View<'_> {
+    fn about_scoped(
+        &self,
+        entity: &str,
+        options: &rastro_core::knowledge::AboutOptions,
+        scopes: &[Scope],
+    ) -> Result<Vec<rastro_core::knowledge::ClaimSummary>> {
+        self.about_scoped_within(entity, options, scopes, scoped::WORK_BUDGET)
+    }
+    fn explain_scoped(
+        &self,
+        claim: &str,
+        options: &rastro_core::knowledge::WhyOptions,
+        scopes: &[Scope],
+    ) -> Result<Option<rastro_core::knowledge::Explanation>> {
+        if scopes.is_empty() {
+            return self.explanation(claim, options);
+        }
+        let projection = scoped::projection(
+            self.0,
+            scopes,
+            scoped::Target::Claim(claim),
+            scoped::WORK_BUDGET,
+        )?;
+        let projection = projection.lock().unwrap_or_else(|e| e.into_inner());
+        View(&projection).explanation(claim, options)
+    }
+
     fn explain(
         &self,
         claim: &str,

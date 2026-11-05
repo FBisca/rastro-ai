@@ -1,4 +1,4 @@
-//! Bounded claim reads. Unscoped reads use the published state; surfaces supply no scopes yet.
+//! Bounded claim reads. Scoped reads recompute from visible justifications.
 use crate::claims::ClaimView;
 use crate::{Coverage, Rastro, ReadStorage, Reader, Storage, read_only};
 use anyhow::{Result, ensure};
@@ -70,10 +70,6 @@ impl<S: ReadStorage> Reader<S> {
     pub fn about(&mut self, entity: &str, options: &AboutOptions) -> Result<About> {
         validate_entity(entity)?;
         ensure!(
-            self.scopes.is_empty(),
-            "scoped claim reads are not available yet"
-        );
-        ensure!(
             (1..=50).contains(&options.limit),
             "limit must be from 1 to 50"
         );
@@ -83,7 +79,7 @@ impl<S: ReadStorage> Reader<S> {
             &self.scopes,
             |view, unfinished, live| {
                 let claims = match view {
-                    Some(view) => view.about(entity, options)?,
+                    Some(view) => view.about_scoped(entity, options, &self.scopes)?,
                     None => vec![],
                 };
                 let coverage = read_only::coverage_of(
@@ -94,8 +90,14 @@ impl<S: ReadStorage> Reader<S> {
                     false,
                     &self.scopes,
                 )?;
-                let extraction =
-                    extraction_of(view, &self.locations, &self.config.sources, &coverage, live)?;
+                let extraction = extraction_of(
+                    view,
+                    &self.locations,
+                    &self.config.sources,
+                    &coverage,
+                    live,
+                    &self.scopes,
+                )?;
                 Ok(answer(claims, options.limit, coverage, extraction))
             },
         )
@@ -117,6 +119,7 @@ impl<S: Storage> Rastro<S> {
                 &self.config.sources,
                 &coverage,
                 true,
+                &[],
             )?;
             Ok(answer(
                 view.about(entity, options)?,
@@ -205,10 +208,6 @@ impl Default for WhyOptions {
 impl<S: ReadStorage> Reader<S> {
     pub fn explain(&mut self, claim: &str, options: &WhyOptions) -> Result<Explanation> {
         ensure!(
-            self.scopes.is_empty(),
-            "scoped claim reads are not available yet"
-        );
-        ensure!(
             (1..=50).contains(&options.limit),
             "limit must be from 1 to 50"
         );
@@ -218,7 +217,7 @@ impl<S: ReadStorage> Reader<S> {
             &self.scopes,
             |view, unfinished, live| {
                 let mut why = view
-                    .map(|view| view.explain(claim, options))
+                    .map(|view| view.explain_scoped(claim, options, &self.scopes))
                     .transpose()?
                     .flatten()
                     .ok_or_else(|| anyhow::anyhow!("unknown claim: {claim}"))?;
@@ -236,6 +235,7 @@ impl<S: ReadStorage> Reader<S> {
                     &self.config.sources,
                     &why.coverage,
                     live,
+                    &self.scopes,
                 )?;
                 Ok(why)
             },
@@ -260,6 +260,7 @@ impl<S: Storage> Rastro<S> {
                 &self.config.sources,
                 &why.coverage,
                 true,
+                &[],
             )?;
             Ok(why)
         })
@@ -273,10 +274,11 @@ fn extraction_of(
     config: &[crate::Source],
     coverage: &[Coverage],
     live: bool,
+    scopes: &[crate::Scope],
 ) -> Result<Vec<crate::runs::ExtractionPair>> {
     use crate::runs::{ExtractionFacts, ExtractionPair, ExtractionStatus, extraction_pair};
     let bindings = view
-        .map(|view| view.extraction_sources(&[]))
+        .map(|view| view.extraction_sources(scopes))
         .transpose()?
         .unwrap_or_default();
     coverage
@@ -290,7 +292,9 @@ fn extraction_of(
                         .iter()
                         .find(|(source, _)| source.name == pair.source)
                 });
-            let configured = config.iter().find(|source| source.name == pair.source);
+            let configured = config.iter().find(|source| {
+                source.name == pair.source && (scopes.is_empty() || scopes.contains(&source.scope))
+            });
             let default = configured
                 .and_then(|source| {
                     crate::host::discover(locations, &source.connector, "connector").ok()

@@ -23,7 +23,7 @@ fn S26_about_and_why_are_additive_v2_and_existing_schemas_are_unchanged() {
     let ops = generated["x-operations"].as_array().unwrap();
     for name in ["about", "why"] {
         let op = ops.iter().find(|op| op["name"] == name).unwrap();
-        assert_eq!(op["surfaces"], json!(["cli"]));
+        assert_eq!(op["surfaces"], json!(["cli", "mcp"]));
         assert!(op["input"]["properties"].get("limit").is_some());
     }
     // Resolve referenced definitions: unchanged roots cannot hide changed shared types.
