@@ -117,6 +117,44 @@ macro_rules! operations {
         $($groups)*
         operations!(@generate $($entries)*);
     };
+    // A group with one level of subgroups: `group / Enum { leaves } with { Sub / SubEnum { leaves } }`.
+    (@collect [$($variants:tt)*] [$($groups:tt)*] [$($entries:tt)*]
+        $(#[$meta:meta])* $group:ident / $enum:ident {
+            $( $variant:ident($input:ident => $output:ident) as $response:ident {
+                $($details:tt)*
+            } ),* $(,)?
+        } with {
+            $( $(#[$submeta:meta])* $sub:ident / $subenum:ident {
+                $( $subvariant:ident($subinput:ident => $suboutput:ident) as $subresponse:ident {
+                    $($subdetails:tt)*
+                } ),* $(,)?
+            } )*
+        }
+        $($rest:tt)*
+    ) => {
+        operations!(@collect
+            [$($variants)* $(#[$meta])* $group { #[command(subcommand)] command: $enum },]
+            [$($groups)* #[derive(clap::Subcommand, Debug)] pub enum $enum {
+                $( $variant($input), )*
+                $( $(#[$submeta])* $sub { #[command(subcommand)] command: $subenum }, )*
+            }
+            $( #[derive(clap::Subcommand, Debug)] pub enum $subenum {
+                $( $subvariant($subinput), )*
+            } )*]
+            [$($entries)* $(
+                ($input => $output, $response, value,
+                 [Request::$group { command: $enum::$variant(value) }],
+                 [Request::$group { command: $enum::$variant(value) }],
+                 { $($details)* })
+            )* $( $(
+                ($subinput => $suboutput, $subresponse, value,
+                 [Request::$group { command: $enum::$sub { command: $subenum::$subvariant(value) } }],
+                 [Request::$group { command: $enum::$sub { command: $subenum::$subvariant(value) } }],
+                 { $($subdetails)* })
+            )* )*]
+            $($rest)*
+        );
+    };
     (@collect [$($variants:tt)*] [$($groups:tt)*] [$($entries:tt)*]
         $(#[$meta:meta])* $group:ident / $enum:ident {
             $( $variant:ident($input:ident => $output:ident) as $response:ident {
@@ -264,6 +302,31 @@ operations! {
     }
     Why(WhyRequest => WhyResult) {
         slot: 6, name: "why", surfaces: [Cli, Mcp], read_only: true, reader: run_read, cli_read_path: true
+    }
+    /// Owner identity: Persons, links between accounts and Persons, and merges. Writes are CLI only.
+    Identity / IdentityRequest {
+        Me(IdentityMeRequest => IdentityPersonResult) as IdentityMe {
+            slot: 9, name: "identity.me", surfaces: [Cli], read_only: false
+        },
+        Link(IdentityLinkRequest => IdentityWriteResult) as IdentityLink {
+            slot: 11, name: "identity.link", surfaces: [Cli], read_only: false
+        },
+        Merge(IdentityMergeRequest => IdentityWriteResult) as IdentityMerge {
+            slot: 12, name: "identity.merge", surfaces: [Cli], read_only: false
+        },
+        Undo(IdentityUndoRequest => IdentityWriteResult) as IdentityUndo {
+            slot: 13, name: "identity.undo", surfaces: [Cli], read_only: false
+        },
+        History(IdentityHistoryRequest => IdentityHistoryResult) as IdentityHistory {
+            slot: 14, name: "identity.history", surfaces: [Cli], read_only: true
+        },
+    } with {
+        /// Create Persons.
+        Person / IdentityPersonRequest {
+            Create(IdentityPersonCreateRequest => IdentityPersonResult) as IdentityPersonCreate {
+                slot: 10, name: "identity.person.create", surfaces: [Cli], read_only: false
+            },
+        }
     }
 }
 

@@ -15,6 +15,7 @@ const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 /// What `PRAGMA user_version` 1 and 2 meant, before migrations were tracked by name. Frozen.
 const LEGACY: [&str; 2] = ["202611041200_initial", "202611041500_evidence_insert_guard"];
 
+mod identity;
 mod knowledge;
 /// `(name, sql)`, named `YYYYMMDDHHmm_<what>` so migrations from different branches
 /// order by time. Never edit one that has shipped; add a new one.
@@ -23,7 +24,7 @@ mod scoped;
 #[doc(hidden)]
 pub use scoped::{cache_len as scoped_cache_len, clear_cache as clear_scoped_cache};
 
-const MIGRATIONS: [(&str, &str); 8] = [
+const MIGRATIONS: [(&str, &str); 9] = [
     (
         "202611041200_initial",
         include_str!("../migrations/202611041200_initial.sql"),
@@ -55,6 +56,10 @@ const MIGRATIONS: [(&str, &str); 8] = [
     (
         "202611061200_knowledge_v2",
         include_str!("../migrations/202611061200_knowledge_v2.sql"),
+    ),
+    (
+        "202611071000_owner_intents",
+        include_str!("../migrations/202611071000_owner_intents.sql"),
     ),
 ];
 
@@ -165,6 +170,10 @@ impl SqliteStorage {
 }
 /// Reads through one connection; for a read-only open, inside one transaction.
 struct View<'a>(&'a Connection);
+
+/// Claims no justification holds any more: no evidence justification and no owner intent.
+pub(crate) const UNJUSTIFIED: &str = "SELECT id FROM claim c WHERE NOT EXISTS (SELECT 1 FROM justification j WHERE j.claim_id = c.id) \
+    AND NOT EXISTS (SELECT 1 FROM intent_justification i WHERE i.claim_id = c.id)";
 
 /// The observations of a pair past an extractor version's checkpoint (`?1` source, `?2` scope,
 /// `?3` extractor, `?4` version, `?5` vocabulary version or NULL for any): what the next run
@@ -633,10 +642,12 @@ impl Storage for SqliteStorage {
             }
         }
         // Claims removed by retirement disappear, together with dangling presentation links.
-        transaction.execute("DELETE FROM claim_link WHERE from_claim IN (SELECT id FROM claim c WHERE NOT EXISTS
-            (SELECT 1 FROM justification j WHERE j.claim_id = c.id)) OR to_claim IN (SELECT id FROM claim c WHERE NOT EXISTS
-            (SELECT 1 FROM justification j WHERE j.claim_id = c.id))", [])?;
-        transaction.execute("DELETE FROM claim WHERE NOT EXISTS (SELECT 1 FROM justification j WHERE j.claim_id = claim.id)", [])?;
+        // An intent-backed claim stays: the intents, not the evidence, hold it.
+        transaction.execute(&format!("DELETE FROM claim_link WHERE from_claim IN ({UNJUSTIFIED}) OR to_claim IN ({UNJUSTIFIED})"), [])?;
+        transaction.execute(
+            &format!("DELETE FROM claim WHERE id IN ({UNJUSTIFIED})"),
+            [],
+        )?;
         if lifecycle::staging(&transaction)? {
             let components = affected
                 .iter()
@@ -673,6 +684,23 @@ impl Storage for SqliteStorage {
     }
     fn finish_claims_rebuild(&mut self, publish: bool) -> Result<usize> {
         lifecycle::finish_rebuild(&mut self.connection, publish)
+    }
+    fn issue_intents<T>(
+        &mut self,
+        plan: impl FnOnce(&dyn Snapshot) -> Result<(Vec<rastro_core::identity::Intent>, T)>,
+    ) -> Result<(Vec<rastro_core::identity::Intent>, T)> {
+        // One immediate transaction: the plan, the checks, the rows and the claims they back
+        // see and write one state.
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let (intents, out) = plan(&View(&transaction))?;
+        let stored = identity::insert_all(&transaction, intents)?;
+        identity::apply(&transaction)?;
+        // An intent write changes the projection, so it publishes like any other projection write.
+        lifecycle::publish(&transaction)?;
+        transaction.commit()?;
+        Ok((stored, out))
     }
     fn carry_over_pair(&mut self, source: &Source, extractor: &str) -> Result<usize> {
         let transaction = self.connection.transaction()?;
@@ -812,6 +840,20 @@ impl Snapshot for View<'_> {
         self.about_claims(entity, options)
     }
 
+    fn intents(&self) -> Result<Vec<rastro_core::identity::Intent>> {
+        identity::load(self.0)
+    }
+    fn resolve_entity(&self, form: &str) -> Result<Option<(String, String)>> {
+        let Some(id) = self.resolve(form)? else {
+            return Ok(None);
+        };
+        let identifier: String =
+            self.0
+                .query_row("SELECT identifier FROM entity WHERE id = ?1", [&id], |r| {
+                    r.get(0)
+                })?;
+        Ok(Some((id, identifier)))
+    }
     fn stored_pairs(&self, scopes: &[Scope]) -> Result<Vec<Pair>> {
         // A source row or a run names a pair: every window and every evidence row comes from
         // a run, so those legs would add nothing. The rule is the one last stored for the
@@ -1192,7 +1234,7 @@ mod projection_schema_tests {
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
-        assert_eq!(tables.len(), 7);
+        assert_eq!(tables.len(), 8);
         for table in tables {
             assert!(
                 db.query_row(

@@ -1,6 +1,8 @@
 //! Request types: serde (JSON input), schemars (schema) and clap (command line) from one definition.
 //! A doc comment is both the CLI help and the schema description.
-pub use crate::catalog::{ClaimsRequest, IndexRequest, Request, SourceRequest};
+pub use crate::catalog::{
+    ClaimsRequest, IdentityPersonRequest, IdentityRequest, IndexRequest, Request, SourceRequest,
+};
 use crate::{catalog::Surface, results::*};
 use anyhow::{Context, Result, ensure};
 use clap::Args;
@@ -301,7 +303,7 @@ impl ClaimsRebuildRequest {
 #[derive(Args, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AboutRequest {
-    /// Entity id, canonical alias (`<namespace>:<kind>/<value>`, e.g. `github:login/octocat`) or exact canonical URL.
+    /// `me` (the owner's Person), entity id, canonical alias (`<namespace>:<kind>/<value>`, e.g. `github:login/octocat`) or exact canonical URL.
     pub entity: String,
     /// Only claims whose known interval started at or after this RFC 3339 time.
     #[arg(long)]
@@ -338,5 +340,89 @@ impl WhyRequest {
             limit: self.limit.0,
             full: self.full,
         }
+    }
+}
+
+/// Create the owner's own Person, once; running it again returns the same Person and records nothing.
+#[derive(Args, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IdentityMeRequest {}
+impl IdentityMeRequest {
+    pub(crate) fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<IdentityPersonResult> {
+        IdentityPersonResult::of(rastro.identity_me()?)
+    }
+}
+
+/// Create a Person with a name.
+#[derive(Args, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IdentityPersonCreateRequest {
+    /// The Person's name; it becomes the alias `rastro:name/<name>`.
+    #[arg(long)]
+    pub name: String,
+}
+impl IdentityPersonCreateRequest {
+    pub(crate) fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<IdentityPersonResult> {
+        IdentityPersonResult::of(rastro.create_person(&self.name)?)
+    }
+}
+
+/// Link an account to a Person: the account is held by the Person. Clears a cannot-link between them.
+#[derive(Args, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IdentityLinkRequest {
+    /// The account: entity id, canonical alias (e.g. `github:login/octocat`) or exact canonical URL.
+    pub account: String,
+    /// The Person: `me`, its identifier (`rastro:person/<id>`), entity id or name alias (`rastro:name/<name>`).
+    pub person: String,
+}
+impl IdentityLinkRequest {
+    pub(crate) fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<IdentityWriteResult> {
+        Ok(IdentityWriteResult::of(
+            rastro.link(&self.account, &self.person)?,
+        ))
+    }
+}
+
+/// Merge two Persons into one. Accounts never merge. Clears a cannot-link between them.
+#[derive(Args, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IdentityMergeRequest {
+    /// One Person: `me`, its identifier, entity id or name alias.
+    pub person: String,
+    /// The other Person.
+    pub other: String,
+}
+impl IdentityMergeRequest {
+    pub(crate) fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<IdentityWriteResult> {
+        Ok(IdentityWriteResult::of(
+            rastro.merge(&self.person, &self.other)?,
+        ))
+    }
+}
+
+/// Undo one earlier intent. Undoing a link or a merge also records a cannot-link for its pair.
+#[derive(Args, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IdentityUndoRequest {
+    /// Id of the intent to undo, as `rastro identity history` lists it.
+    pub intent: String,
+}
+impl IdentityUndoRequest {
+    pub(crate) fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<IdentityWriteResult> {
+        Ok(IdentityWriteResult::of(rastro.undo(&self.intent)?))
+    }
+}
+
+/// List the owner intents that name an entity, in the order they were accepted.
+#[derive(Args, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IdentityHistoryRequest {
+    /// `me`, entity id, canonical alias or exact canonical URL.
+    pub entity: String,
+}
+impl IdentityHistoryRequest {
+    pub(crate) fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<IdentityHistoryResult> {
+        rastro.identity_history(&self.entity)
     }
 }

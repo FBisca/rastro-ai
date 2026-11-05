@@ -48,3 +48,7 @@ CREATE TEMP TABLE extraction_checkpoint (
     last_evidence_id INTEGER NOT NULL, vocabulary_version TEXT NOT NULL,
     PRIMARY KEY (extractor, extractor_version, source, scope)
 ) WITHOUT ROWID;
+CREATE TEMP TABLE intent_justification (
+    id TEXT PRIMARY KEY, claim_id TEXT NOT NULL REFERENCES claim(id), intent_id TEXT NOT NULL
+);
+CREATE INDEX temp.intent_justification_by_claim ON intent_justification (claim_id);

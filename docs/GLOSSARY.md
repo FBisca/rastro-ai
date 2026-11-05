@@ -6,6 +6,7 @@ The core's own language. Code, docs, plugins and the interface all use these wor
 |---|---|---|
 | **Owner** | The person a Rastro instance serves. Owns one graph | User: anyone looking through a renderer |
 | **Person** | A human entity. In the core because reach and scopes need to know who is involved | Owner |
+| **Account** | A source's account for a human or a bot. The core's supertype `rastro:Account`; a vocabulary declares which of its types are accounts. Only an account is held by a Person | Person |
 | **Entity** | One identified thing in the world: a person, project, commitment… | Alias |
 | **Alias** | An identifier or name that points to an entity (an email, handle, nickname, ID) | |
 | **Merge** | A claim that two entities of the same kind are one. Reversible. An account is linked to a Person by a claim, never merged into it | |

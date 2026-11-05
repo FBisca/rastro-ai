@@ -5,6 +5,20 @@
 pub const FORMS: &str = "an entity id (`e_` and 32 lowercase hex digits), an exact canonical URL \
 (`<scheme>://<rest>`), or a canonical alias `<namespace>:<kind>/<value>`";
 
+/// What a read's operation error says: the reserved `me` and the three forms.
+pub const READ_FORMS: &str = "`me` (the owner's Person), an entity id (`e_` and 32 lowercase hex \
+digits), an exact canonical URL (`<scheme>://<rest>`), or a canonical alias `<namespace>:<kind>/<value>`";
+
+/// `Ok` when `entity` names an entity on a read: the reserved `me`, or one of the three forms.
+/// Submit never accepts `me` (it isn't an identifier).
+pub fn check_reference(entity: &str) -> Result<(), String> {
+    if entity == crate::identity::ME || check(entity).is_ok() {
+        Ok(())
+    } else {
+        Err(format!("entity {entity:?} must be {READ_FORMS}"))
+    }
+}
+
 /// `Ok` when `entity` is one of the three accepted forms.
 pub fn check(entity: &str) -> Result<(), String> {
     if is_entity_id(entity) || is_url(entity) || is_alias(entity) {
@@ -90,6 +104,12 @@ mod tests {
         ] {
             let error = check(bad).unwrap_err();
             assert!(error.contains("<namespace>:<kind>/<value>"), "{error}");
+            let error = check_reference(bad).unwrap_err();
+            assert!(error.contains("`me`") && error.contains("<namespace>:<kind>/<value>"));
         }
+        // `me` names the owner's Person on a read, never on submit.
+        assert!(check_reference("me").is_ok());
+        assert!(check("me").is_err());
+        assert!(check_reference("Me").is_err());
     }
 }
