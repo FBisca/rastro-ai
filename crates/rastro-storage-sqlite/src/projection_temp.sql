@@ -6,6 +6,7 @@ CREATE TEMP TABLE claim (
     scalar INTEGER NOT NULL CHECK (scalar IN (0, 1)),
     status TEXT NOT NULL CHECK (status IN ('observed', 'superseded')), revision TEXT NOT NULL,
     known_since TEXT NOT NULL DEFAULT '',
+    type_ancestors TEXT NOT NULL DEFAULT '[]' CHECK (json_valid(type_ancestors) AND json_type(type_ancestors) = 'array'),
     CHECK ((object_entity IS NULL) = (object_value IS NOT NULL AND object_datatype IS NOT NULL))
 );
 CREATE INDEX temp.claim_by_subject ON claim (subject, known_since DESC, id);

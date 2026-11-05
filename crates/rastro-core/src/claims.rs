@@ -58,6 +58,8 @@ pub struct Support {
 /// A claim the core accepted as `observed`, ready to store.
 #[derive(Clone, Debug)]
 pub struct ObservedClaim {
+    /// Ancestor type names supplied by vocabulary validation, never part of an id.
+    pub type_ancestors: Vec<String>,
     pub scalar: bool,
     pub id: String,
     pub subject: Entity,
@@ -221,30 +223,6 @@ pub fn occurrence_id_with_ordinal(
         ],
     )
 }
-/// Stored derivation identity and provenance; spans in this bundle are all required.
-#[derive(Clone, Debug)]
-pub struct Justification {
-    pub id: String,
-    pub claim_id: String,
-    pub extractor: String,
-    pub extractor_version: String,
-    pub derivation_key: String,
-    pub spans: BTreeSet<Support>,
-}
-/// Portable event identity; replay ordering uses capture time and evidence append order.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct EventKey {
-    pub captured_at: DateTime<Utc>,
-    pub portable_key: String,
-}
-#[derive(Clone, Debug)]
-pub struct Occurrence {
-    pub id: String,
-    pub justification_id: String,
-    pub start: EventKey,
-    pub end: Option<EventKey>,
-}
-
 /// Checks a submission against what this run delivered, the extractor's declared rules and
 /// its vocabulary. `Err` carries the reason it is rejected.
 pub fn validate(
@@ -344,6 +322,7 @@ pub fn validate(
     }
     let subject = Entity::new(subject.identifier, subject.entity_type);
     Ok(ObservedClaim {
+        type_ancestors: Vec::new(),
         scalar: predicate.cardinality == rastro_plugin_sdk::Cardinality::One,
         id: claim_id(&subject.id, &submit.predicate, &object),
         subject,

@@ -56,7 +56,11 @@ pub fn extract<S: Storage>(
             Err("forbidden")
         }
         Ok((plugin, vocabulary)) => {
-            let pending = storage.pending_evidence((extractor, &version), source)?;
+            let pending = storage.pending_evidence_for_vocabulary(
+                (extractor, &version),
+                &vocabulary.version,
+                source,
+            )?;
             evidence = pending.len();
             let run = Run {
                 plugin,
@@ -234,15 +238,12 @@ fn converse<S: Storage>(
                     return Ok(Err("protocol"));
                 };
                 let outcome = if finish.status == "ok" {
-                    let checkpoint = run.pending.last().map(|(id, e)| Checkpoint {
+                    let checkpoint = checkpoint_boundary(&run.pending).map(|(id, e)| Checkpoint {
                         extractor: manifest.id.clone(),
                         extractor_version: manifest.version.clone(),
                         source: run.source.name.clone(),
                         scope: run.source.scope.clone(),
-                        last: (
-                            e.captured_at,
-                            run.pending.iter().map(|(id, _)| *id).max().unwrap_or(*id),
-                        ),
+                        last: (e.captured_at, id),
                         vocabulary_version: run.vocabulary.version.clone(),
                         last_portable_key: claims::portable_evidence_key(e),
                     });
@@ -276,6 +277,13 @@ fn converse<S: Storage>(
     }
 }
 
+fn checkpoint_boundary(pending: &[(i64, Evidence)]) -> Option<(i64, &Evidence)> {
+    pending
+        .iter()
+        .max_by_key(|(id, _)| *id)
+        .map(|(id, evidence)| (*id, evidence))
+}
+
 fn item((id, e): &(i64, Evidence)) -> BatchItem {
     BatchItem {
         evidence_id: *id,
@@ -293,5 +301,39 @@ fn item((id, e): &(i64, Evidence)) -> BatchItem {
             .source_updated_at
             .map(|t| t.to_rfc3339_opts(SecondsFormat::Millis, true)),
         trust_class: e.trust_class.as_str().into(),
+    }
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod tests {
+    use super::*;
+    #[test]
+    fn S3_checkpoint_boundary_names_one_append_even_when_capture_order_differs() {
+        let observation = |captured: &str| Evidence {
+            source: "source".into(),
+            scope: crate::Scope("personal".into()),
+            location: "https://example.org/item".into(),
+            field: "/state".into(),
+            start: 0,
+            end: 4,
+            quote: "open".into(),
+            trust_class: crate::TrustClass::Structured,
+            captured_at: captured.parse().unwrap(),
+            source_updated_at: None,
+            original: None,
+        };
+        let later_append = observation("2026-11-01T00:00:00Z");
+        let pending = vec![
+            (20, later_append.clone()),
+            (10, observation("2026-11-02T00:00:00Z")),
+        ];
+        let (id, boundary) = checkpoint_boundary(&pending).unwrap();
+        assert_eq!(id, 20);
+        assert_eq!(boundary.captured_at, later_append.captured_at);
+        assert_eq!(
+            claims::portable_evidence_key(boundary),
+            claims::portable_evidence_key(&later_append)
+        );
     }
 }

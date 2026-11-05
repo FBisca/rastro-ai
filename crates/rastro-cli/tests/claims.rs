@@ -889,11 +889,24 @@ fn S4b_one_bad_span_rejects_the_entire_bundle_and_counts_it() {
 
 #[test]
 fn S16a_version_replay_serves_old_claims_until_atomic_retirement() {
+    assert_atomic_replay(false);
+}
+
+#[test]
+fn S16a_vocabulary_only_bump_replays_without_new_evidence_and_retires_atomically() {
+    assert_atomic_replay(true);
+}
+
+fn assert_atomic_replay(vocabulary_only: bool) {
     let env = Env::new(Some("test-extractor"));
     env.add_source("a", "test");
     sync_state(&env, "a", "open");
     let before = env.json(&["why", OPEN]);
-    let manifest = env.plugin_dir("test-extractor").join("rastro-plugin.toml");
+    let manifest = env.plugin_dir("test-extractor").join(if vocabulary_only {
+        "vocabulary.toml"
+    } else {
+        "rastro-plugin.toml"
+    });
     let text = fs::read_to_string(&manifest)
         .unwrap()
         .replace("0.1.0", "0.2.0");
@@ -936,14 +949,32 @@ fn S16a_version_replay_serves_old_claims_until_atomic_retirement() {
     );
     let after = env.json(&["why", OPEN]);
     assert_eq!(after["claim"], before["claim"]);
-    assert_eq!(after["supports"][0]["extractor_version"], "0.2.0");
     assert_eq!(
-        env.count("justification WHERE extractor_version = '0.1.0'"),
+        after["supports"][0]["extractor_version"],
+        if vocabulary_only { "0.1.0" } else { "0.2.0" }
+    );
+    assert_eq!(
+        after["supports"][0]["vocabulary_version"],
+        if vocabulary_only { "0.2.0" } else { "0.1.0" }
+    );
+    let retired_column = if vocabulary_only {
+        "vocabulary_version"
+    } else {
+        "extractor_version"
+    };
+    assert_eq!(
+        env.count(&format!("justification WHERE {retired_column} = '0.1.0'")),
         0
     );
     assert_eq!(env.count("justification"), 1);
-    let versions: String =
-        env.sql("SELECT extractor_versions FROM projection_publication ORDER BY id DESC LIMIT 1");
+    let publication_column = if vocabulary_only {
+        "vocabulary_versions"
+    } else {
+        "extractor_versions"
+    };
+    let versions: String = env.sql(&format!(
+        "SELECT {publication_column} FROM projection_publication ORDER BY id DESC LIMIT 1"
+    ));
     assert!(
         !versions.contains("0.1.0"),
         "retired extractor leaked into publication: {versions}"
@@ -989,4 +1020,25 @@ fn S16b_sync_and_rebuild_publish_receipts_and_fresh_statistics() {
         db.execute("DELETE FROM projection_publication", [])
             .is_err()
     );
+}
+
+#[test]
+fn S16_rebuild_skips_missing_extractors_and_forbidden_historical_pairs() {
+    let env = Env::new(Some("test-extractor"));
+    env.connector("unavailable", Some("not-installed"));
+    env.add_source("a", "test");
+    env.add_source("historical", "test");
+    env.add_source("missing", "unavailable");
+    sync_state(&env, "a", "open");
+    let before = env.json(&["why", OPEN]);
+    env.observe(&[body("no claims")]);
+    env.extract(&[]);
+    env.json(&["sync", "historical"]);
+    env.json(&["sync", "missing"]);
+    let db = Connection::open(env.path("data/rastro.sqlite3")).unwrap();
+    db.execute("INSERT INTO evidence (source, scope, location, field, start, end, quote, captured_at, trust_class) VALUES ('historical', 'forbidden', 'https://example.org/old', '/body', 0, 1, 'x', '2026-11-01T00:00:00Z', 'untrusted content')", []).unwrap();
+    drop(db);
+    fs::remove_file(env.path("extractor.jsonl")).unwrap();
+    env.ok(&["claims", "rebuild"]);
+    assert_eq!(before, env.json(&["why", OPEN]));
 }

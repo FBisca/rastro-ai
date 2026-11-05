@@ -185,7 +185,7 @@ fn S3_evidence_captured_with_an_earlier_clock_is_still_extracted() {
 }
 
 #[test]
-fn S16b_knowledge_projection_has_insert_only_publications() {
+fn S16b_projection_publication_receipts_reject_updates_and_deletes() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("rastro.sqlite3");
     SqliteStorage::open(&path).unwrap();
@@ -202,6 +202,14 @@ fn S16b_knowledge_projection_has_insert_only_publications() {
         db.execute("DELETE FROM projection_publication", [])
             .is_err()
     );
+}
+
+#[test]
+fn S13_entity_types_are_never_stored_as_a_column() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("rastro.sqlite3");
+    SqliteStorage::open(&path).unwrap();
+    let db = Connection::open(path).unwrap();
     assert_eq!(
         db.query_row(
             "SELECT count(*) FROM pragma_table_info('entity') WHERE name = 'type'",
@@ -211,4 +219,38 @@ fn S16b_knowledge_projection_has_insert_only_publications() {
         .unwrap(),
         0
     );
+}
+
+#[test]
+fn S19_temp_shadow_tables_match_the_migrated_projection_tables() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("rastro.sqlite3");
+    SqliteStorage::open(&path).unwrap();
+    let db = Connection::open(path).unwrap();
+    let ddl = include_str!("../src/projection_temp.sql");
+    db.execute_batch(ddl).unwrap();
+    let shape = |table: &str, schema: &str| -> Vec<(String, String, i64, Option<String>, i64)> {
+        let mut stmt = db
+            .prepare(&format!(
+                "SELECT name, type, \"notnull\", dflt_value, pk FROM pragma_table_info('{table}', '{schema}') ORDER BY cid"
+            ))
+            .unwrap();
+        stmt.query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+    };
+    let mut seen = 0;
+    for line in ddl.lines() {
+        if let Some(rest) = line.trim().strip_prefix("CREATE TEMP TABLE ") {
+            let table = rest.split_whitespace().next().unwrap();
+            let main = shape(table, "main");
+            assert!(!main.is_empty(), "{table} missing from the migration");
+            assert_eq!(main, shape(table, "temp"), "{table} shape differs");
+            seen += 1;
+        }
+    }
+    assert!(seen >= 6, "expected the projection tables, saw {seen}");
 }

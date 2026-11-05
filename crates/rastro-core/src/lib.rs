@@ -381,6 +381,16 @@ pub trait Storage {
         extractor: (&str, &str),
         source: &Source,
     ) -> Result<Vec<(i64, Evidence)>>;
+    /// A vocabulary definition change replays the pair even when ingestion added nothing.
+    fn pending_evidence_for_vocabulary(
+        &self,
+        extractor: (&str, &str),
+        vocabulary_version: &str,
+        source: &Source,
+    ) -> Result<Vec<(i64, Evidence)>> {
+        let _ = vocabulary_version;
+        self.pending_evidence(extractor, source)
+    }
     /// Publishes accepted AND derivations and their checkpoint atomically. A successful
     /// version replay retires the pair's old justifications in the same transaction.
     /// Counts new and unchanged derivations; types and aliases are claims.

@@ -76,7 +76,7 @@ mod tests {
     /// surfaces/R2: a request, its response and the catalog give an operation the same name
     #[test]
     #[allow(non_snake_case)]
-    fn request_response_and_catalog_agree_on_names() {
+    fn S26_request_response_and_catalog_agree_on_names() {
         let responses = [
             Response::SourceAdd(SourceAddResult {
                 source: Source::github("a".into(), "o/r".into(), Scope("w".into())),

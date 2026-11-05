@@ -451,48 +451,15 @@ impl Storage for SqliteStorage {
         extractor: (&str, &str),
         source: &Source,
     ) -> Result<Vec<(i64, Evidence)>> {
-        let mut statement = self.connection.prepare(
-            "SELECT e.id, e.location, e.field, e.start, e.end, e.quote, e.trust_class,
-             e.captured_at, e.source_updated_at FROM evidence e
-             LEFT JOIN extraction_checkpoint c ON c.extractor = ?3 AND c.extractor_version = ?4
-                 AND c.source = e.source AND c.scope = e.scope
-             WHERE e.source = ?1 AND e.scope = ?2 AND (c.source IS NULL
-                 OR e.id > c.last_evidence_id)
-             ORDER BY e.captured_at, e.id",
-        )?;
-        let rows = statement.query_map(
-            params![source.name, source.scope.0, extractor.0, extractor.1],
-            |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    [row.get::<_, String>(1)?, row.get(2)?],
-                    [row.get::<_, i64>(3)? as u64, row.get::<_, i64>(4)? as u64],
-                    [row.get::<_, String>(5)?, row.get(6)?, row.get(7)?],
-                    row.get::<_, Option<String>>(8)?,
-                ))
-            },
-        )?;
-        let mut evidence = rows
-            .map(|row| {
-                let (id, [location, field], [start, end], [quote, trust, captured], updated) = row?;
-                let evidence = Evidence {
-                    source: source.name.clone(),
-                    scope: source.scope.clone(),
-                    location,
-                    field,
-                    start,
-                    end,
-                    quote,
-                    trust_class: trust_class(&trust)?,
-                    captured_at: parse_time(captured)?,
-                    source_updated_at: updated.map(parse_time).transpose()?,
-                    original: None,
-                };
-                Ok((id, evidence))
-            })
-            .collect::<Result<Vec<_>>>()?;
-        evidence.sort_by_key(|(id, e)| (e.captured_at, *id));
-        Ok(evidence)
+        self.evidence_after_checkpoint(extractor, source, None)
+    }
+    fn pending_evidence_for_vocabulary(
+        &self,
+        extractor: (&str, &str),
+        vocabulary_version: &str,
+        source: &Source,
+    ) -> Result<Vec<(i64, Evidence)>> {
+        self.evidence_after_checkpoint(extractor, source, Some(vocabulary_version))
     }
     fn record_claims(
         &mut self,
@@ -510,22 +477,23 @@ impl Storage for SqliteStorage {
             [run_id],
             |r| Ok((r.get(0)?, r.get(1)?)),
         )?;
+        let vocabulary_version = checkpoint.map(|c| c.vocabulary_version.as_str());
         let retired = transaction.prepare(
-            "SELECT DISTINCT c.subject, c.predicate FROM justification j JOIN claim c ON c.id = j.claim_id
+            "SELECT DISTINCT c.subject, c.predicate, e.location, s.field FROM justification j JOIN claim c ON c.id = j.claim_id
              JOIN justification_span s ON s.justification_id = j.id JOIN evidence e ON e.id = s.evidence_id
-             WHERE j.extractor = ?1 AND j.extractor_version != ?2 AND e.source = ?3 AND e.scope = ?4")?
-            .query_map(params![extractor.0, extractor.1, source, scope], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+             WHERE j.extractor = ?1 AND (j.extractor_version != ?2 OR (?5 IS NOT NULL AND j.vocabulary_version != ?5)) AND e.source = ?3 AND e.scope = ?4")?
+            .query_map(params![extractor.0, extractor.1, source, scope, vocabulary_version], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?
             .collect::<Result<Vec<_>, _>>()?;
         affected.extend(retired);
         transaction.execute("DELETE FROM occurrence WHERE justification_id IN (
             SELECT j.id FROM justification j JOIN justification_span s ON s.justification_id = j.id
-            JOIN evidence e ON e.id = s.evidence_id WHERE j.extractor = ?1 AND j.extractor_version != ?2
-            AND e.source = ?3 AND e.scope = ?4)", params![extractor.0, extractor.1, source, scope])?;
+            JOIN evidence e ON e.id = s.evidence_id WHERE j.extractor = ?1 AND (j.extractor_version != ?2 OR (?5 IS NOT NULL AND j.vocabulary_version != ?5))
+            AND e.source = ?3 AND e.scope = ?4)", params![extractor.0, extractor.1, source, scope, vocabulary_version])?;
         transaction.execute(
             "DELETE FROM justification_span WHERE justification_id IN (
-            SELECT j.id FROM justification j WHERE j.extractor = ?1 AND j.extractor_version != ?2)
+            SELECT j.id FROM justification j WHERE j.extractor = ?1 AND (j.extractor_version != ?2 OR (?5 IS NOT NULL AND j.vocabulary_version != ?5)))
             AND evidence_id IN (SELECT id FROM evidence WHERE source = ?3 AND scope = ?4)",
-            params![extractor.0, extractor.1, source, scope],
+            params![extractor.0, extractor.1, source, scope, vocabulary_version],
         )?;
         transaction.execute(
             "DELETE FROM justification WHERE NOT EXISTS
@@ -536,7 +504,6 @@ impl Storage for SqliteStorage {
             params![extractor.0, extractor.1, source, scope])?;
         let mut counts = Counts::default();
         for claim in claims {
-            affected.insert((claim.subject.id.clone(), claim.predicate.clone()));
             let mut entities = vec![claim.subject.clone()];
             let (object_entity, object_value, object_datatype) = match &claim.object {
                 Object::Entity {
@@ -556,9 +523,11 @@ impl Storage for SqliteStorage {
                 )?;
             }
             transaction.execute(
-                "INSERT OR IGNORE INTO claim (id, subject, predicate, object_entity, object_value,
-                 object_datatype, status, revision, scalar) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'observed', '', ?7)",
-                params![claim.id, claim.subject.id, claim.predicate, object_entity, object_value, object_datatype, claim.scalar])?;
+                "INSERT INTO claim (id, subject, predicate, object_entity, object_value,
+                 object_datatype, status, revision, scalar, type_ancestors) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'observed', '', ?7, ?8)
+                 ON CONFLICT(id) DO UPDATE SET scalar = excluded.scalar, type_ancestors = excluded.type_ancestors",
+                params![claim.id, claim.subject.id, claim.predicate, object_entity, object_value, object_datatype, claim.scalar,
+                    serde_json::to_string(&claim.type_ancestors.iter().collect::<std::collections::BTreeSet<_>>())?])?;
             let derivation = derivation_key(&claim.supports);
             let id = justification_id(&claim.id, extractor.0, &derivation);
             let rule = claim
@@ -573,8 +542,25 @@ impl Storage for SqliteStorage {
                  vocabulary_version, derivation_key, extraction_rule, run_id)
                  VALUES (?1, ?2, 'provenance', ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![id, claim.id, extractor.0, extractor.1, checkpoint.map_or("", |c| &c.vocabulary_version), derivation, rule, run_id])?;
+            if added == 0 {
+                transaction.execute(
+                    "UPDATE justification SET vocabulary_version = ?2, run_id = ?3 WHERE id = ?1",
+                    params![id, checkpoint.map_or("", |c| &c.vocabulary_version), run_id],
+                )?;
+            }
             let mut spans_added = 0;
             for span in &claim.supports {
+                let location: String = transaction.query_row(
+                    "SELECT location FROM evidence WHERE id = ?1",
+                    [span.evidence_id],
+                    |r| r.get(0),
+                )?;
+                affected.insert((
+                    claim.subject.id.clone(),
+                    claim.predicate.clone(),
+                    location,
+                    span.field.clone(),
+                ));
                 spans_added += transaction.execute("INSERT OR IGNORE INTO justification_span
                     (justification_id, evidence_id, portable_key, field, start, end) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     params![id, span.evidence_id, span.portable_key, span.field, span.start as i64, span.end as i64])?;
@@ -590,16 +576,23 @@ impl Storage for SqliteStorage {
             (SELECT 1 FROM justification j WHERE j.claim_id = c.id)) OR to_claim IN (SELECT id FROM claim c WHERE NOT EXISTS
             (SELECT 1 FROM justification j WHERE j.claim_id = c.id))", [])?;
         transaction.execute("DELETE FROM claim WHERE NOT EXISTS (SELECT 1 FROM justification j WHERE j.claim_id = claim.id)", [])?;
-        lifecycle::refresh(&transaction, &affected)?;
+        if lifecycle::staging(&transaction)? {
+            let components = affected
+                .iter()
+                .map(|(subject, predicate, _, _)| (subject.clone(), predicate.clone()))
+                .collect();
+            lifecycle::refresh(&transaction, &components)?;
+        } else {
+            lifecycle::refresh_groups(&transaction, &affected)?;
+        }
         transaction.execute("DELETE FROM entity WHERE id NOT IN (SELECT subject FROM claim UNION SELECT object_entity FROM claim WHERE object_entity IS NOT NULL)", [])?;
         if let Some(c) = checkpoint {
             transaction.execute(
                 "INSERT INTO extraction_checkpoint (extractor, extractor_version, source, scope,
                  last_captured_at, last_portable_key, last_evidence_id, vocabulary_version) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                  ON CONFLICT DO UPDATE SET
-                 last_captured_at = max(last_captured_at, excluded.last_captured_at),
-                 last_portable_key = CASE WHEN (excluded.last_captured_at, excluded.last_evidence_id) >
-                    (last_captured_at, last_evidence_id) THEN excluded.last_portable_key ELSE last_portable_key END,
+                 last_captured_at = CASE WHEN excluded.last_evidence_id >= last_evidence_id THEN excluded.last_captured_at ELSE last_captured_at END,
+                 last_portable_key = CASE WHEN excluded.last_evidence_id >= last_evidence_id THEN excluded.last_portable_key ELSE last_portable_key END,
                  last_evidence_id = max(last_evidence_id, excluded.last_evidence_id),
                  vocabulary_version = excluded.vocabulary_version",
                 params![c.extractor, c.extractor_version, c.source, c.scope.0, stamp(c.last.0),
@@ -1055,4 +1048,101 @@ fn first_match(quote: &str, marked: &str) -> Option<(usize, usize)> {
     // No marker precedes the first, so `start` is already an offset in the quote; the open
     // marker sits between `start` and the text.
     Some((start, end - OPEN.len_utf8()))
+}
+
+impl SqliteStorage {
+    fn evidence_after_checkpoint(
+        &self,
+        extractor: (&str, &str),
+        source: &Source,
+        vocabulary_version: Option<&str>,
+    ) -> Result<Vec<(i64, Evidence)>> {
+        let mut statement = self.connection.prepare(
+            "SELECT e.id, e.location, e.field, e.start, e.end, e.quote, e.trust_class,
+             e.captured_at, e.source_updated_at FROM evidence e
+             LEFT JOIN extraction_checkpoint c ON c.extractor = ?3 AND c.extractor_version = ?4
+                 AND c.source = e.source AND c.scope = e.scope
+                 AND (?5 IS NULL OR c.vocabulary_version = ?5)
+             WHERE e.source = ?1 AND e.scope = ?2 AND (c.source IS NULL
+                 OR e.id > c.last_evidence_id)
+             ORDER BY e.captured_at, e.id",
+        )?;
+        let rows = statement.query_map(
+            params![
+                source.name,
+                source.scope.0,
+                extractor.0,
+                extractor.1,
+                vocabulary_version
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    [row.get::<_, String>(1)?, row.get(2)?],
+                    [row.get::<_, i64>(3)? as u64, row.get::<_, i64>(4)? as u64],
+                    [row.get::<_, String>(5)?, row.get(6)?, row.get(7)?],
+                    row.get::<_, Option<String>>(8)?,
+                ))
+            },
+        )?;
+        let mut evidence = rows
+            .map(|row| {
+                let (id, [location, field], [start, end], [quote, trust, captured], updated) = row?;
+                let evidence = Evidence {
+                    source: source.name.clone(),
+                    scope: source.scope.clone(),
+                    location,
+                    field,
+                    start,
+                    end,
+                    quote,
+                    trust_class: trust_class(&trust)?,
+                    captured_at: parse_time(captured)?,
+                    source_updated_at: updated.map(parse_time).transpose()?,
+                    original: None,
+                };
+                Ok((id, evidence))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        evidence.sort_by_key(|(id, e)| (e.captured_at, *id));
+        Ok(evidence)
+    }
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod projection_schema_tests {
+    use super::*;
+
+    #[test]
+    fn S19_shadow_tables_match_the_active_projection_column_shapes() {
+        let home = tempfile::tempdir().unwrap();
+        let mut storage = SqliteStorage::open(&home.path().join("db")).unwrap();
+        storage.begin_claims_rebuild().unwrap();
+        let db = &storage.connection;
+        let tables = db
+            .prepare("SELECT name FROM sqlite_temp_master WHERE type = 'table' ORDER BY name")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(tables.len(), 7);
+        for table in tables {
+            assert!(
+                db.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+                    [&table],
+                    |r| r.get::<_, bool>(0)
+                )
+                .unwrap()
+            );
+            let columns = |schema: &str| {
+                db.prepare("SELECT name, type, \"notnull\", dflt_value, pk, hidden FROM pragma_table_xinfo(?1, ?2) ORDER BY cid").unwrap()
+                    .query_map(params![table, schema], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, bool>(2)?, r.get::<_, Option<String>>(3)?, r.get::<_, i64>(4)?, r.get::<_, i64>(5)?))).unwrap().collect::<Result<Vec<_>, _>>().unwrap()
+            };
+            assert_eq!(columns("main"), columns("temp"), "{table}");
+        }
+        storage.finish_claims_rebuild(false).unwrap();
+    }
 }

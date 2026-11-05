@@ -30,6 +30,7 @@ fn accepted(id: i64, e: &Evidence, predicate: &str, value: &str) -> ObservedClai
         datatype: "string".into(),
     };
     ObservedClaim {
+        type_ancestors: Vec::new(),
         id: claims::claim_id(&subject.id, predicate, &object),
         subject,
         predicate: predicate.into(),
@@ -178,7 +179,7 @@ fn S4b_all_required_spans_of_one_evidence_are_retained_as_an_and_bundle() {
 }
 
 #[test]
-fn S16b_late_append_advances_boundary_even_when_its_portable_key_sorts_before_previous() {
+fn S3_late_append_advances_boundary_even_when_its_portable_key_sorts_before_previous() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("db");
     let mut db = SqliteStorage::open(&path).unwrap();
@@ -248,4 +249,130 @@ fn S9a_same_pair_recurrence_at_equal_capture_stays_separate() {
         before,
         serde_json::to_value(db.why(&open).unwrap().unwrap()).unwrap()
     );
+}
+
+#[test]
+fn S16_vocabulary_and_run_metadata_match_replay_without_extractor_bump() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("db");
+    let mut db = SqliteStorage::open(&path).unwrap();
+    let e = evidence("source", "open");
+    let id = store(&mut db, &e, "code:state", "open");
+    let why = db.why(&id).unwrap().unwrap();
+    let claim = accepted(why.supports[0].evidence_id, &e, "code:state", "open");
+    let source = Source::github("source".into(), "o/p".into(), e.scope.clone());
+    let run = db
+        .start_extraction(&source, ("extractor", "1"), time())
+        .unwrap();
+    let checkpoint = claims::Checkpoint {
+        extractor: "extractor".into(),
+        extractor_version: "1".into(),
+        source: "source".into(),
+        scope: e.scope.clone(),
+        last: (time(), why.supports[0].evidence_id),
+        last_portable_key: claims::portable_evidence_key(&e),
+        vocabulary_version: "2".into(),
+    };
+    db.record_claims(
+        run,
+        ("extractor", "1"),
+        std::slice::from_ref(&claim),
+        Some(&checkpoint),
+    )
+    .unwrap();
+    let incremental = serde_json::to_value(db.why(&id).unwrap().unwrap()).unwrap();
+    assert_eq!(incremental["supports"][0]["vocabulary_version"], "2");
+    let connection = rusqlite::Connection::open(&path).unwrap();
+    assert_eq!(
+        connection
+            .query_row("SELECT run_id FROM justification", [], |r| r
+                .get::<_, i64>(0))
+            .unwrap(),
+        run
+    );
+    db.begin_claims_rebuild().unwrap();
+    db.record_claims(run, ("extractor", "1"), &[claim], Some(&checkpoint))
+        .unwrap();
+    db.finish_claims_rebuild(true).unwrap();
+    assert_eq!(
+        incremental,
+        serde_json::to_value(db.why(&id).unwrap().unwrap()).unwrap()
+    );
+}
+
+#[test]
+fn S12_corroboration_keeps_the_start_of_the_claim_union_interval() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("db");
+    let mut db = SqliteStorage::open(&path).unwrap();
+    let first = evidence("first", "open");
+    let id = store(&mut db, &first, "code:state", "open");
+    let mut later = evidence("later", "open");
+    later.captured_at += chrono::Duration::days(1);
+    store(&mut db, &later, "code:state", "open");
+    let why = db.why(&id).unwrap().unwrap();
+    assert_eq!(why.claim.known_intervals.len(), 1);
+    let connection = rusqlite::Connection::open(path).unwrap();
+    let since: String = connection
+        .query_row("SELECT known_since FROM claim WHERE id = ?1", [&id], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(since.parse::<DateTime<Utc>>().unwrap(), first.captured_at);
+}
+
+#[test]
+fn S11_related_types_do_not_conflict_but_unrelated_types_and_replacement_do() {
+    let home = tempfile::tempdir().unwrap();
+    let mut db = SqliteStorage::open(&home.path().join("db")).unwrap();
+    let account = store(
+        &mut db,
+        &evidence("a", "Account"),
+        "rastro:type",
+        "code:Account",
+    );
+    let e = evidence("b", "User");
+    let user = store(&mut db, &e, "rastro:type", "code:User");
+    let row = db.why(&user).unwrap().unwrap();
+    let mut typed = accepted(row.supports[0].evidence_id, &e, "rastro:type", "code:User");
+    typed.type_ancestors = vec!["code:Account".into()];
+    db.record_claims(1, ("extractor", "1"), &[typed], None)
+        .unwrap();
+    assert!(
+        db.why(&user)
+            .unwrap()
+            .unwrap()
+            .claim
+            .conflicts_with
+            .is_empty()
+    );
+    assert!(
+        db.why(&account)
+            .unwrap()
+            .unwrap()
+            .claim
+            .conflicts_with
+            .is_empty()
+    );
+    let bot = store(&mut db, &evidence("c", "Bot"), "rastro:type", "code:Bot");
+    assert!(
+        db.why(&user)
+            .unwrap()
+            .unwrap()
+            .claim
+            .conflicts_with
+            .contains(&bot)
+    );
+    assert!(
+        db.why(&bot)
+            .unwrap()
+            .unwrap()
+            .claim
+            .conflicts_with
+            .contains(&user)
+    );
+    store(&mut db, &evidence("b", "Bot"), "rastro:type", "code:Bot");
+    let old = db.why(&user).unwrap().unwrap();
+    assert_eq!(old.claim.status, "superseded");
+    assert!(old.claim.superseded_by.contains(&bot));
 }

@@ -132,6 +132,11 @@ impl<S: Storage> Rastro<S> {
         let replay = (|| -> Result<()> {
             for (source, extractor) in &sources {
                 let report = host::extract(&mut self.storage, &self.locations, source, extractor)?;
+                if report.state == ExtractionState::NotInstalled
+                    || report.reason.as_deref() == Some("forbidden")
+                {
+                    continue;
+                }
                 anyhow::ensure!(
                     report.state == ExtractionState::Current,
                     "claims rebuild: extractor {extractor} for {} failed: {}",
