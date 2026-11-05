@@ -117,6 +117,248 @@ fn owner_syncs_a_real_repo_and_finds_a_remembered_phrase() {
     assert_eq!(found["result"]["coverage"][0]["state"], "found");
 }
 
+/// The GitHub API through `gh`, as the owner is logged in; the answer GitHub itself gives.
+fn gh_api(path: &str, jq: &str) -> String {
+    let output = Command::new("gh")
+        .args(["api", path, "--jq", jq])
+        .output()
+        .expect("`gh` must be installed for the live check");
+    assert!(
+        output.status.success(),
+        "gh api {path}: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    String::from_utf8(output.stdout).unwrap().trim().to_owned()
+}
+
+/// Installs a built plugin under `plugins/<dir>`: its manifest pointing at a private copy of the
+/// binary, plus any files the manifest names.
+fn install_plugin(
+    plugins: &std::path::Path,
+    dir: &str,
+    manifest: &str,
+    binary: &std::path::Path,
+    files: &[(&str, &str)],
+) {
+    let target = plugins.join(dir);
+    fs::create_dir_all(&target).unwrap();
+    let mut manifest: toml::Table = manifest.parse().unwrap();
+    manifest.insert(
+        "command".into(),
+        support::binaries::private_copy(binary)
+            .to_str()
+            .unwrap()
+            .into(),
+    );
+    fs::write(target.join("rastro-plugin.toml"), manifest.to_string()).unwrap();
+    for (name, text) in files {
+        fs::write(target.join(name), text).unwrap();
+    }
+}
+
+/// One `rastro mcp --scope <scope>` tool call over stdio; returns the tool's v2 envelope.
+fn scoped_mcp_call(
+    home: &std::path::Path,
+    plugins: &std::path::Path,
+    scope: &str,
+    tool: &str,
+    arguments: Value,
+) -> Value {
+    use std::io::{BufRead, BufReader, Write};
+    use std::process::Stdio;
+    let mut child = Command::new(support::rastro())
+        .env("RASTRO_HOME", home)
+        .env("RASTRO_PLUGIN_PATH", plugins)
+        .args(["mcp", "--scope", scope])
+        .stdin(Stdio::piped())
+        .stdout(Stdio::piped())
+        .spawn()
+        .unwrap();
+    let mut stdin = child.stdin.take().unwrap();
+    let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+    let mut send = |message: Value| {
+        writeln!(stdin, "{message}").unwrap();
+        stdin.flush().unwrap();
+    };
+    send(
+        serde_json::json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+        "protocolVersion": "2025-11-25", "capabilities": {},
+        "clientInfo": {"name": "live-check", "version": "1.0"}}}),
+    );
+    let initialized = lines.next().unwrap().unwrap();
+    assert!(initialized.contains("\"result\""), "{initialized}");
+    send(serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
+    send(
+        serde_json::json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+        "params": {"name": tool, "arguments": arguments}}),
+    );
+    let answer: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+    drop(stdin);
+    let _ = child.wait();
+    assert_ne!(answer["result"]["isError"], true, "{answer}");
+    answer["result"]["structuredContent"].clone()
+}
+
+/// Number of the pull request or issue at a GitHub URL.
+fn item_number(location: &str) -> &str {
+    location.rsplit('/').next().unwrap()
+}
+
+/// claims-and-about S30: after `sync --reread` on a real repository, the owner's account has
+/// `code:author` claims on that repository's pull requests and issues, `why` cites the
+/// `/user/id` and `/user/type` observations, and both match what GitHub says. The same claim
+/// read through `rastro mcp --scope` shows only that scope's supports.
+///
+/// Needs `RASTRO_LIVE_REPO` (owner/name), `RASTRO_LIVE_GITHUB_LOGIN` (an account that authored a
+/// pull request or issue in that repository, usually the owner's) and `gh auth login` or
+/// `GH_TOKEN`; run with `cargo test -p rastro-cli --test live -- --ignored S30`.
+#[test]
+#[ignore = "talks to GitHub; set RASTRO_LIVE_REPO and RASTRO_LIVE_GITHUB_LOGIN"]
+fn S30_the_owners_account_claims_and_receipts_match_github() {
+    let config = live_config(
+        std::env::var_os("RASTRO_LIVE_REPO"),
+        std::env::var_os("RASTRO_LIVE_GITHUB_LOGIN"),
+    )
+    .unwrap_or_else(|why| panic!("the live check is half-configured: {why}"));
+    let Some((repo, login)) = config else {
+        return;
+    };
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let built = Command::new(cargo)
+        .args([
+            "build",
+            "--quiet",
+            "-p",
+            "rastro-connector-github",
+            "-p",
+            "rastro-extractor-github",
+        ])
+        .status()
+        .unwrap();
+    assert!(built.success(), "building the GitHub plugins failed");
+    let target = std::path::Path::new(env!("CARGO_BIN_EXE_rastro"));
+    let home = tempfile::tempdir().unwrap();
+    let plugins = home.path().join("dev-plugins");
+    install_plugin(
+        &plugins,
+        "github",
+        include_str!("../../rastro-connector-github/rastro-plugin.toml"),
+        &target.with_file_name("rastro-connector-github"),
+        &[],
+    );
+    install_plugin(
+        &plugins,
+        "github-extractor",
+        include_str!("../../rastro-extractor-github/rastro-plugin.toml"),
+        &target.with_file_name("rastro-extractor-github"),
+        &[(
+            "vocabulary.toml",
+            include_str!("../../rastro-extractor-github/vocabulary.toml"),
+        )],
+    );
+
+    // The same repository in two scopes, so a scoped read has something to hide.
+    for (name, scope) in [("live-personal", "personal"), ("live-work", "work")] {
+        let added = rastro(
+            home.path(),
+            &plugins,
+            &[
+                "source",
+                "add",
+                name,
+                "--connector",
+                "github",
+                "--repo",
+                &repo,
+                "--scope",
+                scope,
+            ],
+        );
+        assert!(added["error"].is_null(), "{added}");
+    }
+    for args in [vec!["sync"], vec!["sync", "--reread"]] {
+        let synced = rastro(home.path(), &plugins, &args);
+        assert!(synced["error"].is_null(), "{synced}");
+        for run in synced["result"]["runs"].as_array().unwrap() {
+            assert_eq!(run["status"], "ok", "{synced}");
+        }
+    }
+
+    // GitHub's own answer for the account id.
+    let id = gh_api(&format!("users/{login}"), ".id");
+    let account = format!("github:account/{id}");
+    let about = rastro(home.path(), &plugins, &["about", &account, "--limit", "50"]);
+    assert!(about["error"].is_null(), "{about}");
+    let claims = about["result"]["claims"].as_array().unwrap();
+    let authored: Vec<&Value> = claims
+        .iter()
+        .filter(|c| c["predicate"] == "code:author" && c["object"]["identifier"] == account)
+        .collect();
+    assert!(
+        !authored.is_empty(),
+        "no code:author claim for {account} in {repo}: {about}"
+    );
+    for claim in &authored {
+        let subject = claim["subject"]["identifier"].as_str().unwrap();
+        assert!(subject.contains(&repo), "{subject} is not in {repo}");
+    }
+
+    let claim = authored[0];
+    let why = rastro(
+        home.path(),
+        &plugins,
+        &["why", claim["id"].as_str().unwrap()],
+    );
+    assert!(why["error"].is_null(), "{why}");
+    let supports = why["result"]["supports"].as_array().unwrap();
+    let current: Vec<&Value> = supports.iter().filter(|s| s["current"] == true).collect();
+    assert!(!current.is_empty(), "{why}");
+    let link = format!("https://github.com/{repo}/");
+    for support in &current {
+        let spans = support["spans"].as_array().unwrap();
+        let field = |name: &str| {
+            spans
+                .iter()
+                .find(|s| s["field"] == name)
+                .unwrap_or_else(|| panic!("no {name} span: {support}"))
+        };
+        assert_eq!(
+            field("/user/id")["excerpt"]["text"],
+            id.as_str(),
+            "{support}"
+        );
+        assert_eq!(field("/user/type")["excerpt"]["text"], "User", "{support}");
+        for span in spans {
+            let location = span["location"].as_str().unwrap();
+            assert!(location.starts_with(&link), "{location} is not in {repo}");
+            // GitHub agrees that this item's author is this account.
+            let path = format!("repos/{repo}/issues/{}", item_number(location));
+            assert_eq!(gh_api(&path, ".user.id"), id, "{path}");
+            assert_eq!(gh_api(&path, ".user.type"), "User", "{path}");
+        }
+    }
+
+    // One scoped answer: only that scope's supports, and fewer than the unscoped read's.
+    let unscoped = supports.len();
+    for scope in ["personal", "work"] {
+        let scoped = scoped_mcp_call(
+            home.path(),
+            &plugins,
+            scope,
+            "why",
+            serde_json::json!({"claim": claim["id"]}),
+        );
+        assert!(scoped["error"].is_null(), "{scoped}");
+        let rows = scoped["result"]["supports"].as_array().unwrap();
+        assert!(!rows.is_empty() && rows.len() <= unscoped, "{scoped}");
+        for row in rows {
+            for span in row["spans"].as_array().unwrap() {
+                assert_eq!(span["scope"], scope, "{scoped}");
+            }
+        }
+    }
+}
+
 #[cfg(unix)]
 fn not_utf8() -> std::ffi::OsString {
     use std::os::unix::ffi::OsStringExt;
