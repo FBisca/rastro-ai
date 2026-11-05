@@ -247,7 +247,7 @@ impl<S: Storage> Rastro<S> {
 pub use crate::search::{SearchResult, SearchResults};
 
 /// The state of one pair at the installed version of its extractor.
-pub(crate) fn extraction_pair(
+pub fn extraction_pair(
     locations: &crate::Locations,
     source: &Source,
     extractor: &str,
