@@ -25,6 +25,17 @@ impl Snapshot for Fake {
     fn unfinished_runs(&self, _: &[Scope]) -> Result<Vec<UnfinishedRun>> {
         Ok(vec![])
     }
+    fn extraction_sources(&self) -> Result<Vec<(rastro_core::Source, String)>> {
+        Ok(vec![])
+    }
+    fn extraction_facts(
+        &self,
+        _: &rastro_core::Source,
+        _: &str,
+        _: &str,
+    ) -> Result<rastro_core::runs::ExtractionFacts> {
+        Ok(Default::default())
+    }
 }
 impl ReadStorage for Fake {
     fn read<T>(&mut self, work: impl FnOnce(&dyn Snapshot) -> Result<T>) -> Result<T> {

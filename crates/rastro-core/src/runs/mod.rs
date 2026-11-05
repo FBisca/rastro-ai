@@ -113,34 +113,8 @@ impl<S: Storage> Rastro<S> {
             .extraction_sources()?
             .into_iter()
             .map(|(source, extractor)| {
-                let installed = host::discover(&self.locations, &extractor, "extractor");
-                let version = installed.as_ref().ok().map(|p| p.manifest.version.clone());
-                let state = match (&installed, &version) {
-                    (Err("not_installed"), _) => ExtractionStatus::NotInstalled,
-                    (_, Some(version)) => {
-                        let facts = self
-                            .storage
-                            .extraction_facts(&source, &extractor, version)?;
-                        if facts.running {
-                            ExtractionStatus::Running
-                        } else if facts.failed {
-                            ExtractionStatus::Failed
-                        } else if facts.pending {
-                            ExtractionStatus::Behind
-                        } else {
-                            ExtractionStatus::Current
-                        }
-                    }
-                    // An installed extractor that fails its check cannot run.
-                    (Err(_), None) => ExtractionStatus::Failed,
-                    (Ok(_), None) => unreachable!("an installed extractor has a version"),
-                };
-                Ok(ExtractionPair {
-                    source: source.name,
-                    scope: source.scope.0,
-                    extractor,
-                    extractor_version: version,
-                    state,
+                extraction_pair(&self.locations, &source, &extractor, |version| {
+                    self.storage.extraction_facts(&source, &extractor, version)
                 })
             })
             .collect()
@@ -271,3 +245,38 @@ impl<S: Storage> Rastro<S> {
 }
 
 pub use crate::search::{SearchResult, SearchResults};
+
+/// The state of one pair at the installed version of its extractor.
+pub(crate) fn extraction_pair(
+    locations: &crate::Locations,
+    source: &Source,
+    extractor: &str,
+    facts: impl FnOnce(&str) -> Result<ExtractionFacts>,
+) -> Result<ExtractionPair> {
+    let installed = host::discover(locations, extractor, "extractor");
+    let version = installed.as_ref().ok().map(|p| p.manifest.version.clone());
+    let state = match (&installed, &version) {
+        (Err("not_installed"), _) => ExtractionStatus::NotInstalled,
+        (_, Some(version)) => {
+            let facts = facts(version)?;
+            if facts.running {
+                ExtractionStatus::Running
+            } else if facts.failed {
+                ExtractionStatus::Failed
+            } else if facts.pending {
+                ExtractionStatus::Behind
+            } else {
+                ExtractionStatus::Current
+            }
+        }
+        // An installed extractor that fails its check cannot run.
+        _ => ExtractionStatus::Failed,
+    };
+    Ok(ExtractionPair {
+        source: source.name.clone(),
+        scope: source.scope.0.clone(),
+        extractor: extractor.into(),
+        extractor_version: version,
+        state,
+    })
+}

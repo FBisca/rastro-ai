@@ -1204,3 +1204,54 @@ fn S18b_a_failed_version_replay_keeps_the_old_versions_claims_and_reads_failed()
         0
     );
 }
+
+/// The same states as `extraction_states`, read without writing anything.
+fn read_only_states(env: &Env) -> Vec<(String, String, String)> {
+    let locations = rastro_core::Locations {
+        data: env.path("data"),
+        config: env.path("config"),
+    };
+    let mut reader = rastro_core::Rastro::open_read_only(locations, |path| {
+        rastro_storage_sqlite::SqliteStorage::open_read_only(path)
+    })
+    .unwrap();
+    reader
+        .extraction_states()
+        .unwrap()
+        .into_iter()
+        .map(|pair| {
+            (
+                pair.source,
+                pair.extractor_version.unwrap_or_default(),
+                pair.state.as_str().to_string(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn S18_read_only_extraction_state_matches_and_reads_an_unfinished_run_as_running_without_writing() {
+    let env = Env::new(Some("test-extractor"));
+    env.add_source("a", "test");
+    sync_state(&env, "a", "open");
+    let written = extraction_states(&env);
+    assert_eq!(read_only_states(&env), written);
+    assert_eq!(read_only_states(&env)[0].2, "current");
+
+    env.observe(&[state("closed")]);
+    extractor_crashes(&env);
+    failing_sync(&env, "a");
+    assert_eq!(read_only_states(&env)[0].2, "failed");
+
+    // A run a crashed core left unfinished reads running; reading must not recover it.
+    let db = Connection::open(env.path("data/rastro.sqlite3")).unwrap();
+    db.execute(
+        "INSERT INTO runs (source, scope, plugin_id, plugin_version, started_at, status, role)
+         VALUES ('a', 'personal', 'test-extractor', '0.1.0', '2026-11-05T00:00:00.000Z',
+         'running', 'extractor')",
+        [],
+    )
+    .unwrap();
+    assert_eq!(read_only_states(&env)[0].2, "running");
+    assert_eq!(env.count("runs WHERE finished_at IS NULL"), 1);
+}

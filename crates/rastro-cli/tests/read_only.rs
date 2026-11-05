@@ -349,6 +349,17 @@ impl Snapshot for InterleavedView<'_> {
         self.interleave();
         self.inner.unfinished_runs(scopes)
     }
+    fn extraction_sources(&self) -> Result<Vec<(rastro_core::Source, String)>> {
+        self.inner.extraction_sources()
+    }
+    fn extraction_facts(
+        &self,
+        source: &rastro_core::Source,
+        extractor: &str,
+        version: &str,
+    ) -> Result<rastro_core::runs::ExtractionFacts> {
+        self.inner.extraction_facts(source, extractor, version)
+    }
 }
 impl ReadStorage for Interleaved {
     fn read<T>(&mut self, work: impl FnOnce(&dyn Snapshot) -> Result<T>) -> Result<T> {

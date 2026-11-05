@@ -71,6 +71,15 @@ pub trait Snapshot {
     /// Runs with no end and a window; recovery would turn each into "couldn't look: interrupted".
     /// An empty scope set allows every scope. Filter before loading rows.
     fn unfinished_runs(&self, scopes: &[Scope]) -> Result<Vec<UnfinishedRun>>;
+    /// Bound sources, including retained historical ones, with their bound extractor id.
+    fn extraction_sources(&self) -> Result<Vec<(Source, String)>>;
+    /// Whether the pair's extractor is running, last failed, or has evidence left to read.
+    fn extraction_facts(
+        &self,
+        source: &Source,
+        extractor: &str,
+        version: &str,
+    ) -> Result<crate::runs::ExtractionFacts>;
 }
 /// Storage opened read-only.
 pub trait ReadStorage {
@@ -175,6 +184,33 @@ impl<S: ReadStorage> Reader<S> {
         } = self;
         snapshot(locations, storage, scopes, |view, unfinished| {
             coverage_of(view, unfinished, &config.sources, name, all_windows, scopes)
+        })
+    }
+    /// The extraction state of every bound pair in scope, read without writing. A run left
+    /// unfinished reads `running`; recovery to `failed` waits for the next writing open.
+    pub fn extraction_states(&mut self) -> Result<Vec<crate::runs::ExtractionPair>> {
+        let Self {
+            locations,
+            storage,
+            scopes,
+            ..
+        } = self;
+        let Some(storage) = storage else {
+            return Ok(Vec::new());
+        };
+        storage.read(|view| {
+            let mut pairs = Vec::new();
+            for (source, extractor) in view.extraction_sources()? {
+                if scopes.is_empty() || scopes.contains(&source.scope) {
+                    pairs.push(crate::runs::extraction_pair(
+                        locations,
+                        &source,
+                        &extractor,
+                        |version| view.extraction_facts(&source, &extractor, version),
+                    )?);
+                }
+            }
+            Ok(pairs)
         })
     }
     /// Full-text search over evidence quotes, each hit with its source's coverage.

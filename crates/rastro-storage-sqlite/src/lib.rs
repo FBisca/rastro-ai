@@ -610,76 +610,10 @@ impl Storage for SqliteStorage {
         extractor: &str,
         version: &str,
     ) -> Result<rastro_core::runs::ExtractionFacts> {
-        let ask = |query: &str| -> Result<bool> {
-            Ok(self.connection.query_row(
-                query,
-                params![source.name, source.scope.0, extractor, version],
-                |row| row.get(0),
-            )?)
-        };
-        Ok(rastro_core::runs::ExtractionFacts {
-            running: ask("SELECT EXISTS (SELECT 1 FROM runs WHERE role = 'extractor'
-                 AND source = ?1 AND scope = ?2 AND plugin_id = ?3 AND ?4 = ?4 AND finished_at IS NULL)")?,
-            failed: ask("SELECT COALESCE((SELECT status = 'failed' FROM runs
-                 WHERE role = 'extractor' AND source = ?1 AND scope = ?2 AND plugin_id = ?3
-                 AND plugin_version = ?4 AND finished_at IS NOT NULL
-                 ORDER BY id DESC LIMIT 1), 0)")?,
-            pending: ask("SELECT EXISTS (SELECT 1 FROM evidence e
-                 LEFT JOIN extraction_checkpoint c ON c.extractor = ?3 AND c.extractor_version = ?4
-                     AND c.source = e.source AND c.scope = e.scope
-                 WHERE e.source = ?1 AND e.scope = ?2
-                 AND (c.source IS NULL OR e.id > c.last_evidence_id))")?,
-        })
+        View(&self.connection).extraction_facts(source, extractor, version)
     }
     fn extraction_sources(&self) -> Result<Vec<(Source, String)>> {
-        let rows = self
-            .connection
-            .prepare(
-                "SELECT s.name, p.scope, s.extractor, s.connector, s.selector,
-            s.freshness_rule, s.window_start, s.keep_original FROM sources s JOIN
-            (SELECT name AS source, scope FROM sources UNION SELECT source, scope FROM evidence) p
-            ON p.source = s.name WHERE s.extractor IS NOT NULL ORDER BY s.name, p.scope",
-            )?
-            .query_map([], |r| {
-                Ok((
-                    r.get::<_, String>(0)?,
-                    r.get::<_, String>(1)?,
-                    r.get::<_, String>(2)?,
-                    r.get::<_, String>(3)?,
-                    r.get::<_, String>(4)?,
-                    r.get::<_, String>(5)?,
-                    r.get::<_, String>(6)?,
-                    r.get::<_, bool>(7)?,
-                ))
-            })?
-            .collect::<Result<Vec<_>, _>>()?;
-        rows.into_iter()
-            .map(
-                |(
-                    name,
-                    scope,
-                    extractor,
-                    connector,
-                    selector,
-                    freshness_rule,
-                    window_start,
-                    keep_original,
-                )| {
-                    Ok((
-                        Source {
-                            name,
-                            scope: Scope(scope),
-                            connector,
-                            selector: serde_json::from_str(&selector)?,
-                            freshness_rule,
-                            window_start: parse_time(window_start)?,
-                            keep_original,
-                        },
-                        extractor,
-                    ))
-                },
-            )
-            .collect()
+        View(&self.connection).extraction_sources()
     }
     fn begin_claims_rebuild(&mut self) -> Result<()> {
         lifecycle::begin_rebuild(&self.connection)
@@ -1023,6 +957,83 @@ impl Snapshot for View<'_> {
             })
         })
         .collect()
+    }
+    fn extraction_facts(
+        &self,
+        source: &Source,
+        extractor: &str,
+        version: &str,
+    ) -> Result<rastro_core::runs::ExtractionFacts> {
+        let ask = |query: &str| -> Result<bool> {
+            Ok(self.0.query_row(
+                query,
+                params![source.name, source.scope.0, extractor, version],
+                |row| row.get(0),
+            )?)
+        };
+        Ok(rastro_core::runs::ExtractionFacts {
+            running: ask("SELECT EXISTS (SELECT 1 FROM runs WHERE role = 'extractor'
+                 AND source = ?1 AND scope = ?2 AND plugin_id = ?3 AND ?4 = ?4 AND finished_at IS NULL)")?,
+            failed: ask("SELECT COALESCE((SELECT status = 'failed' FROM runs
+                 WHERE role = 'extractor' AND source = ?1 AND scope = ?2 AND plugin_id = ?3
+                 AND plugin_version = ?4 AND finished_at IS NOT NULL
+                 ORDER BY id DESC LIMIT 1), 0)")?,
+            pending: ask("SELECT EXISTS (SELECT 1 FROM evidence e
+                 LEFT JOIN extraction_checkpoint c ON c.extractor = ?3 AND c.extractor_version = ?4
+                     AND c.source = e.source AND c.scope = e.scope
+                 WHERE e.source = ?1 AND e.scope = ?2
+                 AND (c.source IS NULL OR e.id > c.last_evidence_id))")?,
+        })
+    }
+    fn extraction_sources(&self) -> Result<Vec<(Source, String)>> {
+        let rows = self
+            .0
+            .prepare(
+                "SELECT s.name, p.scope, s.extractor, s.connector, s.selector,
+            s.freshness_rule, s.window_start, s.keep_original FROM sources s JOIN
+            (SELECT name AS source, scope FROM sources UNION SELECT source, scope FROM evidence) p
+            ON p.source = s.name WHERE s.extractor IS NOT NULL ORDER BY s.name, p.scope",
+            )?
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, String>(6)?,
+                    r.get::<_, bool>(7)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(
+                |(
+                    name,
+                    scope,
+                    extractor,
+                    connector,
+                    selector,
+                    freshness_rule,
+                    window_start,
+                    keep_original,
+                )| {
+                    Ok((
+                        Source {
+                            name,
+                            scope: Scope(scope),
+                            connector,
+                            selector: serde_json::from_str(&selector)?,
+                            freshness_rule,
+                            window_start: parse_time(window_start)?,
+                            keep_original,
+                        },
+                        extractor,
+                    ))
+                },
+            )
+            .collect()
     }
     fn unfinished_runs(&self, scopes: &[Scope]) -> Result<Vec<UnfinishedRun>> {
         let mut statement = self.0.prepare(
