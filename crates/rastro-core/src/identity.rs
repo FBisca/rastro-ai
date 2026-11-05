@@ -297,6 +297,9 @@ impl Intent {
             }
             _ => {}
         }
+        if let Some([a, b]) = self.targets.endpoints() {
+            ensure!(a.id != b.id, "an intent can't pair an entity with itself");
+        }
         let shape_fits = match self.kind {
             IntentKind::CreatePerson | IntentKind::Name => {
                 matches!(&self.targets, Targets::Entity { entity, .. } if entity.identifier.starts_with(PERSON_PREFIX))
@@ -379,6 +382,7 @@ pub struct Resolution {
     /// link or merge, the newer name).
     pub status: BTreeMap<String, (IntentStatus, Option<String>)>,
     entities: BTreeMap<String, EntityTarget>,
+    intents: BTreeMap<String, Intent>,
     issued: BTreeMap<String, DateTime<Utc>>,
 }
 fn sorted(a: &str, b: &str) -> (String, String) {
@@ -400,6 +404,7 @@ impl Resolution {
         for intent in intents {
             let id = intent.id.clone();
             r.issued.insert(id.clone(), intent.issued_at);
+            r.intents.insert(id.clone(), intent.clone());
             for entity in intent.targets.entities() {
                 r.entities
                     .entry(entity.id.clone())
@@ -469,6 +474,88 @@ impl Resolution {
             self.status
                 .insert(refusal, (IntentStatus::Reversed, Some(by.into())));
         }
+    }
+    /// Refuses an intent the ADR refuses, given the intents accepted before it: a link from a
+    /// Person or to anything but a Person, a merge of entities that aren't both Persons, a name
+    /// for a non-Person, a second creation of a Person or of `me`, and an undo of a missing,
+    /// undone, cannot-link, undo or creation intent, or one whose domain or targets differ.
+    /// Storage calls it on every intent, whoever built it.
+    pub fn admit(&self, intent: &Intent) -> Result<()> {
+        let person = |e: &EntityTarget| self.is_person(&e.id);
+        match intent.kind {
+            IntentKind::CreatePerson => {
+                if let Some(p) = intent.targets.single() {
+                    ensure!(!person(p), "Person {} already exists", p.identifier);
+                }
+                if intent.domain_key == ME_DOMAIN {
+                    ensure!(self.me.is_none(), "the owner's Person already exists");
+                }
+            }
+            IntentKind::Name => {
+                if let Some(p) = intent.targets.single() {
+                    ensure!(
+                        person(p),
+                        "{} is not a Person; only a Person has a name",
+                        p.identifier
+                    );
+                }
+            }
+            IntentKind::Link => {
+                if let Some([account, holder]) = intent.targets.endpoints() {
+                    ensure!(
+                        !person(account),
+                        "{} is a Person, and a Person is never held by another; merge two Persons with `rastro identity merge`",
+                        account.identifier
+                    );
+                    ensure!(
+                        person(holder),
+                        "{} is not a Person; an account is held only by a Person",
+                        holder.identifier
+                    );
+                }
+            }
+            IntentKind::SameAs => {
+                if let Some([a, b]) = intent.targets.endpoints() {
+                    match (person(a), person(b)) {
+                        (true, true) => {}
+                        (false, false) => bail!(
+                            "accounts never merge; link an account to a Person with `rastro identity link`"
+                        ),
+                        (false, true) => {
+                            bail!("only Persons merge, and {} is not a Person", a.identifier)
+                        }
+                        (true, false) => {
+                            bail!("only Persons merge, and {} is not a Person", b.identifier)
+                        }
+                    }
+                }
+            }
+            IntentKind::CannotLink => {}
+            IntentKind::Undo => {
+                let undone = intent.undo_of.as_deref().unwrap_or_default();
+                let Some(target) = self.intents.get(undone) else {
+                    bail!("unknown intent: {undone}");
+                };
+                ensure!(
+                    intent.domain_key == target.domain_key && intent.targets == target.targets,
+                    "an undo takes the domain and targets of the intent it undoes"
+                );
+                if let Some((IntentStatus::Undone, _)) = self.status.get(undone) {
+                    bail!("intent {undone} is already undone");
+                }
+                match target.kind {
+                    IntentKind::CannotLink => bail!(
+                        "a cannot-link can't be undone; only an explicit link or merge of its pair clears it"
+                    ),
+                    IntentKind::Undo => {
+                        bail!("an undo can't be undone; issue the link or merge again")
+                    }
+                    IntentKind::CreatePerson => bail!("creating a Person can't be undone"),
+                    IntentKind::Name | IntentKind::Link | IntentKind::SameAs => {}
+                }
+            }
+        }
+        Ok(())
     }
     pub fn is_person(&self, id: &str) -> bool {
         self.persons.contains_key(id)
@@ -653,10 +740,6 @@ impl<S: Storage> Rastro<S> {
     }
     /// Mints a Person and names it, in two intents accepted together.
     pub fn create_person(&mut self, name: &str) -> Result<Issued> {
-        ensure!(
-            crate::entity_form::is_alias_value(name) && name.len() <= claims::MAX_TERM_BYTES,
-            "a name is non-empty, with no whitespace at either end"
-        );
         self.issue(|_, _| {
             let person = mint_person()?;
             let create = new_intent(
@@ -685,14 +768,6 @@ impl<S: Storage> Rastro<S> {
         self.issue(|view, resolution| {
             let account_target = resolve(view, resolution, account, "account")?;
             let person_target = resolve(view, resolution, holder, "person")?;
-            ensure!(
-                !resolution.is_person(&account_target.id),
-                "{account} is a Person, and a Person is never held by another; merge two Persons with `rastro identity merge`"
-            );
-            ensure!(
-                resolution.is_person(&person_target.id),
-                "{holder} is not a Person; an account is held only by a Person"
-            );
             let pair = (account_target.id.clone(), person_target.id.clone());
             if resolution.links.contains_key(&pair) {
                 return Ok((vec![], Some(person_target), false));
@@ -712,15 +787,6 @@ impl<S: Storage> Rastro<S> {
         self.issue(|view, resolution| {
             let a = resolve(view, resolution, one, "person")?;
             let b = resolve(view, resolution, other, "person")?;
-            ensure!(a.id != b.id, "an entity can't be merged with itself");
-            match (resolution.is_person(&a.id), resolution.is_person(&b.id)) {
-                (true, true) => {}
-                (false, false) => bail!(
-                    "accounts never merge; link an account to a Person with `rastro identity link`"
-                ),
-                (false, true) => bail!("only Persons merge, and {one} is not a Person"),
-                (true, false) => bail!("only Persons merge, and {other} is not a Person"),
-            }
             if resolution.merges.contains_key(&sorted(&a.id, &b.id)) {
                 return Ok((vec![], None, false));
             }
@@ -736,29 +802,12 @@ impl<S: Storage> Rastro<S> {
     }
     /// Undoes one earlier intent, removing only its contribution. Undoing a link or a merge also
     /// records a cannot-link for its pair.
+    /// Storage refuses what can't be undone (`Resolution::admit`).
     pub fn undo(&mut self, intent_id: &str) -> Result<Issued> {
-        self.issue(|view, resolution| {
-            let log = view.intents()?;
-            let Some(target) = log.iter().find(|i| i.id == intent_id) else {
+        self.issue(|_, resolution| {
+            let Some(target) = resolution.intents.get(intent_id) else {
                 bail!("unknown intent: {intent_id}");
             };
-            match resolution.status.get(intent_id) {
-                Some((IntentStatus::Undone, _)) => bail!("intent {intent_id} is already undone"),
-                Some((IntentStatus::Reversed, _)) => {
-                    bail!("intent {intent_id} was already cleared by a link or merge of its pair")
-                }
-                _ => {}
-            }
-            match target.kind {
-                IntentKind::CannotLink => bail!(
-                    "a cannot-link can't be undone; only an explicit link or merge of its pair clears it"
-                ),
-                IntentKind::Undo => {
-                    bail!("an undo can't be undone; issue the link or merge again")
-                }
-                IntentKind::CreatePerson => bail!("creating a Person can't be undone"),
-                IntentKind::Name | IntentKind::Link | IntentKind::SameAs => {}
-            }
             let mut intents = vec![new_intent(
                 IntentKind::Undo,
                 target.domain_key.clone(),

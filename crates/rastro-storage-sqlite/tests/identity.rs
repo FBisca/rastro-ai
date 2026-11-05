@@ -323,3 +323,134 @@ fn S9_me_is_visible_in_every_scope_and_an_unlinked_person_in_none() {
     assert_eq!(about(&person(2).identifier, &[]), 1);
     assert_eq!(about(&person(2).identifier, &[Scope("personal".into())]), 0);
 }
+
+/// An undo naming `undone`, from an issuer seeing `scopes`.
+fn undo(id: &str, undone: &Intent, scopes: &[&str]) -> Intent {
+    let mut undo = intent(id, IntentKind::Undo, undone.targets.clone(), scopes);
+    undo.domain_key = undone.domain_key.clone();
+    undo.undo_of = Some(undone.id.clone());
+    undo
+}
+/// The cannot-link an undo of `pair` records, from an issuer seeing `scopes`.
+fn cannot_link(id: &str, a: &EntityTarget, b: &EntityTarget, scopes: &[&str]) -> Intent {
+    let (first, second) = if a.id < b.id { (a, b) } else { (b, a) };
+    intent(
+        id,
+        IntentKind::CannotLink,
+        Targets::Pair {
+            version: SHAPE_VERSION,
+            symmetric: true,
+            endpoints: [first.clone(), second.clone()],
+        },
+        scopes,
+    )
+}
+
+/// S9: an issuer that sees a Person only through its one link can undo that link: the undo and
+/// its cannot-link are checked against the state the issuer saw, not one the batch changed
+#[test]
+fn S9_a_scoped_issuer_can_undo_a_persons_only_link() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("db");
+    let mut db = SqliteStorage::open(&path).unwrap();
+    let octocat = account(&mut db, 1, "personal");
+    let ana = person(1);
+    let linked = link("i_2", &octocat, &ana, &[]);
+    issue(&mut db, vec![create("i_1", &ana), linked.clone()]).unwrap();
+    issue(
+        &mut db,
+        vec![
+            undo("i_3", &linked, &["personal"]),
+            cannot_link("i_4", &octocat, &ana, &["personal"]),
+        ],
+    )
+    .unwrap();
+    assert_eq!(count(&path), 4);
+}
+
+/// S8: storage refuses what the ADR refuses, whoever builds the intent: a link from a Person or
+/// to an account, a merge of entities that aren't both Persons, an undo of a cannot-link, an undo
+/// or a Person's creation, a second `me`, and a second creation of one Person
+#[test]
+fn S8_storage_refuses_invalid_intents_whoever_builds_them() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("db");
+    let mut db = SqliteStorage::open(&path).unwrap();
+    let octocat = account(&mut db, 1, "personal");
+    let hubot = account(&mut db, 2, "personal");
+    let (ana, silva) = (person(1), person(2));
+    let mut me = create("i_3", &person(3));
+    me.domain_key = rastro_core::identity::ME_DOMAIN.into();
+    let linked = link("i_4", &octocat, &ana, &[]);
+    issue(
+        &mut db,
+        vec![
+            create("i_1", &ana),
+            create("i_2", &silva),
+            me,
+            linked.clone(),
+        ],
+    )
+    .unwrap();
+    let undone = undo("i_5", &linked, &[]);
+    let refusal = cannot_link("i_6", &octocat, &ana, &[]);
+    issue(&mut db, vec![undone.clone(), refusal.clone()]).unwrap();
+    let before = count(&path);
+    let as_account = |e: &EntityTarget| EntityTarget {
+        role: "account".into(),
+        ..e.clone()
+    };
+    let as_person = |e: &EntityTarget| EntityTarget {
+        role: "person".into(),
+        ..e.clone()
+    };
+    let merge = |a: &EntityTarget, b: &EntityTarget| {
+        let mut m = cannot_link("i_9", &as_person(a), &as_person(b), &[]);
+        m.kind = IntentKind::SameAs;
+        m.domain_key = m.expected_domain().unwrap();
+        m
+    };
+    let mut second_me = create("i_9", &person(4));
+    second_me.domain_key = rastro_core::identity::ME_DOMAIN.into();
+    for (intent, reason) in [
+        (link("i_9", &as_account(&ana), &silva, &[]), "is a Person"),
+        (
+            link("i_9", &hubot, &as_person(&octocat), &[]),
+            "is not a Person",
+        ),
+        (merge(&octocat, &hubot), "accounts never merge"),
+        (merge(&octocat, &silva), "only Persons merge"),
+        (undo("i_9", &refusal, &[]), "cannot-link can't be undone"),
+        (undo("i_9", &undone, &[]), "an undo can't be undone"),
+        (
+            undo("i_9", &create("i_1", &ana), &[]),
+            "creating a Person can't be undone",
+        ),
+        (undo("i_9", &linked, &[]), "already undone"),
+        (second_me, "already exists"),
+        (create("i_9", &silva), "already exists"),
+    ] {
+        let error = issue(&mut db, vec![intent]).unwrap_err().to_string();
+        assert!(error.contains(reason), "{reason}: {error}");
+        assert_eq!(count(&path), before, "{reason}");
+    }
+}
+
+/// S11: an intent write publishes the projection, as any other projection write does
+#[test]
+fn S11_an_intent_write_publishes_the_projection() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("db");
+    let mut db = SqliteStorage::open(&path).unwrap();
+    let publications = || -> i64 {
+        Connection::open(&path)
+            .unwrap()
+            .query_row("SELECT count(*) FROM projection_publication", [], |r| {
+                r.get(0)
+            })
+            .unwrap()
+    };
+    let before = publications();
+    issue(&mut db, vec![create("i_1", &person(1))]).unwrap();
+    assert_eq!(publications(), before + 1);
+}

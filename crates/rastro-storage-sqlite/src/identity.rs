@@ -2,7 +2,7 @@
 //! it gives the projection, and the issuer's visibility check. What an intent means is decided by
 //! `rastro_core::identity`; this module stores and replays it.
 use crate::{parse_time, stamp};
-use anyhow::{Context, Result, bail, ensure};
+use anyhow::{Context, Result, ensure};
 use rastro_core::Scope;
 use rastro_core::claims::{Object, intent_justification_id, revision_with_links};
 use rastro_core::identity::{HELD_BY, Intent, IntentKind, Resolution, SAME_AS};
@@ -82,9 +82,13 @@ fn find(db: &Connection, id: &str) -> Result<Option<Intent>> {
     .transpose()
 }
 
-/// Checks and stores intents in order, each against the log as it stands before it. Returns
-/// them with their acceptance order; a retry of a stored intent stores nothing.
+/// Checks and stores intents in order. What each may do (`Resolution::admit`) is judged against
+/// the intents accepted before it, this batch's included; whether the issuer sees its targets is
+/// judged against the state when the batch was issued, so an undo doesn't hide what its own
+/// cannot-link names. Returns them with their acceptance order; a retry stores nothing.
 pub(crate) fn insert_all(db: &Connection, intents: Vec<Intent>) -> Result<Vec<Intent>> {
+    let mut log = load(db)?;
+    let issued = Resolution::of(&log);
     let mut stored = Vec::new();
     // Entities minted earlier in this batch are new: nobody could see them before.
     let mut minted = BTreeSet::new();
@@ -99,22 +103,7 @@ pub(crate) fn insert_all(db: &Connection, intents: Vec<Intent>) -> Result<Vec<In
             stored.push(existing);
             continue;
         }
-        let log = load(db)?;
-        if let Some(undone) = &intent.undo_of {
-            let Some(target) = log.iter().find(|i| &i.id == undone) else {
-                bail!("unknown intent: {undone}");
-            };
-            ensure!(
-                intent.domain_key == target.domain_key && intent.targets == target.targets,
-                "an undo takes the domain and targets of the intent it undoes"
-            );
-            ensure!(
-                !log.iter()
-                    .any(|i| i.undo_of.as_deref() == Some(undone.as_str())),
-                "intent {undone} is already undone"
-            );
-        }
-        let resolution = Resolution::of(&log);
+        Resolution::of(&log).admit(&intent)?;
         let scopes = &intent.issuer_context.scopes;
         for entity in intent.targets.entities() {
             if intent.kind == IntentKind::CreatePerson || minted.contains(&entity.id) {
@@ -122,7 +111,7 @@ pub(crate) fn insert_all(db: &Connection, intents: Vec<Intent>) -> Result<Vec<In
                 continue;
             }
             ensure!(
-                visible(db, &resolution, &entity.id, scopes)?,
+                visible(db, &issued, &entity.id, scopes)?,
                 "the issuing context can't see a target of this {} intent",
                 intent.kind.as_str()
             );
@@ -146,6 +135,7 @@ pub(crate) fn insert_all(db: &Connection, intents: Vec<Intent>) -> Result<Vec<In
             ],
         )?;
         intent.append_seq = db.last_insert_rowid();
+        log.push(intent.clone());
         stored.push(intent);
     }
     Ok(stored)

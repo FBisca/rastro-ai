@@ -619,7 +619,8 @@ pub(crate) fn begin_rebuild(db: &Connection) -> Result<()> {
     Ok(())
 }
 pub(crate) fn finish_rebuild(db: &mut Connection, publish_projection: bool) -> Result<usize> {
-    let transaction = db.transaction()?;
+    // Immediate: the intents replayed below are the ones in force when the swap commits.
+    let transaction = db.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
     // Intents replay after the evidence and every carried-over pair, before publication.
     if publish_projection {
         crate::identity::apply(&transaction)?;

@@ -697,6 +697,8 @@ impl Storage for SqliteStorage {
         let (intents, out) = plan(&View(&transaction))?;
         let stored = identity::insert_all(&transaction, intents)?;
         identity::apply(&transaction)?;
+        // An intent write changes the projection, so it publishes like any other projection write.
+        lifecycle::publish(&transaction)?;
         transaction.commit()?;
         Ok((stored, out))
     }

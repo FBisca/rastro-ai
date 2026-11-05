@@ -100,12 +100,22 @@ fn answer(
             Object::Entity { id, .. } => (String::new(), root(&parent, id)),
             Object::Literal { value, datatype } => (datatype.clone(), value.clone()),
         };
-        let key = (
-            root(&parent, &c.subject.id),
-            c.predicate.clone(),
-            object.0,
-            object.1,
-        );
+        // A merge is never equivalent to another merge: each `rastro:same_as` stays its own item.
+        let key = if c.predicate == crate::identity::SAME_AS {
+            (
+                c.id.clone(),
+                c.predicate.clone(),
+                String::new(),
+                String::new(),
+            )
+        } else {
+            (
+                root(&parent, &c.subject.id),
+                c.predicate.clone(),
+                object.0,
+                object.1,
+            )
+        };
         match index.get(&key) {
             Some(&item) if !parent.is_empty() => items[item].push(summary),
             _ => {

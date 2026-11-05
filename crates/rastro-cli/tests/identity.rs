@@ -652,3 +652,33 @@ fn S10_a_rebuild_with_a_carried_pair_brings_intent_backed_claims_back_identicall
     env.ok(&["claims", "rebuild"]);
     assert_eq!(rows(&env), before);
 }
+
+/// S7: in a merge chain of three Persons, each merge stays its own claim: only claims that say
+/// the same thing group, never two different merges
+#[test]
+fn S7_a_merge_chain_groups_equivalent_claims_but_never_two_merges() {
+    let env = Env::new();
+    let (a, b, c) = (env.person("A"), env.person("B"), env.person("C"));
+    env.ok(&["identity", "merge", &a, &b]);
+    env.ok(&["identity", "merge", &b, &c]);
+    let about = env.about(&a);
+    let merges = statements(&about)
+        .iter()
+        .filter(|(p, ..)| p == "rastro:same_as")
+        .count();
+    assert_eq!(merges, 2, "{about}");
+    let groups = about["groups"].as_array().unwrap();
+    assert_eq!(groups.len(), 1, "{about}");
+    let members = groups[0]["members"].as_array().unwrap();
+    assert_eq!(members.len(), 3, "{about}");
+    for member in members {
+        let claim = about["claims"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == member["claim"])
+            .unwrap();
+        assert_eq!(claim["predicate"], "rastro:type", "{about}");
+    }
+    assert_eq!(statements(&env.about(&c)), statements(&about));
+}
