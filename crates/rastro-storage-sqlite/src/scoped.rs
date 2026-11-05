@@ -178,7 +178,7 @@ fn build(
         &result,
         "justification",
         "SELECT * FROM justification WHERE id IN (SELECT value FROM json_each(?1))",
-        &[visible.clone()],
+        std::slice::from_ref(&visible),
     )?;
     copy(
         db,
