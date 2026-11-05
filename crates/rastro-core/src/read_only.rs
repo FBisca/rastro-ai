@@ -73,23 +73,39 @@ pub trait Snapshot {
         anyhow::ensure!(scopes.is_empty(), "storage does not support scoped why");
         self.explain(claim, options)
     }
+    /// What `about` reads, from the justifications and intents visible to `scopes` (empty:
+    /// every scope): whether the form resolved, the claims (a Person's whole view, or up to one
+    /// more than `limit`), and a Person's linked accounts. A read past the work budget fails.
+    fn about_view(
+        &self,
+        _entity: &str,
+        _options: &crate::knowledge::AboutOptions,
+        _scopes: &[Scope],
+    ) -> Result<crate::knowledge::AboutClaims> {
+        anyhow::bail!("storage does not support about")
+    }
+    /// The claims of [`Snapshot::about_view`], ungrouped.
     fn about_scoped(
         &self,
         entity: &str,
         options: &crate::knowledge::AboutOptions,
         scopes: &[Scope],
     ) -> Result<Vec<crate::knowledge::ClaimSummary>> {
-        anyhow::ensure!(scopes.is_empty(), "storage does not support scoped about");
-        self.about(entity, options)
+        Ok(self
+            .about_view(entity, options, scopes)?
+            .claims
+            .into_iter()
+            .map(|c| c.summary)
+            .collect())
     }
 
     /// Unscoped stored claim state.
     fn about(
         &self,
-        _entity: &str,
-        _options: &crate::knowledge::AboutOptions,
+        entity: &str,
+        options: &crate::knowledge::AboutOptions,
     ) -> Result<Vec<crate::knowledge::ClaimSummary>> {
-        anyhow::bail!("storage does not support about")
+        self.about_scoped(entity, options, &[])
     }
 
     /// The accepted owner intents, in acceptance order.

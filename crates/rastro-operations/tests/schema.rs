@@ -183,9 +183,11 @@ fn expanded(value: &serde_json::Value, defs: &serde_json::Value) -> serde_json::
 }
 
 /// surfaces/R1: identity changes `about` and `why` only additively: `about` gains an optional
-/// `groups` and accepts `me`, a justification gains an optional `intent`; nothing else differs
+/// `groups`, a `resolved` flag (S32), an optional Person view and an optional `account` on each
+/// claim (S28), and accepts `me`; a justification gains an optional `intent`; nothing else
+/// differs
 #[test]
-fn S5_about_and_why_change_only_additively_for_identity() {
+fn S5_S32_about_and_why_change_only_additively_for_identity() {
     use serde_json::{Value, json};
     let generated: Value = serde_json::from_str(&rastro_operations::schema::generate()).unwrap();
     let ops = generated["x-operations"].as_array().unwrap();
@@ -213,6 +215,33 @@ fn S5_about_and_why_change_only_additively_for_identity() {
                     property_names(&groups["items"]),
                     ["members", "revision", "status"]
                 );
+                let properties = result["properties"].as_object_mut().unwrap();
+                let resolved = properties.remove("resolved").unwrap();
+                assert_eq!(resolved["type"], "boolean");
+                let person = properties.remove("person").unwrap();
+                assert_eq!(property_names(&person), ["accounts", "id", "identifier"]);
+                assert_eq!(
+                    property_names(&person["anyOf"][0]["properties"]["accounts"]["items"]),
+                    ["aliases", "id", "identifier", "reasons", "type"]
+                );
+                let claim = properties["claims"]["items"].as_object_mut().unwrap();
+                let account = claim["properties"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("account")
+                    .unwrap();
+                assert_eq!(account["type"], "string");
+                assert!(
+                    !claim["required"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&json!("account"))
+                );
+                // `resolved` is always present; nothing else became required.
+                let required = result["required"].as_array_mut().unwrap();
+                assert!(required.contains(&json!("resolved")));
+                assert!(!required.contains(&json!("person")));
+                required.retain(|name| name != "resolved");
                 // The one input change is the description naming `me`.
                 let entity = &mut new["input"]["properties"]["entity"]["description"];
                 assert!(

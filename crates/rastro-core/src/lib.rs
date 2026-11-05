@@ -426,11 +426,13 @@ pub trait Storage {
     fn carry_over_pair(&mut self, source: &Source, extractor: &str) -> Result<usize>;
     /// Accepts owner intents in one write transaction. `plan` reads the intents accepted so far
     /// and resolves entity forms through the snapshot; storage checks each intent it returns
-    /// (shape, an undo's target, the issuer seeing every target), stores them together in order,
-    /// and recomputes the intent-backed claims before committing. Nothing is stored when any
-    /// check fails. Returns the stored intents with their acceptance order.
+    /// (shape, an undo's target, the issuer seeing every target through `sees`, the scopes the
+    /// issuing surface can read, empty for every scope), stores them together in order, and
+    /// recomputes the intent-backed claims before committing. Nothing is stored when any check
+    /// fails. Returns the stored intents with their acceptance order.
     fn issue_intents<T>(
         &mut self,
+        sees: &[Scope],
         plan: impl FnOnce(&dyn Snapshot) -> Result<(Vec<identity::Intent>, T)>,
     ) -> Result<(Vec<identity::Intent>, T)>;
 }
