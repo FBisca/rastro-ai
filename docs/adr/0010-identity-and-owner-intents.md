@@ -151,7 +151,8 @@ An automatic link is not an intent: it is derived from evidence on every project
 
 The lifecycle fingerprint, lapse and stale, the precedence rules, the `confirmed` status and the scoped-replay fix, the claim and claim-set kinds, and the expansion of an intent into several claims (`../decisions/knowledge.md` §42, §48).
 
-## Build notes awaiting the owner's confirmation
+## Build notes confirmed by the owner (2026-11-05)
+Confirmed as built (plan D30).
 
 - A Person's name: the newest `name` intent wins and the older one is superseded.
 - A cannot-link between two accounts (a no to a candidate) also blocks any automatic link that would put both under one Person.
@@ -159,3 +160,11 @@ The lifecycle fingerprint, lapse and stale, the precedence rules, the `confirmed
 - Every row is validated atomically: JSON shapes, non-empty ids and kinds, unique set members, a valid anchor, and a hash that agrees with the snapshot.
 - The slice-13 export keeps the intents' relative acceptance order.
 - A cleared cannot-link stays in `rastro identity history`, marked reversed.
+
+## Amended 2026-11-05 (owner decisions after the build review)
+Status stays accepted. Plan: `../plans/2026-11-05-second-source-one-identity.plan.md` (D25 to D29). Product meaning in `../decisions/vocabulary.md` §27 and `../decisions/knowledge.md` §58.
+- **Only an account is held by a Person (D25, extends *Core identity predicates*).** The core declares the supertype `rastro:Account`; a vocabulary declares which of its types are accounts (`code:Account`, `tracker:Account`). A link, by the owner or automatic, whose account side is not typed as an account is refused, as a `held_by` from a Person already is.
+- **Undone and older claims stay `superseded` (D26, extends *Resolution* and *Intent-backed claims*).** An undone link or merge, and a Person's older name, stay in the projection as `superseded`, with the interval closed at the undo (or the newer name's) time. An older name still resolves as a historical alias.
+- **No undo of `create_person` (D27, extends *Resolution*).** An `undo` of a `create_person` intent is refused until slice 14's controlled removal. A mistaken Person is merged into the right one.
+- **`issuer_context` records real scopes (D28, extends *The owner-intent table*).** It holds the issuing surface's actual configured scopes, never `[]` standing for all. Still audit data, not authorization.
+- **A retried `person create` mints a new Person (D29, extends *Minting a Person*).** Each run of `rastro identity person create` is a new intent with a new id; a duplicate is merged. Revisit when an agent surface can issue intents.
