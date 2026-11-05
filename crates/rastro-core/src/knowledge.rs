@@ -311,10 +311,18 @@ fn extraction_of(
             };
             let mut source = source.clone();
             source.scope = pair.scope.clone();
-            extraction_pair(locations, &source, extractor, live, |version| {
-                view.map(|view| view.extraction_facts(&source, extractor, version))
+            extraction_pair(
+                locations,
+                &source,
+                extractor,
+                live,
+                |version, vocabulary_version| {
+                    view.map(|view| {
+                        view.extraction_facts(&source, extractor, version, vocabulary_version)
+                    })
                     .unwrap_or_else(|| Ok(ExtractionFacts::default()))
-            })
+                },
+            )
         })
         .collect()
 }

@@ -91,33 +91,20 @@ impl View<'_> {
         let Some(entity) = resolved else {
             return Ok(vec![]);
         };
-        let mut statement = self.0.prepare("SELECT id FROM claim WHERE (subject = ?1 OR object_entity = ?1) AND (?2 OR status = 'observed')")?;
+        let since = options.since.map(crate::stamp);
+        let mut statement = self.0.prepare(
+            "SELECT id FROM claim WHERE (subject = ?1 OR object_entity = ?1) \
+             AND (?2 OR status = 'observed') AND (?3 IS NULL OR known_since >= ?3) \
+             ORDER BY known_since DESC, id LIMIT ?4",
+        )?;
         let ids = statement
-            .query_map(params![entity, options.history], |row| {
-                row.get::<_, String>(0)
-            })?
+            .query_map(
+                params![entity, options.history, since, (options.limit + 1) as i64],
+                |row| row.get::<_, String>(0),
+            )?
             .collect::<Result<Vec<_>, _>>()?;
-        // A later alternative derivation does not reopen the claim's known interval.
-        // The stored recency key is per derivation; derive claim recency from its union.
-        let mut candidates = Vec::new();
-        for id in ids {
-            let since = lifecycle::intervals(self.0, &id)?
-                .last()
-                .map(|interval| interval.start);
-            if options
-                .since
-                .is_none_or(|cutoff| since.is_some_and(|start| start >= cutoff))
-            {
-                candidates.push((since, id));
-            }
-        }
-        candidates.sort_by(|(a_time, a_id), (b_time, b_id)| {
-            b_time.cmp(a_time).then_with(|| a_id.cmp(b_id))
-        });
-        candidates
-            .into_iter()
-            .take(options.limit + 1)
-            .map(|(_, id)| {
+        ids.into_iter()
+            .map(|id| {
                 self.summary(&id)?
                     .ok_or_else(|| anyhow::anyhow!("claim missing in snapshot"))
             })

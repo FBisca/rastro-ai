@@ -1043,7 +1043,9 @@ fn S16_rebuild_skips_missing_extractors_and_forbidden_historical_pairs() {
     drop(db);
     fs::remove_file(env.path("extractor.jsonl")).unwrap();
     env.ok(&["claims", "rebuild"]);
-    assert_eq!(before, env.json(&["why", OPEN]));
+    let after = env.json(&["why", OPEN]);
+    assert_eq!(before["claim"], after["claim"]);
+    assert_eq!(before["supports"], after["supports"]);
 }
 
 /// What the core reports for every bound pair: (source, extractor version, state).

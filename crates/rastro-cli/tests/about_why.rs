@@ -115,6 +115,7 @@ impl Env {
                 predicate: predicate.into(),
                 object,
                 scalar: predicate == "code:state",
+                type_ancestors: Vec::new(),
                 supports: BTreeSet::from([Support {
                     portable_key: claims::portable_evidence_key(&e),
                     evidence_id,
@@ -301,6 +302,7 @@ fn S21_about_filters_known_time_orders_limits_and_includes_history() {
             predicate: "code:state".into(),
             object: literal("open"),
             scalar: true,
+            type_ancestors: Vec::new(),
             supports: BTreeSet::from([Support {
                 portable_key: claims::portable_evidence_key(&evidence),
                 evidence_id,
@@ -350,6 +352,7 @@ fn S24_why_bounds_complete_justifications_and_clips_utf8_quotes() {
                 predicate: stored.claim.predicate.clone(),
                 object: stored.claim.object.clone(),
                 scalar: false,
+                type_ancestors: Vec::new(),
                 supports: spans,
             }],
             None,
