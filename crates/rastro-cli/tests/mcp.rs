@@ -1771,10 +1771,10 @@ fn scoped_about_resolves_a_canonical_alias_only_through_visible_claims() {
     assert!(!all["claims"].as_array().unwrap().is_empty());
 }
 
-/// claims/S20: one location observed in two scopes with different types; a scoped read's type
+/// surfaces/R35: one location observed in two scopes with different types; a scoped read's type
 /// conflicts and displayed type come only from the visible scope's justifications
 #[test]
-fn S20_a_scoped_read_takes_type_conflicts_and_displayed_type_from_visible_scopes_only() {
+fn a_scoped_read_takes_type_conflicts_and_displayed_type_from_visible_scopes_only() {
     let env = Env::new();
     let entity = "github:account/1";
     let (here, there) = ("https://example.org/a", "https://example.org/b");
@@ -1927,9 +1927,9 @@ fn about_text(session: &mut Session, entity: &str) -> Value {
     portable_answer(ok_result(&response["result"])["result"].clone())
 }
 
-/// claims/R31: a hidden-scope read of the same location never supersedes a visible alias
+/// surfaces/R31: a hidden-scope read of the same location never supersedes a visible alias
 #[test]
-fn S5_a_hidden_supersession_does_not_drop_a_visible_alias() {
+fn a_hidden_supersession_does_not_drop_a_visible_alias() {
     let env = Env::new();
     alias_at(&env, "personal", ACCOUNT, "old", 0);
     env.claim_at(
@@ -1978,9 +1978,9 @@ fn S5_a_hidden_supersession_does_not_drop_a_visible_alias() {
     assert!(!expected.to_string().contains("new"));
 }
 
-/// claims/R31: one location read in two scopes with different logins; the visible one decides
+/// surfaces/R34: one location read in two scopes with different logins; the visible one decides
 #[test]
-fn S8_one_location_in_two_scopes_resolves_only_through_the_visible_scope() {
+fn one_location_in_two_scopes_resolves_only_through_the_visible_scope() {
     let env = Env::new();
     alias_at(&env, "personal", ACCOUNT, "mine", 0);
     env.claim_at(
@@ -2050,9 +2050,9 @@ fn S8_one_location_in_two_scopes_resolves_only_through_the_visible_scope() {
     );
 }
 
-/// surfaces/R28: the random scope-set oracle also queries by alias
+/// surfaces/R33: the random scope-set oracle also queries by alias
 #[test]
-fn S7_random_scope_sets_equal_visible_rebuild_when_queried_by_alias() {
+fn random_scope_sets_equal_visible_rebuild_when_queried_by_alias() {
     let scopes = ["personal", "work", "health"];
     let mut seed = 0x51_u64;
     let mut rows = Vec::new();
@@ -2100,10 +2100,10 @@ fn S7_random_scope_sets_equal_visible_rebuild_when_queried_by_alias() {
     }
 }
 
-/// An entity form outside the three accepted ones is a tool result with `isError`, not a
+/// claims/R53: an entity form outside the three accepted ones is a tool result with `isError`, not a
 /// JSON-RPC error.
 #[test]
-fn S21_a_malformed_entity_form_is_a_tool_error_over_mcp() {
+fn a_malformed_entity_form_is_a_tool_error_over_mcp() {
     let env = seeded();
     let mut session = env.start();
     session.initialize();

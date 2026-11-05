@@ -80,9 +80,9 @@ fn about(db: &SqliteStorage, entity: &str) -> anyhow::Result<Value> {
     Ok(json!(claims.iter().map(|c| json!(c)).collect::<Vec<_>>()))
 }
 
-/// claims/R31: hypothesis and retracted alias claims are not lookup candidates
+/// claims/R41: hypothesis and retracted alias claims are not lookup candidates
 #[test]
-fn S4_hypothesis_and_retracted_aliases_are_not_candidates() {
+fn hypothesis_and_retracted_aliases_are_not_candidates() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("db");
     let mut db = SqliteStorage::open(&path).unwrap();
@@ -111,9 +111,9 @@ fn S4_hypothesis_and_retracted_aliases_are_not_candidates() {
     assert_eq!(about(&db, "github:login/shared").unwrap(), json!([]));
 }
 
-/// surfaces/R28: hidden alias claims never spend a scoped read's work budget
+/// surfaces/R32: hidden alias claims never spend a scoped read's work budget
 #[test]
-fn S6_hidden_alias_claims_over_budget_answer_like_an_unknown_entity() {
+fn hidden_alias_claims_over_budget_answer_like_an_unknown_entity() {
     let home = tempfile::tempdir().unwrap();
     let mut db = SqliteStorage::open(&home.path().join("db")).unwrap();
     for n in 0..5 {
@@ -139,9 +139,9 @@ fn S6_hidden_alias_claims_over_budget_answer_like_an_unknown_entity() {
     assert_eq!(run(&mut db, "github:login/shared"), unknown);
 }
 
-/// surfaces/R28: a hidden incoming edge never changes a scoped read's budget outcome
+/// surfaces/R32: a hidden incoming edge never changes a scoped read's budget outcome
 #[test]
-fn S6_a_hidden_incoming_edge_does_not_change_the_budget_outcome() {
+fn a_hidden_incoming_edge_does_not_change_the_budget_outcome() {
     let scopes = [Scope("personal".into())];
     let setup = |hidden_edge: bool| {
         let home = tempfile::tempdir().unwrap();
@@ -251,9 +251,9 @@ fn store_edge(db: &mut SqliteStorage, scope: &str, location: &str, predicate: &s
     .unwrap();
 }
 
-/// surfaces/R28: a hidden claim in a visible slot never pulls its object's claims into a replay
+/// surfaces/R32: a hidden claim in a visible slot never pulls its object's claims into a replay
 #[test]
-fn S6_a_hidden_claim_in_a_visible_slot_does_not_pull_in_its_object() {
+fn a_hidden_claim_in_a_visible_slot_does_not_pull_in_its_object() {
     let scopes = [Scope("personal".into())];
     let mut answers = vec![];
     for target in ["github:login/r", "github:account/1"] {

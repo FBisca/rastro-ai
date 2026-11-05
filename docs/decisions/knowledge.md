@@ -111,6 +111,7 @@ Research and options: `../research/kg-deep-dive/` (`40-decision-brief.md`, `42-p
     - Slice 4: the identity ADR sets the formulas for Person minting and links (§36), group presentation (§35) and the core predicates of `vocabulary.md` §14.
     - Slice 5: §46, and §41's derivation direction.
     - Slice 7: the ADR defining the lifecycle fingerprint (§42).
+    - Slice 7 (statuses `hypothesis` and `retracted`): the scoped replay forces `observed` on the claims it replays (`scoped.rs`), so scoped alias lookup would not exclude those statuses (`vocabulary.md` §20) and a scoped read could resolve through one. The slice that introduces them must replay the real status, or filter on it, before they exist in storage. Today the schema allows only `observed` and `superseded`.
     - Slice 8: §43.
     - Slice 16: `sharing.md` §8.
     - Slices 14 and 15 (scopes and forgetting; plugin install and permissions): does revoking a scope withdraw output already derived under it? (§51; `plugins.md` §5 lets the owner revoke a permission but doesn't say what happens to derived output.)

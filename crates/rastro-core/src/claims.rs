@@ -578,9 +578,9 @@ mod tests {
         }
     }
 
-    /// claims/R30: a subject or object identifier outside the entity forms is rejected
+    /// claims/R56: a subject or object identifier outside the entity forms is rejected
     #[test]
-    fn S24_an_identifier_outside_the_entity_forms_is_rejected() {
+    fn an_identifier_outside_the_entity_forms_is_rejected() {
         let mut bad_subject = submit(TYPE_PREDICATE, "x:Account", "x:Account", TYPE_DATATYPE);
         bad_subject.subject.identifier = "foo:bar".into();
         assert!(
