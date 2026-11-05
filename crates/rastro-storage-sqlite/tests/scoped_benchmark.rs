@@ -26,12 +26,36 @@ fn fixture(path: &std::path::Path, total: usize, hub: usize) {
     db.execute("INSERT INTO claim SELECT printf('c_%032x',x), printf('e_%032x',x), 'code:in_repository', CASE WHEN x<=?2 THEN ?1 ELSE printf('e_%032x',x) END, NULL, NULL, 0, 'observed', '', '', '[]' FROM numbers", rusqlite::params![&hub_id, hub as i64]).unwrap();
     db.execute_batch("        INSERT INTO justification SELECT printf('j_%032x',x), printf('c_%032x',x), 'provenance', 'fixture', '1', '1', printf('d_%032x',x), 'rule', 1, 1 FROM numbers;
         INSERT INTO justification_span SELECT printf('j_%032x',x), x, printf('v_%032x',x), '/url', 0, 1 FROM numbers;
-ANALYZE; PRAGMA wal_checkpoint(TRUNCATE);")
+")
+        .unwrap();
+    // The real hub: the GitHub extractor supports the repository's `rastro:type` claim with one
+    // derivation per item, so that component has one justification per hub item.
+    db.execute("INSERT INTO claim VALUES ('c_hubtype', ?1, 'rastro:type', NULL, 'code:Repository', 'rastro:type', 1, 'observed', '', '', '[]')", [&hub_id]).unwrap();
+    db.execute("INSERT INTO justification SELECT printf('jt_%032x',x), 'c_hubtype', 'provenance', 'fixture', '1', '1', printf('dt_%032x',x), 'rule', 1, 1 FROM numbers WHERE x<=?1", [hub as i64]).unwrap();
+    db.execute("INSERT INTO justification_span SELECT printf('jt_%032x',x), x, printf('vt_%032x',x), '/type', 0, 1 FROM numbers WHERE x<=?1", [hub as i64]).unwrap();
+    // A tenth of the items change state (open then closed, a scalar slot that leaves the
+    // single-derivation path) and carry a second span on their repository claim.
+    let changed = (hub / 10).max(1) as i64;
+    let total_i = total as i64;
+    for (offset, captured, state, prefix) in [
+        (0, "2026-11-01T00:00:00Z", "open", "co"),
+        (changed, "2026-11-02T00:00:00Z", "closed", "cc"),
+    ] {
+        db.execute(&format!("INSERT INTO evidence (id, source, scope, location, field, start, end, quote, captured_at, source_updated_at, trust_class)
+            SELECT ?1 + ?2 + x, CASE x%3 WHEN 0 THEN 'personal' WHEN 1 THEN 'work' ELSE 'health' END, CASE x%3 WHEN 0 THEN 'personal' WHEN 1 THEN 'work' ELSE 'health' END,
+            'https://example.org/item/' || x, '/state', 0, 1, 'x', ?3, ?3, 'structured' FROM numbers WHERE x<=?4"),
+            rusqlite::params![total_i, offset, captured, changed]).unwrap();
+        db.execute(&format!("INSERT INTO claim SELECT printf('{prefix}_%032x',x), printf('e_%032x',x), 'code:state', NULL, '{state}', 'string', 1, 'observed', '', '', '[]' FROM numbers WHERE x<=?1"), [changed]).unwrap();
+        db.execute(&format!("INSERT INTO justification SELECT printf('j{prefix}_%032x',x), printf('{prefix}_%032x',x), 'provenance', 'fixture', '1', '1', printf('d{prefix}_%032x',x), 'state', 1, 1 FROM numbers WHERE x<=?1"), [changed]).unwrap();
+        db.execute(&format!("INSERT INTO justification_span SELECT printf('j{prefix}_%032x',x), ?2 + ?3 + x, printf('v{prefix}_%032x',x), '/state', 0, 1 FROM numbers WHERE x<=?1"), rusqlite::params![changed, total_i, offset]).unwrap();
+    }
+    db.execute("INSERT INTO justification_span SELECT printf('j_%032x',x), ?2 + x, printf('vm_%032x',x), '/state', 0, 1 FROM numbers WHERE x<=?1", rusqlite::params![changed, total_i]).unwrap();
+    db.execute_batch("ANALYZE; PRAGMA wal_checkpoint(TRUNCATE);")
         .unwrap();
     assert_eq!(
         db.query_row("SELECT count(*) FROM claim", [], |r| r.get::<_, i64>(0))
             .unwrap(),
-        total as i64
+        total as i64 + 1 + 2 * changed
     );
     assert_eq!(
         db.query_row(
@@ -91,23 +115,60 @@ fn p95(samples: &mut [Duration]) -> Duration {
     samples[(samples.len() * 95).div_ceil(100) - 1]
 }
 
-fn about(path: &std::path::Path) -> Result<usize, String> {
+fn about(
+    path: &std::path::Path,
+    entity: &str,
+    scopes: &[&str],
+    budget: usize,
+) -> Result<usize, String> {
     let mut storage = SqliteStorage::open_read_only(path).unwrap().unwrap();
-    let scopes = [Scope("personal".into())];
+    let scopes: Vec<_> = scopes.iter().map(|s| Scope((*s).into())).collect();
     storage
-        .read(|view| view.about_scoped(HUB, &AboutOptions::default(), &scopes))
+        .about_scoped_within(entity, &AboutOptions::default(), &scopes, budget)
         .map(|answer| answer.len())
         .map_err(|e| e.to_string())
 }
 
-#[test]
-fn S28b_cache_follows_visible_changes_and_the_work_budget_fails_honestly() {
-    let home = tempfile::tempdir().unwrap();
-    let path = home.path().join("small.sqlite3");
+fn small(dir: &tempfile::TempDir) -> std::path::PathBuf {
+    let path = dir.path().join("small.sqlite3");
     fixture(&path, 30, 12);
-    rastro_storage_sqlite::clear_scoped_cache();
-    let before = about(&path).unwrap();
-    assert_eq!(about(&path).unwrap(), before, "a hit equals the recompute");
+    path
+}
+
+#[test]
+fn S22_hidden_claims_over_the_work_budget_answer_like_an_unknown_entity() {
+    let home = tempfile::tempdir().unwrap();
+    let path = small(&home);
+    // The hub exists, but only in scopes this read cannot see: the tiny budget must not
+    // show through, so the answer equals the unknown entity's.
+    let hidden = about(&path, HUB, &["nobody"], 1);
+    let unknown = about(&path, "https://example.org/unknown", &["nobody"], 1);
+    assert_eq!(unknown, Ok(0));
+    assert_eq!(hidden, unknown);
+}
+
+#[test]
+fn S28b_work_budget_counts_visible_spans_and_fails_without_counts() {
+    let home = tempfile::tempdir().unwrap();
+    let path = small(&home);
+    let ok = about(&path, HUB, &["personal"], 10_000).unwrap();
+    assert!(ok > 0);
+    let error = about(&path, HUB, &["personal"], 3).unwrap_err();
+    assert!(error.contains("work budget"), "{error}");
+    assert!(!error.chars().any(|c| c.is_ascii_digit()), "{error}");
+    assert!(!error.contains("unscoped"), "{error}");
+}
+
+#[test]
+fn S28b_cache_follows_visible_changes_and_keeps_one_entry_per_scope_set() {
+    let home = tempfile::tempdir().unwrap();
+    let path = small(&home);
+    let before = about(&path, HUB, &["personal"], 10_000).unwrap();
+    assert_eq!(about(&path, HUB, &["personal"], 10_000).unwrap(), before);
+    assert_eq!(rastro_storage_sqlite::scoped_cache_len(&path), 1);
+    about(&path, HUB, &["personal", "work"], 10_000).unwrap();
+    about(&path, HUB, &["work", "personal"], 10_000).unwrap();
+    assert_eq!(rastro_storage_sqlite::scoped_cache_len(&path), 2);
     // A new visible justification changes the key: the answer is recomputed, not replayed.
     let db = rusqlite::Connection::open(&path).unwrap();
     let hub = rastro_core::claims::entity_id(HUB);
@@ -122,11 +183,8 @@ fn S28b_cache_follows_visible_changes_and_the_work_budget_fails_honestly() {
          INSERT INTO justification_span SELECT 'j_extra', 1000, 'v_extra', '/url', 0, 1;",
     )
     .unwrap();
-    assert_eq!(about(&path).unwrap(), before + 1);
-    // Past its budget the read errors; it never returns a weaker answer.
-    rastro_storage_sqlite::clear_scoped_cache();
-    rastro_storage_sqlite::set_scoped_work_budget(5);
-    let error = about(&path).unwrap_err();
-    rastro_storage_sqlite::set_scoped_work_budget(200_000);
-    assert!(error.contains("work budget"), "{error}");
+    assert_eq!(
+        about(&path, HUB, &["personal"], 10_000).unwrap(),
+        before + 1
+    );
 }

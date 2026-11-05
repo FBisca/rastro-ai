@@ -1636,6 +1636,10 @@ fn S28_scoped_replay_filters_metadata_and_hidden_replacements_before_limit() {
     for n in 0..55 {
         env.claim("work", &format!("hidden:{n}"), "secret", 2);
     }
+    // Non-vacuous: with every scope visible the work `closed` really supersedes this `open`.
+    let mut everything = env.scoped(&[]);
+    let unscoped = claim_result(&mut everything, "why", json!({"claim": open}));
+    assert_eq!(unscoped["claim"]["status"], "superseded");
     let mut session = env.scoped(&["personal"]);
     let about = claim_result(
         &mut session,

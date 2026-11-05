@@ -1,15 +1,20 @@
 //! Exact replay in private memory. No stored status, occurrence, revision or link is copied.
 //! The source connection stays in its pinned read transaction throughout the computation.
+//!
+//! Cache invariant: every write to the projection tables publishes a `projection_publication`
+//! row (and new evidence or justifications raise their high-water marks), so a cached replay is
+//! valid exactly while the key (database file, scope set, target, those marks) is unchanged.
+//! The work budget counts only justification spans visible to the scope set, never hidden ones,
+//! so an over-budget hidden-only target answers like an unknown one.
 use super::*;
 use anyhow::ensure;
 use rusqlite::params_from_iter;
 use std::collections::BTreeSet;
-use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex};
 
-/// Most candidate claims one scoped read may replay. Past it the read fails with an
+/// Most visible justification spans one scoped read may replay. Past it the read fails with an
 /// operation error; it never answers from a weaker or partial replay.
-static WORK_BUDGET: AtomicUsize = AtomicUsize::new(200_000);
+pub(super) const WORK_BUDGET: usize = 500_000;
 const CACHE_ENTRIES: usize = 4;
 
 /// A finished replay is exact for one visible scope set, one target and one state of the
@@ -17,6 +22,7 @@ const CACHE_ENTRIES: usize = 4;
 #[derive(PartialEq, Eq)]
 struct Key {
     database: String,
+    file: (u64, u64),
     scopes: BTreeSet<String>,
     target: (bool, String),
     publication: i64,
@@ -24,15 +30,19 @@ struct Key {
     justification: i64,
 }
 type Shared = Arc<Mutex<Connection>>;
-static CACHE: Mutex<Vec<(Key, Shared)>> = Mutex::new(Vec::new());
+/// Each entry keeps the visible work it cost, so a hit is held to the caller's budget too.
+static CACHE: Mutex<Vec<(Key, usize, Shared)>> = Mutex::new(Vec::new());
 
 fn key(db: &Connection, scopes: &[Scope], target: &Target<'_>) -> Result<Option<Key>> {
     let Some(database) = db.path().filter(|p| !p.is_empty()) else {
         return Ok(None);
     };
+    use std::os::unix::fs::MetadataExt;
+    let file = std::fs::metadata(database)?;
     let high = |sql: &str| db.query_row(sql, [], |r| r.get::<_, Option<i64>>(0));
     Ok(Some(Key {
         database: database.to_string(),
+        file: (file.dev(), file.ino()),
         scopes: scopes.iter().map(|s| s.0.clone()).collect(),
         target: match target {
             Target::Entity(value) => (true, value.to_string()),
@@ -45,24 +55,33 @@ fn key(db: &Connection, scopes: &[Scope], target: &Target<'_>) -> Result<Option<
 }
 
 /// The cache holds only the output of the exact recompute; a miss recomputes.
-pub(super) fn projection(db: &Connection, scopes: &[Scope], target: Target<'_>) -> Result<Shared> {
+pub(super) fn projection(
+    db: &Connection,
+    scopes: &[Scope],
+    target: Target<'_>,
+    budget: usize,
+) -> Result<Shared> {
     let key = key(db, scopes, &target)?;
     if let Some(key) = &key {
         let cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
-        if let Some((_, hit)) = cache.iter().find(|(k, _)| k == key) {
+        if let Some((_, work, hit)) = cache.iter().find(|(k, _, _)| k == key) {
+            ensure!(*work <= budget, OVER_BUDGET);
             return Ok(hit.clone());
         }
     }
-    let built = Arc::new(Mutex::new(build(db, scopes, target)?));
+    let (connection, work) = build(db, scopes, target, budget)?;
+    let built = Arc::new(Mutex::new(connection));
     if let Some(key) = key {
         let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
         if cache.len() >= CACHE_ENTRIES {
             cache.remove(0);
         }
-        cache.push((key, built.clone()));
+        cache.push((key, work, built.clone()));
     }
     Ok(built)
 }
+
+const OVER_BUDGET: &str = "this read is too large to answer within its work budget";
 
 /// Empties the process-local scoped cache; a benchmark's cold samples start from here.
 #[doc(hidden)]
@@ -96,64 +115,79 @@ fn copy(
     }
     Ok(())
 }
-fn ids(db: &Connection, sql: &str) -> Result<String> {
+fn ids(db: &Connection, sql: &str, arguments: &[String]) -> Result<String> {
     let rows = db
         .prepare(sql)?
-        .query_map([], |r| r.get::<_, String>(0))?
+        .query_map(params_from_iter(arguments), |r| r.get::<_, String>(0))?
         .collect::<Result<Vec<_>, _>>()?;
     Ok(serde_json::to_string(&rows)?)
 }
 
-fn build(db: &Connection, scopes: &[Scope], target: Target<'_>) -> Result<Connection> {
+fn build(
+    db: &Connection,
+    scopes: &[Scope],
+    target: Target<'_>,
+    budget: usize,
+) -> Result<(Connection, usize)> {
     // Replay complete subject/predicate components, including competing claims. One-hop
     // candidates are selected before replay, but status, recency and the limit are not.
-    let (root, argument) = match target {
+    let (roots, components, argument) = match target {
         Target::Entity(entity) => (
             "SELECT id FROM entity WHERE id = ?1 OR identifier = ?1 UNION SELECT subject FROM claim WHERE predicate = 'rastro:alias' AND object_value = ?1",
+            "SELECT subject, predicate FROM claim WHERE subject IN roots UNION ALL SELECT subject, predicate FROM claim WHERE object_entity IN roots",
             entity,
         ),
-        Target::Claim(claim) => ("SELECT subject FROM claim WHERE id = ?1", claim),
+        // A claim's own slot only, plus its endpoints' type and alias claims below.
+        Target::Claim(claim) => (
+            "SELECT 1 WHERE 0",
+            "SELECT subject, predicate FROM claim WHERE id = ?1",
+            claim,
+        ),
     };
-    let candidate_sql = format!("WITH roots AS ({root}), components AS (
-        SELECT subject, predicate FROM claim WHERE subject IN roots UNION ALL SELECT subject, predicate FROM claim WHERE object_entity IN roots
-    ), neighbors AS (
+    let candidate_sql = format!("WITH roots AS ({roots}), components AS ({components}),
+    neighbors AS (
         SELECT c.id, c.subject, c.object_entity FROM claim c JOIN components k ON c.subject = k.subject AND c.predicate = k.predicate
     ) SELECT id FROM neighbors UNION SELECT id FROM claim WHERE predicate IN ('rastro:type','rastro:alias') AND subject IN (SELECT subject FROM neighbors UNION SELECT object_entity FROM neighbors)");
     let candidates = db
         .prepare(&candidate_sql)?
         .query_map([argument], |r| r.get::<_, String>(0))?
         .collect::<Result<Vec<_>, _>>()?;
-    let budget = WORK_BUDGET.load(Ordering::Relaxed);
-    ensure!(
-        candidates.len() <= budget,
-        "scoped read needs {} candidate claims, past its work budget of {budget}; narrow the request or read an unscoped view",
-        candidates.len()
-    );
     let candidates = serde_json::to_string(&candidates)?;
     let scopes = serde_json::to_string(scopes)?;
+    // Every required span must be visible. Partial bundles never become weaker proofs.
+    let visible = ids(
+        db,
+        "SELECT j.id FROM justification j WHERE j.claim_id IN (SELECT value FROM json_each(?1)) AND EXISTS (SELECT 1 FROM justification_span s WHERE s.justification_id = j.id) AND NOT EXISTS (SELECT 1 FROM justification_span s JOIN evidence e ON e.id = s.evidence_id WHERE s.justification_id = j.id AND e.scope NOT IN (SELECT value FROM json_each(?2)))",
+        &[candidates, scopes],
+    )?;
+    // The budget counts visible spans only: hidden work never shows in the outcome.
+    let work: usize = db.query_row(
+        "SELECT count(*) FROM (SELECT 1 FROM justification_span WHERE justification_id IN (SELECT value FROM json_each(?1)) LIMIT ?2)",
+        rusqlite::params![visible, budget.saturating_add(1) as i64],
+        |r| r.get::<_, i64>(0),
+    )? as usize;
+    ensure!(work <= budget, OVER_BUDGET);
     let result = Connection::open_in_memory()?;
     result.execute_batch("PRAGMA foreign_keys = OFF;")?;
     result.execute_batch(include_str!("projection_temp.sql"))?;
     result.execute_batch("BEGIN")?;
     // Evidence is immutable; only cited rows are needed by the private replay and citations.
-    result.execute_batch("CREATE TABLE evidence (id INTEGER PRIMARY KEY, source TEXT, scope TEXT, location TEXT, field TEXT, start INTEGER, end INTEGER, quote TEXT, captured_at TEXT, source_updated_at TEXT, trust_class TEXT, original TEXT)")?;
-    // Every required span must be visible. Partial bundles never become weaker proofs.
+    result.execute_batch("CREATE TABLE evidence (id INTEGER PRIMARY KEY, source TEXT, scope TEXT, location TEXT, field TEXT, start INTEGER, end INTEGER, quote TEXT, captured_at TEXT, source_updated_at TEXT, trust_class TEXT)")?;
     copy(
         db,
         &result,
         "justification",
-        "SELECT j.* FROM justification j WHERE j.claim_id IN (SELECT value FROM json_each(?1)) AND EXISTS (SELECT 1 FROM justification_span s WHERE s.justification_id = j.id) AND NOT EXISTS (SELECT 1 FROM justification_span s JOIN evidence e ON e.id = s.evidence_id WHERE s.justification_id = j.id AND e.scope NOT IN (SELECT value FROM json_each(?2)))",
-        &[candidates, scopes],
+        "SELECT * FROM justification WHERE id IN (SELECT value FROM json_each(?1))",
+        &[visible.clone()],
     )?;
-    let justifications = ids(&result, "SELECT id FROM justification")?;
     copy(
         db,
         &result,
         "justification_span",
         "SELECT * FROM justification_span WHERE justification_id IN (SELECT value FROM json_each(?1))",
-        &[justifications],
+        &[visible],
     )?;
-    let claims = ids(&result, "SELECT DISTINCT claim_id FROM justification")?;
+    let claims = ids(&result, "SELECT DISTINCT claim_id FROM justification", &[])?;
     copy(
         db,
         &result,
@@ -164,6 +198,7 @@ fn build(db: &Connection, scopes: &[Scope], target: Target<'_>) -> Result<Connec
     let entities = ids(
         &result,
         "SELECT subject FROM claim UNION SELECT object_entity FROM claim WHERE object_entity IS NOT NULL",
+        &[],
     )?;
     copy(
         db,
@@ -175,17 +210,18 @@ fn build(db: &Connection, scopes: &[Scope], target: Target<'_>) -> Result<Connec
     let evidence = ids(
         &result,
         "SELECT DISTINCT CAST(evidence_id AS TEXT) FROM justification_span",
+        &[],
     )?;
     copy(
         db,
         &result,
         "evidence",
-        "SELECT id,source,scope,location,field,start,end,quote,captured_at,source_updated_at,trust_class,original FROM evidence WHERE id IN (SELECT value FROM json_each(?1))",
+        "SELECT id,source,scope,location,field,start,end,quote,captured_at,source_updated_at,trust_class FROM evidence WHERE id IN (SELECT value FROM json_each(?1))",
         &[evidence],
     )?;
     replay(&result)?;
     result.execute_batch("COMMIT")?;
-    Ok(result)
+    Ok((result, work))
 }
 
 // A component with exactly one required span has no competing event or alternative
@@ -247,8 +283,14 @@ fn replay(db: &Connection) -> Result<()> {
     lifecycle::refresh(db, &affected)
 }
 
-/// Sets the most candidate claims one scoped read may replay (tests only).
+/// Entries currently cached for one database file (tests only).
 #[doc(hidden)]
-pub fn set_work_budget(claims: usize) {
-    WORK_BUDGET.store(claims, Ordering::Relaxed);
+pub fn cache_len(database: &std::path::Path) -> usize {
+    let database = std::fs::canonicalize(database).unwrap_or_else(|_| database.to_path_buf());
+    let database = database.to_string_lossy();
+    let cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
+    cache
+        .iter()
+        .filter(|(k, _, _)| k.database == database)
+        .count()
 }
