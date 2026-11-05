@@ -1247,19 +1247,9 @@ fn extraction_states(env: &Env) -> Vec<(String, String, String)> {
     };
     let storage =
         rastro_storage_sqlite::SqliteStorage::open(&env.path("data/rastro.sqlite3")).unwrap();
-    let rastro = rastro_core::Rastro::open(locations, storage).unwrap();
-    rastro
-        .extraction_states()
-        .unwrap()
-        .into_iter()
-        .map(|pair| {
-            (
-                pair.source,
-                pair.extractor_version.unwrap_or_default(),
-                pair.state.as_str().to_string(),
-            )
-        })
-        .collect()
+    // The writing open recovers unfinished runs and projects the sources, as a sync would.
+    drop(rastro_core::Rastro::open(locations, storage).unwrap());
+    read_only_states(env)
 }
 /// The extractor reads its batches, submits its claims, then dies with a non-zero exit, so a
 /// partial commit would show.
@@ -1450,8 +1440,8 @@ fn read_only_extraction_state_reads_running_only_while_a_sync_holds_the_lock() {
     let env = Env::new(Some("test-extractor"));
     env.add_source("a", "test");
     sync_state(&env, "a", "open");
-    let written = extraction_states(&env);
-    assert_eq!(read_only_states(&env), written);
+    // The helper links the plugins directory the reader needs.
+    assert_eq!(extraction_states(&env)[0].2, "current");
     assert_eq!(read_only_states(&env)[0].2, "current");
 
     env.observe(&[state("closed")]);

@@ -1,9 +1,30 @@
 #![allow(non_snake_case)]
 use chrono::{DateTime, Utc};
 use rastro_core::claims::{self, Entity, Object, ObservedClaim, Support};
+use rastro_core::knowledge::{Explanation, WhyOptions};
 use rastro_core::{Evidence, Scope, Source, Storage, TrustClass};
 use rastro_storage_sqlite::SqliteStorage;
 use std::collections::BTreeSet;
+/// Every justification of a claim, uncapped and with full citations.
+fn explained(db: &SqliteStorage, claim: &str) -> Explanation {
+    let explained = db
+        .snapshot(|view| {
+            view.explain(
+                claim,
+                &WhyOptions {
+                    limit: 10_000,
+                    full: true,
+                },
+            )
+        })
+        .unwrap()
+        .unwrap();
+    assert!(
+        !explained.truncated,
+        "the explanation must list every support"
+    );
+    explained
+}
 fn time() -> DateTime<Utc> {
     "2026-11-01T00:00:00Z".parse().unwrap()
 }
@@ -91,12 +112,9 @@ fn incremental_record_on_a_hub_is_near_linear_and_equals_the_full_replay() {
         "incremental publication replayed the hub: {elapsed:?}"
     );
     claims.push(extra);
-    let before = serde_json::to_value(db.why(&id).unwrap().unwrap()).unwrap();
+    let before = serde_json::to_value(explained(&db, &id)).unwrap();
     db.begin_claims_rebuild().unwrap();
     db.record_claims(run, ("x", "1"), &claims, None).unwrap();
     db.finish_claims_rebuild(true).unwrap();
-    assert_eq!(
-        before,
-        serde_json::to_value(db.why(&id).unwrap().unwrap()).unwrap()
-    );
+    assert_eq!(before, serde_json::to_value(explained(&db, &id)).unwrap());
 }

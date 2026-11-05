@@ -412,23 +412,12 @@ pub trait Storage {
         claims: &[claims::ObservedClaim],
         checkpoint: Option<&claims::Checkpoint>,
     ) -> Result<Counts>;
-    /// Whether the pair's extractor is running, last failed, or has evidence left to read, at
-    /// this installed version.
-    fn extraction_facts(
-        &self,
-        source: &Source,
-        extractor: &str,
-        version: &str,
-        vocabulary_version: &str,
-    ) -> Result<runs::ExtractionFacts>;
     /// Bound sources, including retained historical sources, for a complete replay.
     fn extraction_sources(&self) -> Result<Vec<(Source, String)>>;
     /// Creates an empty private projection generation. Audit logs remain outside it.
     fn begin_claims_rebuild(&mut self) -> Result<()>;
     /// Atomically publishes the staged generation, or discards it on failure.
     fn finish_claims_rebuild(&mut self, publish: bool) -> Result<usize>;
-    /// A claim and its supports, or `None` for an unknown id.
-    fn why(&self, claim: &str) -> Result<Option<claims::Why>>;
 }
 
 pub struct Rastro<S> {
@@ -484,12 +473,6 @@ impl<S: Storage> Rastro<S> {
     }
     pub fn sources(&self) -> &[Source] {
         &self.config.sources
-    }
-    /// A claim with every support it has; an unknown id is an error.
-    pub fn why(&self, claim: &str) -> Result<claims::Why> {
-        self.storage
-            .why(claim)?
-            .with_context(|| format!("unknown claim: {claim}"))
     }
     pub fn coverage(&self, name: Option<&str>, all_windows: bool) -> Result<Vec<Coverage>> {
         self.storage.snapshot(|view| {

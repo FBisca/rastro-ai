@@ -1,6 +1,6 @@
 use anyhow::{Result, bail};
 use chrono::{DateTime, SecondsFormat, Utc};
-use rastro_core::claims::{Checkpoint, ClaimView, Entity, Object, ObservedClaim, SupportView, Why};
+use rastro_core::claims::{Checkpoint, ClaimView, Entity, Object, ObservedClaim};
 use rastro_core::{
     Appended, COVERAGE_WINDOWS_SHOWN, CompleteCheck, Counts, Coverage, CoverageRecord,
     CoverageState, CoverageWindow, Evidence, Hit, Pair, ReadStorage, Refusal, RunEnd, Scope,
@@ -665,15 +665,6 @@ impl Storage for SqliteStorage {
         transaction.commit()?;
         Ok(counts)
     }
-    fn extraction_facts(
-        &self,
-        source: &Source,
-        extractor: &str,
-        version: &str,
-        vocabulary_version: &str,
-    ) -> Result<rastro_core::runs::ExtractionFacts> {
-        View(&self.connection).extraction_facts(source, extractor, version, vocabulary_version)
-    }
     fn extraction_sources(&self) -> Result<Vec<(Source, String)>> {
         View(&self.connection).extraction_sources(&[])
     }
@@ -682,12 +673,6 @@ impl Storage for SqliteStorage {
     }
     fn finish_claims_rebuild(&mut self, publish: bool) -> Result<usize> {
         lifecycle::finish_rebuild(&mut self.connection, publish)
-    }
-    fn why(&self, claim: &str) -> Result<Option<Why>> {
-        let snapshot = self.connection.unchecked_transaction()?;
-        let result = View(&snapshot).why(claim)?;
-        snapshot.commit()?;
-        Ok(result)
     }
 }
 
@@ -739,143 +724,6 @@ fn trust_class(text: &str) -> Result<TrustClass> {
 }
 
 impl View<'_> {
-    fn why(&self, claim: &str) -> Result<Option<Why>> {
-        let found = self
-            .0
-            .query_row(
-                "SELECT c.id, c.predicate, c.status, c.revision, s.identifier, coalesce((SELECT object_value FROM claim t WHERE t.subject = s.id AND t.predicate = 'rastro:type' AND t.status = 'observed' ORDER BY t.id LIMIT 1), ''),
-                 o.identifier, CASE WHEN o.id IS NOT NULL THEN coalesce((SELECT object_value FROM claim t WHERE t.subject = o.id AND t.predicate = 'rastro:type' AND t.status = 'observed' ORDER BY t.id LIMIT 1), '') END, c.object_value, c.object_datatype
-                 FROM claim c JOIN entity s ON s.id = c.subject
-                 LEFT JOIN entity o ON o.id = c.object_entity WHERE c.id = ?1",
-                [claim],
-                |row| {
-                    let text = |i| row.get::<_, Option<String>>(i);
-                    Ok((
-                        [
-                            row.get::<_, String>(0)?,
-                            row.get(1)?,
-                            row.get(2)?,
-                            row.get(3)?,
-                        ],
-                        [row.get::<_, String>(4)?, row.get(5)?],
-                        [text(6)?, text(7)?, text(8)?, text(9)?],
-                    ))
-                },
-            )
-            .optional()?;
-        let Some(([id, predicate, status, revision], [subject, subject_type], object)) = found
-        else {
-            return Ok(None);
-        };
-        let object = match object {
-            [Some(identifier), Some(entity_type), None, None] => {
-                let Entity { id, .. } = Entity::new(identifier.clone(), entity_type.clone());
-                Object::Entity {
-                    id,
-                    identifier,
-                    entity_type,
-                }
-            }
-            [None, None, Some(value), Some(datatype)] => Object::Literal { value, datatype },
-            _ => bail!("claim {id} has no object"),
-        };
-        let mut statement = self.0.prepare(
-            "SELECT e.id, e.source, e.scope, e.location, s.field, s.start, s.end, e.start,
-             e.quote, e.trust_class, e.captured_at, e.source_updated_at, j.extraction_rule,
-             j.extractor, j.extractor_version, (j.current AND NOT EXISTS (
-                 SELECT 1 FROM justification_span newer WHERE newer.justification_id = s.justification_id
-                 AND newer.portable_key = s.portable_key AND newer.field = s.field
-                 AND newer.start = s.start AND newer.end = s.end AND newer.evidence_id > s.evidence_id)), j.id, j.kind, s.portable_key, j.vocabulary_version
-             FROM justification_span s JOIN evidence e ON e.id = s.evidence_id JOIN justification j ON j.id = s.justification_id
-             WHERE j.claim_id = ?1 ORDER BY e.captured_at, e.id, j.id, s.start, s.end",
-        )?;
-        let rows = statement.query_map([&id], |row| {
-            Ok((
-                row.get::<_, i64>(0)?,
-                [
-                    row.get::<_, String>(1)?,
-                    row.get(2)?,
-                    row.get(3)?,
-                    row.get(4)?,
-                ],
-                [
-                    row.get::<_, i64>(5)? as u64,
-                    row.get::<_, i64>(6)? as u64,
-                    row.get::<_, i64>(7)? as u64,
-                ],
-                [row.get::<_, String>(8)?, row.get(9)?, row.get(10)?],
-                row.get::<_, Option<String>>(11)?,
-                [row.get::<_, String>(12)?, row.get(13)?, row.get(14)?],
-                row.get::<_, bool>(15)?,
-                [
-                    row.get::<_, String>(16)?,
-                    row.get(17)?,
-                    row.get(18)?,
-                    row.get(19)?,
-                ],
-            ))
-        })?;
-        let supports = rows
-            .map(|row| {
-                let (
-                    evidence_id,
-                    [source, scope, location, field],
-                    [start, end, from],
-                    [quote, trust, captured],
-                    updated,
-                    [extraction_rule, extractor, extractor_version],
-                    current,
-                    [
-                        justification_id,
-                        justification_kind,
-                        portable_key,
-                        vocabulary_version,
-                    ],
-                ) = row?;
-                let quote = quote
-                    .get((start - from) as usize..(end - from) as usize)
-                    .unwrap_or_default()
-                    .to_string();
-                Ok(SupportView {
-                    justification_id,
-                    justification_kind,
-                    portable_key,
-                    vocabulary_version,
-                    current,
-                    evidence_id,
-                    source,
-                    scope: Scope(scope),
-                    location,
-                    field,
-                    start,
-                    end,
-                    quote,
-                    trust_class: trust_class(&trust)?,
-                    captured_at: parse_time(captured)?,
-                    source_updated_at: updated.map(parse_time).transpose()?,
-                    extraction_rule,
-                    extractor,
-                    extractor_version,
-                })
-            })
-            .collect::<Result<_>>()?;
-        Ok(Some(Why {
-            claim: ClaimView {
-                id: id.clone(),
-                subject: Entity::new(subject, subject_type),
-                predicate,
-                object,
-                status,
-                revision,
-                known_intervals: lifecycle::intervals(self.0, &id)?,
-                valid_time: rastro_core::claims::ValidTime::Unknown,
-                conflicts_with: lifecycle::links(self.0, &id, "conflicts_with", false)?,
-                supersedes: lifecycle::links(self.0, &id, "supersedes", false)?,
-                superseded_by: lifecycle::links(self.0, &id, "supersedes", true)?,
-            },
-            supports,
-        }))
-    }
     fn last_complete_check(&self, name: &str, scope: &Scope) -> Result<Option<CompleteCheck>> {
         let row: Option<(String, String)> = self
             .0
