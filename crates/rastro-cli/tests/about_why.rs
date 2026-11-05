@@ -138,16 +138,23 @@ fn literal(value: &str) -> Object {
     }
 }
 
+fn alias(kind: &str, value: &str) -> Object {
+    Object::Literal {
+        value: value.into(),
+        datatype: kind.into(),
+    }
+}
+
 #[test]
 fn S20_about_resolves_exact_forms_and_returns_one_hop_with_aliases() {
     let env = Env::new();
     let state = env.claim("code:state", literal("open"), time());
-    env.claim("rastro:alias", literal("github:pr/o/p/1"), time());
+    env.claim("rastro:alias", alias("pr", "o/p/1"), time());
     let entity = Entity::new("github:account/42".into(), "code:Account".into());
     env.claim_for(
         &entity.identifier,
         "rastro:alias",
-        literal("github:login/ana"),
+        alias("login", "ana"),
         time(),
     );
     let author = env.claim(
@@ -161,18 +168,19 @@ fn S20_about_resolves_exact_forms_and_returns_one_hop_with_aliases() {
     );
     let expected = env.ok(&["about", URL]);
     assert_eq!(expected["claims"].as_array().unwrap().len(), 3);
-    for input in [claims::entity_id(URL), "github:pr/o/p/1".into()] {
-        assert_eq!(env.ok(&["about", &input])["claims"], expected["claims"]);
-    }
+    assert_eq!(
+        env.ok(&["about", &claims::entity_id(URL)])["claims"],
+        expected["claims"]
+    );
     let rows = expected["claims"].as_array().unwrap();
     let row = rows.iter().find(|r| r["id"] == state).unwrap();
     assert_eq!(row["status"], "observed");
     assert!(row["revision"].as_str().unwrap().starts_with("r_"));
     assert_eq!(row["predicate"], "code:state");
-    assert_eq!(row["subject_aliases"], json!(["github:pr/o/p/1"]));
+    assert_eq!(row["subject_aliases"], json!(["o/p/1"]));
     assert_eq!(row["support_count"], 1);
     let author_row = rows.iter().find(|r| r["id"] == author).unwrap();
-    assert_eq!(author_row["object_aliases"], json!(["github:login/ana"]));
+    assert_eq!(author_row["object_aliases"], json!(["ana"]));
     let incoming = env.ok(&["about", &entity.id]);
     assert!(
         incoming["claims"]
@@ -183,7 +191,7 @@ fn S20_about_resolves_exact_forms_and_returns_one_hop_with_aliases() {
     );
     assert_eq!(incoming["claims"].as_array().unwrap().len(), 2);
     let other = "github:account/99";
-    env.claim_for(other, "rastro:alias", literal("github:login/ana"), time());
+    env.claim_for(other, "rastro:alias", alias("login", "ana"), time());
     let (ok, error) = env.run(&["about", "github:login/ana"]);
     assert!(!ok, "{error}");
     let error = error["error"].as_str().unwrap();
@@ -623,4 +631,39 @@ fn S23_claim_answers_include_coverage_and_extraction_state_for_every_pair() {
         assert_eq!(other["scope"], "personal");
         assert_eq!(other["state"], "not_installed");
     }
+}
+
+#[test]
+fn S20a_about_resolves_a_canonical_alias_by_namespace_kind_and_exact_value() {
+    let env = Env::new();
+    let account = "github:account/42";
+    env.claim_for(account, "rastro:alias", alias("login", "FBisca"), time());
+    env.claim_for(account, "code:state", literal("active"), time());
+    let expected = env.ok(&["about", account]);
+    assert_eq!(expected["claims"].as_array().unwrap().len(), 2);
+    assert_eq!(
+        env.ok(&["about", "github:login/FBisca"])["claims"],
+        expected["claims"]
+    );
+    for miss in [
+        "gitlab:login/FBisca",
+        "github:email/FBisca",
+        "github:login/fbisca",
+        "github:login/FBisca/x",
+        "github:login/",
+        "github:FBisca",
+    ] {
+        let empty = env.ok(&["about", miss]);
+        assert_eq!(empty["claims"], json!([]), "{miss}");
+        assert!(empty["coverage"].is_array(), "{miss}");
+    }
+    env.claim_for(
+        "github:account/99",
+        "rastro:alias",
+        alias("login", "FBisca"),
+        time(),
+    );
+    let (ok, error) = env.run(&["about", "github:login/FBisca"]);
+    assert!(!ok);
+    assert!(error["error"].as_str().unwrap().contains("ambiguous alias"));
 }

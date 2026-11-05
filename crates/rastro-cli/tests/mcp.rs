@@ -1471,6 +1471,16 @@ fn hidden_unfinished_runs_are_neither_loaded_nor_counted() {
 const CLAIM_ENTITY: &str = "https://example.org/item";
 impl Env {
     fn claim(&self, scope: &str, predicate: &str, value: &str, day: i64) -> String {
+        self.claim_typed(scope, predicate, value, "string", day)
+    }
+    fn claim_typed(
+        &self,
+        scope: &str,
+        predicate: &str,
+        value: &str,
+        datatype: &str,
+        day: i64,
+    ) -> String {
         use rastro_core::claims::{self, Entity, Object, ObservedClaim, Support};
         use rastro_core::{Evidence, Scope, Source, Storage, TrustClass};
         let source = Source::github(format!("claims-{scope}"), "o/p".into(), Scope(scope.into()));
@@ -1507,7 +1517,7 @@ impl Env {
         let subject = Entity::new(CLAIM_ENTITY.into(), "".into());
         let object = Object::Literal {
             value: value.into(),
-            datatype: "string".into(),
+            datatype: datatype.into(),
         };
         let id = claims::claim_id(&subject.id, predicate, &object);
         db.record_claims(
@@ -1680,6 +1690,32 @@ fn S28_scoped_replay_filters_metadata_and_hidden_replacements_before_limit() {
         claim_result(&mut session, "about", json!({"entity": "hidden:alias"}))["claims"],
         json!([])
     );
+}
+
+#[test]
+fn S20a_scoped_about_resolves_a_canonical_alias_only_through_visible_claims() {
+    let env = Env::new();
+    env.claim("personal", "code:state", "open", 0);
+    env.claim_typed("personal", "rastro:alias", "ana", "login", 0);
+    env.claim_typed("work", "rastro:alias", "secret", "login", 1);
+    let mut session = env.scoped(&["personal"]);
+    let direct = claim_result(&mut session, "about", json!({"entity": CLAIM_ENTITY}));
+    assert_eq!(direct["claims"].as_array().unwrap().len(), 2);
+    let by_alias = claim_result(&mut session, "about", json!({"entity": "https:login/ana"}));
+    assert_eq!(by_alias["claims"], direct["claims"]);
+    for miss in ["https:login/secret", "https:email/ana", "other:login/ana"] {
+        let answer = claim_result(&mut session, "about", json!({"entity": miss}));
+        assert_eq!(answer["claims"], json!([]), "{miss}");
+        assert!(answer["coverage"].is_array());
+    }
+    // Unscoped, the work alias resolves.
+    let mut everything = env.scoped(&[]);
+    let all = claim_result(
+        &mut everything,
+        "about",
+        json!({"entity": "https:login/secret"}),
+    );
+    assert!(!all["claims"].as_array().unwrap().is_empty());
 }
 
 fn portable_answer(mut value: Value) -> Value {

@@ -133,13 +133,16 @@ fn build(
     // candidates are selected before replay, but status, recency and the limit are not.
     let (roots, components, argument) = match target {
         Target::Entity(entity) => (
-            "SELECT id FROM entity WHERE id = ?1 OR identifier = ?1 UNION SELECT subject FROM claim WHERE predicate = 'rastro:alias' AND object_value = ?1",
+            format!(
+                "SELECT id FROM entity WHERE id = ?1 OR identifier = ?1 UNION SELECT subject FROM ({})",
+                super::knowledge::ALIAS_SUBJECTS
+            ),
             "SELECT subject, predicate FROM claim WHERE subject IN roots UNION ALL SELECT subject, predicate FROM claim WHERE object_entity IN roots",
             entity,
         ),
         // A claim's own slot only, plus its endpoints' type and alias claims below.
         Target::Claim(claim) => (
-            "SELECT 1 WHERE 0",
+            "SELECT 1 WHERE 0".to_string(),
             "SELECT subject, predicate FROM claim WHERE id = ?1",
             claim,
         ),

@@ -276,7 +276,7 @@ impl ClaimsRebuildRequest {
 #[derive(Args, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct AboutRequest {
-    /// Entity id, canonical alias or exact canonical URL.
+    /// Entity id, canonical alias (`<namespace>:<kind>/<value>`, e.g. `github:login/octocat`) or exact canonical URL.
     pub entity: String,
     /// Only claims whose known interval started at or after this RFC 3339 time.
     #[arg(long)]
