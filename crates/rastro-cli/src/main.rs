@@ -139,6 +139,23 @@ fn why_text(why: &WhyResult) -> String {
         c.id,
         c.revision
     )];
+    lines.push("  Valid time: unknown".into());
+    for interval in &c.known_intervals {
+        lines.push(format!(
+            "  Known: [{}, {})",
+            stamp(interval.start),
+            interval.end.map(stamp).unwrap_or_else(|| "current".into())
+        ));
+    }
+    for (kind, links) in [
+        ("Conflicts with", &c.conflicts_with),
+        ("Supersedes", &c.supersedes),
+        ("Superseded by", &c.superseded_by),
+    ] {
+        if !links.is_empty() {
+            lines.push(format!("  {kind}: {}", links.join(", ")));
+        }
+    }
     lines.extend(why.supports.iter().map(|s| {
         format!(
             "  \"{}\" | Link: {} | Field: {} | Span: [{}, {}) | Captured: {} | Trust class: {} | Scope: {} | Source: {} | Rule: {} ({} {})",
@@ -207,6 +224,7 @@ fn human(response: &Response) -> String {
         )).collect()),
         Response::Coverage(r) => or_none(r.coverage.iter().map(coverage_block).collect()),
         Response::Sync(r) => or_none(r.runs.iter().map(sync_line).collect()),
+        Response::ClaimsRebuild(r) => format!("Claims rebuilt: {} claims", r.claims),
         Response::IndexRebuild(r) => format!("Index rebuilt: {} observations", r.indexed),
         Response::Search(r) => search_text(&r.query, r),
         Response::Why(r) => why_text(r),

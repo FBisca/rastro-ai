@@ -17,7 +17,9 @@ const LEGACY: [&str; 2] = ["202611041200_initial", "202611041500_evidence_insert
 
 /// `(name, sql)`, named `YYYYMMDDHHmm_<what>` so migrations from different branches
 /// order by time. Never edit one that has shipped; add a new one.
-const MIGRATIONS: [(&str, &str); 7] = [
+mod lifecycle;
+
+const MIGRATIONS: [(&str, &str); 8] = [
     (
         "202611041200_initial",
         include_str!("../migrations/202611041200_initial.sql"),
@@ -45,6 +47,10 @@ const MIGRATIONS: [(&str, &str); 7] = [
     (
         "202611061000_claims_projection",
         include_str!("../migrations/202611061000_claims_projection.sql"),
+    ),
+    (
+        "202611061200_knowledge_v2",
+        include_str!("../migrations/202611061200_knowledge_v2.sql"),
     ),
 ];
 
@@ -445,45 +451,15 @@ impl Storage for SqliteStorage {
         extractor: (&str, &str),
         source: &Source,
     ) -> Result<Vec<(i64, Evidence)>> {
-        let mut statement = self.connection.prepare(
-            "SELECT e.id, e.location, e.field, e.start, e.end, e.quote, e.trust_class,
-             e.captured_at, e.source_updated_at FROM evidence e
-             LEFT JOIN extraction_checkpoint c ON c.extractor = ?3 AND c.extractor_version = ?4
-                 AND c.source = e.source AND c.scope = e.scope
-             WHERE e.source = ?1 AND e.scope = ?2 AND (c.source IS NULL
-                 OR (e.captured_at, e.id) > (c.last_captured_at, c.last_evidence_id))
-             ORDER BY e.captured_at, e.id",
-        )?;
-        let rows = statement.query_map(
-            params![source.name, source.scope.0, extractor.0, extractor.1],
-            |row| {
-                Ok((
-                    row.get::<_, i64>(0)?,
-                    [row.get::<_, String>(1)?, row.get(2)?],
-                    [row.get::<_, i64>(3)? as u64, row.get::<_, i64>(4)? as u64],
-                    [row.get::<_, String>(5)?, row.get(6)?, row.get(7)?],
-                    row.get::<_, Option<String>>(8)?,
-                ))
-            },
-        )?;
-        rows.map(|row| {
-            let (id, [location, field], [start, end], [quote, trust, captured], updated) = row?;
-            let evidence = Evidence {
-                source: source.name.clone(),
-                scope: source.scope.clone(),
-                location,
-                field,
-                start,
-                end,
-                quote,
-                trust_class: trust_class(&trust)?,
-                captured_at: parse_time(captured)?,
-                source_updated_at: updated.map(parse_time).transpose()?,
-                original: None,
-            };
-            Ok((id, evidence))
-        })
-        .collect()
+        self.evidence_after_checkpoint(extractor, source, None)
+    }
+    fn pending_evidence_for_vocabulary(
+        &self,
+        extractor: (&str, &str),
+        vocabulary_version: &str,
+        source: &Source,
+    ) -> Result<Vec<(i64, Evidence)>> {
+        self.evidence_after_checkpoint(extractor, source, Some(vocabulary_version))
     }
     fn record_claims(
         &mut self,
@@ -492,7 +468,40 @@ impl Storage for SqliteStorage {
         claims: &[ObservedClaim],
         checkpoint: Option<&Checkpoint>,
     ) -> Result<Counts> {
+        use rastro_core::claims::{derivation_key, justification_id};
         let transaction = self.connection.transaction()?;
+        let mut affected = std::collections::BTreeSet::new();
+        // Retirement happens only on a successful complete run, inside this publication.
+        let (source, scope): (String, String) = transaction.query_row(
+            "SELECT source, scope FROM runs WHERE id = ?1",
+            [run_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let vocabulary_version = checkpoint.map(|c| c.vocabulary_version.as_str());
+        let retired = transaction.prepare(
+            "SELECT DISTINCT c.subject, c.predicate, e.location, s.field FROM justification j JOIN claim c ON c.id = j.claim_id
+             JOIN justification_span s ON s.justification_id = j.id JOIN evidence e ON e.id = s.evidence_id
+             WHERE j.extractor = ?1 AND (j.extractor_version != ?2 OR (?5 IS NOT NULL AND j.vocabulary_version != ?5)) AND e.source = ?3 AND e.scope = ?4")?
+            .query_map(params![extractor.0, extractor.1, source, scope, vocabulary_version], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?, r.get::<_, String>(3)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        affected.extend(retired);
+        transaction.execute("DELETE FROM occurrence WHERE justification_id IN (
+            SELECT j.id FROM justification j JOIN justification_span s ON s.justification_id = j.id
+            JOIN evidence e ON e.id = s.evidence_id WHERE j.extractor = ?1 AND (j.extractor_version != ?2 OR (?5 IS NOT NULL AND j.vocabulary_version != ?5))
+            AND e.source = ?3 AND e.scope = ?4)", params![extractor.0, extractor.1, source, scope, vocabulary_version])?;
+        transaction.execute(
+            "DELETE FROM justification_span WHERE justification_id IN (
+            SELECT j.id FROM justification j WHERE j.extractor = ?1 AND (j.extractor_version != ?2 OR (?5 IS NOT NULL AND j.vocabulary_version != ?5)))
+            AND evidence_id IN (SELECT id FROM evidence WHERE source = ?3 AND scope = ?4)",
+            params![extractor.0, extractor.1, source, scope, vocabulary_version],
+        )?;
+        transaction.execute(
+            "DELETE FROM justification WHERE NOT EXISTS
+            (SELECT 1 FROM justification_span s WHERE s.justification_id = justification.id)",
+            [],
+        )?;
+        transaction.execute("DELETE FROM extraction_checkpoint WHERE extractor = ?1 AND extractor_version != ?2 AND source = ?3 AND scope = ?4",
+            params![extractor.0, extractor.1, source, scope])?;
         let mut counts = Counts::default();
         for claim in claims {
             let mut entities = vec![claim.subject.clone()];
@@ -507,113 +516,155 @@ impl Storage for SqliteStorage {
                 }
                 Object::Literal { value, datatype } => (None, Some(value), Some(datatype)),
             };
-            // One identifier is one entity of one type; a claim naming it as another is refused.
-            let mut clash = false;
-            for entity in &entities {
-                let stored: Option<String> = transaction
-                    .query_row(
-                        "SELECT type FROM entity WHERE id = ?1",
-                        [&entity.id],
-                        |row| row.get(0),
-                    )
-                    .optional()?;
-                clash |= stored.is_some_and(|t| t != entity.entity_type);
-            }
-            if clash {
-                counts.rejected += 1;
-                continue;
-            }
             for entity in &entities {
                 transaction.execute(
-                    "INSERT OR IGNORE INTO entity (id, type, identifier) VALUES (?1, ?2, ?3)",
-                    params![entity.id, entity.entity_type, entity.identifier],
-                )?;
-                transaction.execute(
-                    "INSERT OR IGNORE INTO alias (entity_id, alias, kind)
-                     VALUES (?1, ?2, 'canonical')",
+                    "INSERT OR IGNORE INTO entity (id, identifier) VALUES (?1, ?2)",
                     params![entity.id, entity.identifier],
                 )?;
             }
             transaction.execute(
-                "INSERT OR IGNORE INTO claim (id, subject, predicate, object_entity, object_value,
-                 object_datatype, status, revision) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'observed', '')",
-                params![
-                    claim.id,
-                    claim.subject.id,
-                    claim.predicate,
-                    object_entity,
-                    object_value,
-                    object_datatype
-                ],
-            )?;
-            let mut added = 0;
-            for s in &claim.supports {
-                added += transaction.execute(
-                    "INSERT OR IGNORE INTO claim_support (claim_id, evidence_id, field, start, end,
-                     extraction_rule, extractor, extractor_version, run_id)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                    params![
-                        claim.id,
-                        s.evidence_id,
-                        s.field,
-                        s.start as i64,
-                        s.end as i64,
-                        s.extraction_rule,
-                        extractor.0,
-                        extractor.1,
-                        run_id
-                    ],
+                "INSERT INTO claim (id, subject, predicate, object_entity, object_value,
+                 object_datatype, status, revision, scalar, type_ancestors) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'observed', '', ?7, ?8)
+                 ON CONFLICT(id) DO UPDATE SET scalar = excluded.scalar, type_ancestors = excluded.type_ancestors",
+                params![claim.id, claim.subject.id, claim.predicate, object_entity, object_value, object_datatype, claim.scalar,
+                    serde_json::to_string(&claim.type_ancestors.iter().collect::<std::collections::BTreeSet<_>>())?])?;
+            let derivation = derivation_key(&claim.supports);
+            let id = justification_id(&claim.id, extractor.0, &derivation);
+            let rule = claim
+                .supports
+                .iter()
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("empty justification"))?
+                .extraction_rule
+                .clone();
+            let added = transaction.execute(
+                "INSERT OR IGNORE INTO justification (id, claim_id, kind, extractor, extractor_version,
+                 vocabulary_version, derivation_key, extraction_rule, run_id)
+                 VALUES (?1, ?2, 'provenance', ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![id, claim.id, extractor.0, extractor.1, checkpoint.map_or("", |c| &c.vocabulary_version), derivation, rule, run_id])?;
+            if added == 0 {
+                transaction.execute(
+                    "UPDATE justification SET vocabulary_version = ?2, run_id = ?3 WHERE id = ?1",
+                    params![id, checkpoint.map_or("", |c| &c.vocabulary_version), run_id],
                 )?;
             }
-            if added == 0 {
-                counts.unchanged += 1;
-                continue;
+            let mut spans_added = 0;
+            for span in &claim.supports {
+                let location: String = transaction.query_row(
+                    "SELECT location FROM evidence WHERE id = ?1",
+                    [span.evidence_id],
+                    |r| r.get(0),
+                )?;
+                affected.insert((
+                    claim.subject.id.clone(),
+                    claim.predicate.clone(),
+                    location,
+                    span.field.clone(),
+                ));
+                spans_added += transaction.execute("INSERT OR IGNORE INTO justification_span
+                    (justification_id, evidence_id, portable_key, field, start, end) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![id, span.evidence_id, span.portable_key, span.field, span.start as i64, span.end as i64])?;
             }
-            counts.accepted += 1;
-            let current: Vec<rastro_core::claims::Support> = transaction
-                .prepare(
-                    "SELECT evidence_id, field, start, end, extraction_rule FROM claim_support
-                     WHERE claim_id = ?1 AND current = 1",
-                )?
-                .query_map([&claim.id], |row| {
-                    Ok(rastro_core::claims::Support {
-                        evidence_id: row.get(0)?,
-                        field: row.get(1)?,
-                        start: row.get::<_, i64>(2)? as u64,
-                        end: row.get::<_, i64>(3)? as u64,
-                        extraction_rule: row.get(4)?,
-                    })
-                })?
-                .collect::<Result<_, _>>()?;
-            transaction.execute(
-                "UPDATE claim SET status = 'observed', revision = ?2 WHERE id = ?1",
-                params![
-                    claim.id,
-                    rastro_core::claims::revision("observed", &current)
-                ],
-            )?;
+            if added == 0 && spans_added == 0 {
+                counts.unchanged += 1;
+            } else {
+                counts.accepted += 1;
+            }
         }
+        // Claims removed by retirement disappear, together with dangling presentation links.
+        transaction.execute("DELETE FROM claim_link WHERE from_claim IN (SELECT id FROM claim c WHERE NOT EXISTS
+            (SELECT 1 FROM justification j WHERE j.claim_id = c.id)) OR to_claim IN (SELECT id FROM claim c WHERE NOT EXISTS
+            (SELECT 1 FROM justification j WHERE j.claim_id = c.id))", [])?;
+        transaction.execute("DELETE FROM claim WHERE NOT EXISTS (SELECT 1 FROM justification j WHERE j.claim_id = claim.id)", [])?;
+        if lifecycle::staging(&transaction)? {
+            let components = affected
+                .iter()
+                .map(|(subject, predicate, _, _)| (subject.clone(), predicate.clone()))
+                .collect();
+            lifecycle::refresh(&transaction, &components)?;
+        } else {
+            lifecycle::refresh_groups(&transaction, &affected)?;
+        }
+        transaction.execute("DELETE FROM entity WHERE id NOT IN (SELECT subject FROM claim UNION SELECT object_entity FROM claim WHERE object_entity IS NOT NULL)", [])?;
         if let Some(c) = checkpoint {
             transaction.execute(
                 "INSERT INTO extraction_checkpoint (extractor, extractor_version, source, scope,
-                 last_captured_at, last_evidence_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-                 ON CONFLICT DO UPDATE SET last_captured_at = excluded.last_captured_at,
-                 last_evidence_id = excluded.last_evidence_id",
-                params![
-                    c.extractor,
-                    c.extractor_version,
-                    c.source,
-                    c.scope.0,
-                    stamp(c.last.0),
-                    c.last.1
-                ],
-            )?;
+                 last_captured_at, last_portable_key, last_evidence_id, vocabulary_version) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT DO UPDATE SET
+                 last_captured_at = CASE WHEN excluded.last_evidence_id >= last_evidence_id THEN excluded.last_captured_at ELSE last_captured_at END,
+                 last_portable_key = CASE WHEN excluded.last_evidence_id >= last_evidence_id THEN excluded.last_portable_key ELSE last_portable_key END,
+                 last_evidence_id = max(last_evidence_id, excluded.last_evidence_id),
+                 vocabulary_version = excluded.vocabulary_version",
+                params![c.extractor, c.extractor_version, c.source, c.scope.0, stamp(c.last.0),
+                    c.last_portable_key, c.last.1, c.vocabulary_version])?;
+        }
+        if !lifecycle::staging(&transaction)? {
+            lifecycle::publish(&transaction)?;
         }
         transaction.commit()?;
         Ok(counts)
     }
+    fn extraction_sources(&self) -> Result<Vec<(Source, String)>> {
+        let rows = self
+            .connection
+            .prepare(
+                "SELECT s.name, p.scope, s.extractor, s.connector, s.selector,
+            s.freshness_rule, s.window_start, s.keep_original FROM sources s JOIN
+            (SELECT name AS source, scope FROM sources UNION SELECT source, scope FROM evidence) p
+            ON p.source = s.name WHERE s.extractor IS NOT NULL ORDER BY s.name, p.scope",
+            )?
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, String>(6)?,
+                    r.get::<_, bool>(7)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        rows.into_iter()
+            .map(
+                |(
+                    name,
+                    scope,
+                    extractor,
+                    connector,
+                    selector,
+                    freshness_rule,
+                    window_start,
+                    keep_original,
+                )| {
+                    Ok((
+                        Source {
+                            name,
+                            scope: Scope(scope),
+                            connector,
+                            selector: serde_json::from_str(&selector)?,
+                            freshness_rule,
+                            window_start: parse_time(window_start)?,
+                            keep_original,
+                        },
+                        extractor,
+                    ))
+                },
+            )
+            .collect()
+    }
+    fn begin_claims_rebuild(&mut self) -> Result<()> {
+        lifecycle::begin_rebuild(&self.connection)
+    }
+    fn finish_claims_rebuild(&mut self, publish: bool) -> Result<usize> {
+        lifecycle::finish_rebuild(&mut self.connection, publish)
+    }
     fn why(&self, claim: &str) -> Result<Option<Why>> {
-        View(&self.connection).why(claim)
+        let snapshot = self.connection.unchecked_transaction()?;
+        let result = View(&snapshot).why(claim)?;
+        snapshot.commit()?;
+        Ok(result)
     }
 }
 
@@ -626,8 +677,8 @@ impl View<'_> {
         let found = self
             .0
             .query_row(
-                "SELECT c.id, c.predicate, c.status, c.revision, s.identifier, s.type,
-                 o.identifier, o.type, c.object_value, c.object_datatype
+                "SELECT c.id, c.predicate, c.status, c.revision, s.identifier, coalesce((SELECT object_value FROM claim t WHERE t.subject = s.id AND t.predicate = 'rastro:type' AND t.status = 'observed' ORDER BY t.id LIMIT 1), ''),
+                 o.identifier, CASE WHEN o.id IS NOT NULL THEN coalesce((SELECT object_value FROM claim t WHERE t.subject = o.id AND t.predicate = 'rastro:type' AND t.status = 'observed' ORDER BY t.id LIMIT 1), '') END, c.object_value, c.object_datatype
                  FROM claim c JOIN entity s ON s.id = c.subject
                  LEFT JOIN entity o ON o.id = c.object_entity WHERE c.id = ?1",
                 [claim],
@@ -664,10 +715,13 @@ impl View<'_> {
         };
         let mut statement = self.0.prepare(
             "SELECT e.id, e.source, e.scope, e.location, s.field, s.start, s.end, e.start,
-             e.quote, e.trust_class, e.captured_at, e.source_updated_at, s.extraction_rule,
-             s.extractor, s.extractor_version
-             FROM claim_support s JOIN evidence e ON e.id = s.evidence_id
-             WHERE s.claim_id = ?1 ORDER BY e.captured_at, e.id",
+             e.quote, e.trust_class, e.captured_at, e.source_updated_at, j.extraction_rule,
+             j.extractor, j.extractor_version, (j.current AND NOT EXISTS (
+                 SELECT 1 FROM justification_span newer WHERE newer.justification_id = s.justification_id
+                 AND newer.portable_key = s.portable_key AND newer.field = s.field
+                 AND newer.start = s.start AND newer.end = s.end AND newer.evidence_id > s.evidence_id)), j.id, j.kind, s.portable_key, j.vocabulary_version
+             FROM justification_span s JOIN evidence e ON e.id = s.evidence_id JOIN justification j ON j.id = s.justification_id
+             WHERE j.claim_id = ?1 ORDER BY e.captured_at, e.id, j.id, s.start, s.end",
         )?;
         let rows = statement.query_map([&id], |row| {
             Ok((
@@ -686,6 +740,13 @@ impl View<'_> {
                 [row.get::<_, String>(8)?, row.get(9)?, row.get(10)?],
                 row.get::<_, Option<String>>(11)?,
                 [row.get::<_, String>(12)?, row.get(13)?, row.get(14)?],
+                row.get::<_, bool>(15)?,
+                [
+                    row.get::<_, String>(16)?,
+                    row.get(17)?,
+                    row.get(18)?,
+                    row.get(19)?,
+                ],
             ))
         })?;
         let supports = rows
@@ -697,12 +758,24 @@ impl View<'_> {
                     [quote, trust, captured],
                     updated,
                     [extraction_rule, extractor, extractor_version],
+                    current,
+                    [
+                        justification_id,
+                        justification_kind,
+                        portable_key,
+                        vocabulary_version,
+                    ],
                 ) = row?;
                 let quote = quote
                     .get((start - from) as usize..(end - from) as usize)
                     .unwrap_or_default()
                     .to_string();
                 Ok(SupportView {
+                    justification_id,
+                    justification_kind,
+                    portable_key,
+                    vocabulary_version,
+                    current,
                     evidence_id,
                     source,
                     scope: Scope(scope),
@@ -722,12 +795,17 @@ impl View<'_> {
             .collect::<Result<_>>()?;
         Ok(Some(Why {
             claim: ClaimView {
-                id,
+                id: id.clone(),
                 subject: Entity::new(subject, subject_type),
                 predicate,
                 object,
                 status,
                 revision,
+                known_intervals: lifecycle::intervals(self.0, &id)?,
+                valid_time: rastro_core::claims::ValidTime::Unknown,
+                conflicts_with: lifecycle::links(self.0, &id, "conflicts_with", false)?,
+                supersedes: lifecycle::links(self.0, &id, "supersedes", false)?,
+                superseded_by: lifecycle::links(self.0, &id, "supersedes", true)?,
             },
             supports,
         }))
@@ -970,4 +1048,101 @@ fn first_match(quote: &str, marked: &str) -> Option<(usize, usize)> {
     // No marker precedes the first, so `start` is already an offset in the quote; the open
     // marker sits between `start` and the text.
     Some((start, end - OPEN.len_utf8()))
+}
+
+impl SqliteStorage {
+    fn evidence_after_checkpoint(
+        &self,
+        extractor: (&str, &str),
+        source: &Source,
+        vocabulary_version: Option<&str>,
+    ) -> Result<Vec<(i64, Evidence)>> {
+        let mut statement = self.connection.prepare(
+            "SELECT e.id, e.location, e.field, e.start, e.end, e.quote, e.trust_class,
+             e.captured_at, e.source_updated_at FROM evidence e
+             LEFT JOIN extraction_checkpoint c ON c.extractor = ?3 AND c.extractor_version = ?4
+                 AND c.source = e.source AND c.scope = e.scope
+                 AND (?5 IS NULL OR c.vocabulary_version = ?5)
+             WHERE e.source = ?1 AND e.scope = ?2 AND (c.source IS NULL
+                 OR e.id > c.last_evidence_id)
+             ORDER BY e.captured_at, e.id",
+        )?;
+        let rows = statement.query_map(
+            params![
+                source.name,
+                source.scope.0,
+                extractor.0,
+                extractor.1,
+                vocabulary_version
+            ],
+            |row| {
+                Ok((
+                    row.get::<_, i64>(0)?,
+                    [row.get::<_, String>(1)?, row.get(2)?],
+                    [row.get::<_, i64>(3)? as u64, row.get::<_, i64>(4)? as u64],
+                    [row.get::<_, String>(5)?, row.get(6)?, row.get(7)?],
+                    row.get::<_, Option<String>>(8)?,
+                ))
+            },
+        )?;
+        let mut evidence = rows
+            .map(|row| {
+                let (id, [location, field], [start, end], [quote, trust, captured], updated) = row?;
+                let evidence = Evidence {
+                    source: source.name.clone(),
+                    scope: source.scope.clone(),
+                    location,
+                    field,
+                    start,
+                    end,
+                    quote,
+                    trust_class: trust_class(&trust)?,
+                    captured_at: parse_time(captured)?,
+                    source_updated_at: updated.map(parse_time).transpose()?,
+                    original: None,
+                };
+                Ok((id, evidence))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        evidence.sort_by_key(|(id, e)| (e.captured_at, *id));
+        Ok(evidence)
+    }
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod projection_schema_tests {
+    use super::*;
+
+    #[test]
+    fn S19_shadow_tables_match_the_active_projection_column_shapes() {
+        let home = tempfile::tempdir().unwrap();
+        let mut storage = SqliteStorage::open(&home.path().join("db")).unwrap();
+        storage.begin_claims_rebuild().unwrap();
+        let db = &storage.connection;
+        let tables = db
+            .prepare("SELECT name FROM sqlite_temp_master WHERE type = 'table' ORDER BY name")
+            .unwrap()
+            .query_map([], |r| r.get::<_, String>(0))
+            .unwrap()
+            .collect::<Result<Vec<_>, _>>()
+            .unwrap();
+        assert_eq!(tables.len(), 7);
+        for table in tables {
+            assert!(
+                db.query_row(
+                    "SELECT EXISTS(SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?1)",
+                    [&table],
+                    |r| r.get::<_, bool>(0)
+                )
+                .unwrap()
+            );
+            let columns = |schema: &str| {
+                db.prepare("SELECT name, type, \"notnull\", dflt_value, pk, hidden FROM pragma_table_xinfo(?1, ?2) ORDER BY cid").unwrap()
+                    .query_map(params![table, schema], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, bool>(2)?, r.get::<_, Option<String>>(3)?, r.get::<_, i64>(4)?, r.get::<_, i64>(5)?))).unwrap().collect::<Result<Vec<_>, _>>().unwrap()
+            };
+            assert_eq!(columns("main"), columns("temp"), "{table}");
+        }
+        storage.finish_claims_rebuild(false).unwrap();
+    }
 }

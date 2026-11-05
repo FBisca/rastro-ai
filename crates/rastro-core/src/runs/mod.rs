@@ -121,6 +121,46 @@ impl<S: Storage> Rastro<S> {
         Ok(reports)
     }
 
+    /// Replays evidence through its bound extractors into a private generation and publishes
+    /// only after every extractor succeeds. Readers keep the previous generation on failure.
+    pub fn rebuild_claims(&mut self) -> Result<usize> {
+        let lock = files::private_file(&self.locations.sync_lock())?;
+        lock.lock()?;
+        self.storage.interrupt_unfinished_runs(Utc::now())?;
+        let sources = self.storage.extraction_sources()?;
+        self.storage.begin_claims_rebuild()?;
+        let replay = (|| -> Result<()> {
+            for (source, extractor) in &sources {
+                let report = host::extract(&mut self.storage, &self.locations, source, extractor)?;
+                if report.state == ExtractionState::NotInstalled
+                    || report.reason.as_deref() == Some("forbidden")
+                {
+                    continue;
+                }
+                anyhow::ensure!(
+                    report.state == ExtractionState::Current,
+                    "claims rebuild: extractor {extractor} for {} failed: {}",
+                    source.name,
+                    report.reason.as_deref().unwrap_or("unknown")
+                );
+            }
+            Ok(())
+        })();
+        match replay {
+            Ok(()) => match self.storage.finish_claims_rebuild(true) {
+                Ok(count) => Ok(count),
+                Err(error) => {
+                    self.storage.finish_claims_rebuild(false)?;
+                    Err(error)
+                }
+            },
+            Err(error) => {
+                self.storage.finish_claims_rebuild(false)?;
+                Err(error)
+            }
+        }
+    }
+
     /// Rebuilds the search index from the stored evidence.
     pub fn rebuild_index(&mut self) -> Result<usize> {
         self.storage.rebuild_index()

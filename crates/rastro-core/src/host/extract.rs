@@ -11,7 +11,7 @@ use rastro_plugin_sdk::{
     SourceScope, Span, Vocabulary,
 };
 use std::{
-    collections::{BTreeMap, HashMap, btree_map::Entry},
+    collections::HashMap,
     fs,
     path::{Component, Path},
     process::Command,
@@ -56,7 +56,11 @@ pub fn extract<S: Storage>(
             Err("forbidden")
         }
         Ok((plugin, vocabulary)) => {
-            let pending = storage.pending_evidence((extractor, &version), source)?;
+            let pending = storage.pending_evidence_for_vocabulary(
+                (extractor, &version),
+                &vocabulary.version,
+                source,
+            )?;
             evidence = pending.len();
             let run = Run {
                 plugin,
@@ -201,8 +205,8 @@ fn converse<S: Storage>(
         }
     }
     let delivered: HashMap<i64, Evidence> = run.pending.iter().cloned().collect();
-    // One entry per claim id; a repeat in the same run adds its supports and counts unchanged.
-    let mut accepted: BTreeMap<String, ObservedClaim> = BTreeMap::new();
+    // Preserve each submission as a separate AND derivation.
+    let mut accepted: Vec<ObservedClaim> = Vec::new();
     loop {
         let message = match wire.recv_by(end) {
             Ok(message) => message,
@@ -222,15 +226,7 @@ fn converse<S: Storage>(
                         claims::validate(submit, &delivered, manifest, run.vocabulary)
                     });
                 match checked {
-                    Ok(claim) => match accepted.entry(claim.id.clone()) {
-                        Entry::Vacant(entry) => {
-                            entry.insert(claim);
-                        }
-                        Entry::Occupied(mut entry) => {
-                            entry.get_mut().supports.extend(claim.supports);
-                            counts.unchanged += 1;
-                        }
-                    },
+                    Ok(claim) => accepted.push(claim),
                     Err(why) => {
                         relay.line(&format!("rejected claim: {why}"));
                         counts.rejected += 1;
@@ -242,15 +238,16 @@ fn converse<S: Storage>(
                     return Ok(Err("protocol"));
                 };
                 let outcome = if finish.status == "ok" {
-                    let checkpoint = run.pending.last().map(|(id, e)| Checkpoint {
+                    let checkpoint = checkpoint_boundary(&run.pending).map(|(id, e)| Checkpoint {
                         extractor: manifest.id.clone(),
                         extractor_version: manifest.version.clone(),
                         source: run.source.name.clone(),
                         scope: run.source.scope.clone(),
-                        last: (e.captured_at, *id),
+                        last: (e.captured_at, id),
+                        vocabulary_version: run.vocabulary.version.clone(),
+                        last_portable_key: claims::portable_evidence_key(e),
                     });
-                    let claims: Vec<ObservedClaim> =
-                        std::mem::take(&mut accepted).into_values().collect();
+                    let claims: Vec<ObservedClaim> = std::mem::take(&mut accepted);
                     let stored = storage.record_claims(
                         run.run_id,
                         (&manifest.id, &manifest.version),
@@ -280,6 +277,13 @@ fn converse<S: Storage>(
     }
 }
 
+fn checkpoint_boundary(pending: &[(i64, Evidence)]) -> Option<(i64, &Evidence)> {
+    pending
+        .iter()
+        .max_by_key(|(id, _)| *id)
+        .map(|(id, evidence)| (*id, evidence))
+}
+
 fn item((id, e): &(i64, Evidence)) -> BatchItem {
     BatchItem {
         evidence_id: *id,
@@ -297,5 +301,39 @@ fn item((id, e): &(i64, Evidence)) -> BatchItem {
             .source_updated_at
             .map(|t| t.to_rfc3339_opts(SecondsFormat::Millis, true)),
         trust_class: e.trust_class.as_str().into(),
+    }
+}
+
+#[cfg(test)]
+#[allow(non_snake_case)]
+mod tests {
+    use super::*;
+    #[test]
+    fn S3_checkpoint_boundary_names_one_append_even_when_capture_order_differs() {
+        let observation = |captured: &str| Evidence {
+            source: "source".into(),
+            scope: crate::Scope("personal".into()),
+            location: "https://example.org/item".into(),
+            field: "/state".into(),
+            start: 0,
+            end: 4,
+            quote: "open".into(),
+            trust_class: crate::TrustClass::Structured,
+            captured_at: captured.parse().unwrap(),
+            source_updated_at: None,
+            original: None,
+        };
+        let later_append = observation("2026-11-01T00:00:00Z");
+        let pending = vec![
+            (20, later_append.clone()),
+            (10, observation("2026-11-02T00:00:00Z")),
+        ];
+        let (id, boundary) = checkpoint_boundary(&pending).unwrap();
+        assert_eq!(id, 20);
+        assert_eq!(boundary.captured_at, later_append.captured_at);
+        assert_eq!(
+            claims::portable_evidence_key(boundary),
+            claims::portable_evidence_key(&later_append)
+        );
     }
 }

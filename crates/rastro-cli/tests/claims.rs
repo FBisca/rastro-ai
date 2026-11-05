@@ -215,7 +215,8 @@ fn S3_a_bound_extractor_turns_its_sources_evidence_into_claims_read_through_why(
     let claim = &why["claim"];
     assert_eq!(claim["id"], id.as_str());
     assert_eq!(claim["subject"]["identifier"], PR);
-    assert_eq!(claim["subject"]["type"], "code:PullRequest");
+    // This fixture submits no rastro:type claim. Types are never entity columns.
+    assert_eq!(claim["subject"]["type"], "");
     assert_eq!(claim["predicate"], "code:state");
     assert_eq!(claim["object"], literal("open"));
     assert_eq!(claim["status"], "observed");
@@ -353,7 +354,7 @@ fn S4_claims_with_untrusted_undelivered_outside_or_nondeterministic_supports_are
     assert_eq!(
         (
             env.count("claim"),
-            env.count("claim_support"),
+            env.count("justification_span"),
             env.count("entity")
         ),
         (2, 2, 1)
@@ -594,4 +595,450 @@ fn S18a_an_unfinished_extractor_run_is_marked_interrupted_without_a_coverage_win
         2
     );
     assert_eq!(env.count("coverage"), 1);
+}
+
+// Content-addressed ids are part of the public claim reference contract.
+const OPEN: &str = "c_396068c0fa399a0ab85fba670ab6abf3";
+fn state_id(value: &str) -> String {
+    rastro_core::claims::claim_id(
+        &rastro_core::claims::entity_id(PR),
+        "code:state",
+        &rastro_core::claims::Object::Literal {
+            value: value.into(),
+            datatype: "string".into(),
+        },
+    )
+}
+fn sync_state(env: &Env, source: &str, value: &str) {
+    env.observe(&[state(value)]);
+    env.json(&["sync", source]);
+}
+#[test]
+fn S8_second_support_keeps_id_and_changes_revision() {
+    let env = Env::new(Some("test-extractor"));
+    env.add_source("a", "test");
+    env.add_source("b", "test");
+    sync_state(&env, "a", "open");
+    let first = env.json(&["why", OPEN]);
+    sync_state(&env, "b", "open");
+    let second = env.json(&["why", OPEN]);
+    assert_eq!(first["claim"]["id"], second["claim"]["id"]);
+    assert_ne!(first["claim"]["revision"], second["claim"]["revision"]);
+    assert_eq!(second["supports"].as_array().unwrap().len(), 2);
+}
+#[test]
+fn S9_open_closed_open_reuses_id_and_keeps_intervals() {
+    let env = Env::new(Some("test-extractor"));
+    env.add_source("a", "test");
+    sync_state(&env, "a", "open");
+    let first = env.json(&["why", OPEN]);
+    sync_state(&env, "a", "closed");
+    let replaced = env.json(&["why", OPEN]);
+    assert_eq!(replaced["claim"]["status"], "superseded");
+    assert_eq!(
+        replaced["claim"]["superseded_by"],
+        json!([state_id("closed")])
+    );
+    sync_state(&env, "a", "open");
+    let returned = env.json(&["why", OPEN]);
+    assert_eq!(returned["claim"]["status"], "observed");
+    assert_ne!(first["claim"]["revision"], returned["claim"]["revision"]);
+    assert_eq!(
+        returned["claim"]["known_intervals"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    assert_eq!(returned["claim"]["superseded_by"], json!([]));
+    let closed = env.json(&["why", &state_id("closed")]);
+    assert_eq!(closed["claim"]["status"], "superseded");
+    assert_eq!(closed["claim"]["superseded_by"], json!([OPEN]));
+}
+
+#[test]
+fn S10_missing_null_and_not_returned_never_supersede() {
+    let env = Env::new(Some("test-extractor"));
+    env.add_source("a", "test");
+    sync_state(&env, "a", "open");
+    let before = env.json(&["why", OPEN]);
+    // A structured null observation carries no scalar claim from the extractor.
+    let null = state("null");
+    env.extract(&[]);
+    for observations in [vec![body("field omitted")], vec![null], vec![]] {
+        env.observe(&observations);
+        env.json(&["sync", "a"]);
+        assert_eq!(before, env.json(&["why", OPEN]));
+    }
+}
+#[test]
+fn S12_known_time_uses_evidence_capture_and_valid_time_is_unknown() {
+    let env = Env::new(Some("test-extractor"));
+    env.add_source("a", "test");
+    sync_state(&env, "a", "open");
+    let first = env.json(&["why", OPEN]);
+    assert_eq!(first["claim"]["valid_time"], "unknown");
+    assert_eq!(
+        first["claim"]["known_intervals"][0]["start"],
+        first["supports"][0]["captured_at"]
+    );
+    assert_ne!(
+        first["claim"]["known_intervals"][0]["start"],
+        first["supports"][0]["source_updated_at"]
+    );
+    assert!(first["claim"]["known_intervals"][0]["end"].is_null());
+    sync_state(&env, "a", "closed");
+    let old = env.json(&["why", OPEN]);
+    let new = env.json(&["why", &state_id("closed")]);
+    assert_eq!(
+        old["claim"]["known_intervals"][0]["end"],
+        new["supports"][0]["captured_at"]
+    );
+}
+#[test]
+fn S11_newer_comparable_source_wins_ties_and_unknown_times_conflict() {
+    for (older, newer, expected) in [
+        (
+            Some("2026-11-01T00:00:00Z"),
+            Some("2026-11-02T00:00:00Z"),
+            "superseded",
+        ),
+        (
+            Some("2026-11-01T00:00:00Z"),
+            Some("2026-11-01T00:00:00Z"),
+            "observed",
+        ),
+        (None, Some("2026-11-02T00:00:00Z"), "observed"),
+    ] {
+        let env = Env::new(Some("test-extractor"));
+        let manifest = env.plugin_dir("test-extractor").join("rastro-plugin.toml");
+        let mut text = fs::read_to_string(&manifest).unwrap();
+        text.push_str("\n[[extraction_rules]]\nid = \"other-state-rule\"\ndeterministic = true\n");
+        fs::write(manifest, text).unwrap();
+        env.add_source("a", "test");
+        env.add_source("b", "test");
+        for (source, value, updated) in [("a", "open", older), ("b", "closed", newer)] {
+            let mut observation = state(value);
+            observation["source_updated_at"] = json!(updated);
+            env.extract(&[claim(
+                "code:state",
+                literal(value),
+                if source == "a" {
+                    "state-field"
+                } else {
+                    "other-state-rule"
+                },
+                first_state_support(),
+            )]);
+            env.observe(&[observation]);
+            env.json(&["sync", source]);
+        }
+        let open = env.json(&["why", OPEN]);
+        let closed = env.json(&["why", &state_id("closed")]);
+        assert_eq!(open["claim"]["status"], expected);
+        assert_eq!(closed["claim"]["status"], "observed");
+        if expected == "observed" {
+            assert_eq!(open["claim"]["conflicts_with"], json!([state_id("closed")]));
+            assert_eq!(closed["claim"]["conflicts_with"], json!([OPEN]));
+        } else {
+            assert_eq!(open["claim"]["superseded_by"], json!([state_id("closed")]));
+            assert_eq!(open["claim"]["conflicts_with"], json!([]));
+            assert_eq!(open["supports"][0]["current"], false);
+        }
+    }
+}
+
+fn lifecycle_projection(env: &Env) -> Vec<Value> {
+    [OPEN.to_string(), state_id("closed")]
+        .iter()
+        .map(|id| {
+            let mut why = env.json(&["why", id]);
+            // Extractor run metadata belongs to the audit log, outside the projection.
+            for support in why["supports"].as_array_mut().unwrap() {
+                support.as_object_mut().unwrap().remove("run_id");
+            }
+            why
+        })
+        .collect()
+}
+#[test]
+fn S16_rebuild_matches_incremental_ids_revisions_supports_and_intervals() {
+    for connector in ["test", "github"] {
+        let env = Env::new(Some("test-extractor"));
+        env.connector(connector, Some("test-extractor"));
+        env.add_source("a", connector);
+        env.add_source("b", connector);
+        sync_state(&env, "a", "open");
+        sync_state(&env, "a", "closed");
+        sync_state(&env, "b", "open");
+        sync_state(&env, "a", "open");
+        // Replaying all evidence also retains a source's historical scope after config changes.
+        let path = env.path("config/config.toml");
+        let mut config: toml::Table = fs::read_to_string(&path).unwrap().parse().unwrap();
+        for source in config["sources"].as_array_mut().unwrap() {
+            if source["name"].as_str() == Some("a") {
+                source["scope"] = "work".into();
+            }
+        }
+        fs::write(path, config.to_string()).unwrap();
+        let manifest = env.plugin_dir(connector).join("rastro-plugin.toml");
+        let mut connector: toml::Table = fs::read_to_string(&manifest).unwrap().parse().unwrap();
+        connector["permissions"]["scopes"] =
+            toml::Value::Array(vec!["personal".into(), "work".into()]);
+        fs::write(manifest, connector.to_string()).unwrap();
+        sync_state(&env, "a", "open");
+        let before = lifecycle_projection(&env);
+        env.json(&["claims", "rebuild"]);
+        assert_eq!(before, lifecycle_projection(&env));
+    }
+}
+
+#[test]
+fn S19_failed_rebuild_preserves_projection_and_concurrent_readers_see_complete_generations() {
+    let env = Env::new(Some("test-extractor"));
+    env.add_source("a", "test");
+    env.add_source("b", "test");
+    sync_state(&env, "a", "open");
+    sync_state(&env, "a", "closed");
+    sync_state(&env, "b", "open");
+    let before = lifecycle_projection(&env);
+    for fail in [true, false] {
+        let entered = env.path(if fail {
+            "failed-entered"
+        } else {
+            "success-entered"
+        });
+        let release = env.path(if fail {
+            "failed-release"
+        } else {
+            "success-release"
+        });
+        write_script(
+            &env.path("extractor.jsonl"),
+            &[
+                json!({"do":"initialize"}),
+                json!({"do":"read_batches"}),
+                json!({"do":"state_claims"}),
+                json!({"do":"gate", "source":"b", "entered":entered, "release":release, "fail":fail}),
+                json!({"do":"finish"}),
+            ],
+        );
+        let mut rebuild = env
+            .command(&["claims", "rebuild", "--json"])
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::piped())
+            .spawn()
+            .unwrap();
+        let deadline = Instant::now() + Duration::from_secs(20);
+        while !entered.exists() {
+            assert!(
+                rebuild.try_wait().unwrap().is_none(),
+                "rebuild exited before reader gate"
+            );
+            assert!(
+                Instant::now() < deadline,
+                "rebuild never reached its second source"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        // The first source is already staged; every read must still see both sources.
+        assert_eq!(before, lifecycle_projection(&env));
+        fs::write(release, "").unwrap();
+        let output = rebuild.wait_with_output().unwrap();
+        assert_eq!(
+            output.status.success(),
+            !fail,
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(before, lifecycle_projection(&env));
+    }
+}
+
+#[test]
+fn S4b_one_bad_span_rejects_the_entire_bundle_and_counts_it() {
+    let env = Env::new(Some("test-extractor"));
+    env.add_source("a", "test");
+    env.observe(&[state("open"), body("untrusted")]);
+    let good = claim(
+        "code:state",
+        literal("open"),
+        "state-field",
+        first_state_support(),
+    );
+    let mut bad = good.clone();
+    bad["object"] = literal("bad bundle");
+    bad["supports"]
+        .as_array_mut()
+        .unwrap()
+        .push(support(json!("$evidence:1"), "/body", json!(3)));
+    env.extract(&[good, bad]);
+    let result = env.json(&["sync", "a"]);
+    assert_eq!(result["runs"][0]["extraction"]["counts"]["rejected"], 1);
+    assert_eq!(env.count("justification"), 1);
+    assert_eq!(env.count("justification_span"), 1);
+    let why = env.json(&["why", OPEN]);
+    assert_eq!(why["supports"][0]["justification_kind"], "provenance");
+    assert!(
+        why["supports"][0]["justification_id"]
+            .as_str()
+            .unwrap()
+            .starts_with("j_")
+    );
+}
+
+#[test]
+fn S16a_version_replay_serves_old_claims_until_atomic_retirement() {
+    assert_atomic_replay(false);
+}
+
+#[test]
+fn S16a_vocabulary_only_bump_replays_without_new_evidence_and_retires_atomically() {
+    assert_atomic_replay(true);
+}
+
+fn assert_atomic_replay(vocabulary_only: bool) {
+    let env = Env::new(Some("test-extractor"));
+    env.add_source("a", "test");
+    sync_state(&env, "a", "open");
+    let before = env.json(&["why", OPEN]);
+    let manifest = env.plugin_dir("test-extractor").join(if vocabulary_only {
+        "vocabulary.toml"
+    } else {
+        "rastro-plugin.toml"
+    });
+    let text = fs::read_to_string(&manifest)
+        .unwrap()
+        .replace("0.1.0", "0.2.0");
+    fs::write(manifest, text).unwrap();
+    env.observe(&[]);
+    let entered = env.path("upgrade-entered");
+    let release = env.path("upgrade-release");
+    write_script(
+        &env.path("extractor.jsonl"),
+        &[
+            json!({"do":"initialize"}),
+            json!({"do":"read_batches"}),
+            json!({"do":"state_claims"}),
+            json!({"do":"gate", "source":"a", "entered":entered, "release":release}),
+            json!({"do":"finish"}),
+        ],
+    );
+    let mut sync = env
+        .command(&["sync", "a"])
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    let deadline = Instant::now() + Duration::from_secs(20);
+    while !entered.exists() {
+        assert!(
+            sync.try_wait().unwrap().is_none(),
+            "upgrade exited before gate"
+        );
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(before, env.json(&["why", OPEN]));
+    fs::write(release, "").unwrap();
+    let output = sync.wait_with_output().unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let after = env.json(&["why", OPEN]);
+    assert_eq!(after["claim"], before["claim"]);
+    assert_eq!(
+        after["supports"][0]["extractor_version"],
+        if vocabulary_only { "0.1.0" } else { "0.2.0" }
+    );
+    assert_eq!(
+        after["supports"][0]["vocabulary_version"],
+        if vocabulary_only { "0.2.0" } else { "0.1.0" }
+    );
+    let retired_column = if vocabulary_only {
+        "vocabulary_version"
+    } else {
+        "extractor_version"
+    };
+    assert_eq!(
+        env.count(&format!("justification WHERE {retired_column} = '0.1.0'")),
+        0
+    );
+    assert_eq!(env.count("justification"), 1);
+    let publication_column = if vocabulary_only {
+        "vocabulary_versions"
+    } else {
+        "extractor_versions"
+    };
+    let versions: String = env.sql(&format!(
+        "SELECT {publication_column} FROM projection_publication ORDER BY id DESC LIMIT 1"
+    ));
+    assert!(
+        !versions.contains("0.1.0"),
+        "retired extractor leaked into publication: {versions}"
+    );
+}
+
+#[test]
+fn S16b_sync_and_rebuild_publish_receipts_and_fresh_statistics() {
+    let env = Env::new(Some("test-extractor"));
+    env.add_source("a", "test");
+    sync_state(&env, "a", "open");
+    assert_eq!(env.count("projection_publication"), 1);
+    let versions: String = env.sql("SELECT extractor_versions FROM projection_publication");
+    assert!(versions.contains("test-extractor") && versions.contains("0.1.0"));
+    let vocabulary: String = env.sql("SELECT vocabulary_versions FROM projection_publication");
+    assert!(vocabulary.contains("0.1.0"));
+    let water: String = env.sql("SELECT evidence_high_water FROM projection_publication");
+    assert!(water.contains("personal") && water.contains("v_"));
+    assert!(env.count("sqlite_stat1 WHERE tbl = 'claim'") > 0);
+    sync_state(&env, "a", "closed");
+    let stat: String = env.sql("SELECT stat FROM sqlite_stat1 WHERE idx = 'claim_by_subject'");
+    assert!(stat.starts_with("2 "), "{stat}");
+    env.ok(&["claims", "rebuild"]);
+    assert_eq!(env.count("projection_publication"), 3);
+    env.extract(&[]);
+    env.observe(&[body("no accepted claims")]);
+    env.ok(&["sync", "a"]);
+    let water: String =
+        env.sql("SELECT evidence_high_water FROM projection_publication ORDER BY id DESC LIMIT 1");
+    assert!(
+        water.contains("v_"),
+        "even a rejected/empty extraction records its evidence high-water: {water}"
+    );
+    let db = Connection::open(env.path("data/rastro.sqlite3")).unwrap();
+    assert!(
+        db.execute(
+            "UPDATE projection_publication SET extractor_versions = '[]'",
+            []
+        )
+        .is_err()
+    );
+    assert!(
+        db.execute("DELETE FROM projection_publication", [])
+            .is_err()
+    );
+}
+
+#[test]
+fn S16_rebuild_skips_missing_extractors_and_forbidden_historical_pairs() {
+    let env = Env::new(Some("test-extractor"));
+    env.connector("unavailable", Some("not-installed"));
+    env.add_source("a", "test");
+    env.add_source("historical", "test");
+    env.add_source("missing", "unavailable");
+    sync_state(&env, "a", "open");
+    let before = env.json(&["why", OPEN]);
+    env.observe(&[body("no claims")]);
+    env.extract(&[]);
+    env.json(&["sync", "historical"]);
+    env.json(&["sync", "missing"]);
+    let db = Connection::open(env.path("data/rastro.sqlite3")).unwrap();
+    db.execute("INSERT INTO evidence (source, scope, location, field, start, end, quote, captured_at, trust_class) VALUES ('historical', 'forbidden', 'https://example.org/old', '/body', 0, 1, 'x', '2026-11-01T00:00:00Z', 'untrusted content')", []).unwrap();
+    drop(db);
+    fs::remove_file(env.path("extractor.jsonl")).unwrap();
+    env.ok(&["claims", "rebuild"]);
+    assert_eq!(before, env.json(&["why", OPEN]));
 }

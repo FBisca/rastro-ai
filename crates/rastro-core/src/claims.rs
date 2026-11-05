@@ -10,6 +10,8 @@ use std::collections::{BTreeSet, HashMap};
 
 /// The longest identifier, predicate or literal value a claim may carry, in UTF-8 bytes.
 pub const MAX_TERM_BYTES: usize = 4096;
+pub const TYPE_PREDICATE: &str = "rastro:type";
+pub const ALIAS_PREDICATE: &str = "rastro:alias";
 
 /// An entity: one exact canonical identifier, with its type.
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
@@ -46,6 +48,7 @@ pub enum Object {
 /// A byte range of one observation's field that supports a claim.
 #[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
 pub struct Support {
+    pub portable_key: String,
     pub evidence_id: i64,
     pub field: String,
     pub start: u64,
@@ -55,20 +58,26 @@ pub struct Support {
 /// A claim the core accepted as `observed`, ready to store.
 #[derive(Clone, Debug)]
 pub struct ObservedClaim {
+    /// Ancestor type names supplied by vocabulary validation, never part of an id.
+    pub type_ancestors: Vec<String>,
+    pub scalar: bool,
     pub id: String,
     pub subject: Entity,
     pub predicate: String,
     pub object: Object,
     pub supports: BTreeSet<Support>,
 }
-/// How far an extractor version has read a (source, scope): the last observation processed,
-/// in replay order (`captured_at`, evidence id).
+/// How far an extractor version has read a pair. `last.0` and `last_portable_key` name
+/// the portable identity of the boundary; `last.1` is its local append high-water.
+/// Ordering is (`captured_at`, local append id); ids never enter a content hash.
 pub struct Checkpoint {
     pub extractor: String,
     pub extractor_version: String,
     pub source: String,
     pub scope: Scope,
     pub last: (DateTime<Utc>, i64),
+    pub vocabulary_version: String,
+    pub last_portable_key: String,
 }
 
 /// Canonical encoding, version 1: a domain tag, then each part as one tag byte, its length in
@@ -102,31 +111,118 @@ pub fn claim_id(subject: &str, predicate: &str, object: &Object) -> String {
 /// Revision: the hash of a claim's visible state, its status and the set of its current
 /// supports, so a second support changes it.
 pub fn revision(status: &str, supports: &[Support]) -> String {
-    let mut supports = supports.to_vec();
-    supports.sort();
-    let numbers: Vec<_> = supports
+    revision_with_links(status, supports, &[])
+}
+
+/// Revision v2 hashes a set of portable spans, never local ids or interpretation versions.
+pub fn revision_with_links(
+    status: &str,
+    supports: &[Support],
+    links: &[(String, String)],
+) -> String {
+    let keys: BTreeSet<_> = supports.iter().map(|s| s.portable_key.as_str()).collect();
+    let mut parts = vec![(b'A', status), (b'T', "unknown")];
+    parts.extend(keys.into_iter().map(|key| (b'V', key)));
+    let links: BTreeSet<_> = links.iter().collect();
+    for (kind, target) in links {
+        parts.extend([(b'K', kind.as_str()), (b'C', target.as_str())]);
+    }
+    digest("r_", "rastro/revision/v2", &parts)
+}
+
+/// Portable identity of an observation; capture order never depends on a local row id.
+pub fn portable_evidence_key(evidence: &Evidence) -> String {
+    portable_span_key(evidence, evidence.start, evidence.end)
+}
+pub fn portable_span_key(e: &Evidence, start: u64, end: u64) -> String {
+    let quote = &e.quote[(start - e.start) as usize..(end - e.start) as usize];
+    digest(
+        "v_",
+        "rastro/evidence/v1",
+        &[
+            (b'S', &e.source),
+            (b'C', &e.scope.0),
+            (b'L', &e.location),
+            (b'F', &e.field),
+            (b'B', &start.to_string()),
+            (b'N', &end.to_string()),
+            (b'Q', quote),
+            (
+                b'T',
+                &e.captured_at
+                    .to_rfc3339_opts(chrono::SecondsFormat::Nanos, true),
+            ),
+        ],
+    )
+}
+/// One submission is one derivation. Rule and sorted span keys distinguish alternatives.
+pub fn derivation_key(supports: &BTreeSet<Support>) -> String {
+    let keys: BTreeSet<_> = supports
         .iter()
         .map(|s| {
-            [
-                s.evidence_id.to_string(),
+            (
+                &s.extraction_rule,
+                &s.portable_key,
+                &s.field,
                 s.start.to_string(),
                 s.end.to_string(),
+            )
+        })
+        .collect();
+    let parts: Vec<_> = keys
+        .iter()
+        .flat_map(|(rule, key, field, start, end)| {
+            [
+                (b'R', rule.as_str()),
+                (b'V', key.as_str()),
+                (b'F', field.as_str()),
+                (b'B', start.as_str()),
+                (b'N', end.as_str()),
             ]
         })
         .collect();
-    let mut parts = vec![(b'A', status)];
-    for (support, [evidence, start, end]) in supports.iter().zip(&numbers) {
-        parts.extend([
-            (b'V', &**evidence),
-            (b'F', &*support.field),
-            (b'B', &**start),
-            (b'N', &**end),
-            (b'R', &*support.extraction_rule),
-        ]);
-    }
-    digest("r_", "rastro/revision/v1", &parts)
+    digest("d_", "rastro/derivation/v1", &parts)
 }
-
+pub fn justification_id(claim: &str, extractor: &str, derivation: &str) -> String {
+    digest(
+        "j_",
+        "rastro/justification/v1",
+        &[(b'C', claim), (b'E', extractor), (b'D', derivation)],
+    )
+}
+pub fn occurrence_id(justification: &str, captured: &str, portable_key: &str) -> String {
+    digest(
+        "o_",
+        "rastro/occurrence/v1",
+        &[
+            (b'J', justification),
+            (b'T', captured),
+            (b'V', portable_key),
+        ],
+    )
+}
+/// Repeated openings on the same portable event keep separate, portable identities.
+/// The first occurrence retains the original encoding.
+pub fn occurrence_id_with_ordinal(
+    justification: &str,
+    captured: &str,
+    portable_key: &str,
+    ordinal: u64,
+) -> String {
+    if ordinal == 0 {
+        return occurrence_id(justification, captured, portable_key);
+    }
+    digest(
+        "o_",
+        "rastro/occurrence/v1",
+        &[
+            (b'J', justification),
+            (b'T', captured),
+            (b'V', portable_key),
+            (b'N', &ordinal.to_string()),
+        ],
+    )
+}
 /// Checks a submission against what this run delivered, the extractor's declared rules and
 /// its vocabulary. `Err` carries the reason it is rejected.
 pub fn validate(
@@ -216,6 +312,7 @@ pub fn validate(
             return Err("support span lies outside its evidence".into());
         }
         supports.insert(Support {
+            portable_key: portable_evidence_key(evidence),
             evidence_id: support.evidence_id,
             field: support.field,
             start: support.start,
@@ -225,6 +322,8 @@ pub fn validate(
     }
     let subject = Entity::new(subject.identifier, subject.entity_type);
     Ok(ObservedClaim {
+        type_ancestors: Vec::new(),
+        scalar: predicate.cardinality == rastro_plugin_sdk::Cardinality::One,
         id: claim_id(&subject.id, &submit.predicate, &object),
         subject,
         predicate: submit.predicate,
@@ -243,10 +342,32 @@ pub struct ClaimView {
     #[schemars(extend("enum" = ["observed", "superseded"]))]
     pub status: String,
     pub revision: String,
+    pub known_intervals: Vec<KnownInterval>,
+    pub valid_time: ValidTime,
+    pub conflicts_with: Vec<String>,
+    pub supersedes: Vec<String>,
+    pub superseded_by: Vec<String>,
+}
+/// When evidence established and replaced current support for a claim.
+#[derive(Clone, Debug, JsonSchema, Serialize)]
+pub struct KnownInterval {
+    pub start: DateTime<Utc>,
+    pub end: Option<DateTime<Utc>>,
+}
+/// Item update times do not establish when individual fields changed in the world.
+#[derive(Clone, Debug, JsonSchema, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ValidTime {
+    Unknown,
 }
 /// One support of a claim, with the evidence it cites.
 #[derive(Clone, Debug, JsonSchema, Serialize)]
 pub struct SupportView {
+    pub justification_id: String,
+    pub justification_kind: String,
+    pub portable_key: String,
+    pub vocabulary_version: String,
+    pub current: bool,
     pub evidence_id: i64,
     pub source: String,
     pub scope: Scope,
@@ -274,6 +395,25 @@ pub struct Why {
 #[allow(non_snake_case)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn S8a_revision_ignores_local_ids_and_rules() {
+        let first = Support {
+            portable_key: "portable-span".into(),
+            evidence_id: 1,
+            field: "/state".into(),
+            start: 0,
+            end: 4,
+            extraction_rule: "a".into(),
+        };
+        let mut replay = first.clone();
+        replay.evidence_id = 42;
+        replay.extraction_rule = "b".into();
+        assert_eq!(
+            revision("observed", &[first]),
+            revision("observed", &[replay])
+        );
+    }
 
     /// The canonical encoding is fixed: these ids (checked against an independent SHA-256 of
     /// the encoding) must never change within version 1.

@@ -4,8 +4,20 @@
       "additionalProperties": false,
       "description": "A claim as `why` shows it.",
       "properties": {
+        "conflicts_with": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "id": {
           "type": "string"
+        },
+        "known_intervals": {
+          "items": {
+            "$ref": "#/$defs/KnownInterval"
+          },
+          "type": "array"
         },
         "object": {
           "$ref": "#/$defs/Object"
@@ -25,6 +37,21 @@
         },
         "subject": {
           "$ref": "#/$defs/Entity"
+        },
+        "superseded_by": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "supersedes": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "valid_time": {
+          "$ref": "#/$defs/ValidTime"
         }
       },
       "required": [
@@ -33,7 +60,12 @@
         "predicate",
         "object",
         "status",
-        "revision"
+        "revision",
+        "known_intervals",
+        "valid_time",
+        "conflicts_with",
+        "supersedes",
+        "superseded_by"
       ],
       "type": "object"
     },
@@ -246,6 +278,28 @@
         "not_installed"
       ],
       "type": "string"
+    },
+    "KnownInterval": {
+      "additionalProperties": false,
+      "description": "When evidence established and replaced current support for a claim.",
+      "properties": {
+        "end": {
+          "format": "date-time",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "start": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end"
+      ],
+      "type": "object"
     },
     "Match": {
       "additionalProperties": false,
@@ -560,6 +614,9 @@
           "format": "date-time",
           "type": "string"
         },
+        "current": {
+          "type": "boolean"
+        },
         "end": {
           "format": "uint64",
           "minimum": 0,
@@ -581,7 +638,16 @@
         "field": {
           "type": "string"
         },
+        "justification_id": {
+          "type": "string"
+        },
+        "justification_kind": {
+          "type": "string"
+        },
         "location": {
+          "type": "string"
+        },
+        "portable_key": {
           "type": "string"
         },
         "quote": {
@@ -608,9 +674,17 @@
         },
         "trust_class": {
           "$ref": "#/$defs/TrustClass"
+        },
+        "vocabulary_version": {
+          "type": "string"
         }
       },
       "required": [
+        "justification_id",
+        "justification_kind",
+        "portable_key",
+        "vocabulary_version",
+        "current",
         "evidence_id",
         "source",
         "scope",
@@ -633,6 +707,13 @@
         "structured",
         "unstructured",
         "untrusted content"
+      ],
+      "type": "string"
+    },
+    "ValidTime": {
+      "description": "Item update times do not establish when individual fields changed in the world.",
+      "enum": [
+        "unknown"
       ],
       "type": "string"
     },
@@ -856,6 +937,28 @@
               "type": "object"
             }
           }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "claims.rebuild"
+            },
+            "result": {
+              "additionalProperties": false,
+              "properties": {
+                "claims": {
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                }
+              },
+              "required": [
+                "claims"
+              ],
+              "title": "ClaimsRebuildResult",
+              "type": "object"
+            }
+          }
         }
       ],
       "required": [
@@ -876,7 +979,8 @@
         "sync",
         "search",
         "index.rebuild",
-        "why"
+        "why",
+        "claims.rebuild"
       ]
     },
     "result": {
@@ -1218,6 +1322,34 @@
           "supports"
         ],
         "title": "WhyResult",
+        "type": "object"
+      },
+      "surfaces": [
+        "cli"
+      ]
+    },
+    {
+      "description": "Rebuild the claims projection by replaying all evidence through bound extractors.",
+      "input": {
+        "additionalProperties": false,
+        "description": "Rebuild the claims projection by replaying all evidence through bound extractors.",
+        "title": "ClaimsRebuildRequest",
+        "type": "object"
+      },
+      "name": "claims.rebuild",
+      "result": {
+        "additionalProperties": false,
+        "properties": {
+          "claims": {
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          }
+        },
+        "required": [
+          "claims"
+        ],
+        "title": "ClaimsRebuildResult",
         "type": "object"
       },
       "surfaces": [

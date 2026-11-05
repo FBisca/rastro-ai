@@ -49,7 +49,7 @@ fn stored_evidence_rejects_updates_and_deletes() {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 7);
+        assert_eq!(version, 8);
     }
 }
 
@@ -91,7 +91,7 @@ fn migrations_apply_once_in_timestamp_order_and_unknown_ones_are_refused() {
         .unwrap();
     connection.pragma_update(None, "user_version", 1).unwrap();
     SqliteStorage::open(&legacy).unwrap();
-    assert_eq!(names(&connection).len(), 7);
+    assert_eq!(names(&connection).len(), 8);
 }
 
 /// evidence/R5: legacy user version maps to the migrations it meant
@@ -167,6 +167,8 @@ fn S3_evidence_captured_with_an_earlier_clock_is_still_extracted() {
         extractor_version: extractor.1.into(),
         source: "project".into(),
         scope: Scope("personal".into()),
+        vocabulary_version: "1".into(),
+        last_portable_key: rastro_core::claims::portable_evidence_key(first),
         last: (first.captured_at, *id),
     };
     storage
@@ -180,4 +182,75 @@ fn S3_evidence_captured_with_an_earlier_clock_is_still_extracted() {
     let locations: Vec<_> = pending.iter().map(|(_, e)| e.location.as_str()).collect();
     assert_eq!(locations, ["https://x/2"]);
     assert!(pending[0].1.captured_at >= first.captured_at);
+}
+
+#[test]
+fn S16b_projection_publication_receipts_reject_updates_and_deletes() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("rastro.sqlite3");
+    SqliteStorage::open(&path).unwrap();
+    let db = Connection::open(path).unwrap();
+    db.execute("INSERT INTO projection_publication (extractor_versions, vocabulary_versions, evidence_high_water) VALUES ('{}', '{}', '[]')", []).unwrap();
+    assert!(
+        db.execute(
+            "UPDATE projection_publication SET evidence_high_water = '[]'",
+            []
+        )
+        .is_err()
+    );
+    assert!(
+        db.execute("DELETE FROM projection_publication", [])
+            .is_err()
+    );
+}
+
+#[test]
+fn S13_entity_types_are_never_stored_as_a_column() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("rastro.sqlite3");
+    SqliteStorage::open(&path).unwrap();
+    let db = Connection::open(path).unwrap();
+    assert_eq!(
+        db.query_row(
+            "SELECT count(*) FROM pragma_table_info('entity') WHERE name = 'type'",
+            [],
+            |r| r.get::<_, i64>(0)
+        )
+        .unwrap(),
+        0
+    );
+}
+
+#[test]
+fn S19_temp_shadow_tables_match_the_migrated_projection_tables() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("rastro.sqlite3");
+    SqliteStorage::open(&path).unwrap();
+    let db = Connection::open(path).unwrap();
+    let ddl = include_str!("../src/projection_temp.sql");
+    db.execute_batch(ddl).unwrap();
+    let shape = |table: &str, schema: &str| -> Vec<(String, String, i64, Option<String>, i64)> {
+        let mut stmt = db
+            .prepare(&format!(
+                "SELECT name, type, \"notnull\", dflt_value, pk FROM pragma_table_info('{table}', '{schema}') ORDER BY cid"
+            ))
+            .unwrap();
+        stmt.query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap()
+    };
+    let mut seen = 0;
+    for line in ddl.lines() {
+        if let Some(rest) = line.trim().strip_prefix("CREATE TEMP TABLE ") {
+            let table = rest.split_whitespace().next().unwrap();
+            let main = shape(table, "main");
+            assert!(!main.is_empty(), "{table} missing from the migration");
+            assert_eq!(main, shape(table, "temp"), "{table} shape differs");
+            seen += 1;
+        }
+    }
+    assert!(seen >= 6, "expected the projection tables, saw {seen}");
 }

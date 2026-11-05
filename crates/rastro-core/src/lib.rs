@@ -374,16 +374,26 @@ pub trait Storage {
         plugin: (&str, &str),
         started_at: DateTime<Utc>,
     ) -> Result<i64>;
-    /// The source's observations past the extractor version's checkpoint, in replay order
-    /// (`captured_at`, evidence id), each with its id.
+    /// The source's new observations past the local append checkpoint, sorted by
+    /// (`captured_at`, evidence append id). Portable keys identify, but never order, input.
     fn pending_evidence(
         &self,
         extractor: (&str, &str),
         source: &Source,
     ) -> Result<Vec<(i64, Evidence)>>;
-    /// Stores accepted claims (their entities, aliases and supports) and moves the checkpoint,
-    /// in one transaction. Counts each claim accepted (something new), unchanged, or rejected
-    /// (an identifier already stored under another type).
+    /// A vocabulary definition change replays the pair even when ingestion added nothing.
+    fn pending_evidence_for_vocabulary(
+        &self,
+        extractor: (&str, &str),
+        vocabulary_version: &str,
+        source: &Source,
+    ) -> Result<Vec<(i64, Evidence)>> {
+        let _ = vocabulary_version;
+        self.pending_evidence(extractor, source)
+    }
+    /// Publishes accepted AND derivations and their checkpoint atomically. A successful
+    /// version replay retires the pair's old justifications in the same transaction.
+    /// Counts new and unchanged derivations; types and aliases are claims.
     fn record_claims(
         &mut self,
         run_id: i64,
@@ -391,6 +401,12 @@ pub trait Storage {
         claims: &[claims::ObservedClaim],
         checkpoint: Option<&claims::Checkpoint>,
     ) -> Result<Counts>;
+    /// Bound sources, including retained historical sources, for a complete replay.
+    fn extraction_sources(&self) -> Result<Vec<(Source, String)>>;
+    /// Creates an empty private projection generation. Audit logs remain outside it.
+    fn begin_claims_rebuild(&mut self) -> Result<()>;
+    /// Atomically publishes the staged generation, or discards it on failure.
+    fn finish_claims_rebuild(&mut self, publish: bool) -> Result<usize>;
     /// A claim and its supports, or `None` for an unknown id.
     fn why(&self, claim: &str) -> Result<Option<claims::Why>>;
 }
