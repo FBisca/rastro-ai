@@ -1,0 +1,47 @@
+id = "rastro-extractor-linear"
+name = "Rastro Linear extractor"
+version = "0.1.0"
+author = "Rastro"
+# The `tracker` vocabulary ships in this package, next to the extractor that uses it.
+kinds = ["extractor", "vocabulary"]
+protocol = 1
+command = "rastro-extractor-linear"
+triggers = []
+dependencies = ["tracker"]
+vocabulary = "vocabulary.toml"
+
+# Every rule reads structured fields of one user or issue observation, at a location that is
+# that record's canonical identifier; none reads a title or a description. See src/main.rs.
+[[extraction_rules]]
+id = "account"
+deterministic = true
+
+[[extraction_rules]]
+id = "email"
+deterministic = true
+
+[[extraction_rules]]
+id = "name"
+deterministic = true
+
+[[extraction_rules]]
+id = "active"
+deterministic = true
+
+[[extraction_rules]]
+id = "issue"
+deterministic = true
+
+[[extraction_rules]]
+id = "creator"
+deterministic = true
+
+[[extraction_rules]]
+id = "assignee"
+deterministic = true
+
+[permissions]
+submit = []
+scopes = ["personal", "work"]
+env = []
+actions = []

@@ -1,0 +1,21 @@
+id = "linear"
+name = "Rastro Linear connector"
+version = "0.1.0"
+author = "Rastro"
+kinds = ["connector"]
+protocol = 1
+command = "rastro-connector-linear"
+triggers = []
+dependencies = []
+# Every Linear source is bound to this extractor.
+default_extractor = "rastro-extractor-linear"
+
+# A source is the workspace the API key belongs to, so it declares no options.
+
+[permissions]
+# `viewer` is the one observation of whose API key it is.
+submit = ["user", "issue", "viewer"]
+# Both scopes, so the owner chooses per source which one the workspace belongs to.
+scopes = ["personal", "work"]
+env = ["LINEAR_API_KEY", "RASTRO_LINEAR_API_URL"]
+actions = []
