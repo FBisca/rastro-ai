@@ -76,6 +76,7 @@ Research and options: `../research/kg-deep-dive/` (`40-decision-brief.md`, `42-p
 37. **History is stored per occurrence. Amends §25 and §26.**
     - An *occurrence* is one stretch during which one justification holds a claim. A claim's known interval is built from occurrences, not from accumulated claim-to-claim links. `superseded_by` marks only the current transition.
     - Transitions are ordered by event order: the observation's `captured_at`, then a portable key of the evidence, with the local evidence id only as the local tie-break. Equal timestamps are allowed; a closed occurrence and a later recurrence at the same `captured_at` stay separate. Intervals are half-open and may be zero-length.
+    - *Corrected 2026-11-05 (awaiting the owner's confirmation):* within one `captured_at`, order is the order the evidence was stored, which an export keeps. The portable key serves identity only. See the 2026-11-05 correction in ADR 0009.
     - A claim is present when any of its justifications has an open occurrence, judged on event order, not timestamp.
     - Valid time stays `unknown` (§25). It is reported as `unknown`, with no stored column.
 38. **Justification replaces claim support. Clarifies §5, §6 and §14.**

@@ -65,7 +65,7 @@ The owner confirmed C1–C18 and D1–D15 of `docs/research/kg-deep-dive/` (`40-
 | D1 | Adds: a submission's supports are one AND bundle; location context is bounded (same source, scope and location, evidence up to the batch high-water mark, recomputable on replay); meta-predicates are `rastro:type` and `rastro:alias`; endpoint types are grounded in the same bundle; retirement rule on a version bump | ADR 0008 amendment; knowledge §38, §40; D3, D4, D8, D11, D12 |
 | D3 | The projection is replaced by one new migration (about eight tables, observed-only) that drops the T3 tables; publication stays a TEMP shadow swap with explicit TEMP DDL; `ANALYZE` at publication; the `Source::github` hard-code in rebuild goes | ADR 0009 amendment; D14 |
 | D5 | Revision is `rastro/revision/v2` over visible portable keys; entity and claim id encodings stay v1 | ADR 0009 amendment; knowledge §45; D10 |
-| D6 | History is per occurrence, ordered by event key; valid time is reported `unknown` with no column | knowledge §37; D5 |
+| D6 | History is per occurrence, ordered by event key; valid time is reported `unknown` with no column. Corrected during the build: event order is (`captured_at`, evidence append order), the portable key serves identity only, and the occurrence id adds a recurrence ordinal (lead's decision, awaiting the owner's confirmation) | knowledge §37; D5; ADR 0009 correction 2026-11-05 |
 | D7 | Accounts are not humans; Person ids are never derived from email (slice 4) | vocabulary §14; knowledge §36; D7 |
 | D8 | Types are `rastro:type` claims, not a column | vocabulary §15; C9 |
 | D9 | The vocabulary file denies unknown fields and requires `cardinality`; `supertype` is optional | vocabulary §16–§17; C11, D12 |
