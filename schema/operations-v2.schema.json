@@ -628,6 +628,53 @@
         }
       ]
     },
+    "RebuildPair": {
+      "additionalProperties": false,
+      "description": "One (source, scope) pair of a claims rebuild: how its extractor ended, and, for a pair whose\nextractor never started, the stored output that was carried over in its place.",
+      "properties": {
+        "carried_over": {
+          "description": "The pair's stored output was carried over because its extractor never started.",
+          "type": "boolean"
+        },
+        "counts": {
+          "$ref": "#/$defs/Counts",
+          "description": "Claim counts of the run. For a carried-over pair, `unchanged` is the justifications\ncarried over."
+        },
+        "extractor": {
+          "type": "string"
+        },
+        "extractor_version": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "run_id": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/ExtractionState"
+        }
+      },
+      "required": [
+        "source",
+        "scope",
+        "run_id",
+        "extractor",
+        "extractor_version",
+        "state",
+        "counts",
+        "carried_over"
+      ],
+      "type": "object"
+    },
     "RunReport": {
       "additionalProperties": false,
       "properties": {
@@ -1104,10 +1151,18 @@
                   "format": "uint",
                   "minimum": 0,
                   "type": "integer"
+                },
+                "pairs": {
+                  "description": "Every (source, scope) pair the rebuild visited.",
+                  "items": {
+                    "$ref": "#/$defs/RebuildPair"
+                  },
+                  "type": "array"
                 }
               },
               "required": [
-                "claims"
+                "claims",
+                "pairs"
               ],
               "title": "ClaimsRebuildResult",
               "type": "object"
@@ -1571,10 +1626,18 @@
             "format": "uint",
             "minimum": 0,
             "type": "integer"
+          },
+          "pairs": {
+            "description": "Every (source, scope) pair the rebuild visited.",
+            "items": {
+              "$ref": "#/$defs/RebuildPair"
+            },
+            "type": "array"
           }
         },
         "required": [
-          "claims"
+          "claims",
+          "pairs"
         ],
         "title": "ClaimsRebuildResult",
         "type": "object"

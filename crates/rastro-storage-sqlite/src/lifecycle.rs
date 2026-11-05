@@ -515,6 +515,59 @@ pub(crate) fn publish(db: &Connection) -> Result<()> {
     }
     Ok(())
 }
+/// Copies one pair's stored output into the staged generation: its justifications and spans,
+/// the claims and entities they reach, and the pair's checkpoint. Statuses, occurrences and
+/// links are not copied; every component the pair touches is recomputed from the staged
+/// justifications, which may now include other pairs'. Returns the justifications carried.
+pub(crate) fn carry_over(
+    db: &Connection,
+    source: &str,
+    scope: &str,
+    extractor: &str,
+) -> Result<usize> {
+    anyhow::ensure!(staging(db)?, "no claims rebuild is staged");
+    const PAIR: &str = "SELECT j.id FROM main.justification j WHERE j.extractor = ?3 AND EXISTS (
+        SELECT 1 FROM main.justification_span s JOIN main.evidence e ON e.id = s.evidence_id
+        WHERE s.justification_id = j.id AND e.source = ?1 AND e.scope = ?2)";
+    const CLAIMS: &str = "SELECT claim_id FROM main.justification WHERE id IN (PAIR)";
+    let sql = |text: &str| text.replace("CLAIMS", CLAIMS).replace("PAIR", PAIR);
+    let with = params![source, scope, extractor];
+    db.execute(
+        &sql("INSERT OR IGNORE INTO temp.entity (id, identifier)
+            SELECT id, identifier FROM main.entity WHERE id IN
+            (SELECT subject FROM main.claim WHERE id IN (CLAIMS)
+             UNION SELECT object_entity FROM main.claim WHERE id IN (CLAIMS) AND object_entity IS NOT NULL)"),
+        with,
+    )?;
+    db.execute(
+        &sql("INSERT OR IGNORE INTO temp.claim SELECT * FROM main.claim WHERE id IN (CLAIMS)"),
+        with,
+    )?;
+    let carried = db.execute(
+        &sql("INSERT OR IGNORE INTO temp.justification SELECT * FROM main.justification WHERE id IN (PAIR)"),
+        with,
+    )?;
+    db.execute(
+        &sql(
+            "INSERT OR IGNORE INTO temp.justification_span SELECT * FROM main.justification_span
+            WHERE justification_id IN (PAIR)",
+        ),
+        with,
+    )?;
+    db.execute(
+        "INSERT OR IGNORE INTO temp.extraction_checkpoint SELECT * FROM main.extraction_checkpoint
+         WHERE source = ?1 AND scope = ?2 AND extractor = ?3",
+        with,
+    )?;
+    let touched: BTreeSet<Component> = db
+        .prepare(&sql(
+            "SELECT DISTINCT subject, predicate FROM temp.claim WHERE id IN (CLAIMS)",
+        ))?
+        .query_map(with, |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    refresh(db, &touched)?;
+    Ok(carried)
+}
 pub(crate) fn begin_rebuild(db: &Connection) -> Result<()> {
     db.execute_batch(include_str!("projection_temp.sql"))?;
     Ok(())

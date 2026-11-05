@@ -408,3 +408,34 @@ fn related_types_do_not_conflict_but_unrelated_types_and_replacement_do() {
     assert_eq!(old.claim.claim.status, "superseded");
     assert!(old.claim.claim.superseded_by.contains(&bot));
 }
+
+/// claims/R22: a claim justified by a carried-over pair and a rebuilt pair equals the incremental one
+#[test]
+fn S12_a_claim_justified_by_a_carried_pair_and_a_rebuilt_pair_equals_the_incremental_one() {
+    let home = tempfile::tempdir().unwrap();
+    let mut db = SqliteStorage::open(&home.path().join("db")).unwrap();
+    let carried = evidence("carried", "open");
+    let rebuilt = evidence("rebuilt", "open");
+    let closed = evidence("carried", "closed");
+    let open = store(&mut db, &carried, "code:state", "open");
+    store(&mut db, &closed, "code:state", "closed");
+    store(&mut db, &rebuilt, "code:state", "open");
+    let incremental = serde_json::to_value(explained(&db, &open)).unwrap();
+    assert_eq!(incremental["supports"].as_array().unwrap().len(), 2);
+    db.begin_claims_rebuild().unwrap();
+    let source = Source::github("rebuilt".into(), "o/p".into(), Scope("work".into()));
+    let pending = db.pending_evidence(("extractor", "1"), &source).unwrap();
+    let claims: Vec<_> = pending
+        .iter()
+        .map(|(id, e)| accepted(*id, e, "code:state", &e.quote))
+        .collect();
+    db.record_claims(1, ("extractor", "1"), &claims, None)
+        .unwrap();
+    let carried = Source::github("carried".into(), "o/p".into(), Scope("work".into()));
+    assert_eq!(db.carry_over_pair(&carried, "extractor").unwrap(), 2);
+    db.finish_claims_rebuild(true).unwrap();
+    assert_eq!(
+        incremental,
+        serde_json::to_value(explained(&db, &open)).unwrap()
+    );
+}

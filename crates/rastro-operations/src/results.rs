@@ -39,6 +39,8 @@ pub struct IndexRebuildResult {
 #[derive(Debug, JsonSchema, Serialize)]
 pub struct ClaimsRebuildResult {
     pub claims: usize,
+    /// Every (source, scope) pair the rebuild visited.
+    pub pairs: Vec<rastro_core::runs::RebuildPair>,
 }
 /// A claim and bounded complete justifications, each citing every required span.
 pub type WhyResult = rastro_core::knowledge::Explanation;
@@ -57,6 +59,7 @@ impl Response {
                         .as_ref()
                         .is_none_or(|e| e.state != ExtractionState::Failed)
             }),
+            Self::ClaimsRebuild(r) => r.pairs.iter().all(|p| p.state != ExtractionState::Failed),
             _ => true,
         }
     }
@@ -115,7 +118,10 @@ mod tests {
                 coverage: vec![],
                 extraction: vec![],
             }),
-            Response::ClaimsRebuild(ClaimsRebuildResult { claims: 0 }),
+            Response::ClaimsRebuild(ClaimsRebuildResult {
+                claims: 0,
+                pairs: vec![],
+            }),
             Response::About(AboutResult {
                 claims: vec![],
                 truncated: false,

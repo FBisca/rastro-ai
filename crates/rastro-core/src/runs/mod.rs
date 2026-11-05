@@ -104,6 +104,36 @@ pub struct ExtractionReport {
     /// Observations sent to the extractor.
     pub evidence: usize,
     pub counts: Counts,
+    /// The extractor passed its check and its scope, so a failure is its own run failing.
+    /// A pair that never started has no new output to replace the stored one.
+    #[serde(skip)]
+    pub started: bool,
+}
+
+/// One (source, scope) pair of a claims rebuild: how its extractor ended, and, for a pair whose
+/// extractor never started, the stored output that was carried over in its place.
+#[derive(Debug, JsonSchema, Serialize)]
+pub struct RebuildPair {
+    pub source: String,
+    pub scope: String,
+    pub run_id: i64,
+    pub extractor: String,
+    pub extractor_version: String,
+    pub state: ExtractionState,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reason: Option<String>,
+    /// Claim counts of the run. For a carried-over pair, `unchanged` is the justifications
+    /// carried over.
+    pub counts: Counts,
+    /// The pair's stored output was carried over because its extractor never started.
+    pub carried_over: bool,
+}
+
+/// A finished claims rebuild.
+#[derive(Debug)]
+pub struct Rebuilt {
+    pub claims: usize,
+    pub pairs: Vec<RebuildPair>,
 }
 
 impl<S: Storage> Rastro<S> {
@@ -169,43 +199,59 @@ impl<S: Storage> Rastro<S> {
     }
 
     /// Replays evidence through its bound extractors into a private generation and publishes
-    /// only after every extractor succeeds. Readers keep the previous generation on failure.
-    pub fn rebuild_claims(&mut self) -> Result<usize> {
+    /// only after every extractor that starts succeeds. A pair whose extractor never starts
+    /// (not installed, failing its check, scope forbidden) keeps its stored output, carried
+    /// into the new generation. Readers keep the previous generation on failure.
+    pub fn rebuild_claims(&mut self) -> Result<Rebuilt> {
         let lock = files::private_file(&self.locations.sync_lock())?;
         lock.lock()?;
         self.storage.interrupt_unfinished_runs(Utc::now())?;
         let sources = self.storage.extraction_sources()?;
         self.storage.begin_claims_rebuild()?;
+        let mut pairs = Vec::new();
         let replay = (|| -> Result<()> {
             for (source, extractor) in &sources {
                 let report = host::extract(&mut self.storage, &self.locations, source, extractor)?;
-                if report.state == ExtractionState::NotInstalled
-                    || report.reason.as_deref() == Some("forbidden")
-                {
-                    continue;
+                let carried_over = !report.started && report.state != ExtractionState::Current;
+                let mut counts = report.counts;
+                if carried_over {
+                    counts.unchanged += self.storage.carry_over_pair(source, extractor)? as u64;
+                } else {
+                    anyhow::ensure!(
+                        report.state == ExtractionState::Current,
+                        "claims rebuild: extractor {extractor} for {} failed: {}",
+                        source.name,
+                        report.reason.as_deref().unwrap_or("unknown")
+                    );
                 }
-                anyhow::ensure!(
-                    report.state == ExtractionState::Current,
-                    "claims rebuild: extractor {extractor} for {} failed: {}",
-                    source.name,
-                    report.reason.as_deref().unwrap_or("unknown")
-                );
+                pairs.push(RebuildPair {
+                    source: source.name.clone(),
+                    scope: source.scope.0.clone(),
+                    run_id: report.run_id,
+                    extractor: extractor.clone(),
+                    extractor_version: report.extractor_version,
+                    state: report.state,
+                    reason: report.reason,
+                    counts,
+                    carried_over,
+                });
             }
             Ok(())
         })();
-        match replay {
+        let claims = match replay {
             Ok(()) => match self.storage.finish_claims_rebuild(true) {
-                Ok(count) => Ok(count),
+                Ok(count) => count,
                 Err(error) => {
                     self.storage.finish_claims_rebuild(false)?;
-                    Err(error)
+                    return Err(error);
                 }
             },
             Err(error) => {
                 self.storage.finish_claims_rebuild(false)?;
-                Err(error)
+                return Err(error);
             }
-        }
+        };
+        Ok(Rebuilt { claims, pairs })
     }
 
     /// Rebuilds the search index from the stored evidence.

@@ -266,8 +266,10 @@ impl WhyRequest {
 pub struct ClaimsRebuildRequest {}
 impl ClaimsRebuildRequest {
     pub(crate) fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<ClaimsRebuildResult> {
+        let rebuilt = rastro.rebuild_claims()?;
         Ok(ClaimsRebuildResult {
-            claims: rastro.rebuild_claims()?,
+            claims: rebuilt.claims,
+            pairs: rebuilt.pairs,
         })
     }
 }

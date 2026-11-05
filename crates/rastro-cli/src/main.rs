@@ -282,7 +282,25 @@ fn human(response: &Response) -> String {
         )).collect()),
         Response::Coverage(r) => or_none(r.coverage.iter().map(coverage_block).collect()),
         Response::Sync(r) => or_none(r.runs.iter().map(sync_line).collect()),
-        Response::ClaimsRebuild(r) => format!("Claims rebuilt: {} claims", r.claims),
+        Response::ClaimsRebuild(r) => {
+            let mut text = format!("Claims rebuilt: {} claims", r.claims);
+            for pair in r.pairs.iter().filter(|p| p.carried_over) {
+                text += &format!(
+                    "\n  Carried over: {} | {} | Extractor: {} {} | {}{} | {} justifications kept",
+                    pair.source,
+                    pair.scope,
+                    display_safe(&pair.extractor),
+                    pair.extractor_version,
+                    pair.state.as_str(),
+                    pair.reason
+                        .as_deref()
+                        .map(|r| format!(" ({})", display_safe(r)))
+                        .unwrap_or_default(),
+                    pair.counts.unchanged
+                );
+            }
+            text
+        }
         Response::IndexRebuild(r) => format!("Index rebuilt: {} observations", r.indexed),
         Response::Search(r) => search_text(&r.query, r),
         Response::Why(r) => why_text(r),

@@ -50,7 +50,25 @@ fn about_and_why_are_additive_v2_and_existing_schemas_are_unchanged() {
         serde_json::from_str(include_str!("fixtures/existing-operations.json")).unwrap();
     for old in baseline.as_array().unwrap() {
         let new = ops.iter().find(|op| op["name"] == old["name"]).unwrap();
-        assert_eq!(expand(new, &generated["$defs"]), old.clone());
+        let mut new = expand(new, &generated["$defs"]);
+        // Additive v2 changes recorded in docs/decisions/surfaces.md: `sync` results carry an
+        // optional `extraction` (already part of the baseline) and `claims.rebuild` results
+        // carry `pairs`. Anything else that differs is a breaking change.
+        if old["name"] == "claims.rebuild" {
+            let result = new["result"].as_object_mut().unwrap();
+            assert!(
+                result["properties"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("pairs")
+                    .is_some()
+            );
+            result["required"]
+                .as_array_mut()
+                .unwrap()
+                .retain(|name| name != "pairs");
+        }
+        assert_eq!(new, old.clone());
     }
     assert!(
         generated == existing,
