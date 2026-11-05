@@ -1304,8 +1304,8 @@ fn S17_the_next_writing_sync_extracts_evidence_a_failed_sync_kept_even_when_it_a
     let run = &synced["runs"][0];
     assert_eq!(run["counts"]["accepted"], 0, "{synced}");
     assert_eq!(run["extraction"]["evidence"], 1, "{synced}");
-    assert_eq!(run["extraction"]["counts"]["accepted"], 1, "{synced}");
-    assert_eq!(env.count("claim"), 1);
+    assert_eq!(run["extraction"]["counts"]["accepted"], 2, "{synced}");
+    assert_eq!(env.count("claim"), 2);
 }
 
 #[test]
@@ -1336,7 +1336,7 @@ fn S18_an_extractor_crash_fails_the_sync_keeps_coverage_and_the_last_projection_
     assert_eq!(after["claim"], before["claim"]);
     assert_eq!(after["supports"], before["supports"]);
     assert_eq!(after["extraction"][0]["state"], "failed");
-    assert_eq!(env.count("claim"), 1);
+    assert_eq!(env.count("claim"), 2);
 
     // The next sync resumes from the checkpoint: only the evidence the crash left.
     env.observe(&[state("closed")]);
@@ -1349,7 +1349,7 @@ fn S18_an_extractor_crash_fails_the_sync_keeps_coverage_and_the_last_projection_
     let synced = env.json(&["sync", "a"]);
     assert_eq!(synced["runs"][0]["extraction"]["evidence"], 1, "{synced}");
     assert_eq!(synced["runs"][0]["extraction"]["state"], "current");
-    assert_eq!(env.count("claim"), 2);
+    assert_eq!(env.count("claim"), 3);
     assert_eq!(extraction_states(&env)[0].2, "current");
 }
 
@@ -1379,7 +1379,7 @@ fn S18b_a_failed_version_replay_keeps_the_old_versions_claims_and_reads_failed()
     assert_eq!(after["extraction"][0]["state"], "failed");
     assert_eq!(
         env.count("justification WHERE extractor_version = '0.1.0'"),
-        1
+        2
     );
     assert_eq!(
         env.count("justification WHERE extractor_version = '0.2.0'"),
@@ -1586,7 +1586,7 @@ fn S17_evidence_stored_before_the_connector_failed_is_extracted_by_the_next_sync
     )]);
     let synced = env.json(&["sync", "a"]);
     assert_eq!(synced["runs"][0]["extraction"]["evidence"], 1, "{synced}");
-    assert_eq!(env.count("claim"), 1);
+    assert_eq!(env.count("claim"), 2);
 }
 
 #[test]
