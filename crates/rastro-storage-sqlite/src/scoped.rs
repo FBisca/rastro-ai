@@ -161,8 +161,8 @@ fn build(
     let components = components.replace("{VISIBLE_CLAIM}", VISIBLE_CLAIM);
     let candidate_sql = format!("WITH roots AS ({roots}), components AS ({components}),
     neighbors AS (
-        SELECT c.id, c.subject, c.object_entity FROM claim c JOIN components k ON c.subject = k.subject AND c.predicate = k.predicate
-    ) SELECT id FROM neighbors UNION SELECT id FROM claim WHERE predicate IN ('rastro:type','rastro:alias') AND subject IN (SELECT subject FROM neighbors UNION SELECT object_entity FROM neighbors)");
+        SELECT c.id, c.subject, c.object_entity, {VISIBLE_CLAIM} AS seen FROM claim c JOIN components k ON c.subject = k.subject AND c.predicate = k.predicate
+    ) SELECT id FROM neighbors UNION SELECT id FROM claim WHERE predicate IN ('rastro:type','rastro:alias') AND subject IN (SELECT subject FROM neighbors WHERE seen UNION SELECT object_entity FROM neighbors WHERE seen)");
     let candidates = db
         .prepare(&candidate_sql)?
         .query_map(params_from_iter(&arguments), |r| r.get::<_, String>(0))?

@@ -250,3 +250,71 @@ fn store_edge(db: &mut SqliteStorage, scope: &str, location: &str, predicate: &s
     )
     .unwrap();
 }
+
+/// surfaces/R28: a hidden claim in a visible slot never pulls its object's claims into a replay
+#[test]
+fn S6_a_hidden_claim_in_a_visible_slot_does_not_pull_in_its_object() {
+    let scopes = [Scope("personal".into())];
+    let mut answers = vec![];
+    for target in ["github:login/r", "github:account/1"] {
+        for hidden in [false, true] {
+            let home = tempfile::tempdir().unwrap();
+            let mut db = SqliteStorage::open(&home.path().join("db")).unwrap();
+            store(
+                &mut db,
+                "personal",
+                "github:account/1",
+                "rastro:alias",
+                "r",
+                "login",
+            );
+            store(
+                &mut db,
+                "personal",
+                "github:repo/x",
+                "code:owner",
+                "v",
+                "string",
+            );
+            for n in 0..5 {
+                let value = format!("n{n}");
+                store(
+                    &mut db,
+                    "personal",
+                    "github:account/2",
+                    "rastro:alias",
+                    &value,
+                    "login",
+                );
+            }
+            if hidden {
+                store_edge(
+                    &mut db,
+                    "work",
+                    "github:repo/x",
+                    "code:owner",
+                    "github:account/2",
+                );
+            }
+            // Slot (repo/x, code:owner) is visible through account/1's neighbour.
+            store_edge(
+                &mut db,
+                "personal",
+                "github:repo/x",
+                "code:owner",
+                "github:account/1",
+            );
+            answers.push((
+                target,
+                hidden,
+                db.about_scoped_within(target, &AboutOptions::default(), &scopes, 4)
+                    .map(|c| json!(c.iter().map(|c| json!(c)).collect::<Vec<_>>()))
+                    .map_err(|e| e.to_string()),
+            ));
+        }
+    }
+    for pair in answers.chunks(2) {
+        assert!(pair[0].2.is_ok(), "{}: {:?}", pair[0].0, pair[0].2);
+        assert_eq!(pair[0].2, pair[1].2, "{}", pair[0].0);
+    }
+}
