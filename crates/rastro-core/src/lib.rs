@@ -408,6 +408,7 @@ pub trait Storage {
         source: &Source,
         extractor: &str,
         version: &str,
+        vocabulary_version: &str,
     ) -> Result<runs::ExtractionFacts>;
     /// Bound sources, including retained historical sources, for a complete replay.
     fn extraction_sources(&self) -> Result<Vec<(Source, String)>>;

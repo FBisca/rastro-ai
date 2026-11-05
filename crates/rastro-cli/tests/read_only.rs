@@ -360,8 +360,10 @@ impl Snapshot for InterleavedView<'_> {
         source: &rastro_core::Source,
         extractor: &str,
         version: &str,
+        vocabulary_version: &str,
     ) -> Result<rastro_core::runs::ExtractionFacts> {
-        self.inner.extraction_facts(source, extractor, version)
+        self.inner
+            .extraction_facts(source, extractor, version, vocabulary_version)
     }
 }
 impl ReadStorage for Interleaved {

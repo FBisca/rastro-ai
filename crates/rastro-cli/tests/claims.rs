@@ -1401,3 +1401,27 @@ fn S17_evidence_stored_before_the_connector_failed_is_extracted_by_the_next_sync
     assert_eq!(synced["runs"][0]["extraction"]["evidence"], 1, "{synced}");
     assert_eq!(env.count("claim"), 1);
 }
+
+#[test]
+fn S18_a_vocabulary_version_bump_alone_reads_behind_until_the_replay_succeeds() {
+    let env = Env::new(Some("test-extractor"));
+    env.add_source("a", "test");
+    sync_state(&env, "a", "open");
+    assert_eq!(extraction_states(&env)[0].2, "current");
+    assert_eq!(read_only_states(&env)[0].2, "current");
+
+    let vocabulary = env.plugin_dir("test-extractor").join("vocabulary.toml");
+    let text = fs::read_to_string(&vocabulary).unwrap().replacen(
+        "version = \"0.1.0\"",
+        "version = \"0.2.0\"",
+        1,
+    );
+    fs::write(vocabulary, text).unwrap();
+    assert_eq!(extraction_states(&env)[0].2, "behind");
+    assert_eq!(read_only_states(&env)[0].2, "behind");
+
+    env.observe(&[state("open")]);
+    env.ok(&["sync", "a"]);
+    assert_eq!(extraction_states(&env)[0].2, "current");
+    assert_eq!(read_only_states(&env)[0].2, "current");
+}

@@ -36,6 +36,7 @@ impl Snapshot for Fake {
         _: &rastro_core::Source,
         _: &str,
         _: &str,
+        _: &str,
     ) -> Result<rastro_core::runs::ExtractionFacts> {
         Ok(Default::default())
     }

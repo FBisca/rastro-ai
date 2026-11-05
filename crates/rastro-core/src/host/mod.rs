@@ -24,6 +24,7 @@ use std::{
 mod extract;
 mod io;
 pub use extract::extract;
+pub(crate) use extract::vocabulary;
 
 pub struct Plugin {
     pub manifest: Manifest,

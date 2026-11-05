@@ -113,9 +113,16 @@ impl<S: Storage> Rastro<S> {
             .extraction_sources()?
             .into_iter()
             .map(|(source, extractor)| {
-                extraction_pair(&self.locations, &source, &extractor, true, |version| {
-                    self.storage.extraction_facts(&source, &extractor, version)
-                })
+                extraction_pair(
+                    &self.locations,
+                    &source,
+                    &extractor,
+                    true,
+                    |version, vocabulary| {
+                        self.storage
+                            .extraction_facts(&source, &extractor, version, vocabulary)
+                    },
+                )
             })
             .collect()
     }
@@ -254,7 +261,7 @@ pub fn extraction_pair(
     source: &Source,
     extractor: &str,
     live: bool,
-    facts: impl FnOnce(&str) -> Result<ExtractionFacts>,
+    facts: impl FnOnce(&str, &str) -> Result<ExtractionFacts>,
 ) -> Result<ExtractionPair> {
     let installed = host::discover(locations, extractor, "extractor");
     // Even an extractor that fails its check has a version to name.
@@ -263,18 +270,22 @@ pub fn extraction_pair(
         (Err("not_installed"), _) => ExtractionStatus::NotInstalled,
         // An installed extractor that fails its check cannot run.
         (Err(_), _) | (_, None) => ExtractionStatus::Failed,
-        (Ok(_), Some(version)) => {
-            let facts = facts(version)?;
-            if facts.running && live {
-                ExtractionStatus::Running
-            } else if facts.running || facts.failed {
-                ExtractionStatus::Failed
-            } else if facts.pending {
-                ExtractionStatus::Behind
-            } else {
-                ExtractionStatus::Current
+        (Ok(plugin), Some(version)) => match host::vocabulary(plugin) {
+            // A vocabulary that cannot be read cannot be extracted with.
+            Err(_) => ExtractionStatus::Failed,
+            Ok(vocabulary) => {
+                let facts = facts(version, &vocabulary.version)?;
+                if facts.running && live {
+                    ExtractionStatus::Running
+                } else if facts.running || facts.failed {
+                    ExtractionStatus::Failed
+                } else if facts.pending {
+                    ExtractionStatus::Behind
+                } else {
+                    ExtractionStatus::Current
+                }
             }
-        }
+        },
     };
     Ok(ExtractionPair {
         source: source.name.clone(),

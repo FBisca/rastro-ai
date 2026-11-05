@@ -80,6 +80,7 @@ pub trait Snapshot {
         source: &Source,
         extractor: &str,
         version: &str,
+        vocabulary_version: &str,
     ) -> Result<crate::runs::ExtractionFacts>;
 }
 /// Storage opened read-only.
@@ -204,9 +205,15 @@ impl<S: ReadStorage> Reader<S> {
             view.extraction_sources(scopes)?
                 .into_iter()
                 .map(|(source, extractor)| {
-                    crate::runs::extraction_pair(locations, &source, &extractor, live, |version| {
-                        view.extraction_facts(&source, &extractor, version)
-                    })
+                    crate::runs::extraction_pair(
+                        locations,
+                        &source,
+                        &extractor,
+                        live,
+                        |version, vocabulary| {
+                            view.extraction_facts(&source, &extractor, version, vocabulary)
+                        },
+                    )
                 })
                 .collect()
         })

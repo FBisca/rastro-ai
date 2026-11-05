@@ -618,8 +618,9 @@ impl Storage for SqliteStorage {
         source: &Source,
         extractor: &str,
         version: &str,
+        vocabulary_version: &str,
     ) -> Result<rastro_core::runs::ExtractionFacts> {
-        View(&self.connection).extraction_facts(source, extractor, version)
+        View(&self.connection).extraction_facts(source, extractor, version, vocabulary_version)
     }
     fn extraction_sources(&self) -> Result<Vec<(Source, String)>> {
         View(&self.connection).extraction_sources(&[])
@@ -972,6 +973,7 @@ impl Snapshot for View<'_> {
         source: &Source,
         extractor: &str,
         version: &str,
+        vocabulary_version: &str,
     ) -> Result<rastro_core::runs::ExtractionFacts> {
         let (name, scope) = (&source.name, &source.scope.0);
         // Any version's unfinished run counts: only one extractor run of a pair is live.
@@ -992,7 +994,7 @@ impl Snapshot for View<'_> {
         )?;
         let pending = self.0.query_row(
             &format!("SELECT EXISTS (SELECT 1 {PENDING_EVIDENCE})"),
-            params![name, scope, extractor, version, None::<&str>],
+            params![name, scope, extractor, version, vocabulary_version],
             |row| row.get(0),
         )?;
         Ok(rastro_core::runs::ExtractionFacts {
