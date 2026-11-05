@@ -638,7 +638,16 @@
         "field": {
           "type": "string"
         },
+        "justification_id": {
+          "type": "string"
+        },
+        "justification_kind": {
+          "type": "string"
+        },
         "location": {
+          "type": "string"
+        },
+        "portable_key": {
           "type": "string"
         },
         "quote": {
@@ -665,9 +674,16 @@
         },
         "trust_class": {
           "$ref": "#/$defs/TrustClass"
+        },
+        "vocabulary_version": {
+          "type": "string"
         }
       },
       "required": [
+        "justification_id",
+        "justification_kind",
+        "portable_key",
+        "vocabulary_version",
         "current",
         "evidence_id",
         "source",

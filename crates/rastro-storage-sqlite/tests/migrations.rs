@@ -167,6 +167,8 @@ fn S3_evidence_captured_with_an_earlier_clock_is_still_extracted() {
         extractor_version: extractor.1.into(),
         source: "project".into(),
         scope: Scope("personal".into()),
+        vocabulary_version: "1".into(),
+        last_portable_key: rastro_core::claims::portable_evidence_key(first),
         last: (first.captured_at, *id),
     };
     storage

@@ -457,7 +457,7 @@ impl Storage for SqliteStorage {
              LEFT JOIN extraction_checkpoint c ON c.extractor = ?3 AND c.extractor_version = ?4
                  AND c.source = e.source AND c.scope = e.scope
              WHERE e.source = ?1 AND e.scope = ?2 AND (c.source IS NULL
-                 OR (e.captured_at, e.id) > (c.last_captured_at, c.last_evidence_id))
+                 OR e.id > c.last_evidence_id)
              ORDER BY e.captured_at, e.id",
         )?;
         let rows = statement.query_map(
@@ -472,24 +472,33 @@ impl Storage for SqliteStorage {
                 ))
             },
         )?;
-        rows.map(|row| {
-            let (id, [location, field], [start, end], [quote, trust, captured], updated) = row?;
-            let evidence = Evidence {
-                source: source.name.clone(),
-                scope: source.scope.clone(),
-                location,
-                field,
-                start,
-                end,
-                quote,
-                trust_class: trust_class(&trust)?,
-                captured_at: parse_time(captured)?,
-                source_updated_at: updated.map(parse_time).transpose()?,
-                original: None,
-            };
-            Ok((id, evidence))
-        })
-        .collect()
+        let mut evidence = rows
+            .map(|row| {
+                let (id, [location, field], [start, end], [quote, trust, captured], updated) = row?;
+                let evidence = Evidence {
+                    source: source.name.clone(),
+                    scope: source.scope.clone(),
+                    location,
+                    field,
+                    start,
+                    end,
+                    quote,
+                    trust_class: trust_class(&trust)?,
+                    captured_at: parse_time(captured)?,
+                    source_updated_at: updated.map(parse_time).transpose()?,
+                    original: None,
+                };
+                Ok((id, evidence))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        evidence.sort_by_key(|(id, e)| {
+            (
+                e.captured_at,
+                rastro_core::claims::portable_evidence_key(e),
+                *id,
+            )
+        });
+        Ok(evidence)
     }
     fn record_claims(
         &mut self,
@@ -498,9 +507,42 @@ impl Storage for SqliteStorage {
         claims: &[ObservedClaim],
         checkpoint: Option<&Checkpoint>,
     ) -> Result<Counts> {
+        use rastro_core::claims::{derivation_key, justification_id};
         let transaction = self.connection.transaction()?;
+        let mut affected = std::collections::BTreeSet::new();
+        // Retirement happens only on a successful complete run, inside this publication.
+        let (source, scope): (String, String) = transaction.query_row(
+            "SELECT source, scope FROM runs WHERE id = ?1",
+            [run_id],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )?;
+        let retired = transaction.prepare(
+            "SELECT DISTINCT c.subject, c.predicate FROM justification j JOIN claim c ON c.id = j.claim_id
+             JOIN justification_span s ON s.justification_id = j.id JOIN evidence e ON e.id = s.evidence_id
+             WHERE j.extractor = ?1 AND j.extractor_version != ?2 AND e.source = ?3 AND e.scope = ?4")?
+            .query_map(params![extractor.0, extractor.1, source, scope], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?
+            .collect::<Result<Vec<_>, _>>()?;
+        affected.extend(retired);
+        transaction.execute("DELETE FROM occurrence WHERE justification_id IN (
+            SELECT j.id FROM justification j JOIN justification_span s ON s.justification_id = j.id
+            JOIN evidence e ON e.id = s.evidence_id WHERE j.extractor = ?1 AND j.extractor_version != ?2
+            AND e.source = ?3 AND e.scope = ?4)", params![extractor.0, extractor.1, source, scope])?;
+        transaction.execute(
+            "DELETE FROM justification_span WHERE justification_id IN (
+            SELECT j.id FROM justification j WHERE j.extractor = ?1 AND j.extractor_version != ?2)
+            AND evidence_id IN (SELECT id FROM evidence WHERE source = ?3 AND scope = ?4)",
+            params![extractor.0, extractor.1, source, scope],
+        )?;
+        transaction.execute(
+            "DELETE FROM justification WHERE NOT EXISTS
+            (SELECT 1 FROM justification_span s WHERE s.justification_id = justification.id)",
+            [],
+        )?;
+        transaction.execute("DELETE FROM extraction_checkpoint WHERE extractor = ?1 AND extractor_version != ?2 AND source = ?3 AND scope = ?4",
+            params![extractor.0, extractor.1, source, scope])?;
         let mut counts = Counts::default();
         for claim in claims {
+            affected.insert((claim.subject.id.clone(), claim.predicate.clone()));
             let mut entities = vec![claim.subject.clone()];
             let (object_entity, object_value, object_datatype) = match &claim.object {
                 Object::Entity {
@@ -513,103 +555,116 @@ impl Storage for SqliteStorage {
                 }
                 Object::Literal { value, datatype } => (None, Some(value), Some(datatype)),
             };
-            // One identifier is one entity of one type; a claim naming it as another is refused.
-            let mut clash = false;
-            for entity in &entities {
-                let stored: Option<String> = transaction
-                    .query_row(
-                        "SELECT type FROM entity WHERE id = ?1",
-                        [&entity.id],
-                        |row| row.get(0),
-                    )
-                    .optional()?;
-                clash |= stored.is_some_and(|t| t != entity.entity_type);
-            }
-            if clash {
-                counts.rejected += 1;
-                continue;
-            }
             for entity in &entities {
                 transaction.execute(
-                    "INSERT OR IGNORE INTO entity (id, type, identifier) VALUES (?1, ?2, ?3)",
-                    params![entity.id, entity.entity_type, entity.identifier],
-                )?;
-                transaction.execute(
-                    "INSERT OR IGNORE INTO alias (entity_id, alias, kind)
-                     VALUES (?1, ?2, 'canonical')",
+                    "INSERT OR IGNORE INTO entity (id, identifier) VALUES (?1, ?2)",
                     params![entity.id, entity.identifier],
                 )?;
             }
             transaction.execute(
                 "INSERT OR IGNORE INTO claim (id, subject, predicate, object_entity, object_value,
                  object_datatype, status, revision, scalar) VALUES (?1, ?2, ?3, ?4, ?5, ?6, 'observed', '', ?7)",
-                params![
-                    claim.id,
-                    claim.subject.id,
-                    claim.predicate,
-                    object_entity,
-                    object_value,
-                    object_datatype,
-                    claim.scalar
-                ],
-            )?;
-            let mut added = 0;
-            for s in &claim.supports {
-                added += transaction.execute(
-                    "INSERT OR IGNORE INTO claim_support (claim_id, evidence_id, field, start, end,
-                     extraction_rule, extractor, extractor_version, run_id)
-                     VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                    params![
-                        claim.id,
-                        s.evidence_id,
-                        s.field,
-                        s.start as i64,
-                        s.end as i64,
-                        s.extraction_rule,
-                        extractor.0,
-                        extractor.1,
-                        run_id
-                    ],
-                )?;
+                params![claim.id, claim.subject.id, claim.predicate, object_entity, object_value, object_datatype, claim.scalar])?;
+            let derivation = derivation_key(&claim.supports);
+            let id = justification_id(&claim.id, extractor.0, &derivation);
+            let rule = claim
+                .supports
+                .iter()
+                .next()
+                .ok_or_else(|| anyhow::anyhow!("empty justification"))?
+                .extraction_rule
+                .clone();
+            let added = transaction.execute(
+                "INSERT OR IGNORE INTO justification (id, claim_id, kind, extractor, extractor_version,
+                 vocabulary_version, derivation_key, extraction_rule, run_id)
+                 VALUES (?1, ?2, 'provenance', ?3, ?4, ?5, ?6, ?7, ?8)",
+                params![id, claim.id, extractor.0, extractor.1, checkpoint.map_or("", |c| &c.vocabulary_version), derivation, rule, run_id])?;
+            for span in &claim.supports {
+                transaction.execute("INSERT OR IGNORE INTO justification_span
+                    (justification_id, evidence_id, portable_key, field, start, end) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
+                    params![id, span.evidence_id, span.portable_key, span.field, span.start as i64, span.end as i64])?;
             }
             if added == 0 {
                 counts.unchanged += 1;
-                continue;
+            } else {
+                counts.accepted += 1;
             }
-            counts.accepted += 1;
         }
-        lifecycle::refresh(&transaction)?;
+        // Claims removed by retirement disappear, together with dangling presentation links.
+        transaction.execute("DELETE FROM claim_link WHERE from_claim IN (SELECT id FROM claim c WHERE NOT EXISTS
+            (SELECT 1 FROM justification j WHERE j.claim_id = c.id)) OR to_claim IN (SELECT id FROM claim c WHERE NOT EXISTS
+            (SELECT 1 FROM justification j WHERE j.claim_id = c.id))", [])?;
+        transaction.execute("DELETE FROM claim WHERE NOT EXISTS (SELECT 1 FROM justification j WHERE j.claim_id = claim.id)", [])?;
+        lifecycle::refresh(&transaction, &affected)?;
+        transaction.execute("DELETE FROM entity WHERE id NOT IN (SELECT subject FROM claim UNION SELECT object_entity FROM claim WHERE object_entity IS NOT NULL)", [])?;
         if let Some(c) = checkpoint {
             transaction.execute(
                 "INSERT INTO extraction_checkpoint (extractor, extractor_version, source, scope,
-                 last_captured_at, last_evidence_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6)
-                 ON CONFLICT DO UPDATE SET last_captured_at = excluded.last_captured_at,
-                 last_evidence_id = excluded.last_evidence_id",
-                params![
-                    c.extractor,
-                    c.extractor_version,
-                    c.source,
-                    c.scope.0,
-                    stamp(c.last.0),
-                    c.last.1
-                ],
-            )?;
+                 last_captured_at, last_portable_key, last_evidence_id, vocabulary_version) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
+                 ON CONFLICT DO UPDATE SET
+                 last_captured_at = max(last_captured_at, excluded.last_captured_at),
+                 last_portable_key = CASE WHEN (excluded.last_captured_at, excluded.last_portable_key) >
+                    (last_captured_at, last_portable_key) THEN excluded.last_portable_key ELSE last_portable_key END,
+                 last_evidence_id = max(last_evidence_id, excluded.last_evidence_id),
+                 vocabulary_version = excluded.vocabulary_version",
+                params![c.extractor, c.extractor_version, c.source, c.scope.0, stamp(c.last.0),
+                    c.last_portable_key, c.last.1, c.vocabulary_version])?;
+        }
+        if !lifecycle::staging(&transaction)? {
+            lifecycle::publish(&transaction)?;
         }
         transaction.commit()?;
         Ok(counts)
     }
     fn extraction_sources(&self) -> Result<Vec<(Source, String)>> {
-        let rows = self.connection.prepare("SELECT name, scope, extractor FROM sources WHERE extractor IS NOT NULL
-             UNION SELECT s.name, e.scope, s.extractor FROM sources s JOIN evidence e ON e.source = s.name
-             WHERE s.extractor IS NOT NULL ORDER BY name, scope")?
-            .query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?
+        let rows = self
+            .connection
+            .prepare(
+                "SELECT s.name, p.scope, s.extractor, s.connector, s.selector,
+            s.freshness_rule, s.window_start, s.keep_original FROM sources s JOIN
+            (SELECT name AS source, scope FROM sources UNION SELECT source, scope FROM evidence) p
+            ON p.source = s.name WHERE s.extractor IS NOT NULL ORDER BY s.name, p.scope",
+            )?
+            .query_map([], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, String>(3)?,
+                    r.get::<_, String>(4)?,
+                    r.get::<_, String>(5)?,
+                    r.get::<_, String>(6)?,
+                    r.get::<_, bool>(7)?,
+                ))
+            })?
             .collect::<Result<Vec<_>, _>>()?;
-        Ok(rows
-            .into_iter()
-            .map(|(name, scope, extractor)| {
-                (Source::github(name, String::new(), Scope(scope)), extractor)
-            })
-            .collect())
+        rows.into_iter()
+            .map(
+                |(
+                    name,
+                    scope,
+                    extractor,
+                    connector,
+                    selector,
+                    freshness_rule,
+                    window_start,
+                    keep_original,
+                )| {
+                    Ok((
+                        Source {
+                            name,
+                            scope: Scope(scope),
+                            connector,
+                            selector: serde_json::from_str(&selector)?,
+                            freshness_rule,
+                            window_start: parse_time(window_start)?,
+                            keep_original,
+                        },
+                        extractor,
+                    ))
+                },
+            )
+            .collect()
     }
     fn begin_claims_rebuild(&mut self) -> Result<()> {
         lifecycle::begin_rebuild(&self.connection)
@@ -634,8 +689,8 @@ impl View<'_> {
         let found = self
             .0
             .query_row(
-                "SELECT c.id, c.predicate, c.status, c.revision, s.identifier, s.type,
-                 o.identifier, o.type, c.object_value, c.object_datatype
+                "SELECT c.id, c.predicate, c.status, c.revision, s.identifier, coalesce((SELECT object_value FROM claim t WHERE t.subject = s.id AND t.predicate = 'rastro:type' AND t.status = 'observed' ORDER BY t.id LIMIT 1), ''),
+                 o.identifier, CASE WHEN o.id IS NOT NULL THEN coalesce((SELECT object_value FROM claim t WHERE t.subject = o.id AND t.predicate = 'rastro:type' AND t.status = 'observed' ORDER BY t.id LIMIT 1), '') END, c.object_value, c.object_datatype
                  FROM claim c JOIN entity s ON s.id = c.subject
                  LEFT JOIN entity o ON o.id = c.object_entity WHERE c.id = ?1",
                 [claim],
@@ -672,10 +727,10 @@ impl View<'_> {
         };
         let mut statement = self.0.prepare(
             "SELECT e.id, e.source, e.scope, e.location, s.field, s.start, s.end, e.start,
-             e.quote, e.trust_class, e.captured_at, e.source_updated_at, s.extraction_rule,
-             s.extractor, s.extractor_version, s.current
-             FROM claim_support s JOIN evidence e ON e.id = s.evidence_id
-             WHERE s.claim_id = ?1 ORDER BY e.captured_at, e.id",
+             e.quote, e.trust_class, e.captured_at, e.source_updated_at, j.extraction_rule,
+             j.extractor, j.extractor_version, j.current, j.id, j.kind, s.portable_key, j.vocabulary_version
+             FROM justification_span s JOIN evidence e ON e.id = s.evidence_id JOIN justification j ON j.id = s.justification_id
+             WHERE j.claim_id = ?1 ORDER BY e.captured_at, s.portable_key, e.id, j.id",
         )?;
         let rows = statement.query_map([&id], |row| {
             Ok((
@@ -695,6 +750,12 @@ impl View<'_> {
                 row.get::<_, Option<String>>(11)?,
                 [row.get::<_, String>(12)?, row.get(13)?, row.get(14)?],
                 row.get::<_, bool>(15)?,
+                [
+                    row.get::<_, String>(16)?,
+                    row.get(17)?,
+                    row.get(18)?,
+                    row.get(19)?,
+                ],
             ))
         })?;
         let supports = rows
@@ -707,12 +768,22 @@ impl View<'_> {
                     updated,
                     [extraction_rule, extractor, extractor_version],
                     current,
+                    [
+                        justification_id,
+                        justification_kind,
+                        portable_key,
+                        vocabulary_version,
+                    ],
                 ) = row?;
                 let quote = quote
                     .get((start - from) as usize..(end - from) as usize)
                     .unwrap_or_default()
                     .to_string();
                 Ok(SupportView {
+                    justification_id,
+                    justification_kind,
+                    portable_key,
+                    vocabulary_version,
                     current,
                     evidence_id,
                     source,

@@ -339,21 +339,28 @@ fn last_migration(db: &Connection) -> String {
 
 /// surfaces/R12: launch applies the pending migration, recovers the crashed run and switches on WAL
 #[test]
-fn launch_migrates_recovers_and_turns_on_wal_before_the_first_answer() {
+fn S16b_launch_migrates_recovers_and_turns_on_wal_before_the_first_answer() {
     let env = Env::new();
     env.add_source("project");
     let db = env.db();
     // Undo the last migration, so it is pending again.
     let last = last_migration(&db);
     db.execute_batch(
-        "DROP TABLE claim_link; DROP TABLE known_interval; DROP TABLE projection_generation;
-         ALTER TABLE claim DROP COLUMN scalar; ALTER TABLE claim DROP COLUMN valid_time;
+        "DROP TABLE occurrence; DROP TABLE justification_span; DROP TABLE justification;
+         DROP TABLE claim_link; DROP TABLE claim; DROP TABLE entity;
+         DROP TABLE extraction_checkpoint; DROP TABLE projection_publication;
          INSERT INTO runs (source, scope, plugin_id, plugin_version, started_at, status,
            window_start, window_end)
          VALUES ('project', 'personal', 'test', '0.1.0', '2026-11-04T00:00:00.000Z',
            'running', '2026-11-01T00:00:00.000Z', '2026-11-04T00:00:00.000Z');",
     )
     .unwrap();
+    // Restore the previous disposable projection, leaving source/run columns in place.
+    let previous =
+        include_str!("../../rastro-storage-sqlite/migrations/202611061000_claims_projection.sql");
+    let start = previous.find("CREATE TABLE entity").unwrap();
+    let end = previous.find("-- Replay order").unwrap();
+    db.execute_batch(&previous[start..end]).unwrap();
     db.execute("DELETE FROM schema_migrations WHERE name = ?1", [&last])
         .unwrap();
     db.query_row("PRAGMA journal_mode = DELETE", [], |r| {

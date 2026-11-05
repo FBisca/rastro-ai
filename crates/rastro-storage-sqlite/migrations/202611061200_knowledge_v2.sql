@@ -29,7 +29,7 @@ CREATE TABLE justification_span (
     justification_id TEXT NOT NULL REFERENCES justification(id),
     evidence_id INTEGER NOT NULL REFERENCES evidence(id), portable_key TEXT NOT NULL,
     field TEXT NOT NULL, start INTEGER NOT NULL, end INTEGER NOT NULL CHECK (end > start),
-    PRIMARY KEY (justification_id, portable_key)
+    PRIMARY KEY (justification_id, portable_key, field, start, end)
 ) WITHOUT ROWID;
 CREATE INDEX justification_span_by_evidence ON justification_span (evidence_id);
 CREATE TABLE occurrence (

@@ -124,6 +124,8 @@ fn main() -> Result<()> {
                 let batch: EvidenceBatch = transport.read()?.context("core closed")?.params()?;
                 items.extend(batch.items);
                 if batch.last {
+                    // Script placeholders address append order; wire delivery uses portable event order.
+                    items.sort_by_key(|item| item.evidence_id);
                     break;
                 }
             },

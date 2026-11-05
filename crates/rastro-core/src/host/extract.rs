@@ -11,7 +11,7 @@ use rastro_plugin_sdk::{
     SourceScope, Span, Vocabulary,
 };
 use std::{
-    collections::{BTreeMap, HashMap, btree_map::Entry},
+    collections::HashMap,
     fs,
     path::{Component, Path},
     process::Command,
@@ -201,8 +201,8 @@ fn converse<S: Storage>(
         }
     }
     let delivered: HashMap<i64, Evidence> = run.pending.iter().cloned().collect();
-    // One entry per claim id; a repeat in the same run adds its supports and counts unchanged.
-    let mut accepted: BTreeMap<String, ObservedClaim> = BTreeMap::new();
+    // Preserve each submission as a separate AND derivation.
+    let mut accepted: Vec<ObservedClaim> = Vec::new();
     loop {
         let message = match wire.recv_by(end) {
             Ok(message) => message,
@@ -222,15 +222,7 @@ fn converse<S: Storage>(
                         claims::validate(submit, &delivered, manifest, run.vocabulary)
                     });
                 match checked {
-                    Ok(claim) => match accepted.entry(claim.id.clone()) {
-                        Entry::Vacant(entry) => {
-                            entry.insert(claim);
-                        }
-                        Entry::Occupied(mut entry) => {
-                            entry.get_mut().supports.extend(claim.supports);
-                            counts.unchanged += 1;
-                        }
-                    },
+                    Ok(claim) => accepted.push(claim),
                     Err(why) => {
                         relay.line(&format!("rejected claim: {why}"));
                         counts.rejected += 1;
@@ -247,11 +239,14 @@ fn converse<S: Storage>(
                         extractor_version: manifest.version.clone(),
                         source: run.source.name.clone(),
                         scope: run.source.scope.clone(),
-                        last: (e.captured_at, *id),
+                        last: (
+                            e.captured_at,
+                            run.pending.iter().map(|(id, _)| *id).max().unwrap_or(*id),
+                        ),
                         vocabulary_version: run.vocabulary.version.clone(),
+                        last_portable_key: claims::portable_evidence_key(e),
                     });
-                    let claims: Vec<ObservedClaim> =
-                        std::mem::take(&mut accepted).into_values().collect();
+                    let claims: Vec<ObservedClaim> = std::mem::take(&mut accepted);
                     let stored = storage.record_claims(
                         run.run_id,
                         (&manifest.id, &manifest.version),

@@ -65,8 +65,9 @@ pub struct ObservedClaim {
     pub object: Object,
     pub supports: BTreeSet<Support>,
 }
-/// How far an extractor version has read a (source, scope): the last observation processed,
-/// in replay order (`captured_at`, evidence id).
+/// How far an extractor version has read a pair. `last.0` and `last_portable_key` name
+/// the portable event boundary; `last.1` is the local append high-water, used only to
+/// discover new input (including equal-time appends sorting before that boundary).
 pub struct Checkpoint {
     pub extractor: String,
     pub extractor_version: String,
@@ -74,6 +75,7 @@ pub struct Checkpoint {
     pub scope: Scope,
     pub last: (DateTime<Utc>, i64),
     pub vocabulary_version: String,
+    pub last_portable_key: String,
 }
 
 /// Canonical encoding, version 1: a domain tag, then each part as one tag byte, its length in
@@ -155,11 +157,27 @@ pub fn portable_span_key(e: &Evidence, start: u64, end: u64) -> String {
 pub fn derivation_key(supports: &BTreeSet<Support>) -> String {
     let keys: BTreeSet<_> = supports
         .iter()
-        .map(|s| (&s.extraction_rule, &s.portable_key))
+        .map(|s| {
+            (
+                &s.extraction_rule,
+                &s.portable_key,
+                &s.field,
+                s.start.to_string(),
+                s.end.to_string(),
+            )
+        })
         .collect();
     let parts: Vec<_> = keys
         .iter()
-        .flat_map(|(rule, key)| [(b'R', rule.as_str()), (b'V', key.as_str())])
+        .flat_map(|(rule, key, field, start, end)| {
+            [
+                (b'R', rule.as_str()),
+                (b'V', key.as_str()),
+                (b'F', field.as_str()),
+                (b'B', start.as_str()),
+                (b'N', end.as_str()),
+            ]
+        })
         .collect();
     digest("d_", "rastro/derivation/v1", &parts)
 }
@@ -293,7 +311,7 @@ pub fn validate(
             return Err("support span lies outside its evidence".into());
         }
         supports.insert(Support {
-            portable_key: portable_span_key(evidence, support.start, support.end),
+            portable_key: portable_evidence_key(evidence),
             evidence_id: support.evidence_id,
             field: support.field,
             start: support.start,
@@ -343,6 +361,10 @@ pub enum ValidTime {
 /// One support of a claim, with the evidence it cites.
 #[derive(Clone, Debug, JsonSchema, Serialize)]
 pub struct SupportView {
+    pub justification_id: String,
+    pub justification_kind: String,
+    pub portable_key: String,
+    pub vocabulary_version: String,
     pub current: bool,
     pub evidence_id: i64,
     pub source: String,

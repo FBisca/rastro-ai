@@ -374,16 +374,16 @@ pub trait Storage {
         plugin: (&str, &str),
         started_at: DateTime<Utc>,
     ) -> Result<i64>;
-    /// The source's observations past the extractor version's checkpoint, in replay order
-    /// (`captured_at`, evidence id), each with its id.
+    /// The source's new observations past the local append checkpoint, sorted by portable
+    /// event key (`captured_at`, portable evidence key, local id as tie-break).
     fn pending_evidence(
         &self,
         extractor: (&str, &str),
         source: &Source,
     ) -> Result<Vec<(i64, Evidence)>>;
-    /// Stores accepted claims (their entities, aliases and supports) and moves the checkpoint,
-    /// in one transaction. Counts each claim accepted (something new), unchanged, or rejected
-    /// (an identifier already stored under another type).
+    /// Publishes accepted AND derivations and their checkpoint atomically. A successful
+    /// version replay retires the pair's old justifications in the same transaction.
+    /// Counts new and unchanged derivations; types and aliases are claims.
     fn record_claims(
         &mut self,
         run_id: i64,

@@ -1,131 +1,154 @@
-//! Deterministic lifecycle projection. Replaying support observations in evidence order makes
-//! intervals and revisions independent of extractor submission order and batching.
+//! Replay the affected subject/predicate components in portable event order. A derivation
+//! is live only while every span is current; derivations of one claim are OR alternatives.
 use crate::parse_time;
 use anyhow::Result;
-use rastro_core::claims::{KnownInterval, Support, revision_with_links};
+use rastro_core::claims::{KnownInterval, Support, occurrence_id, revision_with_links};
 use rusqlite::{Connection, params};
 use std::collections::{BTreeMap, BTreeSet};
 
-type Context = (String, String, String, String, String);
+type Event = (String, String);
+type Component = (String, String);
+type Slot = (String, String, String, String, String, Option<String>);
 #[derive(Clone)]
-struct Observation {
-    claim: String,
+struct Span {
     source: String,
     scope: String,
-    context: Context,
-    scalar: bool,
-    captured: String,
+    location: String,
+    event: Event,
     updated: Option<chrono::DateTime<chrono::Utc>>,
     support: Support,
 }
-impl Observation {
-    // Extraction rules have independent support streams, but cannot hide a disagreement
-    // about the same resource field merely by naming their rules differently.
-    fn field(&self) -> (&str, &str, &str, &str) {
-        (
-            &self.context.0,
-            &self.context.1,
-            &self.context.2,
-            &self.context.3,
-        )
-    }
-    fn same_field(&self, other: &Self) -> bool {
-        self.field() == other.field()
-    }
-    fn slot(&self) -> (String, String, Context, Option<String>) {
+impl Span {
+    fn slot(&self, derivation: &Derivation) -> Slot {
         (
             self.source.clone(),
             self.scope.clone(),
-            self.context.clone(),
-            (!self.scalar).then(|| self.claim.clone()),
+            self.location.clone(),
+            self.support.field.clone(),
+            self.support.extraction_rule.clone(),
+            (!derivation.scalar).then(|| derivation.claim.clone()),
         )
     }
+    fn same_field(&self, other: &Self) -> bool {
+        self.location == other.location && self.support.field == other.support.field
+    }
+}
+struct Derivation {
+    id: String,
+    claim: String,
+    scalar: bool,
+    spans: Vec<Span>,
 }
 
-pub(crate) fn refresh(db: &Connection) -> Result<()> {
-    let observations = db.prepare(
-        "SELECT s.claim_id, e.source, e.scope, c.subject, c.predicate, e.location,
-         s.field, s.extraction_rule, c.scalar, e.captured_at, s.evidence_id, s.start, s.end, e.source_updated_at
-         FROM claim_support s JOIN evidence e ON e.id = s.evidence_id
-         JOIN claim c ON c.id = s.claim_id ORDER BY e.captured_at, e.id, s.claim_id,
-         s.extraction_rule, s.start, s.end"
-    )?.query_map([], |r| Ok(Observation {
-        claim: r.get(0)?, source: r.get(1)?, scope: r.get(2)?,
-        context: (r.get(3)?, r.get(4)?, r.get(5)?, r.get(6)?, r.get(7)?),
-        scalar: r.get(8)?, captured: r.get(9)?,
-        updated: r.get::<_, Option<String>>(13)?.map(|v| v.parse().expect("validated evidence timestamp")),
-        support: Support { portable_key: String::new(), evidence_id: r.get(10)?, field: r.get(6)?,
-            extraction_rule: r.get(7)?, start: r.get::<_, i64>(11)? as u64,
-            end: r.get::<_, i64>(12)? as u64 },
-    }))?.collect::<Result<Vec<_>, _>>()?;
-    db.execute_batch(
-        "DELETE FROM known_interval; DELETE FROM claim_link; UPDATE claim_support SET current = 0;",
-    )?;
-    let mut latest = BTreeMap::new();
-    let mut previous = BTreeSet::new();
-    let mut current = Vec::new();
-    // All claims on one evidence observation become visible together.
-    let mut offset = 0;
-    while offset < observations.len() {
-        let first = &observations[offset];
-        let mut end = offset + 1;
-        while end < observations.len()
-            && observations[end].support.evidence_id == first.support.evidence_id
-        {
-            end += 1;
-        }
-        for observation in &observations[offset..end] {
-            let slot = observation.slot();
-            let entries: &mut Vec<&Observation> = latest.entry(slot).or_default();
-            if entries
-                .first()
-                .is_some_and(|old| old.support.evidence_id != observation.support.evidence_id)
-            {
-                entries.clear();
-            }
-            entries.push(observation);
-        }
-        current = latest.values().flatten().copied().collect::<Vec<_>>();
-        let mut candidates = BTreeMap::<_, Vec<_>>::new();
-        for &observation in &current {
-            candidates
-                .entry(observation.field())
+pub(crate) fn refresh(db: &Connection, affected: &BTreeSet<Component>) -> Result<()> {
+    for (subject, predicate) in affected {
+        recompute(db, subject, predicate)?;
+    }
+    Ok(())
+}
+
+fn recompute(db: &Connection, subject: &str, predicate: &str) -> Result<()> {
+    let mut derivations: BTreeMap<String, Derivation> = BTreeMap::new();
+    let rows = db.prepare(
+        "SELECT j.id, j.claim_id, c.scalar, e.source, e.scope, e.location, e.captured_at,
+         e.source_updated_at, s.evidence_id, s.field, s.start, s.end, s.portable_key, j.extraction_rule
+         FROM justification j JOIN claim c ON c.id = j.claim_id
+         JOIN justification_span s ON s.justification_id = j.id JOIN evidence e ON e.id = s.evidence_id
+         WHERE c.subject = ?1 AND c.predicate = ?2 ORDER BY j.id, s.portable_key")?
+        .query_map(params![subject, predicate], |r| {
+            Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, bool>(2)?, Span {
+                source: r.get(3)?, scope: r.get(4)?, location: r.get(5)?,
+                event: (r.get(6)?, r.get(12)?),
+                updated: r.get::<_, Option<String>>(7)?.map(|s| s.parse().expect("validated evidence timestamp")),
+                support: Support { evidence_id: r.get(8)?, field: r.get(9)?, start: r.get::<_, i64>(10)? as u64,
+                    end: r.get::<_, i64>(11)? as u64, portable_key: r.get(12)?, extraction_rule: r.get(13)? },
+            }))
+        })?.collect::<Result<Vec<_>, _>>()?;
+    for (id, claim, scalar, span) in rows {
+        derivations
+            .entry(id.clone())
+            .or_insert_with(|| Derivation {
+                id,
+                claim,
+                scalar,
+                spans: vec![],
+            })
+            .spans
+            .push(span);
+    }
+    db.execute("DELETE FROM occurrence WHERE justification_id IN (SELECT j.id FROM justification j JOIN claim c ON c.id = j.claim_id WHERE c.subject = ?1 AND c.predicate = ?2)", params![subject, predicate])?;
+    db.execute("DELETE FROM claim_link WHERE from_claim IN (SELECT id FROM claim WHERE subject = ?1 AND predicate = ?2) OR to_claim IN (SELECT id FROM claim WHERE subject = ?1 AND predicate = ?2)", params![subject, predicate])?;
+    db.execute("UPDATE justification SET current = 0 WHERE claim_id IN (SELECT id FROM claim WHERE subject = ?1 AND predicate = ?2)", params![subject, predicate])?;
+    let mut events = BTreeMap::<Event, Vec<(&Derivation, &Span)>>::new();
+    for d in derivations.values() {
+        for span in &d.spans {
+            events
+                .entry(span.event.clone())
                 .or_default()
-                .push(observation);
+                .push((d, span));
         }
-        current.retain(|old| {
-            !old.scalar
-                || !candidates[&old.field()].iter().any(|new| {
-                    old.claim != new.claim
-                        && matches!((old.updated, new.updated), (Some(a), Some(b)) if b > a)
-                })
-        });
-        let now: BTreeSet<_> = current.iter().map(|o| o.claim.clone()).collect();
+    }
+    let mut latest = BTreeMap::<Slot, Event>::new();
+    let mut previous = BTreeSet::<String>::new();
+    let mut current = Vec::new();
+    for (event, observations) in events {
+        for (d, span) in observations {
+            latest.insert(span.slot(d), event.clone());
+        }
+        let candidates: Vec<_> = derivations
+            .values()
+            .filter(|d| {
+                d.spans
+                    .iter()
+                    .all(|s| latest.get(&s.slot(d)) == Some(&s.event))
+            })
+            .collect();
+        current = candidates
+            .iter()
+            .copied()
+            .filter(|old| {
+                !old.scalar
+                    || !candidates.iter().any(|new| {
+                        old.claim != new.claim
+                            && old.spans.iter().any(|a| {
+                                new.spans.iter().any(|b|
+                a.same_field(b) && matches!((a.updated, b.updated), (Some(a), Some(b)) if b > a))
+                            })
+                    })
+            })
+            .collect();
+        let now: BTreeSet<_> = current.iter().map(|d| d.id.clone()).collect();
         for id in previous.difference(&now) {
-            db.execute(
-                "UPDATE known_interval SET end = ?2 WHERE claim_id = ?1 AND end IS NULL",
-                params![id, first.captured],
-            )?;
+            db.execute("UPDATE occurrence SET end = ?2, end_key = ?3 WHERE justification_id = ?1 AND end IS NULL", params![id, event.0, event.1])?;
         }
         for id in now.difference(&previous) {
-            db.execute(
-                "INSERT INTO known_interval (claim_id, start, evidence_id) VALUES (?1, ?2, ?3)",
-                params![id, first.captured, first.support.evidence_id],
-            )?;
+            let d = &derivations[id];
+            let span = d
+                .spans
+                .iter()
+                .max_by_key(|s| &s.event)
+                .expect("nonempty derivation");
+            db.execute("INSERT INTO occurrence (id, justification_id, source, scope, location, field,
+                captured_at, source_updated_at, portable_key) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
+                params![occurrence_id(id, &event.0, &event.1), id, span.source, span.scope, span.location,
+                    span.support.field, event.0, span.updated.map(crate::stamp), event.1])?;
         }
         previous = now;
-        offset = end;
     }
-    // Only scalar replacement establishes a supersession link. A revived claim no longer
-    // points at the value which previously replaced it.
+    let current_claims: BTreeSet<_> = current.iter().map(|d| &d.claim).collect();
+    let same_field = |a: &Derivation, b: &Derivation| {
+        a.spans
+            .iter()
+            .any(|s| b.spans.iter().any(|t| s.same_field(t)))
+    };
     let mut edges = BTreeSet::new();
-    for old in &observations {
-        if previous.contains(&old.claim) || !old.scalar {
+    for old in derivations.values() {
+        if !old.scalar || current_claims.contains(&old.claim) {
             continue;
         }
         for new in &current {
-            if old.same_field(new) && old.claim != new.claim {
-                edges.insert((new.claim.clone(), old.claim.clone(), "supersedes"));
+            if old.claim != new.claim && same_field(old, new) {
+                edges.insert((&new.claim, &old.claim, "supersedes"));
             }
         }
     }
@@ -134,8 +157,8 @@ pub(crate) fn refresh(db: &Connection) -> Result<()> {
             continue;
         }
         for right in &current {
-            if left.same_field(right) && left.claim != right.claim {
-                edges.insert((left.claim.clone(), right.claim.clone(), "conflicts_with"));
+            if left.claim != right.claim && same_field(left, right) {
+                edges.insert((&left.claim, &right.claim, "conflicts_with"));
             }
         }
     }
@@ -145,30 +168,21 @@ pub(crate) fn refresh(db: &Connection) -> Result<()> {
             params![from, to, kind],
         )?;
     }
-    for o in &current {
-        let s = &o.support;
+    for d in &current {
         db.execute(
-            "UPDATE claim_support SET current = 1 WHERE claim_id = ?1 AND evidence_id = ?2
-            AND field = ?3 AND start = ?4 AND end = ?5 AND extraction_rule = ?6",
-            params![
-                o.claim,
-                s.evidence_id,
-                s.field,
-                s.start as i64,
-                s.end as i64,
-                s.extraction_rule
-            ],
+            "UPDATE justification SET current = 1 WHERE id = ?1",
+            [&d.id],
         )?;
     }
     let ids = db
-        .prepare("SELECT id FROM claim ORDER BY id")?
-        .query_map([], |r| r.get::<_, String>(0))?
+        .prepare("SELECT id FROM claim WHERE subject = ?1 AND predicate = ?2 ORDER BY id")?
+        .query_map(params![subject, predicate], |r| r.get::<_, String>(0))?
         .collect::<Result<Vec<_>, _>>()?;
     for id in ids {
         let supports: Vec<_> = current
             .iter()
-            .filter(|o| o.claim == id)
-            .map(|o| o.support.clone())
+            .filter(|d| d.claim == id)
+            .flat_map(|d| d.spans.iter().map(|s| s.support.clone()))
             .collect();
         let status = if supports.is_empty() {
             "superseded"
@@ -188,32 +202,41 @@ pub(crate) fn refresh(db: &Connection) -> Result<()> {
                 ));
             }
         }
-        db.execute(
-            "UPDATE claim SET status = ?2, revision = ?3 WHERE id = ?1",
-            params![
-                id,
-                status,
-                revision_with_links(status, &supports, &visible_links)
-            ],
-        )?;
+        db.execute("UPDATE claim SET status = ?2, revision = ?3, known_since = coalesce((
+            SELECT max(o.captured_at) FROM occurrence o JOIN justification j ON j.id = o.justification_id WHERE j.claim_id = ?1), '') WHERE id = ?1",
+            params![id, status, revision_with_links(status, &supports, &visible_links)])?;
     }
     Ok(())
 }
 
 pub(crate) fn intervals(db: &Connection, id: &str) -> Result<Vec<KnownInterval>> {
-    let rows = db
-        .prepare(
-            "SELECT start, end FROM known_interval WHERE claim_id = ?1 ORDER BY start, evidence_id",
-        )?
-        .query_map([id], |r| {
-            Ok((r.get::<_, String>(0)?, r.get::<_, Option<String>>(1)?))
-        })?
+    let rows = db.prepare("SELECT o.captured_at, o.portable_key, o.end, o.end_key FROM occurrence o
+        JOIN justification j ON j.id = o.justification_id WHERE j.claim_id = ?1 ORDER BY o.captured_at, o.portable_key, o.id")?
+        .query_map([id], |r| Ok(((r.get::<_, String>(0)?, r.get::<_, String>(1)?), r.get::<_, Option<String>>(2)?.zip(r.get::<_, Option<String>>(3)?))))?
         .collect::<Result<Vec<_>, _>>()?;
-    rows.into_iter()
+    // Union on event keys, preserving a gap even if its timestamps are equal.
+    let mut intervals: Vec<(Event, Option<Event>)> = Vec::new();
+    for (start, end) in rows {
+        if let Some((_, last_end)) = intervals.last_mut()
+            && last_end.as_ref().is_none_or(|e| e >= &start)
+        {
+            if end.is_none()
+                || last_end
+                    .as_ref()
+                    .is_some_and(|old| end.as_ref().is_some_and(|new| new > old))
+            {
+                *last_end = end;
+            }
+            continue;
+        }
+        intervals.push((start, end));
+    }
+    intervals
+        .into_iter()
         .map(|(start, end)| {
             Ok(KnownInterval {
-                start: parse_time(start)?,
-                end: end.map(parse_time).transpose()?,
+                start: parse_time(start.0)?,
+                end: end.map(|e| parse_time(e.0)).transpose()?,
             })
         })
         .collect()
@@ -230,41 +253,44 @@ pub(crate) fn links(db: &Connection, id: &str, kind: &str, inverse: bool) -> Res
         .collect::<Result<_, _>>()?)
 }
 
-// These tables together form one generation. A rebuild's TEMP tables shadow the active
-// tables on this connection only. Readers on other connections keep reading main until the
-// publication transaction commits. Extractor runs always go to the persistent audit log.
 const TABLES: &[&str] = &[
     "entity",
-    "alias",
     "claim",
-    "claim_support",
-    "known_interval",
+    "justification",
+    "justification_span",
+    "occurrence",
     "claim_link",
     "extraction_checkpoint",
 ];
-pub(crate) fn begin_rebuild(db: &Connection) -> Result<()> {
-    let transaction = db.unchecked_transaction()?;
+pub(crate) fn staging(db: &Connection) -> Result<bool> {
+    Ok(db.query_row(
+        "SELECT EXISTS (SELECT 1 FROM sqlite_temp_master WHERE name = 'claim')",
+        [],
+        |r| r.get(0),
+    )?)
+}
+pub(crate) fn publish(db: &Connection) -> Result<()> {
+    let extractors: Vec<(String, String)> = db.prepare("SELECT DISTINCT extractor, extractor_version FROM extraction_checkpoint ORDER BY extractor, extractor_version")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
+    let vocabularies: Vec<(String, String)> = db.prepare("SELECT DISTINCT extractor, vocabulary_version FROM extraction_checkpoint ORDER BY extractor, vocabulary_version")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
+    let high_water: Vec<(String, String, String, String)> = db.prepare("SELECT source, scope, last_captured_at, last_portable_key FROM extraction_checkpoint ORDER BY source, scope, extractor")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<Result<_, _>>()?;
+    db.execute("INSERT INTO main.projection_publication (extractor_versions, vocabulary_versions, evidence_high_water) VALUES (?1, ?2, ?3)",
+        params![serde_json::to_string(&extractors)?, serde_json::to_string(&vocabularies)?, serde_json::to_string(&high_water)?])?;
     for table in TABLES {
-        let sql: String = transaction.query_row(
-            "SELECT sql FROM main.sqlite_master WHERE type = 'table' AND name = ?1",
-            [table],
-            |r| r.get(0),
-        )?;
-        let mut sql = sql.replacen("CREATE TABLE", "CREATE TEMP TABLE", 1);
-        // SQLite cannot enforce references from TEMP to main. Replay only uses core-validated
-        // submissions; the publication transaction enforces the active generation's FKs.
-        for target in ["entity(id)", "claim(id)", "evidence(id)", "runs(id)"] {
-            sql = sql.replace(&format!(" REFERENCES {target}"), "");
-        }
-        transaction.execute_batch(&sql)?;
+        db.execute_batch(&format!("ANALYZE main.{table}"))?;
     }
-    transaction.commit()?;
     Ok(())
 }
-pub(crate) fn finish_rebuild(db: &mut Connection, publish: bool) -> Result<usize> {
+pub(crate) fn begin_rebuild(db: &Connection) -> Result<()> {
+    db.execute_batch(include_str!("projection_temp.sql"))?;
+    Ok(())
+}
+pub(crate) fn finish_rebuild(db: &mut Connection, publish_projection: bool) -> Result<usize> {
     let transaction = db.transaction()?;
     let count: i64 = transaction.query_row("SELECT count(*) FROM temp.claim", [], |r| r.get(0))?;
-    if publish {
+    if publish_projection {
         for table in TABLES.iter().rev() {
             transaction.execute(&format!("DELETE FROM main.{table}"), [])?;
         }
@@ -274,10 +300,12 @@ pub(crate) fn finish_rebuild(db: &mut Connection, publish: bool) -> Result<usize
                 [],
             )?;
         }
-        transaction.execute("UPDATE main.projection_generation SET id = id + 1", [])?;
     }
     for table in TABLES.iter().rev() {
         transaction.execute_batch(&format!("DROP TABLE temp.{table}"))?;
+    }
+    if publish_projection {
+        publish(&transaction)?;
     }
     transaction.commit()?;
     Ok(count as usize)
