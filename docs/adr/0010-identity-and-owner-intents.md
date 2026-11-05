@@ -7,7 +7,7 @@ date: 2026-11-05
 
 Roadmap slice 4 gives Rastro a second source and one identity per thing (`../concept.md` §1). This ADR sets what `../decisions/knowledge.md` §48 asks of it: the formulas for minting a Person and for linking to one (§36), the presentation of a group of equivalent claims (§35) and the core identity predicates (`../decisions/vocabulary.md` §14). It also sets the owner-intent table the owner writes into, how intents resolve, what each identity claim is visible in, and what a rebuild does with all of it. The plan is `../plans/2026-11-05-second-source-one-identity.plan.md`.
 
-Terms: a **Person** is a human entity; an **account** is a source's account for a human or a bot; a **link** is an account held by a Person; a **merge** is two Persons being one (glossary, "Merge"). A name is an alias and a type is a claim (`../decisions/vocabulary.md` §15).
+Terms: a **Person** is a human entity; an **account** is a source's account for a human; a **link** is an account held by a Person; a **merge** is two Persons being one (glossary, "Merge"). A name is an alias and a type is a claim (`../decisions/vocabulary.md` §15).
 
 ## Core identity predicates
 
@@ -33,7 +33,7 @@ An owner intent is a durable, insert-only input, outside the rebuildable project
 | `format_version` | Positive; the canonical encoding version |
 | `kind` | Validated by the core; no SQL enum |
 | `owner_id` | The owner the intent belongs to |
-| `issuer_context` | Issuing principal, surface and effective scopes. Audit data, not authorization |
+| `issuer_context` | Issuing principal, surface and configured source scopes. Audit data, not authorization; see D35 below |
 | `issued_at` | When the owner issued it |
 | `domain_key` | The canonical operation domain; indexed, not unique |
 | `targets_json` | Versioned, tagged target structure |
@@ -59,7 +59,7 @@ Resolution is per `domain_key`, not "the latest intent wins per target". Creatin
 | Kind | Domain | Resolution inside the domain |
 |---|---|---|
 | `create_person` | The Person the intent mints; `me` is reserved for the owner's | One Person per domain. A second `me` returns the same Person and records no intent |
-| `name` | The Person's name | Set at build (build notes) |
+| `name` | The Person's name | Newest non-undone name wins; earlier stretches stay historical (D39 below) |
 | `link` | The (account, Person) pair. A different Person is a different domain | One link per pair |
 | `cannot_link` | The pair of endpoints, sorted | One refusal per pair |
 | `same_as` | The (Person, Person) pair, sorted | One merge per pair |
@@ -74,8 +74,8 @@ The exact `domain_key` formats are set at build.
 
 ## Intent-backed claims
 
-- A Person (its `rastro:type` claim), its name, a link and a merge are claims in the projection, derived from the intent table. Their status is `observed` and their justification has kind `owner_intent`, carrying the intent's id, time and issuer; `why` shows it (`../decisions/knowledge.md` §48).
-- The `confirmed` status stays in slice 7, with the scoped-replay fix it needs (`../decisions/knowledge.md` §48). Today's scoped replay forces `observed`, so this slice is consistent with it.
+- A Person (its `rastro:type` claim), its name, a link and a merge are claims in the projection, derived from the intent table. Their status is `observed` while current and `superseded` when undone or replaced; their justification has kind `owner_intent`, carrying the intent's id, time and issuer; `why` shows it (`../decisions/knowledge.md` §48).
+- The `confirmed` status stays in slice 7, with the scoped-replay fix it needs (`../decisions/knowledge.md` §48). Identity replay preserves `observed` and `superseded`; the general status fix remains deferred.
 - **No lifecycle binding.** An identity intent targets entities, not the lifecycle state of a claim, so it carries no lifecycle binding and never lapses. This is the exemption from `../decisions/knowledge.md` §42 that §48 asks the slice-4 ADR to record. The fingerprint is defined in slice 7.
 
 ## Minting a Person
@@ -108,7 +108,7 @@ An automatic link is not an intent: it is derived from evidence on every project
 - A Person is visible in a scope that can see at least one of its linked accounts. `me` is visible in every scope.
 - A link or a merge is visible only where both ends are visible.
 - A cannot-link applies in every scope: it is a refusal, not a fact about the world, and hiding it would let an automatic link be derived again, against the owner's refusal.
-- The issuer must be able to see the target when the intent is issued; an intent from a context that cannot is refused. The recorded issuing context is audit data, not lasting authorization: an intent issued in one scope applies in another that can see its target (`../decisions/knowledge.md` §42, §44).
+- The issuer must be able to see the target when the intent is issued; an intent from a context that cannot is refused. The CLI is authorized to see every scope, independently of its recorded issuer scopes (D35 below). The recorded issuing context is audit data, not lasting authorization: an intent issued in one scope applies in another that can see its target (`../decisions/knowledge.md` §42, §44).
 
 ## Rebuild, replay and cache
 
@@ -119,7 +119,7 @@ An automatic link is not an intent: it is derived from evidence on every project
 
 ## Presenting a group
 
-- A group of equivalent claims carries its member claim ids, each with its own status and revision; its revision is the hash of the sorted (member id, revision) pairs; it counts as one toward `limit` (`../decisions/knowledge.md` §35).
+- Equivalence is limited to merged Persons; claims about different accounts held by one Person stay separate (`../decisions/knowledge.md` §59, plan D36). A group of equivalent claims carries its member claim ids, each with its own status and revision; its revision is the hash of the sorted (member id, revision) pairs; it counts as one toward `limit` (`../decisions/knowledge.md` §35).
 - Today only `observed` and `superseded` exist: a group with one observed member shows `observed`. Every member keeps its own status and revision in the result. How the other statuses rank in a group is set in slice 7 (`../decisions/knowledge.md` §42).
 - A group is never presented as one claim with the weakest status, and there is no representative id (`../decisions/knowledge.md` §35).
 
@@ -154,7 +154,7 @@ The lifecycle fingerprint, lapse and stale, the precedence rules, the `confirmed
 ## Build notes confirmed by the owner (2026-11-05)
 Confirmed as built (plan D30).
 
-- A Person's name: the newest `name` intent wins and the older one is superseded.
+- A Person's name: the newest non-undone `name` intent wins; earlier stretches stay historical. Undoing the newer name reopens the older one from the undo, preserving the gap (D39 below).
 - A cannot-link between two accounts (a no to a candidate) also blocks any automatic link that would put both under one Person.
 - Draft `domain_key` formats: `person/<id>` (`person/me` reserved), `person/<id>/name`, `held_by/<account>/<person>`, `cannot_link/<a>/<b>`, `same_as/<a>/<b>`.
 - Every row is validated atomically: JSON shapes, non-empty ids and kinds, unique set members, a valid anchor, and a hash that agrees with the snapshot.
@@ -162,11 +162,17 @@ Confirmed as built (plan D30).
 - A cleared cannot-link stays in `rastro identity history`, marked reversed.
 
 ## Amended 2026-11-05 (owner decisions after the build review)
-Status stays accepted. Plan: `../plans/2026-11-05-second-source-one-identity.plan.md` (D25 to D29). Product meaning in `../decisions/vocabulary.md` §27 and `../decisions/knowledge.md` §58.
-- **Only an account is held by a Person (D25, extends *Core identity predicates*).** The core declares the supertype `rastro:Account`; a vocabulary declares which of its types are accounts (`code:Account`, `tracker:Account`). A link, by the owner or automatic, whose account side is not typed as an account is refused, as a `held_by` from a Person already is.
+Status stays accepted. Plan: `../plans/2026-11-05-second-source-one-identity.plan.md` (D25–D29, D32, D34–D41). Product meaning in `../decisions/vocabulary.md` §27 and `../decisions/knowledge.md` §58.
+- **Only an account is held by a Person (D25, extends *Core identity predicates*).** The core declares the supertype `rastro:Account`; a vocabulary declares which of its types are accounts (`code:Account`, `tracker:Account`). A new link, by the owner or automatic, whose account side is not typed as an account is refused, as a `held_by` from a Person already is. Replaying an existing owner link preserves it (D41 below).
 - **Undone and older claims stay `superseded` (D26, extends *Resolution* and *Intent-backed claims*).** An undone link or merge, and a Person's older name, stay in the projection as `superseded`, with the interval closed at the undo (or the newer name's) time. An older name still resolves as a historical alias.
 - **No undo of `create_person` (D27, extends *Resolution*).** An `undo` of a `create_person` intent is refused until slice 14's controlled removal. A mistaken Person is merged into the right one.
 - **`issuer_context` records real scopes (D28, extends *The owner-intent table*).** It holds the issuing surface's actual configured scopes, never `[]` standing for all. Still audit data, not authorization.
 - **A retried `person create` mints a new Person (D29, extends *Minting a Person*).** Each run of `rastro identity person create` is a new intent with a new id; a duplicate is merged. Revisit when an agent surface can issue intents.
 - **A Linear guest's email is not verified (D32, extends *Automatic links*).** Only a workspace member's email is a verified email; a guest's never makes an automatic link, though it may still feed a fuzzy candidate. Plan D32 (owner Q11).
 - **The token owner is the `viewer` item (D34, extends *Automatic links*).** Each connector records its token's owner as kind `viewer` at `<namespace>:viewer`, field `/id`, and the token-owner link is derived from it. Product meaning in `../decisions/plugins.md` §25.
+- **Issuer scopes are audit only (D35, clarifies D28 and *Visibility*).** The CLI is authorized to see every scope. The recorded list contains only configured sources' scopes, excluding storage-only scopes; `[]` means no configured sources or a legacy row written before D28, never all scopes. A scoped read shows only issuer scopes its reader can see.
+- **A merge does not reveal a hidden Person (D37, clarifies *Visibility*).** A Person with no visible account of its own stays hidden even when merged with a visible Person; `me` keeps its every-scope visibility. Traversal in a scope follows only merges whose two Persons are visible.
+- **The accounts list shows current links (D38).** An undone link appears as a `superseded` `held_by` claim under `--history`, naming its account, rather than as a current account.
+- **Undoing a newer name preserves the gap (D39, clarifies *Resolution* and D26).** Name A at t1, B at t2, undo B at t3 gives A [t1,t2) and [t3,∞). Intent contributions are stored as stretches with `started_at` and `ended_at`; undo opens a new stretch instead of rewriting known-time history.
+- **Replay preserves existing owner links (D41, clarifies D25 and *Rebuild, replay and cache*).** The account-type check runs when a link is issued, not when that intent replays. A link made before a type change, or before D25, survives even if its account side is no longer typed as an account. A later slice may flag a held non-account in the Person view.
+- **Upgrading leaves an account-type gap until replay (D40).** Linking an existing account is refused until `rastro sync` or `rastro rebuild` replays the vocabularies declaring `rastro:Account`. The error and release notes explain this requirement; existing links are unaffected. No migration fills the supertype, because the core may not name plugin vocabularies.
