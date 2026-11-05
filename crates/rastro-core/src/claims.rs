@@ -12,6 +12,12 @@ use std::collections::{BTreeSet, HashMap};
 pub const MAX_TERM_BYTES: usize = 4096;
 pub const TYPE_PREDICATE: &str = "rastro:type";
 pub const ALIAS_PREDICATE: &str = "rastro:alias";
+/// The datatype of a `rastro:type` claim's literal: a type of the extractor's vocabulary, equal
+/// to the subject's type. An entity's type is this claim, not a column, and is never updated in
+/// place. The core owns the `rastro:` prefix; no vocabulary may define a name under it. A
+/// `rastro:alias` claim's datatype is an alias kind the vocabulary declares, and its value is
+/// exactly the text one of its supports quotes.
+pub const TYPE_DATATYPE: &str = "rastro:type";
 
 /// An entity: one exact canonical identifier, with its type.
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
@@ -253,40 +259,76 @@ pub fn validate(
     if !rule.deterministic {
         return Err("extraction rule not declared deterministic".into());
     }
-    let predicate = vocabulary
-        .predicates
-        .iter()
-        .find(|p| p.id == submit.predicate)
-        .ok_or("predicate not in the vocabulary")?;
-    let typed = |t: &String| vocabulary.types.contains(t);
+    let typed = |t: &String| vocabulary.has_type(t);
     let subject = submit.subject;
-    if subject.identifier.is_empty()
-        || !typed(&subject.entity_type)
-        || !predicate.domain.contains(&subject.entity_type)
-    {
+    if subject.identifier.is_empty() || !typed(&subject.entity_type) {
         return Err("subject outside the predicate's domain".into());
     }
-    let object = match submit.object {
-        ClaimObject::Entity {
-            identifier,
-            entity_type,
-        } if !identifier.is_empty()
-            && typed(&entity_type)
-            && predicate.range.contains(&entity_type) =>
+    // The text an alias claim's supports must quote.
+    let mut alias = None;
+    // Every `rastro:type` claim is scalar: a newer type read from the same field replaces the
+    // older, and two live types conflict unless the vocabulary relates them by `supertype`.
+    // The projection can't see the vocabulary, so a type claim carries its supertypes.
+    let scalar;
+    let mut type_ancestors = Vec::new();
+    let object = match (submit.predicate.as_str(), submit.object) {
+        (TYPE_PREDICATE, ClaimObject::Literal { value, datatype })
+            if datatype == TYPE_DATATYPE && value == subject.entity_type =>
         {
-            let Entity { id, .. } = Entity::new(identifier.clone(), entity_type.clone());
-            Object::Entity {
-                id,
-                identifier,
-                entity_type,
-            }
-        }
-        ClaimObject::Literal { value, datatype }
-            if !typed(&datatype) && predicate.range.contains(&datatype) =>
-        {
+            scalar = true;
+            type_ancestors = vocabulary.ancestors(&value);
             Object::Literal { value, datatype }
         }
-        _ => return Err("object outside the predicate's range".into()),
+        (TYPE_PREDICATE, _) => return Err("a type claim names its subject's own type".into()),
+        (ALIAS_PREDICATE, ClaimObject::Literal { value, datatype }) => {
+            let kind = vocabulary
+                .aliases
+                .iter()
+                .find(|k| k.kind == datatype)
+                .ok_or("alias kind not in the vocabulary")?;
+            if !kind.domain.contains(&subject.entity_type) {
+                return Err("subject outside the alias kind's domain".into());
+            }
+            // A new observation of the field an alias is read from ends the previous alias
+            // there, so a rename's two logins show when each held.
+            scalar = true;
+            alias = Some(value.clone());
+            Object::Literal { value, datatype }
+        }
+        (ALIAS_PREDICATE, _) => return Err("an alias is a literal".into()),
+        (id, object) => {
+            let predicate = vocabulary
+                .predicates
+                .iter()
+                .find(|p| p.id == id)
+                .ok_or("predicate not in the vocabulary")?;
+            if !predicate.domain.contains(&subject.entity_type) {
+                return Err("subject outside the predicate's domain".into());
+            }
+            scalar = predicate.cardinality == rastro_plugin_sdk::Cardinality::One;
+            match object {
+                ClaimObject::Entity {
+                    identifier,
+                    entity_type,
+                } if !identifier.is_empty()
+                    && typed(&entity_type)
+                    && predicate.range.contains(&entity_type) =>
+                {
+                    let Entity { id, .. } = Entity::new(identifier.clone(), entity_type.clone());
+                    Object::Entity {
+                        id,
+                        identifier,
+                        entity_type,
+                    }
+                }
+                ClaimObject::Literal { value, datatype }
+                    if !typed(&datatype) && predicate.range.contains(&datatype) =>
+                {
+                    Object::Literal { value, datatype }
+                }
+                _ => return Err("object outside the predicate's range".into()),
+            }
+        }
     };
     if submit.supports.is_empty() {
         return Err("a claim needs at least one support".into());
@@ -320,16 +362,57 @@ pub fn validate(
             extraction_rule: rule.id.clone(),
         });
     }
+    if let Some(alias) = alias {
+        let quoted = |s: &Support| {
+            let e = &delivered[&s.evidence_id];
+            e.quote
+                .get((s.start - e.start) as usize..(s.end - e.start) as usize)
+                == Some(alias.as_str())
+        };
+        if !supports.iter().any(quoted) {
+            return Err("an alias is exactly the text one of its supports quotes".into());
+        }
+    }
     let subject = Entity::new(subject.identifier, subject.entity_type);
     Ok(ObservedClaim {
-        type_ancestors: Vec::new(),
-        scalar: predicate.cardinality == rastro_plugin_sdk::Cardinality::One,
+        type_ancestors,
+        scalar,
         id: claim_id(&subject.id, &submit.predicate, &object),
         subject,
         predicate: submit.predicate,
         object,
         supports,
     })
+}
+
+/// Type grounding: a submission's claims are validated together, and an endpoint's type comes
+/// from a `rastro:type` claim in the same submission, never from stored state. Returns the
+/// claims that pass and how many were rejected: those with a subject or entity object no
+/// `rastro:type` claim here types as the claim says. Type claims ground themselves.
+pub fn ground(claims: Vec<ObservedClaim>) -> (Vec<ObservedClaim>, u64) {
+    let typed: BTreeSet<(String, String)> = claims
+        .iter()
+        .filter_map(|c| match (&*c.predicate, &c.object) {
+            (TYPE_PREDICATE, Object::Literal { value, .. }) => {
+                Some((c.subject.identifier.clone(), value.clone()))
+            }
+            _ => None,
+        })
+        .collect();
+    let grounded = |e: &Entity| typed.contains(&(e.identifier.clone(), e.entity_type.clone()));
+    let (kept, rejected): (Vec<_>, Vec<_>) = claims.into_iter().partition(|c| {
+        c.predicate == TYPE_PREDICATE
+            || grounded(&c.subject)
+                && match &c.object {
+                    Object::Entity {
+                        identifier,
+                        entity_type,
+                        ..
+                    } => typed.contains(&(identifier.clone(), entity_type.clone())),
+                    Object::Literal { .. } => true,
+                }
+    });
+    (kept, rejected.len() as u64)
 }
 
 /// A claim as `why` shows it.
@@ -429,5 +512,155 @@ mod tests {
             claim_id(&pr, "code:state", &open),
             "c_396068c0fa399a0ab85fba670ab6abf3"
         );
+    }
+
+    const WORDS: &str = "definition = \"d\"\nnot_to_confuse_with = \"n\"\nexamples = [\"e\"]\n\
+        counter_examples = [\"c\"]\nevidence_requirement = \"r\"\n";
+    fn vocabulary() -> Vocabulary {
+        Vocabulary::parse(&format!(
+            "namespace = \"x\"\nversion = \"1\"\npredicates = []\n\
+             [[types]]\nid = \"x:Account\"\n{WORDS}[[types]]\nid = \"x:Item\"\n{WORDS}\
+             [[aliases]]\nkind = \"login\"\ndomain = [\"x:Account\"]\n{WORDS}"
+        ))
+        .unwrap()
+    }
+    fn manifest() -> Manifest {
+        Manifest::parse(
+            "id = \"x\"\nname = \"x\"\nversion = \"1\"\nauthor = \"x\"\nkinds = []\n\
+             protocol = 1\ncommand = \"x\"\ntriggers = []\ndependencies = [\"x\"]\n\
+             [[extraction_rules]]\nid = \"r\"\ndeterministic = true\n\
+             [permissions]\nsubmit = []\nscopes = []\nactions = []\n",
+        )
+        .unwrap()
+    }
+    /// One delivered observation: evidence 1, `/user/login` quoting `octocat`.
+    fn delivered() -> HashMap<i64, Evidence> {
+        let evidence = Evidence {
+            source: "s".into(),
+            scope: Scope("personal".into()),
+            location: "https://github.com/o/p/pull/1".into(),
+            field: "/user/login".into(),
+            start: 0,
+            end: 7,
+            quote: "octocat".into(),
+            trust_class: TrustClass::Structured,
+            captured_at: Utc::now(),
+            source_updated_at: None,
+            original: None,
+        };
+        HashMap::from([(1, evidence)])
+    }
+    fn submit(predicate: &str, subject_type: &str, value: &str, datatype: &str) -> ClaimSubmit {
+        serde_json::from_value(serde_json::json!({
+            "subject": {"identifier": "github:account/1", "type": subject_type},
+            "predicate": predicate,
+            "object": {"kind": "literal", "value": value, "datatype": datatype},
+            "extraction_rule": "r",
+            "supports": [{"evidence_id": 1, "field": "/user/login", "start": 0, "end": 7}],
+        }))
+        .unwrap()
+    }
+    fn check(claim: ClaimSubmit) -> Result<ObservedClaim, String> {
+        validate(claim, &delivered(), &manifest(), &vocabulary())
+    }
+
+    #[test]
+    fn S13_a_rastro_type_claim_names_its_subjects_own_vocabulary_type() {
+        assert!(
+            check(submit(
+                TYPE_PREDICATE,
+                "x:Account",
+                "x:Account",
+                TYPE_DATATYPE
+            ))
+            .is_ok()
+        );
+        for wrong in [
+            submit(TYPE_PREDICATE, "x:Account", "x:Item", TYPE_DATATYPE),
+            submit(TYPE_PREDICATE, "x:Account", "x:Account", "string"),
+            submit(TYPE_PREDICATE, "Person", "Person", TYPE_DATATYPE),
+        ] {
+            assert!(check(wrong).is_err());
+        }
+    }
+
+    #[test]
+    fn S13_a_rastro_alias_is_a_declared_kind_quoted_exactly_by_its_support() {
+        let claim = check(submit(ALIAS_PREDICATE, "x:Account", "octocat", "login")).unwrap();
+        assert_eq!(claim.predicate, ALIAS_PREDICATE);
+        for wrong in [
+            // Text the support doesn't quote.
+            submit(ALIAS_PREDICATE, "x:Account", "admin", "login"),
+            submit(ALIAS_PREDICATE, "x:Account", "octo", "login"),
+            // A kind the vocabulary doesn't declare, or a type outside its domain.
+            submit(ALIAS_PREDICATE, "x:Account", "octocat", "email"),
+            submit(ALIAS_PREDICATE, "x:Item", "octocat", "login"),
+        ] {
+            assert!(check(wrong).is_err());
+        }
+    }
+
+    fn typed(identifier: &str, entity_type: &str) -> ObservedClaim {
+        let subject = Entity::new(identifier.into(), entity_type.into());
+        let object = Object::Literal {
+            value: entity_type.into(),
+            datatype: TYPE_DATATYPE.into(),
+        };
+        ObservedClaim {
+            scalar: false,
+            type_ancestors: Vec::new(),
+            id: claim_id(&subject.id, TYPE_PREDICATE, &object),
+            subject,
+            predicate: TYPE_PREDICATE.into(),
+            object,
+            supports: BTreeSet::new(),
+        }
+    }
+    fn about(subject: (&str, &str), object: (&str, &str)) -> ObservedClaim {
+        let subject = Entity::new(subject.0.into(), subject.1.into());
+        let Entity {
+            id,
+            identifier,
+            entity_type,
+        } = Entity::new(object.0.into(), object.1.into());
+        let object = Object::Entity {
+            id,
+            identifier,
+            entity_type,
+        };
+        ObservedClaim {
+            scalar: false,
+            type_ancestors: Vec::new(),
+            id: claim_id(&subject.id, "x:author", &object),
+            subject,
+            predicate: "x:author".into(),
+            object,
+            supports: BTreeSet::new(),
+        }
+    }
+
+    #[test]
+    fn S4c_a_claim_whose_endpoint_type_is_not_claimed_in_the_submission_is_rejected() {
+        let author = about(("i/1", "x:Item"), ("github:account/7", "x:Account"));
+        let kinds = [
+            typed("i/1", "x:Item"),
+            typed("github:account/7", "x:Account"),
+        ];
+        let (kept, rejected) = ground([author.clone(), kinds[0].clone(), kinds[1].clone()].into());
+        assert_eq!((kept.len(), rejected), (3, 0));
+        // Either endpoint untyped here (an earlier submission's type doesn't count), or typed
+        // as something else, rejects the claim; the type claims themselves stay.
+        for kinds in [
+            vec![kinds[0].clone()],
+            vec![kinds[1].clone()],
+            vec![typed("i/1", "x:Item"), typed("github:account/7", "x:Bot")],
+        ] {
+            let mut all = vec![author.clone()];
+            all.extend(kinds.iter().cloned());
+            let (kept, rejected) = ground(all);
+            assert_eq!(rejected, 1);
+            assert_eq!(kept.len(), kinds.len());
+            assert!(kept.iter().all(|c| c.predicate == TYPE_PREDICATE));
+        }
     }
 }

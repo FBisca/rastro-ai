@@ -471,6 +471,36 @@ impl Storage for SqliteStorage {
     ) -> Result<Vec<(i64, Evidence)>> {
         self.evidence_after_checkpoint(extractor, source, Some(vocabulary_version))
     }
+    fn location_context(
+        &self,
+        source: &Source,
+        locations: &[String],
+        high_water: (DateTime<Utc>, i64),
+    ) -> Result<Vec<(i64, Evidence)>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, location, field, start, end, quote, trust_class, captured_at,
+             source_updated_at FROM (
+                 SELECT e.*, row_number() OVER (PARTITION BY e.location, e.field
+                     ORDER BY e.captured_at DESC, e.id DESC) AS newest
+                 FROM evidence e
+                 WHERE e.source = ?1 AND e.scope = ?2 AND e.trust_class = 'structured'
+                     AND e.location IN (SELECT value FROM json_each(?3))
+                     AND (e.captured_at, e.id) <= (?4, ?5)
+             ) WHERE newest = 1 ORDER BY captured_at, id",
+        )?;
+        let locations = serde_json::to_string(locations)?;
+        let rows = statement.query_map(
+            params![
+                source.name,
+                source.scope.0,
+                locations,
+                stamp(high_water.0),
+                high_water.1
+            ],
+            observation,
+        )?;
+        rows.map(|row| row?.into_evidence(source)).collect()
+    }
     fn record_claims(
         &mut self,
         run_id: i64,
@@ -637,6 +667,49 @@ impl Storage for SqliteStorage {
         let result = View(&snapshot).why(claim)?;
         snapshot.commit()?;
         Ok(result)
+    }
+}
+
+/// One evidence row as the extraction queries select it: id, location, field, start, end,
+/// quote, trust class, capture time and source update time.
+struct Observation {
+    id: i64,
+    text: [String; 5],
+    span: [u64; 2],
+    updated: Option<String>,
+}
+fn observation(row: &rusqlite::Row) -> rusqlite::Result<Observation> {
+    Ok(Observation {
+        id: row.get(0)?,
+        text: [
+            row.get(1)?,
+            row.get(2)?,
+            row.get(5)?,
+            row.get(6)?,
+            row.get(7)?,
+        ],
+        span: [row.get::<_, i64>(3)? as u64, row.get::<_, i64>(4)? as u64],
+        updated: row.get(8)?,
+    })
+}
+impl Observation {
+    fn into_evidence(self, source: &Source) -> Result<(i64, Evidence)> {
+        let [location, field, quote, trust, captured] = self.text;
+        let [start, end] = self.span;
+        let evidence = Evidence {
+            source: source.name.clone(),
+            scope: source.scope.clone(),
+            location,
+            field,
+            start,
+            end,
+            quote,
+            trust_class: trust_class(&trust)?,
+            captured_at: parse_time(captured)?,
+            source_updated_at: self.updated.map(parse_time).transpose()?,
+            original: None,
+        };
+        Ok((self.id, evidence))
     }
 }
 

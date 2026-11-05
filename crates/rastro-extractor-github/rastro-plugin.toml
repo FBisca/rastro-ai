@@ -1,0 +1,43 @@
+id = "rastro-extractor-github"
+name = "Rastro GitHub extractor"
+version = "0.1.0"
+author = "Rastro"
+# The `code` vocabulary ships in this package, next to the extractor that uses it.
+kinds = ["extractor", "vocabulary"]
+protocol = 1
+command = "rastro-extractor-github"
+triggers = []
+dependencies = ["code"]
+vocabulary = "vocabulary.toml"
+
+# Every rule reads one structured field or the canonical html_url of an observation's
+# location; none reads a title or body. See src/main.rs for each rule.
+[[extraction_rules]]
+id = "state"
+deterministic = true
+
+[[extraction_rules]]
+id = "kind-from-url"
+deterministic = true
+
+[[extraction_rules]]
+id = "repository-from-url"
+deterministic = true
+
+[[extraction_rules]]
+id = "author"
+deterministic = true
+
+[[extraction_rules]]
+id = "account-type"
+deterministic = true
+
+[[extraction_rules]]
+id = "login"
+deterministic = true
+
+[permissions]
+submit = []
+scopes = ["personal", "work"]
+env = []
+actions = []

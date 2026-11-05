@@ -3,7 +3,8 @@
 //! `RASTRO_TEST_EXTRACTOR_SCRIPT` names a JSONL file; each line is one step, tagged by `do`:
 //! - `initialize`: read the core's `initialize` and answer it
 //! - `read_batches`: read `evidence.batch` notifications up to the one marked `last`
-//! - `state_claims`: for every `/state` item read, a `code:state` claim on its location
+//! - `state_claims`: for every `/state` item read, a `rastro:type` claim typing its location
+//!   as a `code:PullRequest`, then a `code:state` claim on it
 //! - `send` {message}: write that JSON object as one line; in it, `"$evidence:N"` becomes the
 //!   id of the Nth item read and `"$end:N"` that item's span end
 //! - `finish` {status?}: send `run.finish` with the claims sent so far and wait for the reply
@@ -131,16 +132,29 @@ fn main() -> Result<()> {
             },
             Step::StateClaims => {
                 for item in items.iter().filter(|i| i.span.field == "/state") {
-                    sent += 1;
+                    let support = json!([{"evidence_id": item.evidence_id, "field": "/state",
+                        "start": item.span.start, "end": item.span.end}]);
+                    let subject = json!({"identifier": item.location, "type": "code:PullRequest"});
+                    sent += 2;
                     transport.send(&Envelope::notification(
                         CLAIM_SUBMIT,
                         json!({
-                            "subject": {"identifier": item.location, "type": "code:PullRequest"},
+                            "subject": subject,
+                            "predicate": "rastro:type",
+                            "object": {"kind": "literal", "value": "code:PullRequest",
+                                "datatype": "rastro:type"},
+                            "extraction_rule": "state-field",
+                            "supports": support,
+                        }),
+                    )?)?;
+                    transport.send(&Envelope::notification(
+                        CLAIM_SUBMIT,
+                        json!({
+                            "subject": subject,
                             "predicate": "code:state",
                             "object": {"kind": "literal", "value": item.span.quote, "datatype": "string"},
                             "extraction_rule": "state-field",
-                            "supports": [{"evidence_id": item.evidence_id, "field": "/state",
-                                "start": item.span.start, "end": item.span.end}],
+                            "supports": support,
                         }),
                     )?)?;
                 }

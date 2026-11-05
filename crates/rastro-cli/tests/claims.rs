@@ -125,8 +125,17 @@ impl Env {
         steps.push(json!({"do": "finish", "submitted": evidence.len()}));
         write_script(&self.path("connector.jsonl"), &steps);
     }
-    /// The extractor reads every batch, sends these claims and finishes.
+    /// The extractor reads every batch, sends these claims and finishes. Every submission
+    /// carries a `rastro:type` claim for the PR (type grounding), unless it sends its own.
     fn extract(&self, claims: &[Value]) {
+        let own = claims.iter().any(|c| c["predicate"] == "rastro:type");
+        if own || claims.is_empty() {
+            return self.extract_raw(claims);
+        }
+        self.extract_raw(&[&[typed_pr()][..], claims].concat());
+    }
+    /// The same, exactly these claims.
+    fn extract_raw(&self, claims: &[Value]) {
         let mut steps = vec![json!({"do": "initialize"}), json!({"do": "read_batches"})];
         for params in claims {
             let message = json!({"jsonrpc": "2.0", "method": "claim.submit", "params": params});
@@ -175,6 +184,12 @@ fn claim(predicate: &str, object: Value, rule: &str, support: Value) -> Value {
 fn support(evidence: Value, field: &str, end: Value) -> Value {
     json!({"evidence_id": evidence, "field": field, "start": 0, "end": end})
 }
+/// The claim that types the PR, as every submission naming it must carry (type grounding).
+fn typed_pr() -> Value {
+    json!({"subject": pr(), "predicate": "rastro:type",
+        "object": {"kind": "literal", "value": "code:PullRequest", "datatype": "rastro:type"},
+        "extraction_rule": "state-field", "supports": [first_state_support()]})
+}
 fn first_state_support() -> Value {
     support(json!("$evidence:0"), "/state", json!("$end:0"))
 }
@@ -196,7 +211,7 @@ fn S3_a_bound_extractor_turns_its_sources_evidence_into_claims_read_through_why(
     assert_eq!(extraction["state"], "current");
     assert_eq!(
         extraction["counts"],
-        json!({"submitted": 1, "accepted": 1, "rejected": 0, "unchanged": 0})
+        json!({"submitted": 2, "accepted": 2, "rejected": 0, "unchanged": 0})
     );
     assert!(runs[1].get("extraction").is_none(), "{synced}");
     // Its own run: plugin id, version and the claim counts.
@@ -206,17 +221,17 @@ fn S3_a_bound_extractor_turns_its_sources_evidence_into_claims_read_through_why(
              || ' ' || submitted || '/' || accepted || '/' || rejected
              FROM runs WHERE role = 'extractor'"
         ),
-        "test-extractor 0.1.0 project ok 1/1/0"
+        "test-extractor 0.1.0 project ok 2/2/0"
     );
     // Only the bound source's evidence reached the extractor.
-    assert_eq!(env.count("claim"), 1);
-    let id: String = env.sql("SELECT id FROM claim");
+    assert_eq!(env.count("claim"), 2);
+    let id: String = env.sql("SELECT id FROM claim WHERE predicate = 'code:state'");
     let why = env.json(&["why", &id, "--full"]);
     let claim = &why["claim"];
     assert_eq!(claim["id"], id.as_str());
     assert_eq!(claim["subject"]["identifier"], PR);
-    // This fixture submits no rastro:type claim. Types are never entity columns.
-    assert_eq!(claim["subject"]["type"], "");
+    // The type is shown from its `rastro:type` claim; it is never an entity column.
+    assert_eq!(claim["subject"]["type"], "code:PullRequest");
     assert_eq!(claim["predicate"], "code:state");
     assert_eq!(claim["object"], literal("open"));
     assert_eq!(claim["status"], "observed");
@@ -289,6 +304,7 @@ fn S4_claims_with_untrusted_undelivered_outside_or_nondeterministic_supports_are
     let login = observation(PR, "/user/login", "zoë", "structured");
     env.observe(&[state("open"), body("Please close this."), login]);
     env.extract(&[
+        typed_pr(),
         claim(
             "code:state",
             literal("behind the checkpoint"),
@@ -348,7 +364,7 @@ fn S4_claims_with_untrusted_undelivered_outside_or_nondeterministic_supports_are
     let synced = env.json(&["sync"]);
     assert_eq!(
         synced["runs"][1]["extraction"]["counts"],
-        json!({"submitted": 9, "accepted": 1, "rejected": 8, "unchanged": 0}),
+        json!({"submitted": 10, "accepted": 2, "rejected": 8, "unchanged": 0}),
         "{synced}"
     );
     assert_eq!(
@@ -357,10 +373,10 @@ fn S4_claims_with_untrusted_undelivered_outside_or_nondeterministic_supports_are
             env.count("justification_span"),
             env.count("entity")
         ),
-        (2, 2, 1)
+        (3, 4, 1)
     );
     assert_eq!(
-        env.sql::<String>("SELECT group_concat(object_value, ' ') FROM (SELECT object_value FROM claim ORDER BY object_value)"),
+        env.sql::<String>("SELECT group_concat(object_value, ' ') FROM (SELECT object_value FROM claim WHERE predicate = 'code:state' ORDER BY object_value)"),
         "draft open"
     );
 }
@@ -378,10 +394,10 @@ fn S4_an_extractor_exceeding_the_claim_cap_fails_and_stores_nothing() {
         "state-field",
         first_state_support(),
     );
-    env.extract(&[valid.clone(), valid.clone(), valid]);
+    env.extract(&[typed_pr(), valid.clone(), valid.clone(), valid]);
     let output = env
         .command(&["sync", "--json"])
-        .env("RASTRO_HOST_MAX_CLAIMS", "2")
+        .env("RASTRO_HOST_MAX_CLAIMS", "3")
         .output()
         .unwrap();
     assert!(!output.status.success());
@@ -415,6 +431,12 @@ fn S4a_claims_outside_the_vocabulary_are_rejected() {
             "extraction_rule": "state-field", "supports": [first_state_support()]})
     };
     env.extract(&[
+        typed_pr(),
+        on(
+            json!({"identifier": "https://github.com/o/p", "type": "code:Repository"}),
+            "rastro:type",
+            json!({"kind": "literal", "value": "code:Repository", "datatype": "rastro:type"}),
+        ),
         on(pr(), "code:in_repository", repo("code:Repository")),
         on(pr(), "code:colour", literal("open")),
         on(
@@ -437,14 +459,163 @@ fn S4a_claims_outside_the_vocabulary_are_rejected() {
     let synced = env.json(&["sync"]);
     assert_eq!(
         synced["runs"][0]["extraction"]["counts"],
-        json!({"submitted": 6, "accepted": 1, "rejected": 5, "unchanged": 0}),
+        json!({"submitted": 8, "accepted": 3, "rejected": 5, "unchanged": 0}),
         "{synced}"
     );
-    assert_eq!((env.count("claim"), env.count("entity")), (1, 2));
+    assert_eq!((env.count("claim"), env.count("entity")), (3, 2));
     assert_eq!(
-        env.sql::<String>("SELECT predicate FROM claim"),
-        "code:in_repository"
+        env.sql::<String>(
+            "SELECT group_concat(predicate, ' ') FROM (SELECT predicate FROM claim ORDER BY predicate)"
+        ),
+        "code:in_repository rastro:type rastro:type"
     );
+}
+
+/// S4c: an endpoint's type comes from a `rastro:type` claim in the same submission, even when an
+/// earlier submission typed the entity
+#[test]
+fn S4c_an_endpoint_typed_only_by_an_earlier_submission_is_rejected_and_counted() {
+    let env = Env::new(Some("test-extractor"));
+    env.add_source("project", "test");
+    env.observe(&[state("open")]);
+    write_script(
+        &env.path("extractor.jsonl"),
+        &[
+            json!({"do": "initialize"}),
+            json!({"do": "read_batches"}),
+            json!({"do": "state_claims"}),
+            json!({"do": "finish"}),
+        ],
+    );
+    env.ok(&["sync"]);
+    assert_eq!(env.count("claim WHERE predicate = 'rastro:type'"), 1);
+    // The PR was typed before; this submission names it without typing it.
+    env.observe(&[state("closed")]);
+    env.extract_raw(&[claim(
+        "code:state",
+        literal("closed"),
+        "state-field",
+        first_state_support(),
+    )]);
+    let synced = env.json(&["sync"]);
+    assert_eq!(
+        synced["runs"][0]["extraction"]["counts"],
+        json!({"submitted": 1, "accepted": 0, "rejected": 1, "unchanged": 0}),
+        "{synced}"
+    );
+    assert_eq!(env.count("claim WHERE object_value = 'closed'"), 0);
+}
+
+/// S4c: two submissions typing one entity differently leave both visible as a conflict, both
+/// ways, unless one type is a `supertype` ancestor of the other; a newer type read from the
+/// same field replaces the older
+#[test]
+fn S4c_disagreeing_types_conflict_unless_related_by_supertype_and_a_newer_type_replaces() {
+    let words = "definition = \"d\"\nnot_to_confuse_with = \"n\"\nexamples = [\"e\"]\n\
+        counter_examples = [\"c\"]\nevidence_requirement = \"r\"\n";
+    let vocabulary = |env: &Env| {
+        let path = env.plugin_dir("test-extractor").join("vocabulary.toml");
+        let mut text = fs::read_to_string(&path).unwrap();
+        // Two families: Draft under PullRequest, Fork under Repository.
+        text.push_str(&format!(
+            "\n[[types]]\nid = \"code:Draft\"\nsupertype = \"code:PullRequest\"\n{words}\
+             \n[[types]]\nid = \"code:Fork\"\nsupertype = \"code:Repository\"\n{words}"
+        ));
+        fs::write(path, text).unwrap();
+    };
+    let typed_as = |kind: &str| {
+        json!({"subject": {"identifier": PR, "type": kind}, "predicate": "rastro:type",
+            "object": {"kind": "literal", "value": kind, "datatype": "rastro:type"},
+            "extraction_rule": "state-field", "supports": [first_state_support()]})
+    };
+    for (first, second, conflict) in [
+        ("code:PullRequest", "code:Repository", true),
+        ("code:PullRequest", "code:Draft", false),
+        ("code:Draft", "code:PullRequest", false),
+        // Both have relatives, in different families: still a conflict.
+        ("code:Draft", "code:Fork", true),
+    ] {
+        let env = Env::new(Some("test-extractor"));
+        vocabulary(&env);
+        env.add_source("a", "test");
+        env.add_source("b", "test");
+        for (source, kind) in [("a", first), ("b", second)] {
+            env.extract_raw(&[typed_as(kind)]);
+            let mut observation = state("open");
+            observation["source_updated_at"] = json!("2026-11-01T00:00:00Z");
+            env.observe(&[observation]);
+            env.json(&["sync", source]);
+        }
+        for kind in [first, second] {
+            let id: String = env.sql(&format!(
+                "SELECT id FROM claim WHERE predicate = 'rastro:type' AND object_value = '{kind}'"
+            ));
+            let why = env.json(&["why", &id]);
+            assert_eq!(why["claim"]["status"], "observed", "{why}");
+            let conflicts = why["claim"]["conflicts_with"].as_array().unwrap();
+            assert_eq!(
+                conflicts.is_empty(),
+                !conflict,
+                "{first} vs {second}, seen from {kind}: {why}"
+            );
+        }
+    }
+    // One source later reading another type from the same field replaces the first, even when
+    // the first type has relatives.
+    let env = Env::new(Some("test-extractor"));
+    vocabulary(&env);
+    env.add_source("a", "test");
+    for (value, updated, kind) in [
+        ("open", "2026-11-01T00:00:00Z", "code:Draft"),
+        ("closed", "2026-11-02T00:00:00Z", "code:Repository"),
+    ] {
+        env.extract_raw(&[typed_as(kind)]);
+        let mut observation = state(value);
+        observation["source_updated_at"] = json!(updated);
+        env.observe(&[observation]);
+        env.json(&["sync", "a"]);
+    }
+    let status = |kind: &str| -> String {
+        env.sql(&format!(
+            "SELECT status FROM claim WHERE predicate = 'rastro:type' AND object_value = '{kind}'"
+        ))
+    };
+    assert_eq!(status("code:Draft"), "superseded");
+    assert_eq!(status("code:Repository"), "observed");
+}
+
+/// S15a: a vocabulary the core refuses to load fails the run, and no claim is accepted under it
+#[test]
+fn S15a_a_refused_vocabulary_fails_the_extraction_and_accepts_no_claim() {
+    let original = include_str!("../../rastro-test-extractor/vocabulary.toml");
+    let broken = [
+        ("an unknown field", format!("flavour = \"x\"\n{original}")),
+        (
+            "no cardinality",
+            original.replacen("cardinality = \"one\"\n", "", 1),
+        ),
+        (
+            "a rastro: name",
+            original.replacen("code:state", "rastro:state", 1),
+        ),
+    ];
+    for (what, vocabulary) in broken {
+        let env = Env::new(Some("test-extractor"));
+        fs::write(
+            env.plugin_dir("test-extractor").join("vocabulary.toml"),
+            vocabulary,
+        )
+        .unwrap();
+        env.add_source("project", "test");
+        env.observe(&[state("open")]);
+        let output = env.command(&["sync", "--json"]).output().unwrap();
+        let synced: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let extraction = &synced["result"]["runs"][0]["extraction"];
+        assert_eq!(extraction["state"], "failed", "{what}: {synced}");
+        assert_eq!(env.count("claim"), 0, "{what}");
+        let error = String::from_utf8_lossy(&output.stderr);
+        assert!(error.contains("fails its check"), "{what}: {error}");
+    }
 }
 
 /// S5: a bound extractor that isn't installed reads `not_installed` and the sync succeeds;
@@ -530,8 +701,8 @@ fn S7_two_sources_observing_the_same_pr_state_share_one_entity_and_one_claim() {
     env.add_source("b", "test");
     env.observe(&[state("open")]);
     env.json(&["sync"]);
-    assert_eq!((env.count("entity"), env.count("claim")), (1, 1));
-    let id: String = env.sql("SELECT id FROM claim");
+    assert_eq!((env.count("entity"), env.count("claim")), (1, 2));
+    let id: String = env.sql("SELECT id FROM claim WHERE predicate = 'code:state'");
     let why = env.json(&["why", &id]);
     assert_eq!(why["claim"]["predicate"], "code:state");
     let mut sources: Vec<_> = why["supports"]
@@ -876,8 +1047,9 @@ fn S4b_one_bad_span_rejects_the_entire_bundle_and_counts_it() {
     env.extract(&[good, bad]);
     let result = env.json(&["sync", "a"]);
     assert_eq!(result["runs"][0]["extraction"]["counts"]["rejected"], 1);
-    assert_eq!(env.count("justification"), 1);
-    assert_eq!(env.count("justification_span"), 1);
+    // The PR's type claim and the good claim; the bad bundle leaves nothing.
+    assert_eq!(env.count("justification"), 2);
+    assert_eq!(env.count("justification_span"), 2);
     let why = env.json(&["why", OPEN]);
     assert_eq!(why["supports"][0]["justification_kind"], "provenance");
     assert!(
@@ -969,7 +1141,8 @@ fn assert_atomic_replay(vocabulary_only: bool) {
         env.count(&format!("justification WHERE {retired_column} = '0.1.0'")),
         0
     );
-    assert_eq!(env.count("justification"), 1);
+    // The state claim and the PR's type claim, both from the upgraded version.
+    assert_eq!(env.count("justification"), 2);
     let publication_column = if vocabulary_only {
         "vocabulary_versions"
     } else {
@@ -999,7 +1172,7 @@ fn S16b_sync_and_rebuild_publish_receipts_and_fresh_statistics() {
     assert!(env.count("sqlite_stat1 WHERE tbl = 'claim'") > 0);
     sync_state(&env, "a", "closed");
     let stat: String = env.sql("SELECT stat FROM sqlite_stat1 WHERE idx = 'claim_by_subject'");
-    assert!(stat.starts_with("2 "), "{stat}");
+    assert!(stat.starts_with("3 "), "{stat}");
     env.ok(&["claims", "rebuild"]);
     assert_eq!(env.count("projection_publication"), 3);
     env.extract(&[]);
@@ -1131,8 +1304,8 @@ fn S17_the_next_writing_sync_extracts_evidence_a_failed_sync_kept_even_when_it_a
     let run = &synced["runs"][0];
     assert_eq!(run["counts"]["accepted"], 0, "{synced}");
     assert_eq!(run["extraction"]["evidence"], 1, "{synced}");
-    assert_eq!(run["extraction"]["counts"]["accepted"], 1, "{synced}");
-    assert_eq!(env.count("claim"), 1);
+    assert_eq!(run["extraction"]["counts"]["accepted"], 2, "{synced}");
+    assert_eq!(env.count("claim"), 2);
 }
 
 #[test]
@@ -1163,7 +1336,7 @@ fn S18_an_extractor_crash_fails_the_sync_keeps_coverage_and_the_last_projection_
     assert_eq!(after["claim"], before["claim"]);
     assert_eq!(after["supports"], before["supports"]);
     assert_eq!(after["extraction"][0]["state"], "failed");
-    assert_eq!(env.count("claim"), 1);
+    assert_eq!(env.count("claim"), 2);
 
     // The next sync resumes from the checkpoint: only the evidence the crash left.
     env.observe(&[state("closed")]);
@@ -1176,7 +1349,7 @@ fn S18_an_extractor_crash_fails_the_sync_keeps_coverage_and_the_last_projection_
     let synced = env.json(&["sync", "a"]);
     assert_eq!(synced["runs"][0]["extraction"]["evidence"], 1, "{synced}");
     assert_eq!(synced["runs"][0]["extraction"]["state"], "current");
-    assert_eq!(env.count("claim"), 2);
+    assert_eq!(env.count("claim"), 3);
     assert_eq!(extraction_states(&env)[0].2, "current");
 }
 
@@ -1206,7 +1379,7 @@ fn S18b_a_failed_version_replay_keeps_the_old_versions_claims_and_reads_failed()
     assert_eq!(after["extraction"][0]["state"], "failed");
     assert_eq!(
         env.count("justification WHERE extractor_version = '0.1.0'"),
-        1
+        2
     );
     assert_eq!(
         env.count("justification WHERE extractor_version = '0.2.0'"),
@@ -1413,7 +1586,7 @@ fn S17_evidence_stored_before_the_connector_failed_is_extracted_by_the_next_sync
     )]);
     let synced = env.json(&["sync", "a"]);
     assert_eq!(synced["runs"][0]["extraction"]["evidence"], 1, "{synced}");
-    assert_eq!(env.count("claim"), 1);
+    assert_eq!(env.count("claim"), 2);
 }
 
 #[test]
