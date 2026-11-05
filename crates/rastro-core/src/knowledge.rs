@@ -90,8 +90,14 @@ impl<S: ReadStorage> Reader<S> {
                     false,
                     &self.scopes,
                 )?;
-                let extraction =
-                    extraction_of(view, &self.locations, &self.config.sources, &coverage, live)?;
+                let extraction = extraction_of(
+                    view,
+                    &self.locations,
+                    &self.config.sources,
+                    &coverage,
+                    live,
+                    &self.scopes,
+                )?;
                 Ok(answer(claims, options.limit, coverage, extraction))
             },
         )
@@ -113,6 +119,7 @@ impl<S: Storage> Rastro<S> {
                 &self.config.sources,
                 &coverage,
                 true,
+                &[],
             )?;
             Ok(answer(
                 view.about(entity, options)?,
@@ -228,6 +235,7 @@ impl<S: ReadStorage> Reader<S> {
                     &self.config.sources,
                     &why.coverage,
                     live,
+                    &self.scopes,
                 )?;
                 Ok(why)
             },
@@ -252,6 +260,7 @@ impl<S: Storage> Rastro<S> {
                 &self.config.sources,
                 &why.coverage,
                 true,
+                &[],
             )?;
             Ok(why)
         })
@@ -265,10 +274,11 @@ fn extraction_of(
     config: &[crate::Source],
     coverage: &[Coverage],
     live: bool,
+    scopes: &[crate::Scope],
 ) -> Result<Vec<crate::runs::ExtractionPair>> {
     use crate::runs::{ExtractionFacts, ExtractionPair, ExtractionStatus, extraction_pair};
     let bindings = view
-        .map(|view| view.extraction_sources(&[]))
+        .map(|view| view.extraction_sources(scopes))
         .transpose()?
         .unwrap_or_default();
     coverage
@@ -282,7 +292,9 @@ fn extraction_of(
                         .iter()
                         .find(|(source, _)| source.name == pair.source)
                 });
-            let configured = config.iter().find(|source| source.name == pair.source);
+            let configured = config.iter().find(|source| {
+                source.name == pair.source && (scopes.is_empty() || scopes.contains(&source.scope))
+            });
             let default = configured
                 .and_then(|source| {
                     crate::host::discover(locations, &source.connector, "connector").ok()

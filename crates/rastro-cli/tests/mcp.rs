@@ -1519,6 +1519,7 @@ impl Env {
                 predicate: predicate.into(),
                 object,
                 scalar: predicate == "code:state",
+                type_ancestors: Vec::new(),
                 supports: std::collections::BTreeSet::from([Support {
                     evidence_id,
                     portable_key: claims::portable_evidence_key(&evidence),
