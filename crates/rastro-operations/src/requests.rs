@@ -4,7 +4,7 @@ pub use crate::catalog::{
     ClaimsRequest, IdentityPersonRequest, IdentityRequest, IndexRequest, Request, SourceRequest,
 };
 use crate::{catalog::Surface, results::*};
-use anyhow::Result;
+use anyhow::{Context, Result, ensure};
 use clap::Args;
 use rastro_core::{
     DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT, Rastro, Scope, SearchOptions, Source, Storage,
@@ -50,9 +50,14 @@ pub struct SourceAddRequest {
     /// Connector plugin that reads the source.
     #[arg(long)]
     pub connector: String,
-    /// Repository to read, as owner/repository.
+    /// Shorthand for `--option repo=owner/repository` (GitHub).
     #[arg(long)]
-    pub repo: String,
+    #[serde(default)]
+    pub repo: Option<String>,
+    /// A source option declared by the connector's manifest, as key=value; repeatable.
+    #[arg(long = "option")]
+    #[serde(default)]
+    pub options: Vec<String>,
     /// Scope the source's evidence belongs to.
     #[arg(long)]
     pub scope: String,
@@ -205,8 +210,26 @@ impl SearchRequest {
 
 impl SourceAddRequest {
     pub(crate) fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<SourceAddResult> {
-        let mut source = Source::github(self.name, self.repo, Scope(self.scope));
-        source.connector = self.connector;
+        let mut selector = std::collections::BTreeMap::new();
+        for option in self.options {
+            let (key, value) = option
+                .split_once('=')
+                .with_context(|| format!("option must be key=value: {option}"))?;
+            ensure!(
+                selector
+                    .insert(key.to_string(), value.to_string())
+                    .is_none(),
+                "option {key} given twice"
+            );
+        }
+        if let Some(repo) = self.repo {
+            ensure!(
+                selector.insert("repo".into(), repo).is_none(),
+                "option repo given twice"
+            );
+        }
+        let mut source = Source::new(self.name, self.connector, Scope(self.scope));
+        source.selector = selector;
         source.freshness_rule = self.freshness_rule;
         source.keep_original = self.keep_original;
         if let Some(start) = self.window_start {

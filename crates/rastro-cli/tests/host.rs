@@ -785,3 +785,44 @@ fn a_storage_failure_under_blocked_stderr_fails_the_run_with_storage_without_han
     assert_eq!(run["reason"], "storage");
     assert_eq!(env.sql::<i64>("SELECT count(*) FROM evidence"), 0);
 }
+
+/// S1: a stored option the manifest doesn't declare is refused at sync, before the connector runs
+#[test]
+fn S1_a_hand_edited_option_is_refused_at_sync_before_the_connector_runs() {
+    let env = Env::new();
+    let config = env.home.path().join("config/config.toml");
+    let text = fs::read_to_string(&config).unwrap();
+    assert!(text.contains("repo = \"o/p\""));
+    fs::write(&config, text.replace("repo = \"o/p\"", "bogus = \"1\"")).unwrap();
+    env.script(&[evidence(), complete(), finish()]);
+    let (output, run) = env.sync();
+    assert!(!output.status.success());
+    assert_eq!(
+        (&run["status"], &run["reason"]),
+        (&json!("failed"), &json!("protocol"))
+    );
+    assert_eq!(env.sql::<i64>("SELECT count(*) FROM evidence"), 0);
+}
+
+/// S2: a hand-edited GitHub repo that fails the declared pattern never reaches the connector
+#[test]
+fn S2_a_hand_edited_github_repo_is_refused_at_sync() {
+    let env = Env::with_manifest(|m| {
+        m.insert("id".into(), "github".into());
+        m.remove("source_options");
+    });
+    let config = env.home.path().join("config/config.toml");
+    let text = fs::read_to_string(&config).unwrap();
+    let edited = text
+        .replace("repo = \"o/p\"", "repo = \"../x\"")
+        .replace("connector = \"test\"", "connector = \"github\"");
+    assert_ne!(text, edited);
+    fs::write(&config, edited).unwrap();
+    env.script(&[evidence(), complete(), finish()]);
+    let (output, run) = env.sync();
+    assert!(!output.status.success());
+    assert_eq!(
+        (&run["status"], &run["reason"]),
+        (&json!("failed"), &json!("protocol"))
+    );
+}

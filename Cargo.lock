@@ -1199,6 +1199,7 @@ name = "rastro-plugin-sdk"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "regex",
  "schemars",
  "serde",
  "serde_json",

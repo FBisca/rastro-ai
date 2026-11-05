@@ -122,6 +122,23 @@ fn about_and_why_are_additive_v2_and_existing_schemas_are_unchanged() {
                     .unwrap()
                     .retain(|name| name != "pairs");
             }
+            "source.add" => {
+                let input = new["input"].as_object_mut().unwrap();
+                let properties = input["properties"].as_object_mut().unwrap();
+                let options = properties.remove("options").unwrap();
+                assert_eq!(options["type"], "array");
+                assert_eq!(options["items"], json!({"type": "string"}));
+                assert_eq!(options["default"], json!([]));
+                let repo = properties.get_mut("repo").unwrap();
+                assert_eq!(repo["type"], json!(["string", "null"]));
+                assert_eq!(repo["default"], Value::Null);
+                *repo = json!({
+                    "description": "Repository to read, as owner/repository.",
+                    "type": "string"
+                });
+                let required = input["required"].as_array_mut().unwrap();
+                required.insert(2, json!("repo"));
+            }
             _ => {}
         }
         assert_eq!(new, old.clone());
