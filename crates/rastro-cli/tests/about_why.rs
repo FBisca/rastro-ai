@@ -115,7 +115,7 @@ impl Env {
                 subject,
                 predicate: predicate.into(),
                 object,
-                scalar: predicate == "code:state",
+                scalar: predicate == "code:state" || predicate == "rastro:alias",
                 type_ancestors: Vec::new(),
                 supports: BTreeSet::from([Support {
                     portable_key: claims::portable_evidence_key(&e),
@@ -686,4 +686,108 @@ fn about_resolves_a_canonical_alias_by_namespace_kind_and_exact_value() {
     let (ok, error) = env.run(&["about", "github:login/FBisca"]);
     assert!(!ok);
     assert!(error["error"].as_str().unwrap().contains("ambiguous alias"));
+}
+
+fn later(days: i64) -> DateTime<Utc> {
+    time() + chrono::Duration::days(days)
+}
+/// An account whose login changed from `old` to `new`; returns the old alias claim id.
+fn renamed(env: &Env, account: &str, old: &str, new: &str) -> String {
+    let old_claim = env.claim_for(account, "rastro:alias", alias("login", old), later(0));
+    env.claim_for(account, "code:state", literal("active"), later(0));
+    env.claim_for(account, "rastro:alias", alias("login", new), later(1));
+    old_claim
+}
+
+/// claims/R31: an old login still resolves to its account
+#[test]
+fn S1_an_old_login_resolves_to_its_account() {
+    let env = Env::new();
+    let account = "github:account/42";
+    let old = renamed(&env, account, "oldname", "newname");
+    let history = env.ok(&["about", account, "--history"]);
+    let status = history["claims"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["id"] == old.as_str())
+        .unwrap()["status"]
+        .clone();
+    assert_eq!(status, "superseded");
+    let expected = env.ok(&["about", account]);
+    assert!(!expected["claims"].as_array().unwrap().is_empty());
+    assert_eq!(
+        env.ok(&["about", "github:login/oldname"])["claims"],
+        expected["claims"]
+    );
+    assert_eq!(
+        env.ok(&["about", "github:login/newname"])["claims"],
+        expected["claims"]
+    );
+}
+
+/// claims/R31: a login held by several entities names every candidate with its mark
+#[test]
+fn S2_an_ambiguous_login_marks_each_candidate() {
+    let env = Env::new();
+    renamed(&env, "github:account/1", "shared", "other");
+    env.claim_for(
+        "github:account/2",
+        "rastro:alias",
+        alias("login", "shared"),
+        later(2),
+    );
+    let (ok, error) = env.run(&["about", "github:login/shared"]);
+    assert!(!ok);
+    let text = error["error"].as_str().unwrap();
+    assert!(
+        text.contains("ambiguous alias github:login/shared"),
+        "{text}"
+    );
+    assert!(text.contains("(github:account/1): historical"), "{text}");
+    assert!(text.contains("(github:account/2): current"), "{text}");
+}
+
+/// claims/R31: resolving through an old login lists current aliases; why shows the old interval
+#[test]
+fn S3_resolving_through_an_old_login_lists_current_aliases_only() {
+    let env = Env::new();
+    let account = "github:account/42";
+    let old = renamed(&env, account, "oldname", "newname");
+    let about = env.ok(&["about", "github:login/oldname"]);
+    let rows = about["claims"].as_array().unwrap();
+    assert!(!rows.is_empty());
+    for row in rows {
+        for key in ["subject_aliases", "object_aliases"] {
+            assert!(!row[key].to_string().contains("oldname"), "{key}: {row}");
+        }
+    }
+    assert!(
+        rows.iter()
+            .any(|r| r["subject_aliases"] == json!(["newname"]))
+    );
+    let why = env.ok(&["why", &old]);
+    assert_eq!(why["claim"]["status"], "superseded");
+    let intervals = why["claim"]["known_intervals"].as_array().unwrap();
+    assert_eq!(intervals.len(), 1);
+    assert_ne!(intervals[0]["end"], Value::Null);
+}
+
+/// claims/R31: one entity holding a login both current and historical resolves directly
+#[test]
+fn S2_an_entity_that_regained_a_login_resolves_directly() {
+    let env = Env::new();
+    let account = "github:account/7";
+    env.claim_for(account, "rastro:alias", alias("login", "a"), later(0));
+    env.claim_for(account, "rastro:alias", alias("login", "b"), later(1));
+    env.claim_for(account, "rastro:alias", alias("login", "a"), later(2));
+    let expected = env.ok(&["about", account]);
+    assert_eq!(
+        env.ok(&["about", "github:login/a"])["claims"],
+        expected["claims"]
+    );
+    assert_eq!(
+        env.ok(&["about", "github:login/b"])["claims"],
+        expected["claims"]
+    );
 }

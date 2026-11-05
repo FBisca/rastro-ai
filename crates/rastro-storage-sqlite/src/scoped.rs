@@ -81,6 +81,10 @@ pub(super) fn projection(
     Ok(built)
 }
 
+/// A justification of `j` whose every required span is visible to the scope set `?2`.
+const VISIBLE_JUSTIFICATION: &str = "EXISTS (SELECT 1 FROM justification_span s WHERE s.justification_id = j.id) AND NOT EXISTS (SELECT 1 FROM justification_span s JOIN evidence e ON e.id = s.evidence_id WHERE s.justification_id = j.id AND e.scope NOT IN (SELECT value FROM json_each(?2)))";
+/// The claim `c` has a justification visible to the scope set `?2`.
+const VISIBLE_CLAIM: &str = "EXISTS (SELECT 1 FROM justification j WHERE j.claim_id = c.id AND EXISTS (SELECT 1 FROM justification_span s WHERE s.justification_id = j.id) AND NOT EXISTS (SELECT 1 FROM justification_span s JOIN evidence e ON e.id = s.evidence_id WHERE s.justification_id = j.id AND e.scope NOT IN (SELECT value FROM json_each(?2))))";
 const OVER_BUDGET: &str = "this read is too large to answer within its work budget";
 
 /// Empties the process-local scoped cache; a benchmark's cold samples start from here.
@@ -131,36 +135,45 @@ fn build(
 ) -> Result<(Connection, usize)> {
     // Replay complete subject/predicate components, including competing claims. One-hop
     // candidates are selected before replay, but status, recency and the limit are not.
-    let (roots, components, argument) = match target {
+    let scopes = serde_json::to_string(scopes)?;
+    let (roots, components, arguments) = match target {
         Target::Entity(entity) => (
+            // Alias roots are the matching alias claims with a fully visible justification;
+            // stored status is full-scope, so it plays no part here. The replay applies the
+            // status set, the ambiguity and its marks.
             format!(
-                "SELECT id FROM entity WHERE id = ?1 OR identifier = ?1 UNION SELECT subject FROM ({})",
-                super::knowledge::ALIAS_SUBJECTS
+                "SELECT id FROM entity WHERE id = ?1 OR identifier = ?1 UNION SELECT subject FROM ({}) a \
+                 WHERE EXISTS (SELECT 1 FROM justification j WHERE j.claim_id = a.claim AND {VISIBLE_JUSTIFICATION})",
+                super::knowledge::ALIAS_CLAIMS
             ),
-            "SELECT subject, predicate FROM claim WHERE subject IN roots UNION ALL SELECT subject, predicate FROM claim WHERE object_entity IN roots",
-            entity,
+            "SELECT subject, predicate FROM claim c WHERE subject IN roots AND {VISIBLE_CLAIM} UNION ALL SELECT subject, predicate FROM claim c WHERE object_entity IN roots AND {VISIBLE_CLAIM}",
+            vec![entity.to_string(), scopes.clone()],
         ),
         // A claim's own slot only, plus its endpoints' type and alias claims below.
         Target::Claim(claim) => (
             "SELECT 1 WHERE 0".to_string(),
-            "SELECT subject, predicate FROM claim WHERE id = ?1",
-            claim,
+            "SELECT subject, predicate FROM claim c WHERE id = ?1 AND {VISIBLE_CLAIM}",
+            vec![claim.to_string(), scopes.clone()],
         ),
     };
+    // Only claims with a visible justification select slots, so hidden claims never pull
+    // visible ones into a replay and their budget.
+    let components = components.replace("{VISIBLE_CLAIM}", VISIBLE_CLAIM);
     let candidate_sql = format!("WITH roots AS ({roots}), components AS ({components}),
     neighbors AS (
-        SELECT c.id, c.subject, c.object_entity FROM claim c JOIN components k ON c.subject = k.subject AND c.predicate = k.predicate
-    ) SELECT id FROM neighbors UNION SELECT id FROM claim WHERE predicate IN ('rastro:type','rastro:alias') AND subject IN (SELECT subject FROM neighbors UNION SELECT object_entity FROM neighbors)");
+        SELECT c.id, c.subject, c.object_entity, {VISIBLE_CLAIM} AS seen FROM claim c JOIN components k ON c.subject = k.subject AND c.predicate = k.predicate
+    ) SELECT id FROM neighbors UNION SELECT id FROM claim WHERE predicate IN ('rastro:type','rastro:alias') AND subject IN (SELECT subject FROM neighbors WHERE seen UNION SELECT object_entity FROM neighbors WHERE seen)");
     let candidates = db
         .prepare(&candidate_sql)?
-        .query_map([argument], |r| r.get::<_, String>(0))?
+        .query_map(params_from_iter(&arguments), |r| r.get::<_, String>(0))?
         .collect::<Result<Vec<_>, _>>()?;
     let candidates = serde_json::to_string(&candidates)?;
-    let scopes = serde_json::to_string(scopes)?;
     // Every required span must be visible. Partial bundles never become weaker proofs.
     let visible = ids(
         db,
-        "SELECT j.id FROM justification j WHERE j.claim_id IN (SELECT value FROM json_each(?1)) AND EXISTS (SELECT 1 FROM justification_span s WHERE s.justification_id = j.id) AND NOT EXISTS (SELECT 1 FROM justification_span s JOIN evidence e ON e.id = s.evidence_id WHERE s.justification_id = j.id AND e.scope NOT IN (SELECT value FROM json_each(?2)))",
+        &format!(
+            "SELECT j.id FROM justification j WHERE j.claim_id IN (SELECT value FROM json_each(?1)) AND {VISIBLE_JUSTIFICATION}"
+        ),
         &[candidates, scopes],
     )?;
     // The budget counts visible spans only: hidden work never shows in the outcome.
