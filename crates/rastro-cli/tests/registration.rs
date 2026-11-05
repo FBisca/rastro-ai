@@ -343,3 +343,74 @@ fn empty_and_relative_location_overrides() {
         assert!(!root.path().join("relative").exists());
     }
 }
+
+#[test]
+fn S1_declared_options_are_required_and_unknown_options_are_refused() {
+    let home = TempDir::new().unwrap();
+    let plugin = home.path().join("config/plugins/test");
+    std::fs::create_dir_all(&plugin).unwrap();
+    std::fs::write(plugin.join("rastro-plugin.toml"), format!("{}\n[[source_options]]\nname = \"workspace\"\nrequired = true\npattern = \".+\"\nhelp = \"Workspace identifier\"\n", include_str!("../../rastro-test-connector/rastro-plugin.toml"))).unwrap();
+    for options in [vec![], vec!["--option", "other=value"]] {
+        let output = command(home.path())
+            .args([
+                "source",
+                "add",
+                "test",
+                "--connector",
+                "test",
+                "--scope",
+                "personal",
+                "--json",
+            ])
+            .args(options)
+            .output()
+            .unwrap();
+        assert!(!output.status.success());
+        let error: Value = serde_json::from_slice(&output.stdout).unwrap();
+        assert!(
+            error["error"].as_str().unwrap().contains("workspace"),
+            "{error}"
+        );
+        let listed: Value = serde_json::from_str(&run(
+            &mut command(home.path()),
+            &["source", "list", "--json"],
+        ))
+        .unwrap();
+        assert!(listed["result"]["sources"].as_array().unwrap().is_empty());
+    }
+}
+
+#[test]
+fn S2_github_repo_shorthand_uses_the_manifest_pattern() {
+    let home = TempDir::new().unwrap();
+    let plugin = home.path().join("config/plugins/github");
+    std::fs::create_dir_all(&plugin).unwrap();
+    std::fs::write(
+        plugin.join("rastro-plugin.toml"),
+        include_str!("../../rastro-connector-github/rastro-plugin.toml"),
+    )
+    .unwrap();
+    run(&mut command(home.path()), ADD);
+    let output = command(home.path())
+        .args([
+            "source",
+            "add",
+            "bad",
+            "--connector",
+            "github",
+            "--repo",
+            "invalid",
+            "--scope",
+            "personal",
+            "--json",
+        ])
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    let error: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert!(error["error"].as_str().unwrap().contains("repo"), "{error}");
+    assert!(
+        error["error"].as_str().unwrap().contains("pattern"),
+        "{error}"
+    );
+}

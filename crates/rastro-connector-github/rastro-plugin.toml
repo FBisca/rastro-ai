@@ -16,3 +16,9 @@ submit = ["issue", "pull_request", "comment"]
 scopes = ["personal", "work"]
 env = ["GH_TOKEN", "GITHUB_TOKEN", "GH_HOST", "GH_CONFIG_DIR", "XDG_CONFIG_HOME", "RASTRO_GITHUB_API_URL"]
 actions = []
+
+[[source_options]]
+name = "repo"
+required = true
+pattern = "[^/\\s]+/[^/\\s]+"
+help = "Repository as owner/repository"

@@ -47,6 +47,23 @@ pub fn discover(
     })
 }
 
+/// The manifest that declares the options of a connector's sources: the installed one, or for
+/// GitHub the bundled one when none is installed.
+pub(crate) fn source_manifest(locations: &Locations, id: &str) -> Option<Manifest> {
+    find(locations, id)
+        .map(|(manifest, _)| manifest)
+        .or_else(|| {
+            (id == "github")
+                .then(|| {
+                    Manifest::parse(include_str!(
+                        "../../../rastro-connector-github/rastro-plugin.toml"
+                    ))
+                    .ok()
+                })
+                .flatten()
+        })
+}
+
 /// The manifest whose `id` is `id`, before any check of what it provides.
 pub(crate) fn find(locations: &Locations, id: &str) -> Option<(Manifest, PathBuf)> {
     let mut roots = vec![locations.plugins()];

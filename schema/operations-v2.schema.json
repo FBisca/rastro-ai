@@ -1267,9 +1267,21 @@
             "description": "Name of the source.",
             "type": "string"
           },
+          "options": {
+            "default": [],
+            "description": "A source option declared by the connector's manifest, as key=value; repeatable.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
           "repo": {
-            "description": "Repository to read, as owner/repository.",
-            "type": "string"
+            "default": null,
+            "description": "Shorthand for `--option repo=owner/repository` (GitHub).",
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "scope": {
             "description": "Scope the source's evidence belongs to.",
@@ -1287,7 +1299,6 @@
         "required": [
           "name",
           "connector",
-          "repo",
           "scope"
         ],
         "title": "SourceAddRequest",

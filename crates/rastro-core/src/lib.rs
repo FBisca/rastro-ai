@@ -88,18 +88,6 @@ impl Source {
             "connector must not be empty"
         );
         ensure!(!self.scope.0.trim().is_empty(), "scope must not be empty");
-        if self.connector == "github" {
-            let parts: Vec<_> = self
-                .selector
-                .get("repo")
-                .context("github requires --repo")?
-                .split('/')
-                .collect();
-            ensure!(
-                parts.len() == 2 && parts.iter().all(|p| !p.trim().is_empty()),
-                "repo must be owner/repository"
-            );
-        }
         let rule = &self.freshness_rule;
         ensure!(
             rule.len() > 1,
@@ -461,6 +449,9 @@ impl<S: Storage> Rastro<S> {
     }
     pub fn add_source(&mut self, source: Source) -> Result<Source> {
         source.validate()?;
+        if let Some(manifest) = host::source_manifest(&self.locations, &source.connector) {
+            manifest.check_source_options(&source.selector)?;
+        }
         let _lock = self.locations.config_lock()?;
         self.config = Config::load(&self.locations)?;
         ensure!(
