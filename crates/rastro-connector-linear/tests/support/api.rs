@@ -107,6 +107,15 @@ pub fn user(id: &str, name: &str, email: &str, active: bool) -> Value {
         "email": email, "active": active, "updatedAt": days_ago(30),
     })
 }
+/// The slug Linear makes from a title: lowercase words joined by `-`.
+pub fn slug(title: &str) -> String {
+    title
+        .split(|c: char| !c.is_ascii_alphanumeric())
+        .filter(|w| !w.is_empty())
+        .map(str::to_lowercase)
+        .collect::<Vec<_>>()
+        .join("-")
+}
 /// An issue in team ENG created by `creator` and assigned to `assignee`.
 pub fn issue(
     id: &str,
@@ -119,7 +128,8 @@ pub fn issue(
     let identifier = format!("ENG-{number}");
     json!({
         "id": id, "identifier": identifier, "title": title, "description": description,
-        "url": format!("https://linear.app/acme/issue/{identifier}/slug"),
+        // Linear's URL ends in a slug made from the title, so it carries title text.
+        "url": format!("https://linear.app/acme/issue/{identifier}/{}", slug(title)),
         "createdAt": days_ago(3), "updatedAt": days_ago(1),
         "state": {"name": "In Progress", "type": "started"},
         "creator": creator.map(|id| json!({"id": id})),

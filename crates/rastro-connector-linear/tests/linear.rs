@@ -153,10 +153,11 @@ fn S20_the_connector_reads_users_involved_issues_and_the_key_user_with_fixed_que
             ["/team/key", "ENG", "structured"],
             ["/team/name", "Engineering", "structured"],
             ["/title", "Crash on start", "untrusted content"],
+            // Its slug is title text, so the URL is as untrusted as the title.
             [
                 "/url",
-                "https://linear.app/acme/issue/ENG-7/slug",
-                "structured"
+                "https://linear.app/acme/issue/ENG-7/crash-on-start",
+                "untrusted content"
             ],
         ])
     );
@@ -276,6 +277,14 @@ fn S22_failures_map_to_typed_reasons_in_coverage() {
         env.sync(&[]);
         assert_eq!(coverage(&env), [["couldn't look", reason]]);
     }
+    // A key no HTTP header can carry is the key's fault, not the network's.
+    let fixture = Fixture::start(world());
+    let mut bad = env(&fixture.base);
+    bad.key = Some("lin_api_bad\u{1}key".into());
+    let sync = bad.run(&["sync", "l", "--json"]);
+    assert_eq!(coverage(&bad), [["couldn't look", "auth"]]);
+    assert!(fixture.requests().is_empty(), "a bad key, no request");
+    assert!(!bad.leaks("lin_api_bad", &[sync]));
     let env = env("http://127.0.0.1:1");
     env.sync(&[]);
     assert_eq!(coverage(&env), [["couldn't look", "network"]]);

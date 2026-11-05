@@ -11,8 +11,8 @@
 //! - a user at `linear:user/<id>`: `/id`, `/name`, `/displayName`, `/email`, `/active`;
 //! - an issue at `linear:issue/<id>`: `/id`, `/identifier`, `/url`, `/title`, `/description`,
 //!   `/state/name`, `/state/type`, `/creator/id`, `/assignee/id`, `/team/id`, `/team/key`,
-//!   `/team/name`, `/createdAt`. Title and description are untrusted content, the rest
-//!   structured;
+//!   `/team/name`, `/createdAt`. Title, description and URL (whose slug is made from the
+//!   title) are untrusted content, the rest structured;
 //! - whose API key it is, at `linear:viewer`: `/id`. One slot, so a key of another user
 //!   replaces it.
 //!
@@ -128,7 +128,10 @@ fn sync<R: BufRead, W: Write>(
         Ok(_) => return Err(Failure::new("protocol")),
         Err(_) => DEFAULT_API.into(),
     };
-    let key = api::api_key().ok_or(Failure::new("auth"))?;
+    // A key no HTTP header can carry is the key's fault, not the network's.
+    let key = api::api_key()
+        .filter(|key| key.bytes().all(|b| b.is_ascii_graphic()))
+        .ok_or(Failure::new("auth"))?;
     let time = |t: &str| t.parse().map_err(|_| Failure::new("protocol"));
     let mut run = Run {
         transport,
@@ -238,7 +241,8 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
         for (field, trust_class) in [
             ("/id", STRUCTURED),
             ("/identifier", STRUCTURED),
-            ("/url", STRUCTURED),
+            // The URL ends in a slug made from the title, so it is as untrusted as the title.
+            ("/url", UNTRUSTED),
             ("/title", UNTRUSTED),
             ("/description", UNTRUSTED),
             ("/state/name", STRUCTURED),

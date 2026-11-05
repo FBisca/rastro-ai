@@ -224,7 +224,13 @@ fn S20_users_and_involved_issues_become_tracker_entities_and_search_cites_issue_
 
     // Issue text is found with its citation.
     let found = env.json(&["search", "crash", "--full"]);
-    let hit = &found["results"][0];
+    // The title is one hit; the URL's slug, made from the title, may be another.
+    let hit = found["results"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|h| h["field"] == "/title")
+        .unwrap_or_else(|| panic!("{found}"));
     assert_eq!(hit["location"], json!(issue_id(CRASH)), "{found}");
     assert_eq!(
         (&hit["source"], &hit["scope"], &hit["field"], &hit["quote"]),
@@ -244,16 +250,28 @@ fn S20_users_and_involved_issues_become_tracker_entities_and_search_cites_issue_
     assert_eq!(described["results"][0]["location"], json!(issue_id(DOCS)));
 }
 
-/// S21: WHEN a Linear user is deactivated, THEN its account shows it, and a re-sync keeps
-/// every other claim of the account and the claims that point at it
+/// S21: WHEN a Linear user is deactivated, THEN its account shows it, and its existing links
+/// remain, marked deactivated: `about` on the account shows `rastro:held_by` its Person, still
+/// observed, beside `tracker:active false`. A re-sync keeps every other claim of the account
+/// and the claims that point at it
 #[test]
-fn S21_a_deactivated_user_shows_it_and_keeps_its_claims_across_a_resync() {
+fn S21_a_deactivated_user_shows_it_and_keeps_its_link_and_claims_across_a_resync() {
     let fixture = Fixture::start(world());
     let env = env(&fixture.base);
     assert_eq!(env.sync(&[])["extraction"]["state"], "current");
     let ana = account(ANA);
+    let person =
+        env.json(&["identity", "person", "create", "--name", "Ana Silva"])["person"]["identifier"]
+            .as_str()
+            .unwrap()
+            .to_string();
+    env.json(&["identity", "link", &ana, &person]);
     let before = about(&env, &ana, false);
     assert!(before.contains(&claim("tracker:active", "true", "observed")));
+    assert!(
+        before.contains(&claim("rastro:held_by", &person, "observed")),
+        "{before:?}"
+    );
 
     fixture.change(|world| {
         let user = world.users.iter_mut().find(|u| u["id"] == ANA).unwrap();
@@ -270,6 +288,11 @@ fn S21_a_deactivated_user_shows_it_and_keeps_its_claims_across_a_resync() {
     let after = about(&env, &ana, false);
     assert!(
         after.contains(&claim("tracker:active", "false", "observed")),
+        "{after:?}"
+    );
+    // The link stands, and the account it links says it is deactivated.
+    assert!(
+        after.contains(&claim("rastro:held_by", &person, "observed")),
         "{after:?}"
     );
     assert!(
