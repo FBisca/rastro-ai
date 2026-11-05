@@ -119,10 +119,10 @@ fn incremental_record_on_a_hub_is_near_linear_and_equals_the_full_replay() {
     assert_eq!(before, serde_json::to_value(explained(&db, &id)).unwrap());
 }
 
-/// S19: a new observation on an entity typed at many locations replays only its own slots, the
+/// claims/R52: a new observation on an entity typed at many locations replays only its own slots, the
 /// entity-wide type conflict stays in place, and a rebuild equals the incremental projection
 #[test]
-fn S19_a_new_observation_on_a_hub_replays_only_its_slots_and_equals_a_rebuild() {
+fn a_new_observation_on_a_hub_replays_only_its_slots_and_equals_a_rebuild() {
     let n: usize = 4000;
     let home = tempfile::tempdir().unwrap();
     let mut db = SqliteStorage::open(&home.path().join("db")).unwrap();
@@ -232,7 +232,7 @@ fn S19_a_new_observation_on_a_hub_replays_only_its_slots_and_equals_a_rebuild() 
             "{table}: {written} rows rewritten for one observation"
         );
     }
-    eprintln!("N={n} S19 incremental 1 claim: {elapsed:?}");
+    eprintln!("N={n} incremental 1 claim: {elapsed:?}");
     assert!(
         elapsed < std::time::Duration::from_millis(500),
         "incremental publication replayed the hub: {elapsed:?}"

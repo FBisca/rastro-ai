@@ -31,7 +31,7 @@ fn property_names(schema: &serde_json::Value) -> Vec<&str> {
     names
 }
 
-/// S13: about and why are additive v2, `sync.extraction` and `claims.rebuild.pairs` are recorded
+/// surfaces/R1: about and why are additive v2, `sync.extraction` and `claims.rebuild.pairs` are recorded
 /// additions, and existing schemas are unchanged
 #[test]
 fn about_and_why_are_additive_v2_and_existing_schemas_are_unchanged() {

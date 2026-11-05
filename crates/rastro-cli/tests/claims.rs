@@ -616,9 +616,9 @@ fn two_type_sources() -> Env {
 }
 const ELSEWHERE: &str = "https://github.com/o/p/pull/2";
 
-/// vocabulary/S15: unrelated types at different locations conflict both ways, neither supersedes
+/// claims/R48: unrelated types at different locations conflict both ways, neither supersedes
 #[test]
-fn S15_unrelated_types_at_different_locations_conflict_and_neither_supersedes() {
+fn unrelated_types_at_different_locations_conflict_and_neither_supersedes() {
     let env = two_type_sources();
     type_pr_at(&env, "a", PR, "code:PullRequest", 1);
     type_pr_at(&env, "b", ELSEWHERE, "code:Repository", 2);
@@ -635,9 +635,9 @@ fn S15_unrelated_types_at_different_locations_conflict_and_neither_supersedes() 
     }
 }
 
-/// vocabulary/S15: replacing one location's type removes the conflict links on the refresh
+/// claims/R48: replacing one location's type removes the conflict links on the refresh
 #[test]
-fn S15_a_conflict_disappears_when_one_locations_type_is_replaced() {
+fn a_conflict_disappears_when_one_locations_type_is_replaced() {
     let env = two_type_sources();
     type_pr_at(&env, "a", PR, "code:PullRequest", 1);
     type_pr_at(&env, "b", ELSEWHERE, "code:Repository", 2);
@@ -652,10 +652,10 @@ fn S15_a_conflict_disappears_when_one_locations_type_is_replaced() {
     }
 }
 
-/// vocabulary/S16: a type and its supertype at different locations do not conflict; the most
+/// claims/R49: a type and its supertype at different locations do not conflict; the most
 /// specific type is displayed whichever claim id sorts first
 #[test]
-fn S16_a_type_and_its_supertype_do_not_conflict_and_the_most_specific_is_displayed() {
+fn a_type_and_its_supertype_do_not_conflict_and_the_most_specific_is_displayed() {
     for (first, second) in [
         ("code:Draft", "code:PullRequest"),
         ("code:PullRequest", "code:Draft"),
@@ -680,9 +680,9 @@ fn S16_a_type_and_its_supertype_do_not_conflict_and_the_most_specific_is_display
     }
 }
 
-/// vocabulary/S17: conflicting types display the one with the newest known time
+/// claims/R50: conflicting types display the one with the newest known time
 #[test]
-fn S17_conflicting_types_display_the_newest_known_type() {
+fn conflicting_types_display_the_newest_known_type() {
     for (first, second) in [
         ("code:PullRequest", "code:Repository"),
         ("code:Repository", "code:PullRequest"),
@@ -706,10 +706,10 @@ fn S17_conflicting_types_display_the_newest_known_type() {
     }
 }
 
-/// vocabulary/S17: a conflict next to a compatible family; the family with the newest member
+/// claims/R50: a conflict next to a compatible family; the family with the newest member
 /// wins and shows its most specific type
 #[test]
-fn S17_the_family_with_the_newest_member_wins_and_shows_its_most_specific_type() {
+fn the_family_with_the_newest_member_wins_and_shows_its_most_specific_type() {
     let env = two_type_sources();
     env.add_source("c", "test");
     type_pr_at(&env, "a", PR, "code:Draft", 1);
@@ -733,9 +733,9 @@ fn S17_the_family_with_the_newest_member_wins_and_shows_its_most_specific_type()
     assert!(!about.contains("\"type\":\"code:Repository\""), "{about}");
 }
 
-/// vocabulary/S18: the same location's type changing supersedes the old type claim
+/// claims/R51: the same location's type changing supersedes the old type claim
 #[test]
-fn S18_a_changed_type_at_one_location_supersedes_the_old_one() {
+fn a_changed_type_at_one_location_supersedes_the_old_one() {
     let env = two_type_sources();
     type_pr_at(&env, "a", PR, "code:Repository", 1);
     type_pr_at(&env, "a", PR, "code:PullRequest", 2);
@@ -1376,7 +1376,7 @@ fn sync_and_rebuild_publish_receipts_and_fresh_statistics() {
     );
 }
 
-/// S10: rebuild carries over missing extractors and forbidden historical pairs; the forbidden
+/// claims/R43: rebuild carries over missing extractors and forbidden historical pairs; the forbidden
 /// one fails the command
 #[test]
 fn rebuild_carries_over_missing_extractors_and_forbidden_historical_pairs() {
@@ -1876,10 +1876,10 @@ fn pair_in<'a>(result: &'a Value, source: &str, scope: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("no pair {source}: {result}"))
 }
 
-/// S9: a pair whose extractor is not installed is carried over, the rest is rebuilt, whichever
+/// claims/R42: a pair whose extractor is not installed is carried over, the rest is rebuilt, whichever
 /// of them replays first
 #[test]
-fn S9_a_pair_whose_extractor_is_not_installed_is_carried_over() {
+fn a_pair_whose_extractor_is_not_installed_is_carried_over() {
     for carried in ["c", "0c"] {
         let env = two_extractors_with(carried);
         let before = projection_rows(&env);
@@ -1900,9 +1900,9 @@ fn S9_a_pair_whose_extractor_is_not_installed_is_carried_over() {
     }
 }
 
-/// S10: a pair that fails its check or is forbidden is carried over and fails the command
+/// claims/R43: a pair that fails its check or is forbidden is carried over and fails the command
 #[test]
-fn S10_a_failing_check_or_forbidden_scope_is_carried_over_and_exits_non_zero() {
+fn a_failing_check_or_forbidden_scope_is_carried_over_and_exits_non_zero() {
     for reason in ["protocol", "forbidden"] {
         let env = two_extractors();
         let before = projection_rows(&env);
@@ -1927,10 +1927,10 @@ fn S10_a_failing_check_or_forbidden_scope_is_carried_over_and_exits_non_zero() {
     }
 }
 
-/// S11: an extractor that starts and then fails aborts the rebuild and keeps the projection,
+/// claims/R44: an extractor that starts and then fails aborts the rebuild and keeps the projection,
 /// also when a carried pair was staged before it
 #[test]
-fn S11_an_extractor_that_starts_and_fails_aborts_the_rebuild() {
+fn an_extractor_that_starts_and_fails_aborts_the_rebuild() {
     for carried in ["c", "0c"] {
         let env = two_extractors_with(carried);
         let before = projection_rows(&env);
@@ -1943,10 +1943,10 @@ fn S11_an_extractor_that_starts_and_fails_aborts_the_rebuild() {
     }
 }
 
-/// S12: a claim justified by a carried pair and a rebuilt pair equals the incremental one,
+/// claims/R45: a claim justified by a carried pair and a rebuilt pair equals the incremental one,
 /// whichever of them replays first
 #[test]
-fn S12_a_claim_shared_by_a_carried_and_a_rebuilt_pair_equals_the_incremental_one() {
+fn a_claim_shared_by_a_carried_and_a_rebuilt_pair_equals_the_incremental_one() {
     for carried in ["c", "0c"] {
         let env = two_extractors_with(carried);
         let incremental = env.json(&["why", OPEN, "--full"]);
@@ -1964,9 +1964,9 @@ fn S12_a_claim_shared_by_a_carried_and_a_rebuilt_pair_equals_the_incremental_one
     }
 }
 
-/// S13: rebuild lists every pair, and the CLI prints a line per carried-over pair
+/// claims/R46: rebuild lists every pair, and the CLI prints a line per carried-over pair
 #[test]
-fn S13_rebuild_lists_its_pairs_and_the_cli_prints_the_carried_over_ones() {
+fn rebuild_lists_its_pairs_and_the_cli_prints_the_carried_over_ones() {
     let env = two_extractors();
     fs::remove_dir_all(env.plugin_dir("test-extractor-2")).unwrap();
     let result = env.json(&["claims", "rebuild"]);
@@ -2002,12 +2002,12 @@ fn S13_rebuild_lists_its_pairs_and_the_cli_prints_the_carried_over_ones() {
     assert!(lines[0].contains("not_installed"), "{human}");
 }
 
-/// S14: rebuilding a copy of the owner's database with the extractor hidden keeps its claims.
+/// claims/R47: rebuilding a copy of the owner's database with the extractor hidden keeps its claims.
 /// Give `RASTRO_REAL_DB_COPY` the path of a copy; the test copies it again first, with
 /// `VACUUM INTO`, and only ever writes the second copy.
 #[test]
 #[ignore = "needs RASTRO_REAL_DB_COPY, the path of a copy of a real database"]
-fn S14_rebuilding_a_copy_of_the_real_database_without_its_extractor_keeps_every_claim() {
+fn rebuilding_a_copy_of_the_real_database_without_its_extractor_keeps_every_claim() {
     let source = std::env::var("RASTRO_REAL_DB_COPY").expect("RASTRO_REAL_DB_COPY");
     let home = TempDir::new().unwrap();
     let data = home.path().join("data");
@@ -2051,8 +2051,10 @@ fn entity_type(identifier: &str, kind: &str) -> Value {
         "extraction_rule": "state-field", "supports": [first_state_support()]})
 }
 
+/// claims/R56: a claim whose subject or object identifier is outside the entity forms is
+/// rejected and counted
 #[test]
-fn S24_a_claim_with_an_identifier_outside_the_accepted_forms_is_rejected_and_counted() {
+fn a_claim_with_an_identifier_outside_the_accepted_forms_is_rejected_and_counted() {
     let env = Env::new(Some("test-extractor"));
     env.add_source("project", "test");
     env.observe(&[state("open")]);
@@ -2092,8 +2094,10 @@ fn S24_a_claim_with_an_identifier_outside_the_accepted_forms_is_rejected_and_cou
     );
 }
 
+/// claims/R57: alias kinds and values are checked at load and submit; inner whitespace is
+/// accepted and resolves
 #[test]
-fn S25_alias_kinds_and_values_are_checked_and_inner_whitespace_is_accepted() {
+fn alias_kinds_and_values_are_checked_and_inner_whitespace_is_accepted() {
     let original = include_str!("../../rastro-test-extractor/vocabulary.toml");
     let with_kind = |kind: &str| {
         format!(

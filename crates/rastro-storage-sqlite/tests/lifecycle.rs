@@ -409,9 +409,9 @@ fn related_types_do_not_conflict_but_unrelated_types_and_replacement_do() {
     assert!(old.claim.claim.superseded_by.contains(&bot));
 }
 
-/// S17: conflicting types with equal known times display the lowest claim id
+/// claims/R50: conflicting types with equal known times display the lowest claim id
 #[test]
-fn S17_equal_known_times_display_the_lowest_claim_id() {
+fn equal_known_times_display_the_lowest_claim_id() {
     let home = tempfile::tempdir().unwrap();
     let mut db = SqliteStorage::open(&home.path().join("db")).unwrap();
     let account = store(
@@ -436,10 +436,10 @@ fn S17_equal_known_times_display_the_lowest_claim_id() {
             .contains(&account)
     );
 }
-/// S12: a claim justified by a carried-over pair and a rebuilt pair equals the incremental one,
+/// claims/R45: a claim justified by a carried-over pair and a rebuilt pair equals the incremental one,
 /// whichever is staged first, and the carried pair keeps its checkpoint
 #[test]
-fn S12_a_claim_justified_by_a_carried_pair_and_a_rebuilt_pair_equals_the_incremental_one() {
+fn a_claim_justified_by_a_carried_pair_and_a_rebuilt_pair_equals_the_incremental_one() {
     for carry_first in [true, false] {
         let home = tempfile::tempdir().unwrap();
         let path = home.path().join("db");

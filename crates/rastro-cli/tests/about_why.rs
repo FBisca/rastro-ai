@@ -697,9 +697,9 @@ fn renamed(env: &Env, account: &str, old: &str, new: &str) -> String {
     old_claim
 }
 
-/// claims/R31: an old login still resolves to its account
+/// claims/R38: an old login still resolves to its account
 #[test]
-fn S1_an_old_login_resolves_to_its_account() {
+fn an_old_login_resolves_to_its_account() {
     let env = Env::new();
     let account = "github:account/42";
     let old = renamed(&env, account, "oldname", "newname");
@@ -724,9 +724,9 @@ fn S1_an_old_login_resolves_to_its_account() {
     );
 }
 
-/// claims/R31: a login held by several entities names every candidate with its mark
+/// claims/R39: a login held by several entities names every candidate with its mark
 #[test]
-fn S2_an_ambiguous_login_marks_each_candidate() {
+fn an_ambiguous_login_marks_each_candidate() {
     let env = Env::new();
     renamed(&env, "github:account/1", "shared", "other");
     env.claim_for(
@@ -746,9 +746,9 @@ fn S2_an_ambiguous_login_marks_each_candidate() {
     assert!(text.contains("(github:account/2): current"), "{text}");
 }
 
-/// claims/R31: resolving through an old login lists current aliases; why shows the old interval
+/// claims/R40: resolving through an old login lists current aliases; why shows the old interval
 #[test]
-fn S3_resolving_through_an_old_login_lists_current_aliases_only() {
+fn resolving_through_an_old_login_lists_current_aliases_only() {
     let env = Env::new();
     let account = "github:account/42";
     let old = renamed(&env, account, "oldname", "newname");
@@ -771,9 +771,9 @@ fn S3_resolving_through_an_old_login_lists_current_aliases_only() {
     assert_ne!(intervals[0]["end"], Value::Null);
 }
 
-/// claims/R31: one entity holding a login both current and historical resolves directly
+/// claims/R39: one entity holding a login both current and historical resolves directly
 #[test]
-fn S2_an_entity_that_regained_a_login_resolves_directly() {
+fn an_entity_that_regained_a_login_resolves_directly() {
     let env = Env::new();
     let account = "github:account/7";
     env.claim_for(account, "rastro:alias", alias("login", "a"), later(0));
@@ -804,8 +804,9 @@ const BAD_FORMS: [&str; 10] = [
     "github:login/ x",
 ];
 
+/// claims/R53: a malformed entity form is an operation error naming the three forms
 #[test]
-fn S21_a_malformed_entity_form_is_an_operation_error_naming_the_three_forms() {
+fn a_malformed_entity_form_is_an_operation_error_naming_the_three_forms() {
     let env = Env::new();
     for bad in BAD_FORMS {
         let (ok, error) = env.run(&["about", bad]);
@@ -817,8 +818,9 @@ fn S21_a_malformed_entity_form_is_an_operation_error_naming_the_three_forms() {
     }
 }
 
+/// claims/R54: a well-formed form that matches nothing is the empty result with coverage
 #[test]
-fn S22_a_well_formed_form_that_matches_nothing_is_empty_with_coverage() {
+fn a_well_formed_form_that_matches_nothing_is_empty_with_coverage() {
     let env = Env::new();
     env.claim("code:state", literal("open"), time());
     for miss in [
@@ -832,8 +834,9 @@ fn S22_a_well_formed_form_that_matches_nothing_is_empty_with_coverage() {
     }
 }
 
+/// claims/R55: real identifiers (fragment URLs, accounts, bot logins) are accepted
 #[test]
-fn S23_real_identifiers_are_accepted() {
+fn real_identifiers_are_accepted() {
     let env = Env::new();
     let url = "https://github.com/o/p/pull/1#issuecomment-5";
     env.claim_for(url, "code:state", literal("open"), time());
