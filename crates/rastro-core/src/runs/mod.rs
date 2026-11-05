@@ -107,26 +107,6 @@ pub struct ExtractionReport {
 }
 
 impl<S: Storage> Rastro<S> {
-    /// The extraction state of every bound pair at the installed extractor version.
-    pub fn extraction_states(&self) -> Result<Vec<ExtractionPair>> {
-        self.storage
-            .extraction_sources()?
-            .into_iter()
-            .map(|(source, extractor)| {
-                extraction_pair(
-                    &self.locations,
-                    &source,
-                    &extractor,
-                    true,
-                    |version, vocabulary| {
-                        self.storage
-                            .extraction_facts(&source, &extractor, version, vocabulary)
-                    },
-                )
-            })
-            .collect()
-    }
-
     /// Runs the connector of one source, or of every source, one after another.
     pub fn sync(&mut self, name: Option<&str>) -> Result<Vec<RunReport>> {
         self.sync_with_reread(name, false)

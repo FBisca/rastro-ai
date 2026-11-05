@@ -443,37 +443,6 @@ pub struct KnownInterval {
 pub enum ValidTime {
     Unknown,
 }
-/// One support of a claim, with the evidence it cites.
-#[derive(Clone, Debug, JsonSchema, Serialize)]
-pub struct SupportView {
-    pub justification_id: String,
-    pub justification_kind: String,
-    pub portable_key: String,
-    pub vocabulary_version: String,
-    pub current: bool,
-    pub evidence_id: i64,
-    pub source: String,
-    pub scope: Scope,
-    pub location: String,
-    pub field: String,
-    pub start: u64,
-    pub end: u64,
-    /// The supporting bytes of the observation.
-    pub quote: String,
-    pub trust_class: TrustClass,
-    pub captured_at: DateTime<Utc>,
-    pub source_updated_at: Option<DateTime<Utc>>,
-    pub extraction_rule: String,
-    pub extractor: String,
-    pub extractor_version: String,
-}
-/// A claim and every support it has.
-#[derive(Clone, Debug, JsonSchema, Serialize)]
-pub struct Why {
-    pub claim: ClaimView,
-    pub supports: Vec<SupportView>,
-}
-
 #[cfg(test)]
 #[allow(non_snake_case)]
 mod tests {

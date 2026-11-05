@@ -2,6 +2,7 @@
 mod support;
 use chrono::{DateTime, Utc};
 use rastro_core::claims::{self, Entity, Object, ObservedClaim, Support};
+use rastro_core::knowledge::WhyOptions;
 use rastro_core::{Evidence, Scope, Source, Storage, TrustClass};
 use rastro_storage_sqlite::SqliteStorage;
 use serde_json::{Value, json};
@@ -339,8 +340,19 @@ fn why_bounds_complete_justifications_and_clips_utf8_quotes() {
     let quote = "é🦀".repeat(100);
     let id = env.claim("code:description", literal(&quote), time());
     let mut db = env.db();
-    let stored = db.why(&id).unwrap().unwrap();
-    let original = &stored.supports[0];
+    let stored = db
+        .snapshot(|view| {
+            view.explain(
+                &id,
+                &WhyOptions {
+                    limit: 50,
+                    full: true,
+                },
+            )
+        })
+        .unwrap()
+        .unwrap();
+    let original = &stored.supports[0].spans[0];
     for n in 0..21 {
         let rule = format!("rule-{n:02}");
         let spans = [(0, quote.len() as u64), (2, 6)]
@@ -359,9 +371,9 @@ fn why_bounds_complete_justifications_and_clips_utf8_quotes() {
             ("fixture", "1"),
             &[ObservedClaim {
                 id: id.clone(),
-                subject: stored.claim.subject.clone(),
-                predicate: stored.claim.predicate.clone(),
-                object: stored.claim.object.clone(),
+                subject: stored.claim.claim.subject.clone(),
+                predicate: stored.claim.claim.predicate.clone(),
+                object: stored.claim.claim.object.clone(),
                 scalar: false,
                 type_ancestors: Vec::new(),
                 supports: spans,
