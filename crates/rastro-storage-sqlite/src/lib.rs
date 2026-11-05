@@ -491,13 +491,7 @@ impl Storage for SqliteStorage {
                 Ok((id, evidence))
             })
             .collect::<Result<Vec<_>>>()?;
-        evidence.sort_by_key(|(id, e)| {
-            (
-                e.captured_at,
-                rastro_core::claims::portable_evidence_key(e),
-                *id,
-            )
-        });
+        evidence.sort_by_key(|(id, e)| (e.captured_at, *id));
         Ok(evidence)
     }
     fn record_claims(
@@ -579,12 +573,13 @@ impl Storage for SqliteStorage {
                  vocabulary_version, derivation_key, extraction_rule, run_id)
                  VALUES (?1, ?2, 'provenance', ?3, ?4, ?5, ?6, ?7, ?8)",
                 params![id, claim.id, extractor.0, extractor.1, checkpoint.map_or("", |c| &c.vocabulary_version), derivation, rule, run_id])?;
+            let mut spans_added = 0;
             for span in &claim.supports {
-                transaction.execute("INSERT OR IGNORE INTO justification_span
+                spans_added += transaction.execute("INSERT OR IGNORE INTO justification_span
                     (justification_id, evidence_id, portable_key, field, start, end) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     params![id, span.evidence_id, span.portable_key, span.field, span.start as i64, span.end as i64])?;
             }
-            if added == 0 {
+            if added == 0 && spans_added == 0 {
                 counts.unchanged += 1;
             } else {
                 counts.accepted += 1;
@@ -603,8 +598,8 @@ impl Storage for SqliteStorage {
                  last_captured_at, last_portable_key, last_evidence_id, vocabulary_version) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)
                  ON CONFLICT DO UPDATE SET
                  last_captured_at = max(last_captured_at, excluded.last_captured_at),
-                 last_portable_key = CASE WHEN (excluded.last_captured_at, excluded.last_portable_key) >
-                    (last_captured_at, last_portable_key) THEN excluded.last_portable_key ELSE last_portable_key END,
+                 last_portable_key = CASE WHEN (excluded.last_captured_at, excluded.last_evidence_id) >
+                    (last_captured_at, last_evidence_id) THEN excluded.last_portable_key ELSE last_portable_key END,
                  last_evidence_id = max(last_evidence_id, excluded.last_evidence_id),
                  vocabulary_version = excluded.vocabulary_version",
                 params![c.extractor, c.extractor_version, c.source, c.scope.0, stamp(c.last.0),
@@ -728,9 +723,12 @@ impl View<'_> {
         let mut statement = self.0.prepare(
             "SELECT e.id, e.source, e.scope, e.location, s.field, s.start, s.end, e.start,
              e.quote, e.trust_class, e.captured_at, e.source_updated_at, j.extraction_rule,
-             j.extractor, j.extractor_version, j.current, j.id, j.kind, s.portable_key, j.vocabulary_version
+             j.extractor, j.extractor_version, (j.current AND NOT EXISTS (
+                 SELECT 1 FROM justification_span newer WHERE newer.justification_id = s.justification_id
+                 AND newer.portable_key = s.portable_key AND newer.field = s.field
+                 AND newer.start = s.start AND newer.end = s.end AND newer.evidence_id > s.evidence_id)), j.id, j.kind, s.portable_key, j.vocabulary_version
              FROM justification_span s JOIN evidence e ON e.id = s.evidence_id JOIN justification j ON j.id = s.justification_id
-             WHERE j.claim_id = ?1 ORDER BY e.captured_at, s.portable_key, e.id, j.id",
+             WHERE j.claim_id = ?1 ORDER BY e.captured_at, e.id, j.id, s.start, s.end",
         )?;
         let rows = statement.query_map([&id], |row| {
             Ok((

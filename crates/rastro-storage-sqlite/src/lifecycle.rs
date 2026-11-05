@@ -1,12 +1,14 @@
-//! Replay the affected subject/predicate components in portable event order. A derivation
+//! Replay the affected subject/predicate components in evidence append order. A derivation
 //! is live only while every span is current; derivations of one claim are OR alternatives.
 use crate::parse_time;
 use anyhow::Result;
-use rastro_core::claims::{KnownInterval, Support, occurrence_id, revision_with_links};
+use rastro_core::claims::{
+    KnownInterval, Support, occurrence_id_with_ordinal, revision_with_links,
+};
 use rusqlite::{Connection, params};
 use std::collections::{BTreeMap, BTreeSet};
 
-type Event = (String, String);
+type Event = (String, i64);
 type Component = (String, String);
 type Slot = (String, String, String, String, String, Option<String>);
 #[derive(Clone)]
@@ -28,6 +30,12 @@ impl Span {
             self.support.extraction_rule.clone(),
             (!derivation.scalar).then(|| derivation.claim.clone()),
         )
+    }
+    fn same_span(&self, other: &Self) -> bool {
+        self.support.portable_key == other.support.portable_key
+            && self.support.field == other.support.field
+            && self.support.start == other.support.start
+            && self.support.end == other.support.end
     }
     fn same_field(&self, other: &Self) -> bool {
         self.location == other.location && self.support.field == other.support.field
@@ -58,7 +66,7 @@ fn recompute(db: &Connection, subject: &str, predicate: &str) -> Result<()> {
         .query_map(params![subject, predicate], |r| {
             Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, bool>(2)?, Span {
                 source: r.get(3)?, scope: r.get(4)?, location: r.get(5)?,
-                event: (r.get(6)?, r.get(12)?),
+                event: (r.get(6)?, r.get(8)?),
                 updated: r.get::<_, Option<String>>(7)?.map(|s| s.parse().expect("validated evidence timestamp")),
                 support: Support { evidence_id: r.get(8)?, field: r.get(9)?, start: r.get::<_, i64>(10)? as u64,
                     end: r.get::<_, i64>(11)? as u64, portable_key: r.get(12)?, extraction_rule: r.get(13)? },
@@ -91,16 +99,20 @@ fn recompute(db: &Connection, subject: &str, predicate: &str) -> Result<()> {
     let mut latest = BTreeMap::<Slot, Event>::new();
     let mut previous = BTreeSet::<String>::new();
     let mut current = Vec::new();
+    let mut ordinals = BTreeMap::<(String, String, String), u64>::new();
     for (event, observations) in events {
+        let portable_key = observations[0].1.support.portable_key.clone();
         for (d, span) in observations {
             latest.insert(span.slot(d), event.clone());
         }
         let candidates: Vec<_> = derivations
             .values()
             .filter(|d| {
-                d.spans
-                    .iter()
-                    .all(|s| latest.get(&s.slot(d)) == Some(&s.event))
+                d.spans.iter().all(|s| {
+                    d.spans.iter().any(|other| {
+                        s.same_span(other) && latest.get(&other.slot(d)) == Some(&other.event)
+                    })
+                })
             })
             .collect();
         current = candidates
@@ -110,8 +122,8 @@ fn recompute(db: &Connection, subject: &str, predicate: &str) -> Result<()> {
                 !old.scalar
                     || !candidates.iter().any(|new| {
                         old.claim != new.claim
-                            && old.spans.iter().any(|a| {
-                                new.spans.iter().any(|b|
+                            && old.spans.iter().filter(|a| latest.get(&a.slot(old)) == Some(&a.event)).any(|a| {
+                                new.spans.iter().filter(|b| latest.get(&b.slot(new)) == Some(&b.event)).any(|b|
                 a.same_field(b) && matches!((a.updated, b.updated), (Some(a), Some(b)) if b > a))
                             })
                     })
@@ -119,19 +131,25 @@ fn recompute(db: &Connection, subject: &str, predicate: &str) -> Result<()> {
             .collect();
         let now: BTreeSet<_> = current.iter().map(|d| d.id.clone()).collect();
         for id in previous.difference(&now) {
-            db.execute("UPDATE occurrence SET end = ?2, end_key = ?3 WHERE justification_id = ?1 AND end IS NULL", params![id, event.0, event.1])?;
+            db.execute("UPDATE occurrence SET end = ?2, end_evidence_id = ?3 WHERE justification_id = ?1 AND end IS NULL", params![id, event.0, event.1])?;
         }
         for id in now.difference(&previous) {
             let d = &derivations[id];
             let span = d
                 .spans
                 .iter()
+                .filter(|s| latest.get(&s.slot(d)) == Some(&s.event))
                 .max_by_key(|s| &s.event)
                 .expect("nonempty derivation");
+            let ordinal = ordinals
+                .entry((id.clone(), event.0.clone(), portable_key.clone()))
+                .or_default();
+            let occurrence = occurrence_id_with_ordinal(id, &event.0, &portable_key, *ordinal);
+            *ordinal += 1;
             db.execute("INSERT INTO occurrence (id, justification_id, source, scope, location, field,
-                captured_at, source_updated_at, portable_key) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)",
-                params![occurrence_id(id, &event.0, &event.1), id, span.source, span.scope, span.location,
-                    span.support.field, event.0, span.updated.map(crate::stamp), event.1])?;
+                captured_at, source_updated_at, portable_key, evidence_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                params![occurrence, id, span.source, span.scope, span.location,
+                    span.support.field, event.0, span.updated.map(crate::stamp), portable_key, event.1])?;
         }
         previous = now;
     }
@@ -210,9 +228,9 @@ fn recompute(db: &Connection, subject: &str, predicate: &str) -> Result<()> {
 }
 
 pub(crate) fn intervals(db: &Connection, id: &str) -> Result<Vec<KnownInterval>> {
-    let rows = db.prepare("SELECT o.captured_at, o.portable_key, o.end, o.end_key FROM occurrence o
-        JOIN justification j ON j.id = o.justification_id WHERE j.claim_id = ?1 ORDER BY o.captured_at, o.portable_key, o.id")?
-        .query_map([id], |r| Ok(((r.get::<_, String>(0)?, r.get::<_, String>(1)?), r.get::<_, Option<String>>(2)?.zip(r.get::<_, Option<String>>(3)?))))?
+    let rows = db.prepare("SELECT o.captured_at, o.evidence_id, o.end, o.end_evidence_id FROM occurrence o
+        JOIN justification j ON j.id = o.justification_id WHERE j.claim_id = ?1 ORDER BY o.captured_at, o.evidence_id, o.id")?
+        .query_map([id], |r| Ok(((r.get::<_, String>(0)?, r.get::<_, i64>(1)?), r.get::<_, Option<String>>(2)?.zip(r.get::<_, Option<i64>>(3)?))))?
         .collect::<Result<Vec<_>, _>>()?;
     // Union on event keys, preserving a gap even if its timestamps are equal.
     let mut intervals: Vec<(Event, Option<Event>)> = Vec::new();

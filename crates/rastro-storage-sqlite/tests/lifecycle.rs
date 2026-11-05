@@ -56,6 +56,7 @@ fn store(db: &mut SqliteStorage, e: &Evidence, predicate: &str, value: &str) -> 
     let pending = db.pending_evidence(("extractor", "1"), &source).unwrap();
     let id = pending
         .iter()
+        .rev()
         .find(|(_, item)| item.quote == e.quote)
         .unwrap()
         .0;
@@ -126,10 +127,31 @@ fn S8a_fresh_databases_with_other_local_ids_keep_revisions_and_ids() {
     let first = store(&mut a, &e, "code:state", "open");
     let replay = store(&mut b, &e, "code:state", "open");
     assert_eq!(first, replay);
-    let a = a.why(&first).unwrap().unwrap();
-    let b = b.why(&replay).unwrap().unwrap();
-    assert_ne!(a.supports[0].evidence_id, b.supports[0].evidence_id);
-    assert_eq!(a.claim.revision, b.claim.revision);
+    let initial_a = a.why(&first).unwrap().unwrap();
+    let initial_b = b.why(&replay).unwrap().unwrap();
+    assert_ne!(
+        initial_a.supports[0].evidence_id,
+        initial_b.supports[0].evidence_id
+    );
+    assert_eq!(initial_a.claim.revision, initial_b.claim.revision);
+    // The portable recurrence ordinal also survives a local-id remap.
+    for db in [&mut a, &mut b] {
+        store(db, &evidence("source", "closed"), "code:state", "closed");
+        store(db, &e, "code:state", "open");
+    }
+    let final_a = a.why(&first).unwrap().unwrap();
+    let final_b = b.why(&replay).unwrap().unwrap();
+    assert_eq!(
+        serde_json::to_value(final_a.claim).unwrap(),
+        serde_json::to_value(final_b.claim).unwrap()
+    );
+    let occurrences = |name| {
+        let connection = rusqlite::Connection::open(home.path().join(name)).unwrap();
+        connection.prepare("SELECT o.id FROM occurrence o JOIN justification j ON j.id = o.justification_id WHERE j.claim_id = ?1 ORDER BY o.captured_at, o.evidence_id").unwrap()
+            .query_map([&first], |r| r.get::<_, String>(0)).unwrap().collect::<Result<Vec<_>, _>>().unwrap()
+    };
+    assert_eq!(occurrences("a").len(), 2);
+    assert_eq!(occurrences("a"), occurrences("b"));
 }
 
 #[test]
@@ -156,7 +178,7 @@ fn S4b_all_required_spans_of_one_evidence_are_retained_as_an_and_bundle() {
 }
 
 #[test]
-fn S16b_equal_time_late_append_does_not_regress_the_portable_high_water() {
+fn S16b_late_append_advances_boundary_even_when_its_portable_key_sorts_before_previous() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("db");
     let mut db = SqliteStorage::open(&path).unwrap();
@@ -165,13 +187,13 @@ fn S16b_equal_time_late_append_does_not_regress_the_portable_high_water() {
     let run = db
         .start_extraction(&source, ("extractor", "1"), time())
         .unwrap();
-    for key in ["v_z", "v_a"] {
+    for (id, key) in [(1, "v_z"), (2, "v_a")] {
         let checkpoint = claims::Checkpoint {
             extractor: "extractor".into(),
             extractor_version: "1".into(),
             source: "source".into(),
             scope: source.scope.clone(),
-            last: (time(), 1),
+            last: (time(), id),
             last_portable_key: key.into(),
             vocabulary_version: "1".into(),
         };
@@ -186,5 +208,44 @@ fn S16b_equal_time_late_append_does_not_regress_the_portable_high_water() {
             |r| r.get(0),
         )
         .unwrap();
-    assert_eq!(key, "v_z");
+    assert_eq!(key, "v_a");
+}
+
+#[test]
+fn S9a_same_pair_recurrence_at_equal_capture_stays_separate() {
+    let home = tempfile::tempdir().unwrap();
+    let mut db = SqliteStorage::open(&home.path().join("db")).unwrap();
+    let e = evidence("source", "open");
+    let open = store(&mut db, &e, "code:state", "open");
+    let closed = store(
+        &mut db,
+        &evidence("source", "closed"),
+        "code:state",
+        "closed",
+    );
+    store(&mut db, &e, "code:state", "open");
+    let why = db.why(&open).unwrap().unwrap();
+    assert_eq!(why.claim.status, "observed");
+    assert_eq!(why.claim.known_intervals.len(), 2);
+    assert_eq!(why.claim.known_intervals[0].end, Some(time()));
+    assert_eq!(why.claim.known_intervals[1].start, time());
+    let why = db.why(&closed).unwrap().unwrap();
+    assert_eq!(why.claim.status, "superseded");
+    assert_eq!(why.claim.known_intervals.len(), 1);
+    assert_eq!(why.claim.known_intervals[0].end, Some(time()));
+    let before = serde_json::to_value(db.why(&open).unwrap().unwrap()).unwrap();
+    db.begin_claims_rebuild().unwrap();
+    let source = Source::github("source".into(), "o/p".into(), Scope("work".into()));
+    let pending = db.pending_evidence(("extractor", "1"), &source).unwrap();
+    let claims: Vec<_> = pending
+        .iter()
+        .map(|(id, e)| accepted(*id, e, "code:state", &e.quote))
+        .collect();
+    db.record_claims(1, ("extractor", "1"), &claims, None)
+        .unwrap();
+    db.finish_claims_rebuild(true).unwrap();
+    assert_eq!(
+        before,
+        serde_json::to_value(db.why(&open).unwrap().unwrap()).unwrap()
+    );
 }

@@ -29,18 +29,19 @@ CREATE TABLE justification_span (
     justification_id TEXT NOT NULL REFERENCES justification(id),
     evidence_id INTEGER NOT NULL REFERENCES evidence(id), portable_key TEXT NOT NULL,
     field TEXT NOT NULL, start INTEGER NOT NULL, end INTEGER NOT NULL CHECK (end > start),
-    PRIMARY KEY (justification_id, portable_key, field, start, end)
+    PRIMARY KEY (justification_id, portable_key, field, start, end, evidence_id)
 ) WITHOUT ROWID;
 CREATE INDEX justification_span_by_evidence ON justification_span (evidence_id);
 CREATE TABLE occurrence (
     id TEXT PRIMARY KEY, justification_id TEXT NOT NULL REFERENCES justification(id),
     source TEXT NOT NULL, scope TEXT NOT NULL, location TEXT NOT NULL, field TEXT NOT NULL,
     captured_at TEXT NOT NULL, source_updated_at TEXT, portable_key TEXT NOT NULL,
-    end TEXT, end_key TEXT,
-    CHECK ((end IS NULL) = (end_key IS NULL))
+    evidence_id INTEGER NOT NULL REFERENCES evidence(id),
+    end TEXT, end_evidence_id INTEGER REFERENCES evidence(id),
+    CHECK ((end IS NULL) = (end_evidence_id IS NULL))
 );
-CREATE INDEX occurrence_by_justification ON occurrence (justification_id, captured_at, portable_key);
-CREATE INDEX occurrence_by_slot ON occurrence (source, scope, location, field, captured_at, portable_key);
+CREATE INDEX occurrence_by_justification ON occurrence (justification_id, captured_at, evidence_id);
+CREATE INDEX occurrence_by_slot ON occurrence (source, scope, location, field, captured_at, evidence_id);
 CREATE TABLE claim_link (
     from_claim TEXT NOT NULL REFERENCES claim(id), to_claim TEXT NOT NULL REFERENCES claim(id),
     kind TEXT NOT NULL CHECK (kind IN ('conflicts_with', 'supersedes')),

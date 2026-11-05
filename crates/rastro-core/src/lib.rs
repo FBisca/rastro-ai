@@ -374,8 +374,8 @@ pub trait Storage {
         plugin: (&str, &str),
         started_at: DateTime<Utc>,
     ) -> Result<i64>;
-    /// The source's new observations past the local append checkpoint, sorted by portable
-    /// event key (`captured_at`, portable evidence key, local id as tie-break).
+    /// The source's new observations past the local append checkpoint, sorted by
+    /// (`captured_at`, evidence append id). Portable keys identify, but never order, input.
     fn pending_evidence(
         &self,
         extractor: (&str, &str),

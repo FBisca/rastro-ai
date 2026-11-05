@@ -66,8 +66,8 @@ pub struct ObservedClaim {
     pub supports: BTreeSet<Support>,
 }
 /// How far an extractor version has read a pair. `last.0` and `last_portable_key` name
-/// the portable event boundary; `last.1` is the local append high-water, used only to
-/// discover new input (including equal-time appends sorting before that boundary).
+/// the portable identity of the boundary; `last.1` is its local append high-water.
+/// Ordering is (`captured_at`, local append id); ids never enter a content hash.
 pub struct Checkpoint {
     pub extractor: String,
     pub extractor_version: String,
@@ -199,6 +199,28 @@ pub fn occurrence_id(justification: &str, captured: &str, portable_key: &str) ->
         ],
     )
 }
+/// Repeated openings on the same portable event keep separate, portable identities.
+/// The first occurrence retains the original encoding.
+pub fn occurrence_id_with_ordinal(
+    justification: &str,
+    captured: &str,
+    portable_key: &str,
+    ordinal: u64,
+) -> String {
+    if ordinal == 0 {
+        return occurrence_id(justification, captured, portable_key);
+    }
+    digest(
+        "o_",
+        "rastro/occurrence/v1",
+        &[
+            (b'J', justification),
+            (b'T', captured),
+            (b'V', portable_key),
+            (b'N', &ordinal.to_string()),
+        ],
+    )
+}
 /// Stored derivation identity and provenance; spans in this bundle are all required.
 #[derive(Clone, Debug)]
 pub struct Justification {
@@ -209,7 +231,8 @@ pub struct Justification {
     pub derivation_key: String,
     pub spans: BTreeSet<Support>,
 }
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+/// Portable event identity; replay ordering uses capture time and evidence append order.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct EventKey {
     pub captured_at: DateTime<Utc>,
     pub portable_key: String,
