@@ -71,3 +71,8 @@ Status stays accepted. Knowledge graph deep dive (`../research/kg-deep-dive/42-p
   - **Location context.** The core delivers every latest `structured` field of each changed location, up to the batch high-water mark. It's capped at 64 fields per location, and a location over the cap fails the run (`context_too_large`) rather than being trimmed, so incremental, `--reread` and rebuild agree. The delivered set isn't stored: it is recomputed on replay from evidence and the checkpoint boundary. Only the ids cited in spans are stored.
   - **Identifier trust.** The core checks that every span is structured, delivered and quoted exactly. It doesn't check that a canonical identifier such as `github:account/<id>` equals the quoted `/user/id`; that tie belongs to the extractor's declared deterministic rule.
   - **Type scalarity.** Every `rastro:type` claim is scalar, and carries its type's supertype closure (`type_ancestors`, outside every hash). The lifecycle suppresses `conflicts_with` only between a type and one of its ancestors.
+
+## Amended 2026-11-05 (claims hardening)
+Status stays accepted. Product meaning in `../decisions/surfaces.md` §34 and `../decisions/vocabulary.md` §24.
+- **Identifier grammar at submit.** `claim.submit` rejects a subject or object identifier outside the entity-form grammar of `surfaces.md` §34, using the same function as the read side; the claim is counted rejected. Otherwise an extractor could mint an entity that `about` cannot reach.
+- **Alias checks.** Vocabulary load rejects an alias kind containing `/`, `:` or whitespace. Submit rejects an alias claim whose value is empty or whitespace-only. Lookup doesn't check kinds against installed vocabularies.
