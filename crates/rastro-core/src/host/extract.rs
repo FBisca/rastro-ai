@@ -50,12 +50,15 @@ pub fn extract<S: Storage>(
     let run_id = storage.start_extraction(source, (extractor, &version), Utc::now())?;
     let mut counts = Counts::default();
     let mut evidence = 0;
+    let mut started = false;
     let outcome = match &found {
         Err(reason) => Err(*reason),
         Ok((plugin, _)) if !plugin.manifest.permissions.scopes.contains(&source.scope.0) => {
             Err("forbidden")
         }
         Ok((plugin, vocabulary)) => {
+            // Past the check and the scope: from here a failure is the extractor's run failing.
+            started = true;
             let pending = storage.pending_evidence_for_vocabulary(
                 (extractor, &version),
                 &vocabulary.version,
@@ -101,6 +104,7 @@ pub fn extract<S: Storage>(
         reason,
         evidence,
         counts,
+        started,
     })
 }
 

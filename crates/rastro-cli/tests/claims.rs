@@ -1209,9 +1209,10 @@ fn sync_and_rebuild_publish_receipts_and_fresh_statistics() {
     );
 }
 
-/// claims/R22: rebuild skips missing extractors and forbidden historical pairs
+/// S10: rebuild carries over missing extractors and forbidden historical pairs; the forbidden
+/// one fails the command
 #[test]
-fn rebuild_skips_missing_extractors_and_forbidden_historical_pairs() {
+fn rebuild_carries_over_missing_extractors_and_forbidden_historical_pairs() {
     let env = Env::new(Some("test-extractor"));
     env.connector("unavailable", Some("not-installed"));
     env.add_source("a", "test");
@@ -1227,7 +1228,17 @@ fn rebuild_skips_missing_extractors_and_forbidden_historical_pairs() {
     db.execute("INSERT INTO evidence (source, scope, location, field, start, end, quote, captured_at, trust_class) VALUES ('historical', 'forbidden', 'https://example.org/old', '/body', 0, 1, 'x', '2026-11-01T00:00:00Z', 'untrusted content')", []).unwrap();
     drop(db);
     fs::remove_file(env.path("extractor.jsonl")).unwrap();
-    env.ok(&["claims", "rebuild"]);
+    let rebuilt = env.rastro(&["claims", "rebuild", "--json"]);
+    assert!(!rebuilt.status.success());
+    let rebuilt: Value = serde_json::from_slice(&rebuilt.stdout).unwrap();
+    assert_eq!(
+        pair_in(&rebuilt["result"], "historical", "forbidden")["reason"],
+        "forbidden"
+    );
+    assert_eq!(
+        pair(&rebuilt["result"], "missing")["state"],
+        "not_installed"
+    );
     let after = env.json(&["why", OPEN]);
     assert_eq!(before["claim"], after["claim"]);
     assert_eq!(before["supports"], after["supports"]);
@@ -1621,4 +1632,248 @@ fn a_vocabulary_version_bump_alone_reads_behind_until_the_replay_succeeds() {
     env.ok(&["sync", "a"]);
     assert_eq!(extraction_states(&env)[0].2, "current");
     assert_eq!(read_only_states(&env)[0].2, "current");
+}
+
+/// A second installed extractor, bound by the `other` connector, so a pair can lose its
+/// extractor while another stays.
+fn two_extractors() -> Env {
+    two_extractors_with("c")
+}
+/// The same, naming the source of the second extractor, so a test can put it before or after
+/// the rebuilt one in replay order.
+fn two_extractors_with(second: &str) -> Env {
+    let env = Env::new(Some("test-extractor"));
+    env.connector("other", Some("test-extractor-2"));
+    let dir = env.plugin_dir("test-extractor-2");
+    let mut manifest: toml::Table =
+        fs::read_to_string(env.plugin_dir("test-extractor").join("rastro-plugin.toml"))
+            .unwrap()
+            .parse()
+            .unwrap();
+    manifest.insert("id".into(), "test-extractor-2".into());
+    fs::write(dir.join("rastro-plugin.toml"), manifest.to_string()).unwrap();
+    fs::copy(
+        env.plugin_dir("test-extractor").join("vocabulary.toml"),
+        dir.join("vocabulary.toml"),
+    )
+    .unwrap();
+    env.add_source("a", "test");
+    env.add_source(second, "other");
+    // `a` and `c` both justify OPEN; `c` alone justifies the closed claim.
+    sync_state(&env, "a", "open");
+    sync_state(&env, second, "open");
+    sync_state(&env, second, "closed");
+    env
+}
+/// Every projection row that rebuild must reproduce, as the database holds them.
+fn projection_rows(env: &Env) -> Vec<String> {
+    let db = Connection::open(env.path("data/rastro.sqlite3")).unwrap();
+    let mut rows = Vec::new();
+    for query in [
+        "SELECT 'claim', id, status, revision, known_since FROM claim ORDER BY id",
+        "SELECT 'justification', id, claim_id, extractor, extractor_version, current FROM justification ORDER BY id",
+        "SELECT 'span', justification_id, evidence_id, field FROM justification_span ORDER BY 2, 3, 4",
+        "SELECT 'occurrence', justification_id, source, evidence_id, ifnull(end_evidence_id, '') FROM occurrence ORDER BY 2, 3, 4",
+        "SELECT 'link', from_claim, to_claim, kind FROM claim_link ORDER BY 2, 3, 4",
+        "SELECT 'checkpoint', extractor, source, scope, last_evidence_id FROM extraction_checkpoint ORDER BY 2, 3, 4",
+        "SELECT 'entity', id, identifier FROM entity ORDER BY id",
+    ] {
+        let mut statement = db.prepare(query).unwrap();
+        let width = statement.column_count();
+        let found: Vec<String> = statement
+            .query_map([], |row| {
+                (0..width)
+                    .map(|i| {
+                        row.get::<_, rusqlite::types::Value>(i)
+                            .map(|v| format!("{v:?}"))
+                    })
+                    .collect::<Result<Vec<_>, _>>()
+                    .map(|cells| cells.join("|"))
+            })
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        rows.extend(found);
+    }
+    rows
+}
+fn pair<'a>(result: &'a Value, source: &str) -> &'a Value {
+    pair_in(result, source, "personal")
+}
+fn pair_in<'a>(result: &'a Value, source: &str, scope: &str) -> &'a Value {
+    result["pairs"]
+        .as_array()
+        .unwrap_or_else(|| panic!("no pairs: {result}"))
+        .iter()
+        .find(|p| p["source"] == source && p["scope"] == scope)
+        .unwrap_or_else(|| panic!("no pair {source}: {result}"))
+}
+
+/// S9: a pair whose extractor is not installed is carried over, the rest is rebuilt, whichever
+/// of them replays first
+#[test]
+fn S9_a_pair_whose_extractor_is_not_installed_is_carried_over() {
+    for carried in ["c", "0c"] {
+        let env = two_extractors_with(carried);
+        let before = projection_rows(&env);
+        fs::remove_dir_all(env.plugin_dir("test-extractor-2")).unwrap();
+        // Exit 0: `env.json` asserts it.
+        let result = env.json(&["claims", "rebuild"]);
+        assert_eq!(pair(&result, carried)["state"], "not_installed", "{result}");
+        assert_eq!(pair(&result, "a")["state"], "current", "{result}");
+        assert_eq!(result["claims"], 3, "{result}");
+        assert_eq!(before, projection_rows(&env), "{carried}");
+        let human = env.ok(&["claims", "rebuild"]);
+        let lines: Vec<_> = human
+            .lines()
+            .filter(|l| l.contains("Carried over"))
+            .collect();
+        assert_eq!(lines.len(), 1, "{human}");
+        assert!(lines[0].contains(carried) && lines[0].contains("not_installed"));
+    }
+}
+
+/// S10: a pair that fails its check or is forbidden is carried over and fails the command
+#[test]
+fn S10_a_failing_check_or_forbidden_scope_is_carried_over_and_exits_non_zero() {
+    for reason in ["protocol", "forbidden"] {
+        let env = two_extractors();
+        let before = projection_rows(&env);
+        let dir = env.plugin_dir("test-extractor-2");
+        if reason == "forbidden" {
+            let path = dir.join("rastro-plugin.toml");
+            let text = fs::read_to_string(&path)
+                .unwrap()
+                .replace("scopes = [\"personal\", \"work\"]", "scopes = [\"work\"]");
+            fs::write(path, text).unwrap();
+        } else {
+            fs::remove_file(dir.join("vocabulary.toml")).unwrap();
+        }
+        let output = env.rastro(&["claims", "rebuild", "--json"]);
+        assert!(!output.status.success(), "{reason}");
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let result = &value["result"];
+        assert_eq!(pair(result, "c")["state"], "failed", "{value}");
+        assert_eq!(pair(result, "c")["reason"], reason, "{value}");
+        assert_eq!(pair(result, "a")["state"], "current", "{value}");
+        assert_eq!(before, projection_rows(&env), "{reason}");
+    }
+}
+
+/// S11: an extractor that starts and then fails aborts the rebuild and keeps the projection,
+/// also when a carried pair was staged before it
+#[test]
+fn S11_an_extractor_that_starts_and_fails_aborts_the_rebuild() {
+    for carried in ["c", "0c"] {
+        let env = two_extractors_with(carried);
+        let before = projection_rows(&env);
+        fs::remove_dir_all(env.plugin_dir("test-extractor-2")).unwrap();
+        extractor_crashes(&env);
+        let output = env.rastro(&["claims", "rebuild", "--json"]);
+        assert!(!output.status.success());
+        assert_eq!(before, projection_rows(&env), "{carried}");
+        assert_eq!(env.json(&["why", OPEN])["claim"]["status"], "observed");
+    }
+}
+
+/// S12: a claim justified by a carried pair and a rebuilt pair equals the incremental one,
+/// whichever of them replays first
+#[test]
+fn S12_a_claim_shared_by_a_carried_and_a_rebuilt_pair_equals_the_incremental_one() {
+    for carried in ["c", "0c"] {
+        let env = two_extractors_with(carried);
+        let incremental = env.json(&["why", OPEN, "--full"]);
+        assert_eq!(incremental["supports"].as_array().unwrap().len(), 2);
+        let before = projection_rows(&env);
+        fs::remove_dir_all(env.plugin_dir("test-extractor-2")).unwrap();
+        env.json(&["claims", "rebuild"]);
+        let mut after = env.json(&["why", OPEN, "--full"]);
+        let mut expected = incremental.clone();
+        for value in [&mut after, &mut expected] {
+            value.as_object_mut().unwrap().remove("extraction");
+        }
+        assert_eq!(expected, after, "{carried}");
+        assert_eq!(before, projection_rows(&env), "{carried}");
+    }
+}
+
+/// S13: rebuild lists every pair, and the CLI prints a line per carried-over pair
+#[test]
+fn S13_rebuild_lists_its_pairs_and_the_cli_prints_the_carried_over_ones() {
+    let env = two_extractors();
+    fs::remove_dir_all(env.plugin_dir("test-extractor-2")).unwrap();
+    let result = env.json(&["claims", "rebuild"]);
+    let carried = pair(&result, "c");
+    for key in [
+        "source",
+        "scope",
+        "run_id",
+        "extractor",
+        "extractor_version",
+        "state",
+        "counts",
+    ] {
+        assert!(carried.get(key).is_some(), "{key}: {carried}");
+    }
+    assert_eq!(carried["scope"], "personal");
+    assert_eq!(carried["extractor"], "test-extractor-2");
+    assert_eq!(carried["reason"], "not_installed");
+    // The counts are the run log's: the extractor never ran.
+    assert_eq!(
+        carried["counts"],
+        json!({"submitted": 0, "accepted": 0, "rejected": 0, "unchanged": 0})
+    );
+    let rebuilt = pair(&result, "a");
+    assert_eq!(rebuilt["state"], "current");
+    assert!(rebuilt["counts"]["accepted"].as_u64().unwrap() > 0);
+    let human = env.ok(&["claims", "rebuild"]);
+    let lines: Vec<_> = human
+        .lines()
+        .filter(|l| l.contains("test-extractor-2"))
+        .collect();
+    assert_eq!(lines.len(), 1, "{human}");
+    assert!(lines[0].contains("not_installed"), "{human}");
+}
+
+/// S14: rebuilding a copy of the owner's database with the extractor hidden keeps its claims.
+/// Give `RASTRO_REAL_DB_COPY` the path of a copy; the test copies it again first, with
+/// `VACUUM INTO`, and only ever writes the second copy.
+#[test]
+#[ignore = "needs RASTRO_REAL_DB_COPY, the path of a copy of a real database"]
+fn S14_rebuilding_a_copy_of_the_real_database_without_its_extractor_keeps_every_claim() {
+    let source = std::env::var("RASTRO_REAL_DB_COPY").expect("RASTRO_REAL_DB_COPY");
+    let home = TempDir::new().unwrap();
+    let data = home.path().join("data");
+    fs::create_dir_all(&data).unwrap();
+    let database = data.join("rastro.sqlite3");
+    Connection::open_with_flags(&source, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .unwrap()
+        .execute("VACUUM INTO ?1", [database.to_str().unwrap()])
+        .unwrap();
+    // The plugins directory is empty: every extractor is hidden.
+    fs::create_dir_all(home.path().join("dev-plugins")).unwrap();
+    let claims = || -> std::collections::BTreeSet<String> {
+        let db = Connection::open(&database).unwrap();
+        let mut statement = db.prepare("SELECT id FROM claim").unwrap();
+        statement
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect()
+    };
+    let before = claims();
+    assert!(!before.is_empty(), "the copy holds no claims");
+    let output = Command::new(support::rastro())
+        .env("RASTRO_HOME", home.path())
+        .env("RASTRO_PLUGIN_PATH", home.path().join("dev-plugins"))
+        .args(["claims", "rebuild", "--json"])
+        .output()
+        .unwrap();
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(output.status.success(), "{said}");
+    assert_eq!(claims(), before, "{said}");
 }

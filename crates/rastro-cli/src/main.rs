@@ -3,7 +3,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use clap::Parser;
 use rastro_core::{
     Coverage, CoverageWindow, Locations, MAX_SEARCH_LIMIT, Rastro, display_escaped, display_safe,
-    runs::RunReport,
+    runs::{ExtractionState, RunReport},
 };
 use rastro_operations::{
     Request, Response, catalog, envelope,
@@ -282,7 +282,24 @@ fn human(response: &Response) -> String {
         )).collect()),
         Response::Coverage(r) => or_none(r.coverage.iter().map(coverage_block).collect()),
         Response::Sync(r) => or_none(r.runs.iter().map(sync_line).collect()),
-        Response::ClaimsRebuild(r) => format!("Claims rebuilt: {} claims", r.claims),
+        Response::ClaimsRebuild(r) => {
+            let mut text = format!("Claims rebuilt: {} claims", r.claims);
+            // A pair that is not current never started; its stored output was carried over.
+            for pair in r.pairs.iter().filter(|p| p.state != ExtractionState::Current) {
+                text += &format!(
+                    "\n  Carried over: {} | {} | Extractor: {} {} | {}",
+                    pair.source,
+                    pair.scope,
+                    display_safe(&pair.extractor),
+                    pair.extractor_version,
+                    pair.state.as_str(),
+                );
+                if let Some(reason) = pair.reason.as_deref().filter(|r| *r != pair.state.as_str()) {
+                    text += &format!(" | Reason: {}", display_safe(reason));
+                }
+            }
+            text
+        }
         Response::IndexRebuild(r) => format!("Index rebuilt: {} observations", r.indexed),
         Response::Search(r) => search_text(&r.query, r),
         Response::Why(r) => why_text(r),

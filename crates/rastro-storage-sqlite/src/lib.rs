@@ -674,6 +674,13 @@ impl Storage for SqliteStorage {
     fn finish_claims_rebuild(&mut self, publish: bool) -> Result<usize> {
         lifecycle::finish_rebuild(&mut self.connection, publish)
     }
+    fn carry_over_pair(&mut self, source: &Source, extractor: &str) -> Result<usize> {
+        let transaction = self.connection.transaction()?;
+        let carried =
+            lifecycle::carry_over(&transaction, &source.name, &source.scope.0, extractor)?;
+        transaction.commit()?;
+        Ok(carried)
+    }
 }
 
 /// One evidence row as the extraction queries select it: id, location, field, start, end,

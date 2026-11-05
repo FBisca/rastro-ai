@@ -628,6 +628,48 @@
         }
       ]
     },
+    "RebuildPair": {
+      "additionalProperties": false,
+      "description": "One (source, scope) pair of a claims rebuild: how its extractor ended. A pair that is not\n`current` never started, and its stored output was carried over.",
+      "properties": {
+        "counts": {
+          "$ref": "#/$defs/Counts",
+          "description": "Claim counts of the pair's run, as the run log records them."
+        },
+        "extractor": {
+          "type": "string"
+        },
+        "extractor_version": {
+          "type": "string"
+        },
+        "reason": {
+          "type": "string"
+        },
+        "run_id": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "source": {
+          "type": "string"
+        },
+        "state": {
+          "$ref": "#/$defs/ExtractionState"
+        }
+      },
+      "required": [
+        "source",
+        "scope",
+        "run_id",
+        "extractor",
+        "extractor_version",
+        "state",
+        "counts"
+      ],
+      "type": "object"
+    },
     "RunReport": {
       "additionalProperties": false,
       "properties": {
@@ -1104,10 +1146,18 @@
                   "format": "uint",
                   "minimum": 0,
                   "type": "integer"
+                },
+                "pairs": {
+                  "description": "Every (source, scope) pair the rebuild visited.",
+                  "items": {
+                    "$ref": "#/$defs/RebuildPair"
+                  },
+                  "type": "array"
                 }
               },
               "required": [
-                "claims"
+                "claims",
+                "pairs"
               ],
               "title": "ClaimsRebuildResult",
               "type": "object"
@@ -1571,10 +1621,18 @@
             "format": "uint",
             "minimum": 0,
             "type": "integer"
+          },
+          "pairs": {
+            "description": "Every (source, scope) pair the rebuild visited.",
+            "items": {
+              "$ref": "#/$defs/RebuildPair"
+            },
+            "type": "array"
           }
         },
         "required": [
-          "claims"
+          "claims",
+          "pairs"
         ],
         "title": "ClaimsRebuildResult",
         "type": "object"

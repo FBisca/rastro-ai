@@ -418,6 +418,10 @@ pub trait Storage {
     fn begin_claims_rebuild(&mut self) -> Result<()>;
     /// Atomically publishes the staged generation, or discards it on failure.
     fn finish_claims_rebuild(&mut self, publish: bool) -> Result<usize>;
+    /// During a staged rebuild, copies the stored output of a pair whose extractor could not
+    /// run into the staged generation and recomputes the components it touches. Returns the
+    /// justifications carried over.
+    fn carry_over_pair(&mut self, source: &Source, extractor: &str) -> Result<usize>;
 }
 
 pub struct Rastro<S> {
