@@ -344,10 +344,12 @@ fn launch_migrates_recovers_and_turns_on_wal_before_the_first_answer() {
     let env = Env::new();
     env.add_source("project");
     let db = env.db();
-    // Undo the last migration, so it is pending again.
+    // Undo the knowledge migration and the ones after it, so they are pending again.
     let last = last_migration(&db);
     db.execute_batch(
-        "DROP TABLE occurrence; DROP TABLE justification_span; DROP TABLE justification;
+        "DROP TABLE intent_justification; DROP TABLE intent;
+         DELETE FROM schema_migrations WHERE name > '202611061200_knowledge_v2';
+         DROP TABLE occurrence; DROP TABLE justification_span; DROP TABLE justification;
          DROP TABLE claim_link; DROP TABLE claim; DROP TABLE entity;
          DROP TABLE extraction_checkpoint; DROP TABLE projection_publication;
          INSERT INTO runs (source, scope, plugin_id, plugin_version, started_at, status,
@@ -362,8 +364,11 @@ fn launch_migrates_recovers_and_turns_on_wal_before_the_first_answer() {
     let start = previous.find("CREATE TABLE entity").unwrap();
     let end = previous.find("-- Replay order").unwrap();
     db.execute_batch(&previous[start..end]).unwrap();
-    db.execute("DELETE FROM schema_migrations WHERE name = ?1", [&last])
-        .unwrap();
+    db.execute(
+        "DELETE FROM schema_migrations WHERE name = '202611061200_knowledge_v2'",
+        [],
+    )
+    .unwrap();
     db.query_row("PRAGMA journal_mode = DELETE", [], |r| {
         r.get::<_, String>(0)
     })

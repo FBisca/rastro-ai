@@ -4,6 +4,7 @@ pub mod entity_form;
 pub mod evidence;
 pub mod files;
 pub mod host;
+pub mod identity;
 pub mod knowledge;
 pub mod read_only;
 pub mod runs;
@@ -423,6 +424,15 @@ pub trait Storage {
     /// run into the staged generation and recomputes the components it touches. Returns the
     /// justifications carried over.
     fn carry_over_pair(&mut self, source: &Source, extractor: &str) -> Result<usize>;
+    /// Accepts owner intents in one write transaction. `plan` reads the intents accepted so far
+    /// and resolves entity forms through the snapshot; storage checks each intent it returns
+    /// (shape, an undo's target, the issuer seeing every target), stores them together in order,
+    /// and recomputes the intent-backed claims before committing. Nothing is stored when any
+    /// check fails. Returns the stored intents with their acceptance order.
+    fn issue_intents<T>(
+        &mut self,
+        plan: impl FnOnce(&dyn Snapshot) -> Result<(Vec<identity::Intent>, T)>,
+    ) -> Result<(Vec<identity::Intent>, T)>;
 }
 
 pub struct Rastro<S> {

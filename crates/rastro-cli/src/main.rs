@@ -172,6 +172,20 @@ fn about_text(about: &rastro_operations::results::AboutResult) -> String {
     if lines.is_empty() {
         lines.push("No claims found".into());
     }
+    for group in &about.groups {
+        lines.push(format!(
+            "Group of {} equivalent claims: {} | Status: {} | Revision: {}",
+            group.members.len(),
+            group
+                .members
+                .iter()
+                .map(|m| m.claim.as_str())
+                .collect::<Vec<_>>()
+                .join(", "),
+            group.status,
+            group.revision
+        ));
+    }
     if about.truncated {
         lines.push("More claims exist; raise --limit (at most 50)".into());
     }
@@ -200,6 +214,19 @@ fn why_text(why: &WhyResult) -> String {
         }
     }
     for support in &why.supports {
+        if let Some(intent) = &support.intent {
+            lines.push(format!(
+                "  Justification: {} | Kind: {} | Intent: {} {} | Issued: {} | Issuer: {} via {}",
+                support.justification_id,
+                display_safe(&support.justification_kind),
+                display_safe(&support.extraction_rule),
+                display_safe(&intent.id),
+                stamp(intent.issued_at),
+                display_safe(&intent.issuer.principal),
+                display_safe(&intent.issuer.surface)
+            ));
+            continue;
+        }
         lines.push(format!(
             "  Justification: {} | Kind: {} | Extractor: {} {} | Rule: {} | Vocabulary: {} | Current: {}",
             support.justification_id,
@@ -263,6 +290,51 @@ fn search_text(text: &str, found: &SearchResponse) -> String {
     }
     text
 }
+fn intent_line(intent: &rastro_core::identity::IntentView) -> String {
+    let mut line = format!(
+        "{} | {} | Intent: {} | Issued: {} | Status: {}",
+        intent.append_seq,
+        intent.kind.as_str(),
+        display_safe(&intent.id),
+        stamp(intent.issued_at),
+        serde_json::to_value(intent.status)
+            .ok()
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_default()
+    );
+    if let Some(by) = &intent.status_by {
+        line += &format!(" by {}", display_safe(by));
+    }
+    if let Some(undone) = &intent.undo_of {
+        line += &format!(" | Undoes: {}", display_safe(undone));
+    }
+    line += &format!(" | Domain: {}", display_safe(&intent.domain_key));
+    line
+}
+fn intents_text(intents: &[rastro_core::identity::IntentView], none: &str) -> String {
+    if intents.is_empty() {
+        return none.into();
+    }
+    intents
+        .iter()
+        .map(intent_line)
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+fn person_text(result: &rastro_operations::results::IdentityPersonResult) -> String {
+    let mut text = format!(
+        "Person: {} | Id: {}",
+        display_safe(&result.person.identifier),
+        result.person.id
+    );
+    if !result.created {
+        text += " | Already existed; nothing recorded";
+    }
+    for intent in &result.intents {
+        text += &format!("\n{}", intent_line(intent));
+    }
+    text
+}
 /// The result of an operation, its human form, and whether it succeeded.
 type Outcome = (Response, String);
 
@@ -304,6 +376,18 @@ fn human(response: &Response) -> String {
         Response::Search(r) => search_text(&r.query, r),
         Response::Why(r) => why_text(r),
         Response::About(r) => about_text(r),
+        Response::IdentityMe(r) | Response::IdentityPersonCreate(r) => person_text(r),
+        Response::IdentityLink(r) | Response::IdentityMerge(r) | Response::IdentityUndo(r) => {
+            intents_text(&r.intents, "Already in force; nothing recorded")
+        }
+        Response::IdentityHistory(r) => match &r.entity {
+            Some(entity) => format!(
+                "{}\n{}",
+                display_safe(&entity.identifier),
+                intents_text(&r.intents, "No intents name it")
+            ),
+            None => "No entity matches".into(),
+        },
     }
 }
 fn execute(request: Request) -> Result<Outcome> {

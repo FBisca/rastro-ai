@@ -218,12 +218,15 @@ fn about_resolves_exact_forms_and_returns_one_hop_with_aliases() {
                 .any(|c| c["id"] == state)
         );
     }
-    for bad in ["me", "felippe", "o/p", "https://github.com/o p/pull/1"] {
+    // `me` is the reserved fourth form (surfaces §38); any other bare word stays an error that
+    // names the four.
+    for bad in ["felippe", "Me", "o/p", "https://github.com/o p/pull/1"] {
         let (ok, error) = env.run(&["about", bad]);
         assert!(!ok, "{error}");
         let text = error["error"].as_str().unwrap();
         assert!(
-            text.contains("entity id")
+            text.contains("`me`")
+                && text.contains("entity id")
                 && text.contains("canonical alias")
                 && text.contains("exact canonical URL"),
             "{text}"

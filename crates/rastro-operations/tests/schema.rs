@@ -160,3 +160,123 @@ fn catalog_declares_claim_cli_read_paths_without_changing_existing_routes() {
         }
     }
 }
+
+/// Resolves every `$ref` against the document's definitions.
+fn expanded(value: &serde_json::Value, defs: &serde_json::Value) -> serde_json::Value {
+    use serde_json::Value;
+    match value {
+        Value::Object(map) if map.contains_key("$ref") => expanded(
+            &defs[map["$ref"]
+                .as_str()
+                .unwrap()
+                .strip_prefix("#/$defs/")
+                .unwrap()],
+            defs,
+        ),
+        Value::Object(map) => map
+            .iter()
+            .map(|(key, value)| (key.clone(), expanded(value, defs)))
+            .collect(),
+        Value::Array(items) => items.iter().map(|value| expanded(value, defs)).collect(),
+        other => other.clone(),
+    }
+}
+
+/// surfaces/R1: identity changes `about` and `why` only additively: `about` gains an optional
+/// `groups` and accepts `me`, a justification gains an optional `intent`; nothing else differs
+#[test]
+fn S5_about_and_why_change_only_additively_for_identity() {
+    use serde_json::{Value, json};
+    let generated: Value = serde_json::from_str(&rastro_operations::schema::generate()).unwrap();
+    let ops = generated["x-operations"].as_array().unwrap();
+    let baseline: Value =
+        serde_json::from_str(include_str!("fixtures/claim-operations.json")).unwrap();
+    for old in baseline.as_array().unwrap() {
+        let name = old["name"].as_str().unwrap();
+        let new = ops.iter().find(|op| op["name"] == name).unwrap();
+        let mut new = expanded(new, &generated["$defs"]);
+        match name {
+            "about" => {
+                let result = new["result"].as_object_mut().unwrap();
+                let groups = result["properties"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("groups")
+                    .unwrap();
+                assert!(
+                    !result["required"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&json!("groups"))
+                );
+                assert_eq!(
+                    property_names(&groups["items"]),
+                    ["members", "revision", "status"]
+                );
+                // The one input change is the description naming `me`.
+                let entity = &mut new["input"]["properties"]["entity"]["description"];
+                assert!(
+                    entity
+                        .as_str()
+                        .unwrap()
+                        .starts_with("`me` (the owner's Person), ")
+                );
+                *entity = old["input"]["properties"]["entity"]["description"].clone();
+            }
+            "why" => {
+                let support = &mut new["result"]["properties"]["supports"]["items"];
+                let intent = support["properties"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("intent")
+                    .unwrap();
+                assert!(
+                    !support["required"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&json!("intent"))
+                );
+                assert_eq!(property_names(&intent), ["id", "issued_at", "issuer"]);
+            }
+            _ => unreachable!(),
+        }
+        assert_eq!(new, old.clone(), "{name}");
+    }
+}
+
+/// surfaces/R2: identity operations are CLI only; MCP stays read-only (surfaces §37)
+#[test]
+fn S3_identity_operations_are_cli_only() {
+    use rastro_operations::catalog::CATALOG;
+    let identity: Vec<_> = CATALOG
+        .iter()
+        .filter(|spec| spec.name.starts_with("identity."))
+        .collect();
+    let mut names: Vec<_> = identity.iter().map(|spec| spec.name).collect();
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "identity.history",
+            "identity.link",
+            "identity.me",
+            "identity.merge",
+            "identity.person.create",
+            "identity.undo"
+        ]
+    );
+    for spec in identity {
+        assert_eq!(
+            spec.surfaces,
+            [rastro_operations::Surface::Cli],
+            "{}",
+            spec.name
+        );
+        assert_eq!(
+            spec.read_only,
+            spec.name == "identity.history",
+            "{}",
+            spec.name
+        );
+    }
+}

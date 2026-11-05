@@ -32,27 +32,133 @@ pub struct ClaimSummary {
 }
 #[derive(Debug, JsonSchema, Serialize)]
 pub struct About {
+    // Every claim shown, each with its own id; a group's members are all listed here.
     pub claims: Vec<ClaimSummary>,
     pub truncated: bool,
     pub coverage: Vec<Coverage>,
     pub extraction: Vec<crate::runs::ExtractionPair>,
+    /// Equivalent claims under a merge, grouped. A group counts once toward `limit`.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub groups: Vec<ClaimGroup>,
+}
+/// Claims that say the same thing once merged Persons are taken as one (knowledge §35). There is
+/// no representative claim: each member keeps its own id, status and revision.
+#[derive(Debug, JsonSchema, Serialize)]
+pub struct ClaimGroup {
+    pub members: Vec<GroupMember>,
+    /// `observed` when any member is.
+    #[schemars(extend("enum" = ["observed", "superseded"]))]
+    pub status: String,
+    /// The hash of the sorted (member id, revision) pairs. Never a claim id.
+    pub revision: String,
+}
+#[derive(Debug, JsonSchema, Serialize)]
+pub struct GroupMember {
+    pub claim: String,
+    #[schemars(extend("enum" = ["observed", "superseded"]))]
+    pub status: String,
+    pub revision: String,
 }
 fn validate_entity(entity: &str) -> Result<()> {
-    crate::entity_form::check(entity).map_err(anyhow::Error::msg)
+    crate::entity_form::check_reference(entity).map_err(anyhow::Error::msg)
 }
+/// Claims ordered newest first become the answer: claims equivalent under the observed merges
+/// among them group, an item (a lone claim or a group, placed at its newest member) counts once
+/// toward `limit`, and every member of a kept item is listed.
 fn answer(
-    mut claims: Vec<ClaimSummary>,
+    claims: Vec<ClaimSummary>,
     limit: usize,
     coverage: Vec<Coverage>,
     extraction: Vec<crate::runs::ExtractionPair>,
 ) -> About {
-    let truncated = claims.len() > limit;
-    claims.truncate(limit);
+    use crate::claims::Object;
+    use std::collections::BTreeMap;
+    let mut parent = BTreeMap::<String, String>::new();
+    fn root(parent: &BTreeMap<String, String>, id: &str) -> String {
+        let mut id = id.to_string();
+        while let Some(next) = parent.get(&id).filter(|next| **next != id) {
+            id = next.clone();
+        }
+        id
+    }
+    for c in claims.iter().map(|s| &s.claim) {
+        if let (crate::identity::SAME_AS, "observed", Object::Entity { id, .. }) =
+            (c.predicate.as_str(), c.status.as_str(), &c.object)
+        {
+            let (a, b) = (root(&parent, &c.subject.id), root(&parent, id));
+            if a != b {
+                let (low, high) = if a < b { (a, b) } else { (b, a) };
+                parent.insert(high, low);
+            }
+        }
+    }
+    let mut items: Vec<Vec<ClaimSummary>> = vec![];
+    let mut index = BTreeMap::<(String, String, String, String), usize>::new();
+    for summary in claims {
+        let c = &summary.claim;
+        let object = match &c.object {
+            Object::Entity { id, .. } => (String::new(), root(&parent, id)),
+            Object::Literal { value, datatype } => (datatype.clone(), value.clone()),
+        };
+        // A merge is never equivalent to another merge: each `rastro:same_as` stays its own item.
+        let key = if c.predicate == crate::identity::SAME_AS {
+            (
+                c.id.clone(),
+                c.predicate.clone(),
+                String::new(),
+                String::new(),
+            )
+        } else {
+            (
+                root(&parent, &c.subject.id),
+                c.predicate.clone(),
+                object.0,
+                object.1,
+            )
+        };
+        match index.get(&key) {
+            Some(&item) if !parent.is_empty() => items[item].push(summary),
+            _ => {
+                index.insert(key, items.len());
+                items.push(vec![summary]);
+            }
+        }
+    }
+    let truncated = items.len() > limit;
+    items.truncate(limit);
+    let groups = items
+        .iter()
+        .filter(|members| members.len() > 1)
+        .map(|members| {
+            let members: Vec<_> = members
+                .iter()
+                .map(|m| GroupMember {
+                    claim: m.claim.id.clone(),
+                    status: m.claim.status.clone(),
+                    revision: m.claim.revision.clone(),
+                })
+                .collect();
+            let pairs: Vec<_> = members
+                .iter()
+                .map(|m| (m.claim.clone(), m.revision.clone()))
+                .collect();
+            ClaimGroup {
+                status: if members.iter().any(|m| m.status == "observed") {
+                    "observed".into()
+                } else {
+                    "superseded".into()
+                },
+                revision: crate::claims::group_revision(&pairs),
+                members,
+            }
+        })
+        .collect();
     About {
-        claims,
+        claims: items.into_iter().flatten().collect(),
         truncated,
         coverage,
         extraction,
+        groups,
     }
 }
 impl<S: ReadStorage> Reader<S> {
@@ -132,6 +238,16 @@ pub struct JustificationView {
     /// False for a historical justification that no longer supports the current claim.
     pub current: bool,
     pub spans: Vec<Citation>,
+    /// The owner intent behind a justification of kind `owner_intent`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub intent: Option<IntentCitation>,
+}
+/// The owner intent a justification rests on: its id, when it was issued and by whom.
+#[derive(Debug, JsonSchema, Serialize)]
+pub struct IntentCitation {
+    pub id: String,
+    pub issued_at: DateTime<Utc>,
+    pub issuer: crate::identity::IssuerContext,
 }
 #[derive(Debug, JsonSchema, Serialize)]
 pub struct Citation {

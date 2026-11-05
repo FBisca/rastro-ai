@@ -229,6 +229,24 @@ pub fn occurrence_id_with_ordinal(
         ],
     )
 }
+/// The justification an owner intent gives a claim: the hash of the claim id and the intent id.
+pub fn intent_justification_id(claim: &str, intent: &str) -> String {
+    digest(
+        "j_",
+        "rastro/intent-justification/v1",
+        &[(b'C', claim), (b'I', intent)],
+    )
+}
+/// A group of equivalent claims: the hash of its sorted (member id, revision) pairs. Metadata
+/// only, never a claim id (knowledge §35).
+pub fn group_revision(members: &[(String, String)]) -> String {
+    let sorted: BTreeSet<_> = members.iter().collect();
+    let parts: Vec<_> = sorted
+        .iter()
+        .flat_map(|(id, revision)| [(b'C', id.as_str()), (b'R', revision.as_str())])
+        .collect();
+    digest("g_", "rastro/group/v1", &parts)
+}
 /// Checks a submission against what this run delivered, the extractor's declared rules and
 /// its vocabulary. `Err` carries the reason it is rejected.
 pub fn validate(

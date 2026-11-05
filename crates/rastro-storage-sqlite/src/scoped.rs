@@ -2,8 +2,9 @@
 //! The source connection stays in its pinned read transaction throughout the computation.
 //!
 //! Cache invariant: every write to the projection tables publishes a `projection_publication`
-//! row (and new evidence or justifications raise their high-water marks), so a cached replay is
-//! valid exactly while the key (database file, scope set, target, those marks) is unchanged.
+//! row (and new evidence or justifications raise their high-water marks), and every intent write
+//! raises the intent high-water mark, so a cached replay is valid exactly while the key (database
+//! file, scope set, target, those marks) is unchanged.
 //! The work budget counts only justification spans visible to the scope set, never hidden ones,
 //! so an over-budget hidden-only target answers like an unknown one.
 use super::*;
@@ -28,6 +29,8 @@ struct Key {
     publication: i64,
     evidence: i64,
     justification: i64,
+    /// An intent write changes the intent-backed claims without a publication.
+    intent: i64,
 }
 type Shared = Arc<Mutex<Connection>>;
 /// Each entry keeps the visible work it cost, so a hit is held to the caller's budget too.
@@ -51,6 +54,7 @@ fn key(db: &Connection, scopes: &[Scope], target: &Target<'_>) -> Result<Option<
         publication: high("SELECT max(id) FROM projection_publication")?.unwrap_or(0),
         evidence: high("SELECT max(id) FROM evidence")?.unwrap_or(0),
         justification: high("SELECT max(rowid) FROM justification")?.unwrap_or(0),
+        intent: high("SELECT max(append_seq) FROM intent")?.unwrap_or(0),
     }))
 }
 
@@ -84,7 +88,10 @@ pub(super) fn projection(
 /// A justification of `j` whose every required span is visible to the scope set `?2`.
 const VISIBLE_JUSTIFICATION: &str = "EXISTS (SELECT 1 FROM justification_span s WHERE s.justification_id = j.id) AND NOT EXISTS (SELECT 1 FROM justification_span s JOIN evidence e ON e.id = s.evidence_id WHERE s.justification_id = j.id AND e.scope NOT IN (SELECT value FROM json_each(?2)))";
 /// The claim `c` has a justification visible to the scope set `?2`.
-const VISIBLE_CLAIM: &str = "EXISTS (SELECT 1 FROM justification j WHERE j.claim_id = c.id AND EXISTS (SELECT 1 FROM justification_span s WHERE s.justification_id = j.id) AND NOT EXISTS (SELECT 1 FROM justification_span s JOIN evidence e ON e.id = s.evidence_id WHERE s.justification_id = j.id AND e.scope NOT IN (SELECT value FROM json_each(?2))))";
+pub(crate) const VISIBLE_CLAIM: &str = "EXISTS (SELECT 1 FROM justification j WHERE j.claim_id = c.id AND EXISTS (SELECT 1 FROM justification_span s WHERE s.justification_id = j.id) AND NOT EXISTS (SELECT 1 FROM justification_span s JOIN evidence e ON e.id = s.evidence_id WHERE s.justification_id = j.id AND e.scope NOT IN (SELECT value FROM json_each(?2))))";
+/// The claim `c` is backed by an owner intent.
+const INTENT_BACKED: &str =
+    "EXISTS (SELECT 1 FROM intent_justification ij WHERE ij.claim_id = c.id)";
 const OVER_BUDGET: &str = "this read is too large to answer within its work budget";
 
 /// Empties the process-local scoped cache; a benchmark's cold samples start from here.
@@ -135,6 +142,7 @@ fn build(
 ) -> Result<(Connection, usize)> {
     // Replay complete subject/predicate components, including competing claims. One-hop
     // candidates are selected before replay, but status, recency and the limit are not.
+    let scope_set = scopes;
     let scopes = serde_json::to_string(scopes)?;
     let (roots, components, arguments) = match target {
         Target::Entity(entity) => (
@@ -157,11 +165,15 @@ fn build(
         ),
     };
     // Only claims with a visible justification select slots, so hidden claims never pull
-    // visible ones into a replay and their budget.
-    let components = components.replace("{VISIBLE_CLAIM}", VISIBLE_CLAIM);
+    // visible ones into a replay and their budget. An intent-backed claim selects its slot too,
+    // so its endpoints' types and aliases are candidates; whether the intent-backed claim itself
+    // is shown is decided apart (`identity::copy_visible`), and candidates still need a visible
+    // justification.
+    let selecting = format!("({VISIBLE_CLAIM} OR {INTENT_BACKED})");
+    let components = components.replace("{VISIBLE_CLAIM}", &selecting);
     let candidate_sql = format!("WITH roots AS ({roots}), components AS ({components}),
     neighbors AS (
-        SELECT c.id, c.subject, c.object_entity, {VISIBLE_CLAIM} AS seen FROM claim c JOIN components k ON c.subject = k.subject AND c.predicate = k.predicate
+        SELECT c.id, c.subject, c.object_entity, {selecting} AS seen FROM claim c JOIN components k ON c.subject = k.subject AND c.predicate = k.predicate
     ) SELECT id FROM neighbors UNION SELECT id FROM claim WHERE predicate IN ('rastro:type','rastro:alias') AND subject IN (SELECT subject FROM neighbors WHERE seen UNION SELECT object_entity FROM neighbors WHERE seen)");
     let candidates = db
         .prepare(&candidate_sql)?
@@ -211,6 +223,7 @@ fn build(
         "SELECT * FROM claim WHERE id IN (SELECT value FROM json_each(?1))",
         &[claims],
     )?;
+    super::identity::copy_visible(db, &result, scope_set)?;
     let entities = ids(
         &result,
         "SELECT subject FROM claim UNION SELECT object_entity FROM claim WHERE object_entity IS NOT NULL",
