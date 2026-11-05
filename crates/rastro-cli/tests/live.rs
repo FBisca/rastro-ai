@@ -204,17 +204,17 @@ fn item_number(location: &str) -> &str {
     location.rsplit('/').next().unwrap()
 }
 
-/// claims-and-about S30: after `sync --reread` on a real repository, the owner's account has
+/// claims/R37: after `sync --reread` on a real repository, the owner's account has
 /// `code:author` claims on that repository's pull requests and issues, `why` cites the
 /// `/user/id` and `/user/type` observations, and both match what GitHub says. The same claim
 /// read through `rastro mcp --scope` shows only that scope's supports.
 ///
 /// Needs `RASTRO_LIVE_REPO` (owner/name), `RASTRO_LIVE_GITHUB_LOGIN` (an account that authored a
 /// pull request or issue in that repository, usually the owner's) and `gh auth login` or
-/// `GH_TOKEN`; run with `cargo test -p rastro-cli --test live -- --ignored S30`.
+/// `GH_TOKEN`; run with `cargo test -p rastro-cli --test live -- --ignored the_owners_account`.
 #[test]
 #[ignore = "talks to GitHub; set RASTRO_LIVE_REPO and RASTRO_LIVE_GITHUB_LOGIN"]
-fn S30_the_owners_account_claims_and_receipts_match_github() {
+fn the_owners_account_claims_and_receipts_match_github() {
     let config = live_config(
         std::env::var_os("RASTRO_LIVE_REPO"),
         std::env::var_os("RASTRO_LIVE_GITHUB_LOGIN"),

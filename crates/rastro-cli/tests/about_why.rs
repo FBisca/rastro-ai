@@ -145,8 +145,9 @@ fn alias(kind: &str, value: &str) -> Object {
     }
 }
 
+/// claims/R30: about resolves exact forms and returns one hop with aliases
 #[test]
-fn S20_about_resolves_exact_forms_and_returns_one_hop_with_aliases() {
+fn about_resolves_exact_forms_and_returns_one_hop_with_aliases() {
     let env = Env::new();
     let state = env.claim("code:state", literal("open"), time());
     env.claim("rastro:alias", alias("pr", "o/p/1"), time());
@@ -229,8 +230,9 @@ fn S20_about_resolves_exact_forms_and_returns_one_hop_with_aliases() {
     }
 }
 
+/// claims/R32: about filters known time orders limits and includes history
 #[test]
-fn S21_about_filters_known_time_orders_limits_and_includes_history() {
+fn about_filters_known_time_orders_limits_and_includes_history() {
     let env = Env::new();
     let open = env.claim("code:state", literal("open"), time());
     let later = time() + chrono::Duration::days(1);
@@ -330,8 +332,9 @@ fn S21_about_filters_known_time_orders_limits_and_includes_history() {
     );
 }
 
+/// claims/R35: why bounds complete justifications and clips utf8 quotes
 #[test]
-fn S24_why_bounds_complete_justifications_and_clips_utf8_quotes() {
+fn why_bounds_complete_justifications_and_clips_utf8_quotes() {
     let env = Env::new();
     let quote = "é🦀".repeat(100);
     let id = env.claim("code:description", literal(&quote), time());
@@ -464,8 +467,9 @@ fn S24_why_bounds_complete_justifications_and_clips_utf8_quotes() {
     }
 }
 
+/// claims/R33: unknown entity returns empty claims with coverage
 #[test]
-fn S22_unknown_entity_returns_empty_claims_with_coverage() {
+fn unknown_entity_returns_empty_claims_with_coverage() {
     let env = Env::new();
     env.claim("code:state", literal("open"), time());
     let result = env.ok(&["about", "github:account/999"]);
@@ -478,8 +482,9 @@ fn S22_unknown_entity_returns_empty_claims_with_coverage() {
     );
 }
 
+/// claims/R36: unknown claim is an operation error on catalog and cli
 #[test]
-fn S25_unknown_claim_is_an_operation_error_on_catalog_and_cli() {
+fn unknown_claim_is_an_operation_error_on_catalog_and_cli() {
     let env = Env::new();
     let (ok, error) = env.run(&["why", "c_unknown"]);
     assert!(!ok);
@@ -503,8 +508,9 @@ fn S25_unknown_claim_is_an_operation_error_on_catalog_and_cli() {
     );
 }
 
+/// surfaces/R30: claim reads leave rows unchanged and missing database uncreated
 #[test]
-fn S29_claim_reads_leave_rows_unchanged_and_missing_database_uncreated() {
+fn claim_reads_leave_rows_unchanged_and_missing_database_uncreated() {
     let env = Env::new();
     let id = env.claim("code:state", literal("open"), time());
     let database = env.home.path().join("data/rastro.sqlite3");
@@ -555,8 +561,9 @@ fn S29_claim_reads_leave_rows_unchanged_and_missing_database_uncreated() {
     assert!(!database.exists());
 }
 
+/// claims/R34: claim answers include coverage and extraction state for every pair
 #[test]
-fn S23_claim_answers_include_coverage_and_extraction_state_for_every_pair() {
+fn claim_answers_include_coverage_and_extraction_state_for_every_pair() {
     let env = Env::new();
     let id = env.claim("code:state", literal("open"), time());
     env.ok(&[
@@ -633,8 +640,9 @@ fn S23_claim_answers_include_coverage_and_extraction_state_for_every_pair() {
     }
 }
 
+/// claims/R31: about resolves a canonical alias by namespace kind and exact value
 #[test]
-fn S20a_about_resolves_a_canonical_alias_by_namespace_kind_and_exact_value() {
+fn about_resolves_a_canonical_alias_by_namespace_kind_and_exact_value() {
     let env = Env::new();
     let account = "github:account/42";
     env.claim_for(account, "rastro:alias", alias("login", "FBisca"), time());

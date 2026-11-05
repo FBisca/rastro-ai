@@ -73,3 +73,5 @@ Paths: crates/rastro-core/, crates/rastro-storage-sqlite/, crates/rastro-cli/, c
 - **R69** WHEN a source's manifest fails its check, THEN a failed run with "couldn't look: protocol" is recorded and any other source in the same sync still runs. (from cited-search-github/S29)
 - **R70** WHEN the GitHub API base URL override names a host that isn't loopback, THEN the connector sends no request and coverage records "couldn't look: protocol". (from cited-search-github/S30)
 - **R71** WHEN a release build runs with `RASTRO_NOW` or a `RASTRO_HOST_*` override set, THEN it ignores them. (from cited-search-github/S31)
+- **R72** WHEN the GitHub connector reads a PR, issue or comment with an author, THEN it submits `structured` evidence at `/user/id`, `/user/login` and `/user/type` at that item's location; WHEN the author is null, THEN it submits no author evidence. (from claims-and-about/S1)
+- **R73** WHEN `rastro sync <source> --reread` runs, THEN the connector reads from the registered window start: unchanged fields add no evidence, new fields append, coverage is recorded as for any sync, and an item that isn't returned changes nothing. (from claims-and-about/S2)

@@ -123,10 +123,10 @@ fn legacy_user_version_maps_to_the_migrations_it_meant() {
     assert!(format!("{error:#}").contains("user_version 3"), "{error:#}");
 }
 
-/// S3: evidence appended while the clock reads earlier than an extracted observation is still
+/// claims/R1: evidence appended while the clock reads earlier than an extracted observation is still
 /// pending for the extractor: capture times never go backwards within a (source, scope)
 #[test]
-fn S3_evidence_captured_with_an_earlier_clock_is_still_extracted() {
+fn evidence_captured_with_an_earlier_clock_is_still_extracted() {
     use chrono::{DateTime, Utc};
     use rastro_core::{Evidence, TrustClass, claims::Checkpoint};
     let home = tempfile::tempdir().unwrap();
@@ -184,8 +184,9 @@ fn S3_evidence_captured_with_an_earlier_clock_is_still_extracted() {
     assert!(pending[0].1.captured_at >= first.captured_at);
 }
 
+/// claims/R24: projection publication receipts reject updates and deletes
 #[test]
-fn S16b_projection_publication_receipts_reject_updates_and_deletes() {
+fn projection_publication_receipts_reject_updates_and_deletes() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("rastro.sqlite3");
     SqliteStorage::open(&path).unwrap();
@@ -204,8 +205,9 @@ fn S16b_projection_publication_receipts_reject_updates_and_deletes() {
     );
 }
 
+/// claims/R17: entity types are never stored as a column
 #[test]
-fn S13_entity_types_are_never_stored_as_a_column() {
+fn entity_types_are_never_stored_as_a_column() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("rastro.sqlite3");
     SqliteStorage::open(&path).unwrap();
@@ -221,8 +223,9 @@ fn S13_entity_types_are_never_stored_as_a_column() {
     );
 }
 
+/// claims/R29: temp shadow tables match the migrated projection tables
 #[test]
-fn S19_temp_shadow_tables_match_the_migrated_projection_tables() {
+fn temp_shadow_tables_match_the_migrated_projection_tables() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("rastro.sqlite3");
     SqliteStorage::open(&path).unwrap();

@@ -1323,8 +1323,9 @@ impl SqliteStorage {
 mod projection_schema_tests {
     use super::*;
 
+    /// claims/R29: shadow tables match the active projection column shapes
     #[test]
-    fn S19_shadow_tables_match_the_active_projection_column_shapes() {
+    fn shadow_tables_match_the_active_projection_column_shapes() {
         let home = tempfile::tempdir().unwrap();
         let mut storage = SqliteStorage::open(&home.path().join("db")).unwrap();
         storage.begin_claims_rebuild().unwrap();

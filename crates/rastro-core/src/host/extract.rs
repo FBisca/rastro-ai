@@ -382,8 +382,9 @@ fn item((id, e): &(i64, Evidence)) -> BatchItem {
 mod tests {
     use super::*;
     use crate::{Scope, TrustClass};
+    /// claims/R1: checkpoint boundary names one append even when capture order differs
     #[test]
-    fn S3_checkpoint_boundary_names_one_append_even_when_capture_order_differs() {
+    fn checkpoint_boundary_names_one_append_even_when_capture_order_differs() {
         let observation = |captured: &str| Evidence {
             source: "source".into(),
             scope: crate::Scope("personal".into()),
@@ -430,8 +431,9 @@ mod tests {
         )
     }
 
+    /// claims/R21: context is every structured companion field of a changed location
     #[test]
-    fn S15b_context_is_every_structured_companion_field_of_a_changed_location() {
+    fn context_is_every_structured_companion_field_of_a_changed_location() {
         let pending = [seen(9, "l", "/user/login", TrustClass::Structured)];
         let found = vec![
             seen(1, "l", "/user/id", TrustClass::Structured),
@@ -448,8 +450,9 @@ mod tests {
         assert_eq!(kept, [1, 4]);
     }
 
+    /// claims/R21: a location over the context cap fails instead of being trimmed
     #[test]
-    fn S15b_a_location_over_the_context_cap_fails_instead_of_being_trimmed() {
+    fn a_location_over_the_context_cap_fails_instead_of_being_trimmed() {
         let pending = [seen(900, "l", "/state", TrustClass::Structured)];
         let many = |n: usize, at: &str| -> Vec<_> {
             (0..n)

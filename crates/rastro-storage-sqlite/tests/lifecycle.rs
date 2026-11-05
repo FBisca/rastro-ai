@@ -67,8 +67,9 @@ fn store(db: &mut SqliteStorage, e: &Evidence, predicate: &str, value: &str) -> 
         .unwrap();
     result
 }
+/// claims/R12: equal capture recurrence keeps separate ordered occurrences
 #[test]
-fn S9a_equal_capture_recurrence_keeps_separate_ordered_occurrences() {
+fn equal_capture_recurrence_keeps_separate_ordered_occurrences() {
     let home = tempfile::tempdir().unwrap();
     let mut db = SqliteStorage::open(&home.path().join("db")).unwrap();
     let mut opens: Vec<_> = (0..100)
@@ -102,8 +103,9 @@ fn S9a_equal_capture_recurrence_keeps_separate_ordered_occurrences() {
     assert_eq!(why.claim.known_intervals.len(), 1);
     assert_eq!(why.claim.known_intervals[0].end, Some(time()));
 }
+/// claims/R15: one span can justify two conclusions without collision
 #[test]
-fn S11a_one_span_can_justify_two_conclusions_without_collision() {
+fn one_span_can_justify_two_conclusions_without_collision() {
     let home = tempfile::tempdir().unwrap();
     let mut db = SqliteStorage::open(&home.path().join("db")).unwrap();
     let e = evidence("source", "open");
@@ -116,8 +118,9 @@ fn S11a_one_span_can_justify_two_conclusions_without_collision() {
     }
 }
 
+/// claims/R10: fresh databases with other local ids keep revisions and ids
 #[test]
-fn S8a_fresh_databases_with_other_local_ids_keep_revisions_and_ids() {
+fn fresh_databases_with_other_local_ids_keep_revisions_and_ids() {
     let home = tempfile::tempdir().unwrap();
     let mut a = SqliteStorage::open(&home.path().join("a")).unwrap();
     let mut b = SqliteStorage::open(&home.path().join("b")).unwrap();
@@ -155,8 +158,9 @@ fn S8a_fresh_databases_with_other_local_ids_keep_revisions_and_ids() {
     assert_eq!(occurrences("a"), occurrences("b"));
 }
 
+/// claims/R4: all required spans of one evidence are retained as an and bundle
 #[test]
-fn S4b_all_required_spans_of_one_evidence_are_retained_as_an_and_bundle() {
+fn all_required_spans_of_one_evidence_are_retained_as_an_and_bundle() {
     let home = tempfile::tempdir().unwrap();
     let mut db = SqliteStorage::open(&home.path().join("db")).unwrap();
     let e = evidence("source", "open");
@@ -178,8 +182,9 @@ fn S4b_all_required_spans_of_one_evidence_are_retained_as_an_and_bundle() {
     );
 }
 
+/// claims/R1: late append advances boundary even when its portable key sorts before previous
 #[test]
-fn S3_late_append_advances_boundary_even_when_its_portable_key_sorts_before_previous() {
+fn late_append_advances_boundary_even_when_its_portable_key_sorts_before_previous() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("db");
     let mut db = SqliteStorage::open(&path).unwrap();
@@ -212,8 +217,9 @@ fn S3_late_append_advances_boundary_even_when_its_portable_key_sorts_before_prev
     assert_eq!(key, "v_a");
 }
 
+/// claims/R12: same pair recurrence at equal capture stays separate
 #[test]
-fn S9a_same_pair_recurrence_at_equal_capture_stays_separate() {
+fn same_pair_recurrence_at_equal_capture_stays_separate() {
     let home = tempfile::tempdir().unwrap();
     let mut db = SqliteStorage::open(&home.path().join("db")).unwrap();
     let e = evidence("source", "open");
@@ -251,8 +257,9 @@ fn S9a_same_pair_recurrence_at_equal_capture_stays_separate() {
     );
 }
 
+/// claims/R22: vocabulary and run metadata match replay without extractor bump
 #[test]
-fn S16_vocabulary_and_run_metadata_match_replay_without_extractor_bump() {
+fn vocabulary_and_run_metadata_match_replay_without_extractor_bump() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("db");
     let mut db = SqliteStorage::open(&path).unwrap();
@@ -300,8 +307,9 @@ fn S16_vocabulary_and_run_metadata_match_replay_without_extractor_bump() {
     );
 }
 
+/// claims/R16: corroboration keeps the start of the claim union interval
 #[test]
-fn S12_corroboration_keeps_the_start_of_the_claim_union_interval() {
+fn corroboration_keeps_the_start_of_the_claim_union_interval() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("db");
     let mut db = SqliteStorage::open(&path).unwrap();
@@ -321,8 +329,9 @@ fn S12_corroboration_keeps_the_start_of_the_claim_union_interval() {
     assert_eq!(since.parse::<DateTime<Utc>>().unwrap(), first.captured_at);
 }
 
+/// claims/R14: related types do not conflict but unrelated types and replacement do
 #[test]
-fn S11_related_types_do_not_conflict_but_unrelated_types_and_replacement_do() {
+fn related_types_do_not_conflict_but_unrelated_types_and_replacement_do() {
     let home = tempfile::tempdir().unwrap();
     let mut db = SqliteStorage::open(&home.path().join("db")).unwrap();
     let account = store(

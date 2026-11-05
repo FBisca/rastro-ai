@@ -5,6 +5,16 @@ use std::time::{Duration, Instant};
 
 const HUB: &str = "https://example.org/hub";
 
+/// The scope-set cache is process-wide and holds a few entries, so tests that read through it
+/// run one at a time, each starting from an empty cache.
+static CACHE_TESTS: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+fn exclusive_cache() -> std::sync::MutexGuard<'static, ()> {
+    let guard = CACHE_TESTS.lock().unwrap_or_else(|e| e.into_inner());
+    rastro_storage_sqlite::clear_scoped_cache();
+    guard
+}
+
 fn fixture(path: &std::path::Path, total: usize, hub: usize) {
     drop(SqliteStorage::open(path).unwrap());
     let db = rusqlite::Connection::open(path).unwrap();
@@ -68,9 +78,11 @@ fn fixture(path: &std::path::Path, total: usize, hub: usize) {
     );
 }
 
+/// surfaces/R29: scoped about hub cold and warm p95 under 200ms
 #[test]
 #[ignore = "release benchmark: cargo test --release -p rastro-storage-sqlite --test scoped_benchmark -- --ignored --nocapture"]
-fn S28b_scoped_about_hub_cold_and_warm_p95_under_200ms() {
+fn scoped_about_hub_cold_and_warm_p95_under_200ms() {
+    let _serial = exclusive_cache();
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("bench.sqlite3");
     fixture(&path, 100_000, 20_000);
@@ -135,8 +147,10 @@ fn small(dir: &tempfile::TempDir) -> std::path::PathBuf {
     path
 }
 
+/// claims/R33: hidden claims over the work budget answer like an unknown entity
 #[test]
-fn S22_hidden_claims_over_the_work_budget_answer_like_an_unknown_entity() {
+fn hidden_claims_over_the_work_budget_answer_like_an_unknown_entity() {
+    let _serial = exclusive_cache();
     let home = tempfile::tempdir().unwrap();
     let path = small(&home);
     // The hub exists, but only in scopes this read cannot see: the tiny budget must not
@@ -147,8 +161,10 @@ fn S22_hidden_claims_over_the_work_budget_answer_like_an_unknown_entity() {
     assert_eq!(hidden, unknown);
 }
 
+/// surfaces/R29: work budget counts visible spans and fails without counts
 #[test]
-fn S28b_work_budget_counts_visible_spans_and_fails_without_counts() {
+fn work_budget_counts_visible_spans_and_fails_without_counts() {
+    let _serial = exclusive_cache();
     let home = tempfile::tempdir().unwrap();
     let path = small(&home);
     let ok = about(&path, HUB, &["personal"], 10_000).unwrap();
@@ -159,8 +175,10 @@ fn S28b_work_budget_counts_visible_spans_and_fails_without_counts() {
     assert!(!error.contains("unscoped"), "{error}");
 }
 
+/// surfaces/R29: cache follows visible changes and keeps one entry per scope set
 #[test]
-fn S28b_cache_follows_visible_changes_and_keeps_one_entry_per_scope_set() {
+fn cache_follows_visible_changes_and_keeps_one_entry_per_scope_set() {
+    let _serial = exclusive_cache();
     let home = tempfile::tempdir().unwrap();
     let path = small(&home);
     let before = about(&path, HUB, &["personal"], 10_000).unwrap();

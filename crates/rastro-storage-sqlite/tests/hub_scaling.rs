@@ -7,8 +7,9 @@ use std::collections::BTreeSet;
 fn time() -> DateTime<Utc> {
     "2026-11-01T00:00:00Z".parse().unwrap()
 }
+/// claims/R22: incremental record on a hub is near linear and equals the full replay
 #[test]
-fn S16_incremental_record_on_a_hub_is_near_linear_and_equals_the_full_replay() {
+fn incremental_record_on_a_hub_is_near_linear_and_equals_the_full_replay() {
     let n: usize = 4000;
     let scalar = true;
     let home = tempfile::tempdir().unwrap();

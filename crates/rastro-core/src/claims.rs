@@ -479,8 +479,9 @@ pub struct Why {
 mod tests {
     use super::*;
 
+    /// claims/R10: revision ignores local ids and rules
     #[test]
-    fn S8a_revision_ignores_local_ids_and_rules() {
+    fn revision_ignores_local_ids_and_rules() {
         let first = Support {
             portable_key: "portable-span".into(),
             evidence_id: 1,
@@ -498,10 +499,10 @@ mod tests {
         );
     }
 
-    /// The canonical encoding is fixed: these ids (checked against an independent SHA-256 of
+    /// claims/R8: ids are stable across builds. The canonical encoding is fixed: these ids (checked against an independent SHA-256 of
     /// the encoding) must never change within version 1.
     #[test]
-    fn S7_ids_are_stable_across_builds() {
+    fn ids_are_stable_across_builds() {
         let pr = entity_id("https://github.com/o/p/pull/1");
         assert_eq!(pr, "e_e57fd39600ca2d8bb660fe3b66cc4aed");
         let open = Object::Literal {
@@ -564,8 +565,9 @@ mod tests {
         validate(claim, &delivered(), &manifest(), &vocabulary())
     }
 
+    /// claims/R17: a rastro type claim names its subjects own vocabulary type
     #[test]
-    fn S13_a_rastro_type_claim_names_its_subjects_own_vocabulary_type() {
+    fn a_rastro_type_claim_names_its_subjects_own_vocabulary_type() {
         assert!(
             check(submit(
                 TYPE_PREDICATE,
@@ -584,8 +586,9 @@ mod tests {
         }
     }
 
+    /// claims/R17: a rastro alias is a declared kind quoted exactly by its support
     #[test]
-    fn S13_a_rastro_alias_is_a_declared_kind_quoted_exactly_by_its_support() {
+    fn a_rastro_alias_is_a_declared_kind_quoted_exactly_by_its_support() {
         let claim = check(submit(ALIAS_PREDICATE, "x:Account", "octocat", "login")).unwrap();
         assert_eq!(claim.predicate, ALIAS_PREDICATE);
         for wrong in [
@@ -639,8 +642,9 @@ mod tests {
         }
     }
 
+    /// claims/R5: a claim whose endpoint type is not claimed in the submission is rejected
     #[test]
-    fn S4c_a_claim_whose_endpoint_type_is_not_claimed_in_the_submission_is_rejected() {
+    fn a_claim_whose_endpoint_type_is_not_claimed_in_the_submission_is_rejected() {
         let author = about(("i/1", "x:Item"), ("github:account/7", "x:Account"));
         let kinds = [
             typed("i/1", "x:Item"),

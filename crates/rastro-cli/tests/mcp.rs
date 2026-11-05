@@ -271,7 +271,7 @@ fn tool<'a>(tools: &'a [Value], name: &str) -> &'a Value {
 
 /// surfaces/R3: each tool's name, description and input schema equal the catalog entry
 #[test]
-fn S27_listed_tools_equal_the_catalog_entries() {
+fn listed_tools_equal_the_catalog_entries() {
     let env = Env::new();
     let mut session = env.start();
     session.initialize();
@@ -285,9 +285,9 @@ fn S27_listed_tools_equal_the_catalog_entries() {
     }
 }
 
-/// surfaces/R4: exactly search and coverage, read-only; any other tool is a JSON-RPC error and runs nothing
+/// surfaces/R4: exactly search, coverage, about and why, read-only; any other tool is a JSON-RPC error and runs nothing
 #[test]
-fn S27_exactly_four_read_only_tools_and_writes_are_protocol_errors() {
+fn exactly_four_read_only_tools_and_writes_are_protocol_errors() {
     let env = seeded();
     let config = env.home.path().join("config/config.toml");
     let config_before = fs::read(&config).unwrap();
@@ -534,7 +534,7 @@ fn every_stdout_line_is_a_json_rpc_message() {
 
 /// surfaces/R21: an unsupported revision gets the pinned one back, and the session proceeds
 #[test]
-fn S27_an_unsupported_revision_is_answered_with_the_pinned_revision() {
+fn an_unsupported_revision_is_answered_with_the_pinned_revision() {
     let env = seeded();
     for asked in ["2025-06-18", "2024-11-05", "1999-01-01", "2099-01-01"] {
         let mut session = env.start();
@@ -583,7 +583,7 @@ fn closing_stdin_exits_zero_and_diagnostics_stay_on_stderr_within_a_bound() {
 
 /// surfaces/R21: a client that starts with `server/discover` (Claude Code's v2 flow) keeps its session
 #[test]
-fn S27_server_discover_first_does_not_end_the_session_and_initialize_then_works() {
+fn server_discover_first_does_not_end_the_session_and_initialize_then_works() {
     let env = seeded();
     let mut session = env.start();
     let discovered = session.request("server/discover", json!({}));
@@ -1569,8 +1569,9 @@ fn claim_result(session: &mut Session, tool: &str, args: Value) -> Value {
     ok_result(&response["result"])["result"].clone()
 }
 
+/// claims/R33: unknown and hidden only entity have the same empty scoped answer
 #[test]
-fn S22_unknown_and_hidden_only_entity_have_the_same_empty_scoped_answer() {
+fn unknown_and_hidden_only_entity_have_the_same_empty_scoped_answer() {
     let env = Env::new();
     env.claim("work", "code:state", "open", 0);
     let mut session = env.scoped(&["personal"]);
@@ -1584,8 +1585,9 @@ fn S22_unknown_and_hidden_only_entity_have_the_same_empty_scoped_answer() {
     assert_eq!(hidden["claims"], json!([]));
     assert!(hidden["coverage"].is_array());
 }
+/// claims/R36: unknown and hidden only claim are the same scoped operation error
 #[test]
-fn S25_unknown_and_hidden_only_claim_are_the_same_scoped_operation_error() {
+fn unknown_and_hidden_only_claim_are_the_same_scoped_operation_error() {
     let env = Env::new();
     let hidden = env.claim("work", "code:state", "open", 0);
     let mut session = env.scoped(&["personal"]);
@@ -1600,8 +1602,9 @@ fn S25_unknown_and_hidden_only_claim_are_the_same_scoped_operation_error() {
         );
     }
 }
+/// surfaces/R5: about and why cli mcp envelopes are equal
 #[test]
-fn S27_about_and_why_cli_mcp_envelopes_are_equal() {
+fn about_and_why_cli_mcp_envelopes_are_equal() {
     let env = Env::new();
     let id = env.claim("personal", "code:state", "open", 0);
     let mut session = env.start();
@@ -1633,8 +1636,9 @@ fn S27_about_and_why_cli_mcp_envelopes_are_equal() {
         assert_eq!(ok_result(&mcp["result"]), &cli);
     }
 }
+/// surfaces/R27: scoped replay filters metadata and hidden replacements before limit
 #[test]
-fn S28_scoped_replay_filters_metadata_and_hidden_replacements_before_limit() {
+fn scoped_replay_filters_metadata_and_hidden_replacements_before_limit() {
     let env = Env::new();
     let open = env.claim("personal", "code:state", "open", 0);
     env.claim("work", "code:state", "open", 0);
@@ -1692,8 +1696,9 @@ fn S28_scoped_replay_filters_metadata_and_hidden_replacements_before_limit() {
     );
 }
 
+/// claims/R31: scoped about resolves a canonical alias only through visible claims
 #[test]
-fn S20a_scoped_about_resolves_a_canonical_alias_only_through_visible_claims() {
+fn scoped_about_resolves_a_canonical_alias_only_through_visible_claims() {
     let env = Env::new();
     env.claim("personal", "code:state", "open", 0);
     env.claim_typed("personal", "rastro:alias", "ana", "login", 0);
@@ -1738,8 +1743,9 @@ fn portable_answer(mut value: Value) -> Value {
     clean(&mut value);
     value
 }
+/// surfaces/R28: random scope sets equal visible rebuild and ignore hidden inputs
 #[test]
-fn S28a_random_scope_sets_equal_visible_rebuild_and_ignore_hidden_inputs() {
+fn random_scope_sets_equal_visible_rebuild_and_ignore_hidden_inputs() {
     let scopes = ["personal", "work", "health"];
     let mut seed = 0x8325_u64;
     let mut rows = Vec::new();

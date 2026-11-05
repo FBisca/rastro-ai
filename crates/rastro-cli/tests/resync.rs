@@ -190,8 +190,9 @@ fn a_body_changing_and_changing_back_leaves_three_observations() {
     assert!(human.contains("beta body"), "{human}");
 }
 
+/// evidence/R73: reread starts at registration and appends only new fields
 #[test]
-fn S2_reread_starts_at_registration_and_appends_only_new_fields() {
+fn reread_starts_at_registration_and_appends_only_new_fields() {
     let env = Env::new();
     let start = "2026-01-01T00:00:00.000Z";
     env.ok(&[
