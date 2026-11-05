@@ -1153,6 +1153,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "rastro-connector-linear"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "rastro-plugin-sdk",
+ "rusqlite",
+ "serde_json",
+ "tempfile",
+ "tiny_http",
+ "toml",
+ "ureq",
+]
+
+[[package]]
 name = "rastro-core"
 version = "0.1.0"
 dependencies = [
@@ -1169,6 +1184,20 @@ dependencies = [
 
 [[package]]
 name = "rastro-extractor-github"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "chrono",
+ "rastro-plugin-sdk",
+ "rusqlite",
+ "serde_json",
+ "tempfile",
+ "tiny_http",
+ "toml",
+]
+
+[[package]]
+name = "rastro-extractor-linear"
 version = "0.1.0"
 dependencies = [
  "anyhow",
