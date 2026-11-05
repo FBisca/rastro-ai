@@ -462,9 +462,23 @@ fn recompute(
     replay.rollup(db, subject, predicate)
 }
 pub(crate) fn intervals(db: &Connection, id: &str) -> Result<Vec<KnownInterval>> {
-    let rows = db.prepare("SELECT o.captured_at, o.evidence_id, o.end, o.end_evidence_id FROM occurrence o
-        JOIN justification j ON j.id = o.justification_id WHERE j.claim_id = ?1 ORDER BY o.captured_at, o.evidence_id, o.id")?
-        .query_map([id], |r| Ok(((r.get::<_, String>(0)?, r.get::<_, i64>(1)?), r.get::<_, Option<String>>(2)?.zip(r.get::<_, Option<i64>>(3)?))))?
+    // An owner intent holds its claim from the time it was issued, with no end while it stands.
+    let rows = db
+        .prepare(
+            "SELECT captured_at, evidence_id, end, end_evidence_id FROM (
+        SELECT o.captured_at, o.evidence_id, o.end, o.end_evidence_id, o.id FROM occurrence o
+        JOIN justification j ON j.id = o.justification_id WHERE j.claim_id = ?1
+        UNION ALL SELECT i.issued_at, 0, NULL, NULL, ij.id FROM intent_justification ij
+        JOIN intent i ON i.id = ij.intent_id WHERE ij.claim_id = ?1)
+        ORDER BY captured_at, evidence_id, id",
+        )?
+        .query_map([id], |r| {
+            Ok((
+                (r.get::<_, String>(0)?, r.get::<_, i64>(1)?),
+                r.get::<_, Option<String>>(2)?
+                    .zip(r.get::<_, Option<i64>>(3)?),
+            ))
+        })?
         .collect::<Result<Vec<_>, _>>()?;
     // Union on event keys, preserving a gap even if its timestamps are equal.
     let mut intervals: Vec<(Event, Option<Event>)> = Vec::new();
@@ -512,6 +526,7 @@ const TABLES: &[&str] = &[
     "justification_span",
     "occurrence",
     "claim_link",
+    "intent_justification",
     "extraction_checkpoint",
 ];
 pub(crate) fn staging(db: &Connection) -> Result<bool> {
@@ -605,6 +620,10 @@ pub(crate) fn begin_rebuild(db: &Connection) -> Result<()> {
 }
 pub(crate) fn finish_rebuild(db: &mut Connection, publish_projection: bool) -> Result<usize> {
     let transaction = db.transaction()?;
+    // Intents replay after the evidence and every carried-over pair, before publication.
+    if publish_projection {
+        crate::identity::apply(&transaction)?;
+    }
     let count: i64 = transaction.query_row("SELECT count(*) FROM temp.claim", [], |r| r.get(0))?;
     if publish_projection {
         for table in TABLES.iter().rev() {

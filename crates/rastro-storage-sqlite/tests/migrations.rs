@@ -49,7 +49,7 @@ fn stored_evidence_rejects_updates_and_deletes() {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 8);
+        assert_eq!(version, 9);
     }
 }
 
@@ -91,7 +91,7 @@ fn migrations_apply_once_in_timestamp_order_and_unknown_ones_are_refused() {
         .unwrap();
     connection.pragma_update(None, "user_version", 1).unwrap();
     SqliteStorage::open(&legacy).unwrap();
-    assert_eq!(names(&connection).len(), 8);
+    assert_eq!(names(&connection).len(), 9);
 }
 
 /// evidence/R5: legacy user version maps to the migrations it meant
@@ -256,4 +256,65 @@ fn temp_shadow_tables_match_the_migrated_projection_tables() {
         }
     }
     assert!(seen >= 6, "expected the projection tables, saw {seen}");
+}
+
+/// The owner-intent migration adds the insert-only intent table and leaves the projection a
+/// database already holds in place: no claim is lost to the upgrade
+#[test]
+fn the_owner_intent_migration_keeps_the_existing_projection() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("rastro.sqlite3");
+    let before: [(&str, &str); 8] = [
+        (
+            "202611041200_initial",
+            include_str!("../migrations/202611041200_initial.sql"),
+        ),
+        (
+            "202611041500_evidence_insert_guard",
+            include_str!("../migrations/202611041500_evidence_insert_guard.sql"),
+        ),
+        (
+            "202611041700_evidence_full_text_index",
+            include_str!("../migrations/202611041700_evidence_full_text_index.sql"),
+        ),
+        (
+            "202611050900_run_window",
+            include_str!("../migrations/202611050900_run_window.sql"),
+        ),
+        (
+            "202611051100_run_evidence",
+            include_str!("../migrations/202611051100_run_evidence.sql"),
+        ),
+        (
+            "202611051300_coverage_pair_indexes",
+            include_str!("../migrations/202611051300_coverage_pair_indexes.sql"),
+        ),
+        (
+            "202611061000_claims_projection",
+            include_str!("../migrations/202611061000_claims_projection.sql"),
+        ),
+        (
+            "202611061200_knowledge_v2",
+            include_str!("../migrations/202611061200_knowledge_v2.sql"),
+        ),
+    ];
+    drop(SqliteStorage::open_with(&path, &before).unwrap());
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "INSERT INTO entity (id, identifier) VALUES ('e_1', 'github:account/1');
+             INSERT INTO claim (id, subject, predicate, object_value, object_datatype, scalar, status, revision)
+             VALUES ('c_1', 'e_1', 'rastro:alias', 'octocat', 'login', 1, 'observed', 'r_1');",
+        )
+        .unwrap();
+    drop(SqliteStorage::open(&path).unwrap());
+    let count = |sql: &str| -> i64 { connection.query_row(sql, [], |r| r.get(0)).unwrap() };
+    assert_eq!(count("SELECT count(*) FROM claim"), 1);
+    assert_eq!(count("SELECT count(*) FROM entity"), 1);
+    assert_eq!(count("SELECT count(*) FROM intent"), 0);
+    assert_eq!(count("SELECT count(*) FROM intent_justification"), 0);
+    assert_eq!(
+        count("SELECT count(*) FROM sqlite_master WHERE type = 'trigger' AND tbl_name = 'intent'"),
+        3
+    );
 }

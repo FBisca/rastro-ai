@@ -74,7 +74,7 @@ impl View<'_> {
         Ok(Entity::new(identifier, self.displayed_type(id)?))
     }
     fn summary(&self, id: &str) -> Result<Option<ClaimSummary>> {
-        let row = self.0.query_row("SELECT subject, predicate, object_entity, object_value, object_datatype, status, revision, (SELECT count(*) FROM justification WHERE claim_id = c.id AND current = 1) FROM claim c WHERE id = ?1", [id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Option<String>>(3)?, row.get::<_, Option<String>>(4)?, row.get::<_, String>(5)?, row.get::<_, String>(6)?, row.get::<_, i64>(7)?))).optional()?;
+        let row = self.0.query_row("SELECT subject, predicate, object_entity, object_value, object_datatype, status, revision, (SELECT count(*) FROM justification WHERE claim_id = c.id AND current = 1) + (SELECT count(*) FROM intent_justification WHERE claim_id = c.id) FROM claim c WHERE id = ?1", [id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Option<String>>(3)?, row.get::<_, Option<String>>(4)?, row.get::<_, String>(5)?, row.get::<_, String>(6)?, row.get::<_, i64>(7)?))).optional()?;
         let Some((subject, predicate, object_entity, value, datatype, status, revision, count)) =
             row
         else {
@@ -123,14 +123,14 @@ impl View<'_> {
             support_count: count as usize,
         }))
     }
-    pub(super) fn about_claims(
-        &self,
-        entity: &str,
-        options: &AboutOptions,
-    ) -> Result<Vec<ClaimSummary>> {
+    /// The entity id a form names: `me`, an exact id or identifier, else a canonical alias.
+    pub(super) fn resolve(&self, entity: &str) -> Result<Option<String>> {
+        if entity == rastro_core::identity::ME {
+            return super::identity::me(self.0);
+        }
         let exact: Option<String> = self.0.query_row(
             "SELECT id FROM entity WHERE id = ?1 OR identifier = ?1 ORDER BY (id = ?1) DESC LIMIT 1", [entity], |row| row.get(0)).optional()?;
-        let resolved = match exact {
+        Ok(match exact {
             Some(id) => Some(id),
             None => {
                 let candidates = self.0.prepare(&format!("SELECT s.subject, s.identifier, max(s.status IN {CURRENT}) FROM ({ALIAS_CLAIMS}) s WHERE s.status NOT IN {NOT_LOOKED_UP} GROUP BY s.subject ORDER BY s.subject"))?
@@ -150,22 +150,69 @@ impl View<'_> {
                 }
                 candidates.into_iter().next().map(|(id, _, _)| id)
             }
-        };
-        let Some(entity) = resolved else {
+        })
+    }
+    /// The Persons merged with `entity` through any number of observed `rastro:same_as` claims,
+    /// itself included.
+    fn merge_class(&self, entity: &str) -> Result<BTreeSet<String>> {
+        let mut class = BTreeSet::from([entity.to_string()]);
+        let mut pending = vec![entity.to_string()];
+        let mut statement = self.0.prepare_cached(
+            "SELECT subject, object_entity FROM claim WHERE predicate = ?2 AND status = 'observed' \
+             AND (subject = ?1 OR object_entity = ?1)",
+        )?;
+        while let Some(next) = pending.pop() {
+            let pairs = statement
+                .query_map(params![next, rastro_core::identity::SAME_AS], |row| {
+                    Ok([row.get::<_, String>(0)?, row.get::<_, String>(1)?])
+                })?
+                .collect::<Result<Vec<_>, _>>()?;
+            for other in pairs.into_iter().flatten() {
+                if class.insert(other.clone()) {
+                    pending.push(other);
+                }
+            }
+        }
+        Ok(class)
+    }
+    pub(super) fn about_claims(
+        &self,
+        entity: &str,
+        options: &AboutOptions,
+    ) -> Result<Vec<ClaimSummary>> {
+        let Some(entity) = self.resolve(entity)? else {
             return Ok(vec![]);
         };
         let since = options.since.map(crate::stamp);
-        let mut statement = self.0.prepare(
-            "SELECT id FROM claim WHERE (subject = ?1 OR object_entity = ?1) \
-             AND (?2 OR status = 'observed') AND (?3 IS NULL OR known_since >= ?3) \
-             ORDER BY known_since DESC, id LIMIT ?4",
-        )?;
-        let ids = statement
-            .query_map(
-                params![entity, options.history, since, (options.limit + 1) as i64],
-                |row| row.get::<_, String>(0),
-            )?
-            .collect::<Result<Vec<_>, _>>()?;
+        // A merged Person answers for its whole merge class; its equivalent claims are grouped
+        // on read, a group counting once toward the limit, so every claim of the class is read.
+        let class = self.merge_class(&entity)?;
+        let ids = if class.len() == 1 {
+            let mut statement = self.0.prepare(
+                "SELECT id FROM claim WHERE (subject = ?1 OR object_entity = ?1) \
+                 AND (?2 OR status = 'observed') AND (?3 IS NULL OR known_since >= ?3) \
+                 ORDER BY known_since DESC, id LIMIT ?4",
+            )?;
+            statement
+                .query_map(
+                    params![entity, options.history, since, (options.limit + 1) as i64],
+                    |row| row.get::<_, String>(0),
+                )?
+                .collect::<Result<Vec<_>, _>>()?
+        } else {
+            let mut statement = self.0.prepare(
+                "SELECT id FROM claim WHERE (subject IN (SELECT value FROM json_each(?1)) \
+                 OR object_entity IN (SELECT value FROM json_each(?1))) \
+                 AND (?2 OR status = 'observed') AND (?3 IS NULL OR known_since >= ?3) \
+                 ORDER BY known_since DESC, id",
+            )?;
+            statement
+                .query_map(
+                    params![serde_json::to_string(&class)?, options.history, since],
+                    |row| row.get::<_, String>(0),
+                )?
+                .collect::<Result<Vec<_>, _>>()?
+        };
         ids.into_iter()
             .map(|id| {
                 self.summary(&id)?
@@ -194,9 +241,41 @@ impl View<'_> {
                     vocabulary_version: row.get(5)?,
                     current: row.get(6)?,
                     spans: vec![],
+                    intent: None,
                 })
             })?
             .collect::<Result<Vec<_>, _>>()?;
+        // An owner intent's justification: always current while the intent stands.
+        let mut statement = self.0.prepare("SELECT ij.id, i.id, i.kind, i.format_version, i.issued_at, i.issuer_context FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id WHERE ij.claim_id = ?1 ORDER BY ij.id LIMIT ?2")?;
+        let rows = statement
+            .query_map(params![claim.claim.id, (options.limit + 1) as i64], |row| {
+                Ok((
+                    [row.get::<_, String>(0)?, row.get(1)?, row.get(2)?],
+                    row.get::<_, i64>(3)?,
+                    [row.get::<_, String>(4)?, row.get(5)?],
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        for ([id, intent, kind], version, [issued_at, issuer]) in rows {
+            supports.push(JustificationView {
+                justification_id: id,
+                justification_kind: rastro_core::identity::OWNER_INTENT.into(),
+                extractor: rastro_core::identity::OWNER.into(),
+                extractor_version: version.to_string(),
+                extraction_rule: kind,
+                vocabulary_version: String::new(),
+                current: true,
+                spans: vec![],
+                intent: Some(rastro_core::knowledge::IntentCitation {
+                    id: intent,
+                    issued_at: parse_time(issued_at)?,
+                    issuer: serde_json::from_str(&issuer)?,
+                }),
+            });
+        }
+        supports.sort_by(|a, b| {
+            (!a.current, &a.justification_id).cmp(&(!b.current, &b.justification_id))
+        });
         let truncated = supports.len() > options.limit;
         supports.truncate(options.limit);
         for support in &mut supports {

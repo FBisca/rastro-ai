@@ -1,6 +1,7 @@
 //! Result types: what each operation returns, serialised into the envelope's `result`.
 pub use crate::catalog::Response;
 use crate::envelope;
+use rastro_core::identity::{IntentView, Issued};
 use rastro_core::runs::{ExtractionState, RunReport};
 use rastro_core::{Coverage, Source, search::SearchResult};
 use schemars::JsonSchema;
@@ -67,11 +68,74 @@ impl Response {
 
 pub type AboutResult = rastro_core::knowledge::About;
 
+/// A Person, by its entity id and canonical identifier.
+#[derive(Debug, JsonSchema, Serialize)]
+pub struct PersonRef {
+    pub id: String,
+    pub identifier: String,
+}
+/// What `identity me` and `identity person create` did.
+#[derive(Debug, JsonSchema, Serialize)]
+pub struct IdentityPersonResult {
+    pub person: PersonRef,
+    /// False when the Person already existed and nothing was recorded.
+    pub created: bool,
+    /// The intents accepted, in acceptance order.
+    pub intents: Vec<IntentView>,
+}
+impl IdentityPersonResult {
+    pub(crate) fn of(issued: Issued) -> anyhow::Result<Self> {
+        let person = issued
+            .person
+            .ok_or_else(|| anyhow::anyhow!("an identity write named no Person"))?;
+        Ok(Self {
+            person: PersonRef {
+                id: person.id,
+                identifier: person.identifier,
+            },
+            created: issued.created,
+            intents: views(&issued.intents),
+        })
+    }
+}
+/// The intents an identity write accepted, in acceptance order; none when it was already in force.
+#[derive(Debug, JsonSchema, Serialize)]
+pub struct IdentityWriteResult {
+    pub intents: Vec<IntentView>,
+}
+impl IdentityWriteResult {
+    pub(crate) fn of(issued: Issued) -> Self {
+        Self {
+            intents: views(&issued.intents),
+        }
+    }
+}
+/// Freshly accepted intents stand as written.
+fn views(intents: &[rastro_core::identity::Intent]) -> Vec<IntentView> {
+    let resolution = rastro_core::identity::Resolution::of(intents);
+    intents
+        .iter()
+        .map(|i| IntentView::of(i, &resolution))
+        .collect()
+}
+pub type IdentityHistoryResult = rastro_core::identity::History;
+
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::catalog::CATALOG;
     use rastro_core::{Scope, Source};
+
+    fn person() -> IdentityPersonResult {
+        IdentityPersonResult {
+            person: PersonRef {
+                id: "e_1".into(),
+                identifier: "rastro:person/1".into(),
+            },
+            created: true,
+            intents: vec![],
+        }
+    }
 
     /// surfaces/R2: a request, its response and the catalog give an operation the same name
     #[test]
@@ -127,6 +191,16 @@ mod tests {
                 truncated: false,
                 coverage: vec![],
                 extraction: vec![],
+                groups: vec![],
+            }),
+            Response::IdentityMe(person()),
+            Response::IdentityPersonCreate(person()),
+            Response::IdentityLink(IdentityWriteResult { intents: vec![] }),
+            Response::IdentityMerge(IdentityWriteResult { intents: vec![] }),
+            Response::IdentityUndo(IdentityWriteResult { intents: vec![] }),
+            Response::IdentityHistory(IdentityHistoryResult {
+                entity: None,
+                intents: vec![],
             }),
         ];
         let arguments = |name: &str| match name {
@@ -136,8 +210,14 @@ mod tests {
             "search" => serde_json::json!({"text": "x"}),
             "why" => serde_json::json!({"claim": "c"}),
             "about" => serde_json::json!({"entity": "github:account/1"}),
+            "identity.person.create" => serde_json::json!({"name": "Ana"}),
+            "identity.link" => serde_json::json!({"account": "github:login/a", "person": "me"}),
+            "identity.merge" => serde_json::json!({"person": "me", "other": "rastro:name/Ana"}),
+            "identity.undo" => serde_json::json!({"intent": "i_1"}),
+            "identity.history" => serde_json::json!({"entity": "me"}),
             _ => serde_json::json!({}),
         };
+        assert_eq!(CATALOG.len(), responses.len());
         for (spec, response) in CATALOG.iter().zip(&responses) {
             assert_eq!(response.operation(), spec.name);
             let request = spec.decode(arguments(spec.name)).unwrap();

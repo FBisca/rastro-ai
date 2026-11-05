@@ -92,6 +92,15 @@ pub trait Snapshot {
         anyhow::bail!("storage does not support about")
     }
 
+    /// The accepted owner intents, in acceptance order.
+    fn intents(&self) -> Result<Vec<crate::identity::Intent>> {
+        anyhow::bail!("storage does not support owner intents")
+    }
+    /// The entity (id, canonical identifier) a form names, resolved unscoped as `about` resolves
+    /// it: an exact id or identifier, else a canonical alias. An ambiguous alias is an error.
+    fn resolve_entity(&self, _form: &str) -> Result<Option<(String, String)>> {
+        anyhow::bail!("storage does not support entity resolution")
+    }
     /// What storage recorded for the source, before the freshness rule is applied.
     fn coverage(&self, pair: &Pair, all_windows: bool) -> Result<Coverage>;
     /// Allowed (source, scope) pairs storage holds anything for, with stored freshness rules.
