@@ -8,11 +8,16 @@
 //! # What it records
 //! Each field is one observation at a location that is the record's canonical identifier, so a
 //! changed title or team never moves it:
-//! - a user at `linear:user/<id>`: `/id`, `/name`, `/displayName`, `/email`, `/active`;
+//! - a user at `linear:user/<id>`: `/id`, `/app`, `/name`, `/displayName`, `/email`, `/active`;
 //! - an issue at `linear:issue/<id>`: `/id`, `/identifier`, `/url`, `/title`, `/description`,
-//!   `/state/name`, `/state/type`, `/creator/id`, `/assignee/id`, `/team/id`, `/team/key`,
-//!   `/team/name`, `/createdAt`. Title, description and URL (whose slug is made from the
-//!   title) are untrusted content, the rest structured;
+//!   `/state/name`, `/state/type`, `/creator/app`, `/creator/id`, `/assignee/app`,
+//!   `/assignee/id`, `/team/id`, `/team/key`, `/team/name`, `/createdAt`. Title, description
+//!   and URL (whose slug is made from the title) are untrusted content, the rest structured;
+//! - `app` is Linear's flag for an app (integration) user, `true` or `false`. An issue's
+//!   creator or assignee flag is recorded just before its id, so a reader going in order never
+//!   pairs a new actor's id with the previous actor's flag. The field is `User.app` of Linear's
+//!   public schema (`app: Boolean!`). Whether `users(includeDisabled: true)` lists app users is
+//!   not checked against the live API: the tests run against a scripted one;
 //! - whose API key it is, at `linear:viewer`: `/id`. One slot, so a key of another user
 //!   replaces it.
 //!
@@ -38,14 +43,15 @@ const DEFAULT_API: &str = "https://api.linear.app";
 
 const VIEWER: &str = "query Viewer { viewer { id } }";
 const USERS: &str = "query Users($after: String) { users(first: 100, after: $after, \
-    includeDisabled: true) { nodes { id name displayName email active updatedAt } \
+    includeDisabled: true) { nodes { id name displayName email active app updatedAt } \
     pageInfo { hasNextPage endCursor } } }";
 const ISSUES: &str = "query Issues($after: String, $from: DateTimeOrDuration!, \
     $to: DateTimeOrDuration!) { issues(first: 100, after: $after, orderBy: updatedAt, \
     filter: { updatedAt: { gte: $from, lt: $to }, or: [{ creator: { isMe: { eq: true } } }, \
     { assignee: { isMe: { eq: true } } }, { subscribers: { some: { isMe: { eq: true } } } }] }) \
     { nodes { id identifier title description url createdAt updatedAt state { name type } \
-    creator { id } assignee { id } team { id key name } } pageInfo { hasNextPage endCursor } } }";
+    creator { id app } assignee { id app } team { id key name } } \
+    pageInfo { hasNextPage endCursor } } }";
 
 const STRUCTURED: &str = "structured";
 const UNTRUSTED: &str = "untrusted content";
@@ -151,6 +157,12 @@ fn sync<R: BufRead, W: Write>(
 fn text<'a>(node: &'a Value, pointer: &str) -> Option<&'a str> {
     node.pointer(pointer).and_then(Value::as_str)
 }
+/// A boolean field as `true` or `false`, or `None` when it is missing, null or not a boolean.
+fn flag(node: &Value, pointer: &str) -> Option<String> {
+    node.pointer(pointer)
+        .and_then(Value::as_bool)
+        .map(|b| b.to_string())
+}
 
 impl<R: BufRead, W: Write> Run<'_, R, W> {
     fn read_all(&mut self, from: &str, to: &str) -> Result<(), Failure> {
@@ -208,9 +220,11 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
             updated: text(user, "/updatedAt"),
             original: user,
         };
-        let active = user["active"].as_bool().map(|a| a.to_string());
+        let active = flag(user, "/active");
+        let app = flag(user, "/app");
         for (field, value) in [
             ("/id", Some(id)),
+            ("/app", app.as_deref()),
             ("/name", text(user, "/name")),
             ("/displayName", text(user, "/displayName")),
             ("/email", text(user, "/email")),
@@ -238,6 +252,13 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
             updated: Some(updated),
             original: issue,
         };
+        let creator_app = flag(issue, "/creator/app");
+        let assignee_app = flag(issue, "/assignee/app");
+        let value = |field: &str| match field {
+            "/creator/app" => creator_app.as_deref(),
+            "/assignee/app" => assignee_app.as_deref(),
+            _ => text(issue, field),
+        };
         for (field, trust_class) in [
             ("/id", STRUCTURED),
             ("/identifier", STRUCTURED),
@@ -247,14 +268,17 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
             ("/description", UNTRUSTED),
             ("/state/name", STRUCTURED),
             ("/state/type", STRUCTURED),
+            // Each actor's flag just before its id (see the module docs).
+            ("/creator/app", STRUCTURED),
             ("/creator/id", STRUCTURED),
+            ("/assignee/app", STRUCTURED),
             ("/assignee/id", STRUCTURED),
             ("/team/id", STRUCTURED),
             ("/team/key", STRUCTURED),
             ("/team/name", STRUCTURED),
             ("/createdAt", STRUCTURED),
         ] {
-            self.submit(&record, field, text(issue, field), trust_class)?;
+            self.submit(&record, field, value(field), trust_class)?;
         }
         Ok(())
     }

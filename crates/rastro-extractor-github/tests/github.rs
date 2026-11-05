@@ -454,3 +454,54 @@ fn a_rename_across_many_labelled_pull_requests_projects_like_a_rebuild() {
         "a rebuild differs from the incremental one"
     );
 }
+
+/// S35: WHEN the owner links a pull request, a repository or a bot the GitHub extractor typed,
+/// THEN the link is refused with an operation error naming the reason and nothing is stored,
+/// while the `code:Account` that wrote them links as before. The `code` vocabulary declares
+/// `code:Account`, and no other type, an account
+#[test]
+fn S35_a_pull_request_repository_or_bot_is_never_held_but_a_code_account_is() {
+    let vocabulary =
+        rastro_plugin_sdk::Vocabulary::parse(include_str!("../vocabulary.toml")).unwrap();
+    for t in &vocabulary.types {
+        let account = vocabulary
+            .ancestors(&t.id)
+            .contains(&rastro_plugin_sdk::ACCOUNT_TYPE.to_string());
+        assert_eq!(account, t.id == "code:Account", "{}", t.id);
+    }
+    let fixture = Fixture::start(world("Add cache", "adds a cache"));
+    let env = Env::new(&fixture.base);
+    assert_eq!(env.sync(&[])["state"], "current");
+    env.json(&["identity", "me"]);
+    for (entity, entity_type) in [
+        (PR, "code:PullRequest"),
+        (REPO, "code:Repository"),
+        (HELPER, "code:Bot"),
+    ] {
+        let out = env.run(&["identity", "link", entity, "me", "--json"]);
+        assert!(!out.status.success(), "{entity}");
+        let refused: Value = serde_json::from_slice(&out.stdout).unwrap();
+        let error = refused["error"].as_str().unwrap_or_default();
+        assert!(
+            error.contains(&format!("is a {entity_type}"))
+                && error.contains("only an account is held by a Person"),
+            "{entity}: {refused}"
+        );
+    }
+    assert_eq!(env.column("SELECT count(*) FROM intent"), ["1"]);
+    env.json(&["identity", "link", OCTOCAT, "me"]);
+    assert_eq!(
+        env.column(
+            "SELECT count(*) FROM claim c JOIN entity e ON e.id = c.subject
+             WHERE c.predicate = 'rastro:held_by'"
+        ),
+        ["1"]
+    );
+    assert_eq!(
+        env.column(&format!(
+            "SELECT e.identifier FROM claim c JOIN entity e ON e.id = c.subject
+             WHERE c.predicate = 'rastro:held_by' AND e.identifier = '{OCTOCAT}'"
+        )),
+        [OCTOCAT]
+    );
+}

@@ -769,6 +769,46 @@ impl Resolution {
         persons
     }
 }
+/// The core's supertype of every account; a vocabulary declares which of its types are accounts
+/// by naming it as their `supertype` (decisions/vocabulary.md §27).
+pub const ACCOUNT_TYPE: &str = rastro_plugin_sdk::ACCOUNT_TYPE;
+
+/// One current type of an entity, as the account rule judges it: its value, the supertypes its
+/// claim carries, and whether the issuer can see a claim giving it.
+#[derive(Clone, Debug)]
+pub struct SeenType {
+    pub value: String,
+    pub ancestors: Vec<String>,
+    pub visible: bool,
+}
+/// Refuses holding an entity that isn't typed as an account: the account side of a link has a
+/// current type, and each of its current types is an account (has `rastro:Account` among its
+/// supertypes). An entity two sources type differently, an account and something else, is not
+/// held while they disagree. Judged on every current type, but a refusal names only types the
+/// issuer can see. Storage runs it when a link intent is issued; a replay keeps links already
+/// accepted. Automatic links are to use the same rule.
+pub fn admit_account(identifier: &str, types: &[SeenType]) -> Result<()> {
+    const ONLY: &str = "only an account is held by a Person";
+    const HINT: &str = "if its vocabulary changed since it was read, run `rastro sync` or \
+        `rastro rebuild` first";
+    ensure!(!types.is_empty(), "{identifier} has no type; {ONLY}");
+    let others: Vec<&SeenType> = types
+        .iter()
+        .filter(|t| !t.ancestors.iter().any(|a| a == ACCOUNT_TYPE))
+        .collect();
+    if others.is_empty() {
+        return Ok(());
+    }
+    if others.iter().any(|t| !t.visible) {
+        bail!("{identifier} is not typed as an account; {ONLY} ({HINT})");
+    }
+    let named: BTreeSet<&str> = others.iter().map(|t| t.value.as_str()).collect();
+    bail!(
+        "{identifier} is a {}, which no vocabulary declares an account; {ONLY} ({HINT})",
+        named.into_iter().collect::<Vec<_>>().join(" and a ")
+    )
+}
+
 /// A stretch of a Person's name: (Person id, name, intent id, (start, end)).
 type NameStretch = (
     String,
@@ -1281,6 +1321,78 @@ mod tests {
                     .check()
                     .is_err()
             );
+        }
+    }
+
+    /// S35: only an entity whose current types are all accounts may be held; an untyped one, a
+    /// pull request, a repository or a bot may not, and the refusal names why
+    #[test]
+    fn S35_only_an_entity_typed_as_an_account_may_be_held() {
+        let typed = |types: &[(&str, &[&str], bool)]| -> Vec<SeenType> {
+            types
+                .iter()
+                .map(|(t, up, visible)| SeenType {
+                    value: t.to_string(),
+                    ancestors: up.iter().map(|u| u.to_string()).collect(),
+                    visible: *visible,
+                })
+                .collect()
+        };
+        for ok in [
+            typed(&[("code:Account", &[ACCOUNT_TYPE], true)]),
+            typed(&[("tracker:Account", &[ACCOUNT_TYPE], false)]),
+            typed(&[("x:Admin", &["x:Account", ACCOUNT_TYPE], true)]),
+        ] {
+            assert!(admit_account("e", &ok).is_ok(), "{ok:?}");
+        }
+        for (types, reason) in [
+            (typed(&[]), "has no type"),
+            (
+                typed(&[("code:PullRequest", &[], true)]),
+                "is a code:PullRequest",
+            ),
+            (
+                typed(&[("code:Repository", &[], true)]),
+                "is a code:Repository",
+            ),
+            (typed(&[("tracker:Bot", &[], true)]), "is a tracker:Bot"),
+            // An account another source calls a bot is not held while they disagree.
+            (
+                typed(&[
+                    ("code:Account", &[ACCOUNT_TYPE], true),
+                    ("code:Bot", &[], true),
+                ]),
+                "is a code:Bot",
+            ),
+            // A type the issuer can't see is never named.
+            (
+                typed(&[
+                    ("code:Account", &[ACCOUNT_TYPE], true),
+                    ("code:Bot", &[], false),
+                ]),
+                "is not typed as an account",
+            ),
+        ] {
+            let error = admit_account("https://github.com/o/p/pull/1", &types)
+                .unwrap_err()
+                .to_string();
+            assert!(error.contains(reason), "{error}");
+            assert!(
+                error.contains("only an account is held by a Person"),
+                "{error}"
+            );
+            assert!(error.contains("https://github.com/o/p/pull/1"), "{error}");
+            assert!(
+                !error.contains("code:Bot") || reason.contains("code:Bot"),
+                "{error}"
+            );
+            // An account read before its vocabulary declared it one gets a way out.
+            if reason != "has no type" {
+                assert!(
+                    error.contains("rastro sync") && error.contains("rastro rebuild"),
+                    "{error}"
+                );
+            }
         }
     }
 

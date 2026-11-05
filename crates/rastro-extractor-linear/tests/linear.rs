@@ -190,6 +190,8 @@ fn S20_users_and_involved_issues_become_tracker_entities_and_search_cites_issue_
     assert_eq!(
         cited(&env, &issue_id(CRASH), "tracker:creator", &account(ANA)),
         [
+            // Linear's flag that the creator is no app (S38) is cited too.
+            cite(&issue_id(CRASH), "/creator/app", "false", "creator"),
             cite(&issue_id(CRASH), "/creator/id", ANA, "creator"),
             cite(&issue_id(CRASH), "/id", CRASH, "creator"),
         ]
@@ -334,4 +336,53 @@ fn S21_a_deactivated_user_shows_it_and_keeps_its_link_and_claims_across_a_resync
         "false",
         "observed"
     )));
+}
+
+/// S38: WHEN a Linear sync reads an app (integration) user, THEN it is typed `tracker:Bot`,
+/// never `tracker:Account` (neither from its user record nor from an issue it created), and a
+/// link to it is refused with an operation error, while a workspace member still links
+#[test]
+fn S38_an_app_user_syncs_as_a_bot_and_a_link_to_it_is_refused() {
+    const APP: &str = "0b5a8c1e-0000-4000-8000-000000000009";
+    let mut world = world();
+    world.users.push(app_user(APP, "GitHub"));
+    world.issues[1]["creator"] = json!({"id": APP, "app": true});
+    let fixture = Fixture::start(world);
+    let env = env(&fixture.base);
+    let run = env.sync(&[]);
+    assert_eq!(run["extraction"]["state"], "current", "{run}");
+    assert_eq!(run["extraction"]["counts"]["rejected"], 0, "{run}");
+    let app = account(APP);
+    let types = env.column(&format!(
+        "SELECT c.object_value FROM claim c JOIN entity e ON e.id = c.subject
+         WHERE e.identifier = '{app}' AND c.predicate = 'rastro:type'"
+    ));
+    assert_eq!(types, ["tracker:Bot"]);
+    let claims = about(&env, &app, false);
+    assert!(
+        claims.contains(&claim("rastro:alias", "GitHub", "observed")),
+        "{claims:?}"
+    );
+    assert!(about(&env, &issue_id(DOCS), false).contains(&claim(
+        "tracker:creator",
+        &app,
+        "observed"
+    )));
+
+    env.json(&["identity", "me"]);
+    let out = env.run(&["identity", "link", &app, "me", "--json"]);
+    assert!(!out.status.success());
+    let refused: serde_json::Value = serde_json::from_slice(&out.stdout).unwrap();
+    let error = refused["error"].as_str().unwrap_or_default();
+    assert!(
+        error.contains("is a tracker:Bot") && error.contains("only an account is held by a Person"),
+        "{refused}"
+    );
+    assert_eq!(env.column("SELECT count(*) FROM intent"), ["1"]);
+    env.json(&["identity", "link", &account(ANA), "me"]);
+    assert!(
+        about(&env, &account(ANA), false)
+            .iter()
+            .any(|c| c.0 == "rastro:held_by")
+    );
 }

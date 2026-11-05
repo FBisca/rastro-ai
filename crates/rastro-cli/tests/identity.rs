@@ -126,13 +126,21 @@ impl Env {
             .rev()
             .find(|(_, item)| item.location == location && item.field == field)
             .unwrap();
+        // `code:Account` and `tracker:Account` are accounts (S35): their type claims carry the
+        // core's supertype, as their vocabularies declare.
+        let account = matches!(&object, Object::Literal { value, .. }
+            if predicate == claims::TYPE_PREDICATE && value.ends_with(":Account"));
         let observed = ObservedClaim {
             id: claims::claim_id(&subject.id, predicate, &object),
             subject: subject.clone(),
             predicate: predicate.into(),
             object,
             scalar: true,
-            type_ancestors: Vec::new(),
+            type_ancestors: if account {
+                vec![rastro_core::identity::ACCOUNT_TYPE.into()]
+            } else {
+                Vec::new()
+            },
             supports: BTreeSet::from([Support {
                 portable_key: claims::portable_evidence_key(&e),
                 evidence_id,

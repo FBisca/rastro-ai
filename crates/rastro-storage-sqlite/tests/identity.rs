@@ -4,8 +4,8 @@
 use chrono::{DateTime, Utc};
 use rastro_core::claims::{self, Entity, Object, ObservedClaim, Support};
 use rastro_core::identity::{
-    EntityTarget, FORMAT_VERSION, Intent, IntentKind, IssuerContext, OWNER, Payload, SHAPE_VERSION,
-    Targets,
+    ACCOUNT_TYPE, EntityTarget, FORMAT_VERSION, Intent, IntentKind, IssuerContext, OWNER, Payload,
+    SHAPE_VERSION, Targets,
 };
 use rastro_core::knowledge::AboutOptions;
 use rastro_core::{Evidence, Scope, Source, Storage, TrustClass};
@@ -18,12 +18,23 @@ fn time() -> DateTime<Utc> {
 }
 /// An account `github:account/<n>` typed `code:Account`, observed in `scope` only.
 fn account(db: &mut SqliteStorage, n: u32, scope: &str) -> EntityTarget {
+    let identifier = format!("github:account/{n}");
+    typed(db, &identifier, "code:Account", &[ACCOUNT_TYPE], scope)
+}
+/// An entity typed `entity_type`, with these supertypes, observed in `scope` only.
+fn typed(
+    db: &mut SqliteStorage,
+    identifier: &str,
+    entity_type: &str,
+    ancestors: &[&str],
+    scope: &str,
+) -> EntityTarget {
     let source = Source::github(format!("s-{scope}"), "o/p".into(), Scope(scope.into()));
     db.project_sources(std::slice::from_ref(&source)).unwrap();
     let run = db
         .start_run(&source, ("fixture", "1"), time(), (time(), time()))
         .unwrap();
-    let location = format!("https://api.github.com/users/{n}");
+    let location = identifier.to_string();
     let e = Evidence {
         source: source.name.clone(),
         scope: source.scope.clone(),
@@ -45,10 +56,9 @@ fn account(db: &mut SqliteStorage, n: u32, scope: &str) -> EntityTarget {
         .rev()
         .find(|(_, item)| item.location == location)
         .unwrap();
-    let identifier = format!("github:account/{n}");
-    let subject = Entity::new(identifier.clone(), "code:Account".into());
+    let subject = Entity::new(identifier.into(), entity_type.into());
     let object = Object::Literal {
-        value: "code:Account".into(),
+        value: entity_type.into(),
         datatype: claims::TYPE_DATATYPE.into(),
     };
     db.record_claims(
@@ -60,7 +70,7 @@ fn account(db: &mut SqliteStorage, n: u32, scope: &str) -> EntityTarget {
             predicate: claims::TYPE_PREDICATE.into(),
             object,
             scalar: true,
-            type_ancestors: vec![],
+            type_ancestors: ancestors.iter().map(|a| a.to_string()).collect(),
             supports: BTreeSet::from([Support {
                 portable_key: claims::portable_evidence_key(&e),
                 evidence_id,
@@ -74,8 +84,8 @@ fn account(db: &mut SqliteStorage, n: u32, scope: &str) -> EntityTarget {
     )
     .unwrap();
     EntityTarget {
-        id: claims::entity_id(&identifier),
-        identifier,
+        id: claims::entity_id(identifier),
+        identifier: identifier.into(),
         role: "account".into(),
     }
 }
@@ -188,6 +198,102 @@ fn S9_an_intent_whose_issuer_cannot_see_its_target_is_refused() {
     undo.undo_of = Some("i_3".into());
     assert!(issue(&mut db, vec![undo]).is_err());
     assert_eq!(count(&path), 3);
+}
+
+/// S35: a link whose account side no vocabulary declares an account (a pull request, a
+/// repository, a bot, an untyped entity) is refused at the storage seam with an error naming the
+/// reason, and nothing is stored; an account of any vocabulary links as before
+#[test]
+fn S35_a_link_whose_account_side_isnt_typed_as_an_account_is_refused() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("db");
+    let mut db = SqliteStorage::open(&path).unwrap();
+    let ana = person(1);
+    issue(&mut db, vec![create("i_1", &ana)]).unwrap();
+    let pull = typed(
+        &mut db,
+        "https://github.com/o/p/pull/1",
+        "code:PullRequest",
+        &[],
+        "personal",
+    );
+    let repository = typed(
+        &mut db,
+        "https://github.com/o/p",
+        "code:Repository",
+        &[],
+        "personal",
+    );
+    let bot = typed(&mut db, "github:account/9", "code:Bot", &[], "personal");
+    for (target, reason) in [
+        (&pull, "is a code:PullRequest"),
+        (&repository, "is a code:Repository"),
+        (&bot, "is a code:Bot"),
+    ] {
+        let error = issue(&mut db, vec![link("i_2", target, &ana, &[])])
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains(reason), "{error}");
+        assert!(
+            error.contains("only an account is held by a Person"),
+            "{error}"
+        );
+    }
+    // An entity with no current type (here, one the projection never saw) is no account.
+    let unknown = EntityTarget {
+        id: claims::entity_id("github:account/404"),
+        identifier: "github:account/404".into(),
+        role: "account".into(),
+    };
+    let error = issue(&mut db, vec![link("i_2", &unknown, &ana, &[])]).unwrap_err();
+    assert!(error.to_string().contains("has no type"), "{error}");
+    assert_eq!(count(&path), 1);
+    // Accounts of both vocabularies link as before.
+    let github = account(&mut db, 1, "personal");
+    let linear = typed(
+        &mut db,
+        "linear:user/0b5a8c1e-0000-4000-8000-000000000002",
+        "tracker:Account",
+        &[ACCOUNT_TYPE],
+        "work",
+    );
+    issue(&mut db, vec![link("i_2", &github, &ana, &[])]).unwrap();
+    issue(&mut db, vec![link("i_3", &linear, &ana, &[])]).unwrap();
+    assert_eq!(count(&path), 3);
+}
+
+/// S35: a refusal never names a type the issuer can't see: an account another scope types a
+/// bot is refused for a scoped issuer without naming the bot, and for an unscoped one by name
+#[test]
+fn S35_a_refusal_never_names_a_type_from_a_scope_the_issuer_cannot_see() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("db");
+    let mut db = SqliteStorage::open(&path).unwrap();
+    let me = person(1);
+    let mut minted = create("i_1", &me);
+    minted.domain_key = rastro_core::identity::ME_DOMAIN.into();
+    issue(&mut db, vec![minted]).unwrap();
+    let shared = typed(
+        &mut db,
+        "github:account/9",
+        "code:Account",
+        &[ACCOUNT_TYPE],
+        "personal",
+    );
+    typed(&mut db, "github:account/9", "code:Bot", &[], "work");
+    let error = issue(&mut db, vec![link("i_2", &shared, &me, &["personal"])])
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("only an account is held by a Person"),
+        "{error}"
+    );
+    assert!(!error.contains("code:Bot"), "{error}");
+    let error = issue(&mut db, vec![link("i_2", &shared, &me, &[])])
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("is a code:Bot"), "{error}");
+    assert_eq!(count(&path), 1);
 }
 
 /// S11: an intent written after a scoped read was cached shows in the next scoped read

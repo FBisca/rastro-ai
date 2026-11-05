@@ -481,6 +481,19 @@ impl<S: Storage> Rastro<S> {
             "source already exists: {}",
             source.name
         );
+        if host::single_source(&self.locations, &source.connector)
+            && let Some(existing) = self
+                .config
+                .sources
+                .iter()
+                .find(|s| s.connector == source.connector)
+        {
+            anyhow::bail!(
+                "connector {} takes a single source, and source {} already uses it",
+                source.connector,
+                existing.name
+            );
+        }
         self.config.sources.push(source.clone());
         if let Err(error) = self.config.save(&self.locations) {
             self.config.sources.pop();

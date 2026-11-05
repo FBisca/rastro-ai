@@ -1,11 +1,17 @@
 //! Owner intents in storage (ADR 0010): the insert-only `intent` table, the intent-backed claims
 //! it gives the projection, and the issuer's visibility check. What an intent means is decided by
 //! `rastro_core::identity`; this module stores and replays it.
+use crate::knowledge::CURRENT;
+use crate::scoped::VISIBLE_CLAIM;
 use crate::{parse_time, stamp};
 use anyhow::{Context, Result, ensure};
 use rastro_core::Scope;
-use rastro_core::claims::{Object, intent_justification_id_with_ordinal, revision_with_links};
-use rastro_core::identity::{HELD_BY, Intent, IntentKind, Resolution, SAME_AS};
+use rastro_core::claims::{
+    Object, TYPE_PREDICATE, intent_justification_id_with_ordinal, revision_with_links,
+};
+use rastro_core::identity::{
+    HELD_BY, Intent, IntentKind, Resolution, SAME_AS, SeenType, admit_account,
+};
 use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -119,6 +125,13 @@ pub(crate) fn insert_all(
                 intent.kind.as_str()
             );
         }
+        // Only an account is held by a Person; its types are in the projection. Checked after
+        // visibility, so an issuer never learns the type of what it can't see.
+        if intent.kind == IntentKind::Link
+            && let Some(account) = intent.targets.entities().first()
+        {
+            admit_account(&account.identifier, &types(db, &account.id, sees)?)?;
+        }
         db.execute(
             "INSERT INTO main.intent (id, format_version, kind, owner_id, issuer_context, issued_at,
              domain_key, targets_json, payload_json, undo_of, supersedes)
@@ -142,6 +155,40 @@ pub(crate) fn insert_all(
         stored.push(intent);
     }
     Ok(stored)
+}
+
+/// The entity's current `rastro:type` values in the projection the connection reads, each with
+/// the supertypes its claim carries and whether a scope set (empty: every scope) sees a claim
+/// giving it: what `identity::admit_account` judges whether it is an account by.
+pub(crate) fn types(db: &Connection, id: &str, scopes: &[Scope]) -> Result<Vec<SeenType>> {
+    let mut statement = db.prepare_cached(&format!(
+        "SELECT object_value, type_ancestors, ?3 OR {VISIBLE_CLAIM} FROM claim c
+         WHERE subject = ?1 AND predicate = '{TYPE_PREDICATE}' AND status IN {CURRENT}
+         AND object_value IS NOT NULL"
+    ))?;
+    let every = scopes.is_empty();
+    let scopes = serde_json::to_string(scopes)?;
+    let rows = statement.query_map(params![id, scopes, every], |r| {
+        Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get(2)?))
+    })?;
+    let mut found: Vec<SeenType> = Vec::new();
+    for row in rows {
+        let (value, ancestors, visible) = row?;
+        let ancestors: Vec<String> = serde_json::from_str(&ancestors)?;
+        // One value may be claimed in several scopes: it is seen if any of its claims is.
+        match found
+            .iter_mut()
+            .find(|t| t.value == value && t.ancestors == ancestors)
+        {
+            Some(seen) => seen.visible |= visible,
+            None => found.push(SeenType {
+                value,
+                ancestors,
+                visible,
+            }),
+        }
+    }
+    Ok(found)
 }
 
 /// Recomputes every intent-backed claim of the projection the connection writes (the active one,

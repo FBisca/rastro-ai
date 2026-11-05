@@ -21,7 +21,7 @@ pub(super) const ALIAS_CLAIMS: &str = "SELECT c.id AS claim, c.subject, e.identi
 /// Lookup counts every status except these; a superseded alias is the historical candidate.
 const NOT_LOOKED_UP: &str = "('hypothesis', 'retracted')";
 /// Statuses that mark a candidate (and an alias shown on a claim) as current.
-const CURRENT: &str = "('observed', 'confirmed')";
+pub(crate) const CURRENT: &str = "('observed', 'confirmed')";
 impl View<'_> {
     fn aliases(&self, entity: &str) -> Result<Vec<String>> {
         Ok(self.0.prepare(&format!("SELECT DISTINCT object_value FROM claim WHERE subject = ?1 AND predicate = 'rastro:alias' AND status IN {CURRENT} ORDER BY object_value"))?

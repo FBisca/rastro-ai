@@ -615,6 +615,23 @@ fn S36_the_intent_end_migration_replays_existing_intents() {
     // The full chain ends where a fresh database given the same intents does.
     let fresh = home.path().join("fresh.sqlite3");
     let mut storage = SqliteStorage::open(&fresh).unwrap();
+    // Fresh intent admission requires the account types that predate these legacy intents.
+    let fresh_db = Connection::open(&fresh).unwrap();
+    for n in [7, 8] {
+        let identifier = format!("github:account/{n}");
+        let id = entity_id(&identifier);
+        fresh_db
+            .execute(
+                "INSERT INTO entity (id, identifier) VALUES (?1, ?2)",
+                [&id, &identifier],
+            )
+            .unwrap();
+        fresh_db.execute(
+            "INSERT INTO claim (id, subject, predicate, object_value, object_datatype, scalar, status, revision, type_ancestors) VALUES (?1, ?2, 'rastro:type', 'code:Account', 'rastro:type', 1, 'observed', 'fixture', '[\"rastro:Account\"]')",
+            [format!("account_type_{n}"), id],
+        ).unwrap();
+    }
+    drop(fresh_db);
     storage
         .issue_intents(&[], |_| Ok((upgrade_intents(), ())))
         .unwrap();

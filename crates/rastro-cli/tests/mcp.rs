@@ -1567,7 +1567,14 @@ impl Env {
                 predicate: predicate.into(),
                 object,
                 scalar,
-                type_ancestors: Vec::new(),
+                // Declared account types (S35) carry the core's supertype in their type claims.
+                type_ancestors: if predicate == claims::TYPE_PREDICATE
+                    && matches!(value, "code:Account" | "tracker:Account")
+                {
+                    vec![rastro_core::identity::ACCOUNT_TYPE.into()]
+                } else {
+                    Vec::new()
+                },
                 supports: std::collections::BTreeSet::from([Support {
                     evidence_id,
                     portable_key: claims::portable_evidence_key(&evidence),
