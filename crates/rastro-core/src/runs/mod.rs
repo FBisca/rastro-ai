@@ -110,8 +110,8 @@ pub struct ExtractionReport {
     pub started: bool,
 }
 
-/// One (source, scope) pair of a claims rebuild: how its extractor ended, and, for a pair whose
-/// extractor never started, the stored output that was carried over in its place.
+/// One (source, scope) pair of a claims rebuild: how its extractor ended. A pair that is not
+/// `current` never started, and its stored output was carried over.
 #[derive(Debug, JsonSchema, Serialize)]
 pub struct RebuildPair {
     pub source: String,
@@ -122,11 +122,8 @@ pub struct RebuildPair {
     pub state: ExtractionState,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
-    /// Claim counts of the run. For a carried-over pair, `unchanged` is the justifications
-    /// carried over.
+    /// Claim counts of the pair's run, as the run log records them.
     pub counts: Counts,
-    /// The pair's stored output was carried over because its extractor never started.
-    pub carried_over: bool,
 }
 
 /// A finished claims rebuild.
@@ -212,10 +209,8 @@ impl<S: Storage> Rastro<S> {
         let replay = (|| -> Result<()> {
             for (source, extractor) in &sources {
                 let report = host::extract(&mut self.storage, &self.locations, source, extractor)?;
-                let carried_over = !report.started && report.state != ExtractionState::Current;
-                let mut counts = report.counts;
-                if carried_over {
-                    counts.unchanged += self.storage.carry_over_pair(source, extractor)? as u64;
+                if !report.started && report.state != ExtractionState::Current {
+                    self.storage.carry_over_pair(source, extractor)?;
                 } else {
                     anyhow::ensure!(
                         report.state == ExtractionState::Current,
@@ -232,8 +227,7 @@ impl<S: Storage> Rastro<S> {
                     extractor_version: report.extractor_version,
                     state: report.state,
                     reason: report.reason,
-                    counts,
-                    carried_over,
+                    counts: report.counts,
                 });
             }
             Ok(())

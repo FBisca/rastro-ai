@@ -13,7 +13,26 @@ fn generated_schema_equals_the_committed_file() {
     );
 }
 
-/// surfaces/R1: about and why are additive v2 and existing schemas are unchanged
+/// The sorted names of an object schema's properties.
+fn property_names(schema: &serde_json::Value) -> Vec<&str> {
+    // An optional object is a union of the object and null.
+    let object = ["anyOf", "oneOf"]
+        .iter()
+        .find_map(|key| schema[key].as_array())
+        .and_then(|variants| variants.iter().find(|v| v.get("properties").is_some()))
+        .unwrap_or(schema);
+    let mut names: Vec<_> = object["properties"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    names.sort();
+    names
+}
+
+/// S13: about and why are additive v2, `sync.extraction` and `claims.rebuild.pairs` are recorded
+/// additions, and existing schemas are unchanged
 #[test]
 fn about_and_why_are_additive_v2_and_existing_schemas_are_unchanged() {
     use serde_json::{Value, json};
@@ -51,22 +70,59 @@ fn about_and_why_are_additive_v2_and_existing_schemas_are_unchanged() {
     for old in baseline.as_array().unwrap() {
         let new = ops.iter().find(|op| op["name"] == old["name"]).unwrap();
         let mut new = expand(new, &generated["$defs"]);
-        // Additive v2 changes recorded in docs/decisions/surfaces.md: `sync` results carry an
-        // optional `extraction` (already part of the baseline) and `claims.rebuild` results
-        // carry `pairs`. Anything else that differs is a breaking change.
-        if old["name"] == "claims.rebuild" {
-            let result = new["result"].as_object_mut().unwrap();
-            assert!(
-                result["properties"]
+        // Additive v2 changes recorded in docs/decisions/surfaces.md, each with the fields it
+        // may carry: anything else that differs, or any other field, is a breaking change.
+        match old["name"].as_str().unwrap() {
+            "sync" => {
+                let run = &mut new["result"]["properties"]["runs"]["items"];
+                let extraction = run["properties"]
                     .as_object_mut()
                     .unwrap()
-                    .remove("pairs")
-                    .is_some()
-            );
-            result["required"]
-                .as_array_mut()
-                .unwrap()
-                .retain(|name| name != "pairs");
+                    .remove("extraction");
+                assert_eq!(
+                    property_names(&extraction.unwrap()),
+                    [
+                        "counts",
+                        "evidence",
+                        "extractor",
+                        "extractor_version",
+                        "reason",
+                        "run_id",
+                        "state"
+                    ]
+                );
+                assert!(
+                    !run["required"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&json!("extraction"))
+                );
+            }
+            "claims.rebuild" => {
+                let result = new["result"].as_object_mut().unwrap();
+                let pairs = result["properties"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("pairs");
+                assert_eq!(
+                    property_names(&pairs.unwrap()["items"]),
+                    [
+                        "counts",
+                        "extractor",
+                        "extractor_version",
+                        "reason",
+                        "run_id",
+                        "scope",
+                        "source",
+                        "state"
+                    ]
+                );
+                result["required"]
+                    .as_array_mut()
+                    .unwrap()
+                    .retain(|name| name != "pairs");
+            }
+            _ => {}
         }
         assert_eq!(new, old.clone());
     }

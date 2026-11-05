@@ -526,47 +526,58 @@ pub(crate) fn carry_over(
     extractor: &str,
 ) -> Result<usize> {
     anyhow::ensure!(staging(db)?, "no claims rebuild is staged");
-    const PAIR: &str = "SELECT j.id FROM main.justification j WHERE j.extractor = ?3 AND EXISTS (
-        SELECT 1 FROM main.justification_span s JOIN main.evidence e ON e.id = s.evidence_id
-        WHERE s.justification_id = j.id AND e.source = ?1 AND e.scope = ?2)";
-    const CLAIMS: &str = "SELECT claim_id FROM main.justification WHERE id IN (PAIR)";
-    let sql = |text: &str| text.replace("CLAIMS", CLAIMS).replace("PAIR", PAIR);
-    let with = params![source, scope, extractor];
-    db.execute(
-        &sql("INSERT OR IGNORE INTO temp.entity (id, identifier)
-            SELECT id, identifier FROM main.entity WHERE id IN
-            (SELECT subject FROM main.claim WHERE id IN (CLAIMS)
-             UNION SELECT object_entity FROM main.claim WHERE id IN (CLAIMS) AND object_entity IS NOT NULL)"),
-        with,
+    // The pair's justifications, found once; everything else is driven from them.
+    db.execute_batch(
+        "CREATE TEMP TABLE IF NOT EXISTS carry_ids (id TEXT PRIMARY KEY); DELETE FROM temp.carry_ids",
     )?;
-    db.execute(
-        &sql("INSERT OR IGNORE INTO temp.claim SELECT * FROM main.claim WHERE id IN (CLAIMS)"),
-        with,
-    )?;
-    let carried = db.execute(
-        &sql("INSERT OR IGNORE INTO temp.justification SELECT * FROM main.justification WHERE id IN (PAIR)"),
-        with,
-    )?;
-    db.execute(
-        &sql(
-            "INSERT OR IGNORE INTO temp.justification_span SELECT * FROM main.justification_span
-            WHERE justification_id IN (PAIR)",
-        ),
-        with,
-    )?;
-    db.execute(
-        "INSERT OR IGNORE INTO temp.extraction_checkpoint SELECT * FROM main.extraction_checkpoint
-         WHERE source = ?1 AND scope = ?2 AND extractor = ?3",
-        with,
-    )?;
-    let touched: BTreeSet<Component> = db
-        .prepare(&sql(
-            "SELECT DISTINCT subject, predicate FROM temp.claim WHERE id IN (CLAIMS)",
-        ))?
-        .query_map(with, |r| Ok((r.get(0)?, r.get(1)?)))?
-        .collect::<Result<_, _>>()?;
-    refresh(db, &touched)?;
-    Ok(carried)
+    let result = (|| -> Result<usize> {
+        let with = params![source, scope, extractor];
+        db.execute(
+            "INSERT INTO temp.carry_ids SELECT j.id FROM main.justification j WHERE j.extractor = ?3 AND EXISTS (
+                SELECT 1 FROM main.justification_span s JOIN main.evidence e ON e.id = s.evidence_id
+                WHERE s.justification_id = j.id AND e.source = ?1 AND e.scope = ?2)",
+            with,
+        )?;
+        const CLAIMS: &str =
+            "SELECT j.claim_id FROM main.justification j JOIN temp.carry_ids c ON c.id = j.id";
+        db.execute(
+            &format!("INSERT OR IGNORE INTO temp.entity (id, identifier)
+                SELECT id, identifier FROM main.entity WHERE id IN
+                (SELECT subject FROM main.claim WHERE id IN ({CLAIMS})
+                 UNION SELECT object_entity FROM main.claim WHERE id IN ({CLAIMS}) AND object_entity IS NOT NULL)"),
+            [],
+        )?;
+        db.execute(
+            &format!(
+                "INSERT OR IGNORE INTO temp.claim SELECT * FROM main.claim WHERE id IN ({CLAIMS})"
+            ),
+            [],
+        )?;
+        let carried = db.execute(
+            "INSERT OR IGNORE INTO temp.justification SELECT j.* FROM main.justification j JOIN temp.carry_ids c ON c.id = j.id",
+            [],
+        )?;
+        db.execute(
+            "INSERT OR IGNORE INTO temp.justification_span SELECT s.* FROM main.justification_span s
+             JOIN temp.carry_ids c ON c.id = s.justification_id",
+            [],
+        )?;
+        db.execute(
+            "INSERT OR IGNORE INTO temp.extraction_checkpoint SELECT * FROM main.extraction_checkpoint
+             WHERE source = ?1 AND scope = ?2 AND extractor = ?3",
+            with,
+        )?;
+        let touched: BTreeSet<Component> = db
+            .prepare(&format!(
+                "SELECT DISTINCT subject, predicate FROM temp.claim WHERE id IN ({CLAIMS})"
+            ))?
+            .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        refresh(db, &touched)?;
+        Ok(carried)
+    })();
+    db.execute_batch("DROP TABLE IF EXISTS temp.carry_ids")?;
+    result
 }
 pub(crate) fn begin_rebuild(db: &Connection) -> Result<()> {
     db.execute_batch(include_str!("projection_temp.sql"))?;

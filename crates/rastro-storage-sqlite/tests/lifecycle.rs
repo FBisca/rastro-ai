@@ -409,33 +409,91 @@ fn related_types_do_not_conflict_but_unrelated_types_and_replacement_do() {
     assert!(old.claim.claim.superseded_by.contains(&bot));
 }
 
-/// claims/R22: a claim justified by a carried-over pair and a rebuilt pair equals the incremental one
+/// S12: a claim justified by a carried-over pair and a rebuilt pair equals the incremental one,
+/// whichever is staged first, and the carried pair keeps its checkpoint
 #[test]
 fn S12_a_claim_justified_by_a_carried_pair_and_a_rebuilt_pair_equals_the_incremental_one() {
-    let home = tempfile::tempdir().unwrap();
-    let mut db = SqliteStorage::open(&home.path().join("db")).unwrap();
-    let carried = evidence("carried", "open");
-    let rebuilt = evidence("rebuilt", "open");
-    let closed = evidence("carried", "closed");
-    let open = store(&mut db, &carried, "code:state", "open");
-    store(&mut db, &closed, "code:state", "closed");
-    store(&mut db, &rebuilt, "code:state", "open");
-    let incremental = serde_json::to_value(explained(&db, &open)).unwrap();
-    assert_eq!(incremental["supports"].as_array().unwrap().len(), 2);
-    db.begin_claims_rebuild().unwrap();
-    let source = Source::github("rebuilt".into(), "o/p".into(), Scope("work".into()));
-    let pending = db.pending_evidence(("extractor", "1"), &source).unwrap();
-    let claims: Vec<_> = pending
-        .iter()
-        .map(|(id, e)| accepted(*id, e, "code:state", &e.quote))
-        .collect();
-    db.record_claims(1, ("extractor", "1"), &claims, None)
-        .unwrap();
-    let carried = Source::github("carried".into(), "o/p".into(), Scope("work".into()));
-    assert_eq!(db.carry_over_pair(&carried, "extractor").unwrap(), 2);
-    db.finish_claims_rebuild(true).unwrap();
-    assert_eq!(
-        incremental,
-        serde_json::to_value(explained(&db, &open)).unwrap()
-    );
+    for carry_first in [true, false] {
+        let home = tempfile::tempdir().unwrap();
+        let path = home.path().join("db");
+        let mut db = SqliteStorage::open(&path).unwrap();
+        let carried_evidence = evidence("carried", "open");
+        let rebuilt_evidence = evidence("rebuilt", "open");
+        let open = store(&mut db, &carried_evidence, "code:state", "open");
+        store(
+            &mut db,
+            &evidence("carried", "closed"),
+            "code:state",
+            "closed",
+        );
+        store(&mut db, &rebuilt_evidence, "code:state", "open");
+        let carried = Source::github("carried".into(), "o/p".into(), Scope("work".into()));
+        let rebuilt = Source::github("rebuilt".into(), "o/p".into(), Scope("work".into()));
+        let checkpoint = |source: &Source, e: &Evidence| {
+            let pending = db.pending_evidence(("extractor", "1"), source).unwrap();
+            claims::Checkpoint {
+                extractor: "extractor".into(),
+                extractor_version: "1".into(),
+                source: source.name.clone(),
+                scope: source.scope.clone(),
+                last: (time(), pending.iter().map(|(id, _)| *id).max().unwrap()),
+                last_portable_key: claims::portable_evidence_key(e),
+                // The vocabulary the stored justifications were recorded under, so none retires.
+                vocabulary_version: String::new(),
+            }
+        };
+        let carried_checkpoint = checkpoint(&carried, &carried_evidence);
+        let rebuilt_checkpoint = checkpoint(&rebuilt, &rebuilt_evidence);
+        let run = db
+            .start_extraction(&carried, ("extractor", "1"), time())
+            .unwrap();
+        db.record_claims(run, ("extractor", "1"), &[], Some(&carried_checkpoint))
+            .unwrap();
+        let incremental = serde_json::to_value(explained(&db, &open)).unwrap();
+        assert_eq!(incremental["supports"].as_array().unwrap().len(), 2);
+        let checkpoints = || -> Vec<String> {
+            let connection = rusqlite::Connection::open(&path).unwrap();
+            let mut statement = connection
+                .prepare("SELECT source || last_evidence_id FROM extraction_checkpoint ORDER BY 1")
+                .unwrap();
+            statement
+                .query_map([], |r| r.get(0))
+                .unwrap()
+                .map(Result::unwrap)
+                .collect()
+        };
+        let carried_before = checkpoints();
+        db.begin_claims_rebuild().unwrap();
+        let rebuild = |db: &mut SqliteStorage| {
+            let run = db
+                .start_extraction(&rebuilt, ("extractor", "1"), time())
+                .unwrap();
+            let pending = db.pending_evidence(("extractor", "1"), &rebuilt).unwrap();
+            let claims: Vec<_> = pending
+                .iter()
+                .map(|(id, e)| accepted(*id, e, "code:state", &e.quote))
+                .collect();
+            db.record_claims(run, ("extractor", "1"), &claims, Some(&rebuilt_checkpoint))
+                .unwrap();
+        };
+        if carry_first {
+            assert_eq!(db.carry_over_pair(&carried, "extractor").unwrap(), 2);
+            rebuild(&mut db);
+        } else {
+            rebuild(&mut db);
+            assert_eq!(db.carry_over_pair(&carried, "extractor").unwrap(), 2);
+        }
+        db.finish_claims_rebuild(true).unwrap();
+        assert_eq!(
+            incremental,
+            serde_json::to_value(explained(&db, &open)).unwrap(),
+            "carry first: {carry_first}"
+        );
+        assert!(
+            checkpoints()
+                .iter()
+                .any(|c| carried_before.contains(c) && c.starts_with("carried")),
+            "the carried pair keeps its checkpoint"
+        );
+    }
 }

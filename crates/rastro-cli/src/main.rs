@@ -3,7 +3,7 @@ use chrono::{DateTime, SecondsFormat, Utc};
 use clap::Parser;
 use rastro_core::{
     Coverage, CoverageWindow, Locations, MAX_SEARCH_LIMIT, Rastro, display_escaped, display_safe,
-    runs::RunReport,
+    runs::{ExtractionState, RunReport},
 };
 use rastro_operations::{
     Request, Response, catalog, envelope,
@@ -284,20 +284,19 @@ fn human(response: &Response) -> String {
         Response::Sync(r) => or_none(r.runs.iter().map(sync_line).collect()),
         Response::ClaimsRebuild(r) => {
             let mut text = format!("Claims rebuilt: {} claims", r.claims);
-            for pair in r.pairs.iter().filter(|p| p.carried_over) {
+            // A pair that is not current never started; its stored output was carried over.
+            for pair in r.pairs.iter().filter(|p| p.state != ExtractionState::Current) {
                 text += &format!(
-                    "\n  Carried over: {} | {} | Extractor: {} {} | {}{} | {} justifications kept",
+                    "\n  Carried over: {} | {} | Extractor: {} {} | {}",
                     pair.source,
                     pair.scope,
                     display_safe(&pair.extractor),
                     pair.extractor_version,
                     pair.state.as_str(),
-                    pair.reason
-                        .as_deref()
-                        .map(|r| format!(" ({})", display_safe(r)))
-                        .unwrap_or_default(),
-                    pair.counts.unchanged
                 );
+                if let Some(reason) = pair.reason.as_deref().filter(|r| *r != pair.state.as_str()) {
+                    text += &format!(" | Reason: {}", display_safe(reason));
+                }
             }
             text
         }

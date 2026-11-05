@@ -630,15 +630,11 @@
     },
     "RebuildPair": {
       "additionalProperties": false,
-      "description": "One (source, scope) pair of a claims rebuild: how its extractor ended, and, for a pair whose\nextractor never started, the stored output that was carried over in its place.",
+      "description": "One (source, scope) pair of a claims rebuild: how its extractor ended. A pair that is not\n`current` never started, and its stored output was carried over.",
       "properties": {
-        "carried_over": {
-          "description": "The pair's stored output was carried over because its extractor never started.",
-          "type": "boolean"
-        },
         "counts": {
           "$ref": "#/$defs/Counts",
-          "description": "Claim counts of the run. For a carried-over pair, `unchanged` is the justifications\ncarried over."
+          "description": "Claim counts of the pair's run, as the run log records them."
         },
         "extractor": {
           "type": "string"
@@ -670,8 +666,7 @@
         "extractor",
         "extractor_version",
         "state",
-        "counts",
-        "carried_over"
+        "counts"
       ],
       "type": "object"
     },

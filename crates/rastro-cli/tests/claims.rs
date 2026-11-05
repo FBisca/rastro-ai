@@ -1209,8 +1209,8 @@ fn sync_and_rebuild_publish_receipts_and_fresh_statistics() {
     );
 }
 
-/// claims/R22: rebuild carries over missing extractors and forbidden historical pairs; the
-/// forbidden one fails the command
+/// S10: rebuild carries over missing extractors and forbidden historical pairs; the forbidden
+/// one fails the command
 #[test]
 fn rebuild_carries_over_missing_extractors_and_forbidden_historical_pairs() {
     let env = Env::new(Some("test-extractor"));
@@ -1232,7 +1232,7 @@ fn rebuild_carries_over_missing_extractors_and_forbidden_historical_pairs() {
     assert!(!rebuilt.status.success());
     let rebuilt: Value = serde_json::from_slice(&rebuilt.stdout).unwrap();
     assert_eq!(
-        pair(&rebuilt["result"], "historical")["reason"],
+        pair_in(&rebuilt["result"], "historical", "forbidden")["reason"],
         "forbidden"
     );
     assert_eq!(
@@ -1637,6 +1637,11 @@ fn a_vocabulary_version_bump_alone_reads_behind_until_the_replay_succeeds() {
 /// A second installed extractor, bound by the `other` connector, so a pair can lose its
 /// extractor while another stays.
 fn two_extractors() -> Env {
+    two_extractors_with("c")
+}
+/// The same, naming the source of the second extractor, so a test can put it before or after
+/// the rebuilt one in replay order.
+fn two_extractors_with(second: &str) -> Env {
     let env = Env::new(Some("test-extractor"));
     env.connector("other", Some("test-extractor-2"));
     let dir = env.plugin_dir("test-extractor-2");
@@ -1653,11 +1658,11 @@ fn two_extractors() -> Env {
     )
     .unwrap();
     env.add_source("a", "test");
-    env.add_source("c", "other");
+    env.add_source(second, "other");
     // `a` and `c` both justify OPEN; `c` alone justifies the closed claim.
     sync_state(&env, "a", "open");
-    sync_state(&env, "c", "open");
-    sync_state(&env, "c", "closed");
+    sync_state(&env, second, "open");
+    sync_state(&env, second, "closed");
     env
 }
 /// Every projection row that rebuild must reproduce, as the database holds them.
@@ -1693,34 +1698,42 @@ fn projection_rows(env: &Env) -> Vec<String> {
     rows
 }
 fn pair<'a>(result: &'a Value, source: &str) -> &'a Value {
+    pair_in(result, source, "personal")
+}
+fn pair_in<'a>(result: &'a Value, source: &str, scope: &str) -> &'a Value {
     result["pairs"]
         .as_array()
         .unwrap_or_else(|| panic!("no pairs: {result}"))
         .iter()
-        .find(|p| p["source"] == source)
+        .find(|p| p["source"] == source && p["scope"] == scope)
         .unwrap_or_else(|| panic!("no pair {source}: {result}"))
 }
 
-/// claims/R22: a pair whose extractor is not installed is carried over, the rest is rebuilt
+/// S9: a pair whose extractor is not installed is carried over, the rest is rebuilt, whichever
+/// of them replays first
 #[test]
 fn S9_a_pair_whose_extractor_is_not_installed_is_carried_over() {
-    let env = two_extractors();
-    let before = projection_rows(&env);
-    fs::remove_dir_all(env.plugin_dir("test-extractor-2")).unwrap();
-    // Exit 0: `env.json` asserts it.
-    let result = env.json(&["claims", "rebuild"]);
-    assert_eq!(pair(&result, "c")["state"], "not_installed", "{result}");
-    assert_eq!(pair(&result, "a")["state"], "current", "{result}");
-    assert_eq!(result["claims"], 3, "{result}");
-    assert_eq!(before, projection_rows(&env));
-    let human = env.ok(&["claims", "rebuild"]);
-    assert!(
-        human.contains("c") && human.contains("not_installed"),
-        "{human}"
-    );
+    for carried in ["c", "0c"] {
+        let env = two_extractors_with(carried);
+        let before = projection_rows(&env);
+        fs::remove_dir_all(env.plugin_dir("test-extractor-2")).unwrap();
+        // Exit 0: `env.json` asserts it.
+        let result = env.json(&["claims", "rebuild"]);
+        assert_eq!(pair(&result, carried)["state"], "not_installed", "{result}");
+        assert_eq!(pair(&result, "a")["state"], "current", "{result}");
+        assert_eq!(result["claims"], 3, "{result}");
+        assert_eq!(before, projection_rows(&env), "{carried}");
+        let human = env.ok(&["claims", "rebuild"]);
+        let lines: Vec<_> = human
+            .lines()
+            .filter(|l| l.contains("Carried over"))
+            .collect();
+        assert_eq!(lines.len(), 1, "{human}");
+        assert!(lines[0].contains(carried) && lines[0].contains("not_installed"));
+    }
 }
 
-/// claims/R22: a pair that fails its check or is forbidden is carried over and fails the command
+/// S10: a pair that fails its check or is forbidden is carried over and fails the command
 #[test]
 fn S10_a_failing_check_or_forbidden_scope_is_carried_over_and_exits_non_zero() {
     for reason in ["protocol", "forbidden"] {
@@ -1747,37 +1760,44 @@ fn S10_a_failing_check_or_forbidden_scope_is_carried_over_and_exits_non_zero() {
     }
 }
 
-/// claims/R29: an extractor that starts and then fails aborts the rebuild and keeps the projection
+/// S11: an extractor that starts and then fails aborts the rebuild and keeps the projection,
+/// also when a carried pair was staged before it
 #[test]
 fn S11_an_extractor_that_starts_and_fails_aborts_the_rebuild() {
-    let env = two_extractors();
-    let before = projection_rows(&env);
-    extractor_crashes(&env);
-    let output = env.rastro(&["claims", "rebuild", "--json"]);
-    assert!(!output.status.success());
-    assert_eq!(before, projection_rows(&env));
-    assert_eq!(env.json(&["why", OPEN])["claim"]["status"], "observed");
+    for carried in ["c", "0c"] {
+        let env = two_extractors_with(carried);
+        let before = projection_rows(&env);
+        fs::remove_dir_all(env.plugin_dir("test-extractor-2")).unwrap();
+        extractor_crashes(&env);
+        let output = env.rastro(&["claims", "rebuild", "--json"]);
+        assert!(!output.status.success());
+        assert_eq!(before, projection_rows(&env), "{carried}");
+        assert_eq!(env.json(&["why", OPEN])["claim"]["status"], "observed");
+    }
 }
 
-/// claims/R22: a claim justified by a carried pair and a rebuilt pair equals the incremental one
+/// S12: a claim justified by a carried pair and a rebuilt pair equals the incremental one,
+/// whichever of them replays first
 #[test]
 fn S12_a_claim_shared_by_a_carried_and_a_rebuilt_pair_equals_the_incremental_one() {
-    let env = two_extractors();
-    let incremental = env.json(&["why", OPEN, "--full"]);
-    assert_eq!(incremental["supports"].as_array().unwrap().len(), 2);
-    let before = projection_rows(&env);
-    fs::remove_dir_all(env.plugin_dir("test-extractor-2")).unwrap();
-    env.json(&["claims", "rebuild"]);
-    let mut after = env.json(&["why", OPEN, "--full"]);
-    let mut expected = incremental.clone();
-    for value in [&mut after, &mut expected] {
-        value.as_object_mut().unwrap().remove("extraction");
+    for carried in ["c", "0c"] {
+        let env = two_extractors_with(carried);
+        let incremental = env.json(&["why", OPEN, "--full"]);
+        assert_eq!(incremental["supports"].as_array().unwrap().len(), 2);
+        let before = projection_rows(&env);
+        fs::remove_dir_all(env.plugin_dir("test-extractor-2")).unwrap();
+        env.json(&["claims", "rebuild"]);
+        let mut after = env.json(&["why", OPEN, "--full"]);
+        let mut expected = incremental.clone();
+        for value in [&mut after, &mut expected] {
+            value.as_object_mut().unwrap().remove("extraction");
+        }
+        assert_eq!(expected, after, "{carried}");
+        assert_eq!(before, projection_rows(&env), "{carried}");
     }
-    assert_eq!(expected, after);
-    assert_eq!(before, projection_rows(&env));
 }
 
-/// surfaces/R1: rebuild lists every pair, and the CLI prints a line per carried-over pair
+/// S13: rebuild lists every pair, and the CLI prints a line per carried-over pair
 #[test]
 fn S13_rebuild_lists_its_pairs_and_the_cli_prints_the_carried_over_ones() {
     let env = two_extractors();
@@ -1798,6 +1818,11 @@ fn S13_rebuild_lists_its_pairs_and_the_cli_prints_the_carried_over_ones() {
     assert_eq!(carried["scope"], "personal");
     assert_eq!(carried["extractor"], "test-extractor-2");
     assert_eq!(carried["reason"], "not_installed");
+    // The counts are the run log's: the extractor never ran.
+    assert_eq!(
+        carried["counts"],
+        json!({"submitted": 0, "accepted": 0, "rejected": 0, "unchanged": 0})
+    );
     let rebuilt = pair(&result, "a");
     assert_eq!(rebuilt["state"], "current");
     assert!(rebuilt["counts"]["accepted"].as_u64().unwrap() > 0);
@@ -1810,8 +1835,9 @@ fn S13_rebuild_lists_its_pairs_and_the_cli_prints_the_carried_over_ones() {
     assert!(lines[0].contains("not_installed"), "{human}");
 }
 
-/// claims/R22: rebuilding a copy of the owner's database with the extractor hidden keeps its
-/// claims. Give `RASTRO_REAL_DB_COPY` the path of a copy; the test copies it again first.
+/// S14: rebuilding a copy of the owner's database with the extractor hidden keeps its claims.
+/// Give `RASTRO_REAL_DB_COPY` the path of a copy; the test copies it again first, with
+/// `VACUUM INTO`, and only ever writes the second copy.
 #[test]
 #[ignore = "needs RASTRO_REAL_DB_COPY, the path of a copy of a real database"]
 fn S14_rebuilding_a_copy_of_the_real_database_without_its_extractor_keeps_every_claim() {
@@ -1820,28 +1846,34 @@ fn S14_rebuilding_a_copy_of_the_real_database_without_its_extractor_keeps_every_
     let data = home.path().join("data");
     fs::create_dir_all(&data).unwrap();
     let database = data.join("rastro.sqlite3");
-    fs::copy(&source, &database).unwrap();
+    Connection::open_with_flags(&source, rusqlite::OpenFlags::SQLITE_OPEN_READ_ONLY)
+        .unwrap()
+        .execute("VACUUM INTO ?1", [database.to_str().unwrap()])
+        .unwrap();
     // The plugins directory is empty: every extractor is hidden.
     fs::create_dir_all(home.path().join("dev-plugins")).unwrap();
-    let count = || -> i64 {
-        Connection::open(&database)
+    let claims = || -> std::collections::BTreeSet<String> {
+        let db = Connection::open(&database).unwrap();
+        let mut statement = db.prepare("SELECT id FROM claim").unwrap();
+        statement
+            .query_map([], |r| r.get(0))
             .unwrap()
-            .query_row("SELECT count(*) FROM claim", [], |r| r.get(0))
-            .unwrap()
+            .map(Result::unwrap)
+            .collect()
     };
-    let before = count();
-    assert!(before > 0, "the copy holds no claims");
+    let before = claims();
+    assert!(!before.is_empty(), "the copy holds no claims");
     let output = Command::new(support::rastro())
         .env("RASTRO_HOME", home.path())
         .env("RASTRO_PLUGIN_PATH", home.path().join("dev-plugins"))
         .args(["claims", "rebuild", "--json"])
         .output()
         .unwrap();
-    let stdout = String::from_utf8_lossy(&output.stdout);
-    assert_eq!(
-        count(),
-        before,
-        "{stdout}{}",
+    let said = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+    assert!(output.status.success(), "{said}");
+    assert_eq!(claims(), before, "{said}");
 }
