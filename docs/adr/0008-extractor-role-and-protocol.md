@@ -54,3 +54,15 @@ An extractor is bound to sources by config, never discovered. A connector's mani
 ## Consequences
 - Slice 5 reuses the role for agent-tool extractors; its hypotheses need a new, separate acceptance rule.
 - The projection that stores accepted claims: `0009-claims-projection.md`.
+
+## Amended 2026-11-05
+Status stays accepted. Knowledge graph deep dive (`../research/kg-deep-dive/42-proposed-decisions.md`); product meaning in `../decisions/knowledge.md` §33–§48 and `../decisions/vocabulary.md` §14–§19. Tables: `0009-claims-projection.md`.
+- **Justification, not support (amends *Core validation*).** A submission's `supports` are one derivation, an AND bundle: every listed span must satisfy the checks, and a failure of any rejects the claim. Justification identity includes the claim, the extractor and the derivation. Several claims from one span (for example a repository and a kind from one URL) don't collide.
+- **Justifications of one claim are OR alternatives.** Inference (later) adds premise claims to a derivation, also AND; cycles are rejected over the whole dependency graph.
+- **Location context (amends *Shape*).** For a changed record, the core may deliver companion fields of the same source, scope and location, with evidence no newer than the batch high-water mark; the choice is recomputable on replay, and the delivered ids are kept. Delivery stays bounded per batch.
+- **Meta-predicates.** The core owns the `rastro:` prefix. Types and aliases are `rastro:type` and `rastro:alias` claims (the datatype `rastro:type` too). A plugin can't define `rastro:` names. The core's identity predicates (`rastro:held_by`, `rastro:same_as`) are named in the slice 4 ADR.
+- **Type grounding.** A submission's claims are validated together. Endpoint types come from type claims in the same bundle, not from stored state; a bundle carries the types of its own endpoints. A type from another bundle that disagrees is a visible conflict, subject to `supertype` compatibility.
+- **Vocabulary format (amends *Manifest additions*).** The vocabulary file is parsed with unknown fields denied. `cardinality` is required (`one` or `many`, report-only). `supertype` is optional. Datatypes keep lexical identity.
+- **Retirement rule (amends *Binding*).** One binding per source stays. A version bump replays the pair; when the replay completes, the old version's justifications are replaced in the same transaction as the final batch. Reads serve the old output until then, and a failed upgrade keeps the last good output. A slot or replacement contract for several bound extractors waits for a second one.
+- **Domain inference is not in the core** (no rule registry). For slice 5, derivation is an extractor role that submits claims with declared premises, which the core validates. That needs a protocol message first.
+- **Rebuild source.** The source comes from the `sources` row; nothing is hard-coded to GitHub.

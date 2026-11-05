@@ -62,3 +62,5 @@ Extraction hallucination (fix: anchor to source spans); duplicate-node bloat (we
 
 ## Unverified
 Exact Mem0 graph-removal version; LoCoMo judge audit figures; most vendor memory scores; Cognee `temporal_cognify`; FalkorDBLite import path; any public Preston presence.
+
+**Correction 2026-11-05 (knowledge graph deep dive):** Kùzu was archived 2025-10-10 (final release 0.11.3), not in 2026. The 2026 death is its fork Kineviz/Bighorn, archived 2026-10-23. See `kg-deep-dive/12-engines.md`.

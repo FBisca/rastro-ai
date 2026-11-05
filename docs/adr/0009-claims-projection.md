@@ -43,3 +43,26 @@ These tables live in a **generation**; readers see the active one.
 - A sync holds the write lock a little longer; WAL readers aren't blocked.
 - Rebuild is O(evidence); fine at the current scale.
 - A new extractor or vocabulary version means replay (`../decisions/vocabulary.md` §6).
+
+## Amended 2026-11-05
+Status stays accepted. Knowledge graph deep dive (`../research/kg-deep-dive/42-proposed-decisions.md`); product meaning in `../decisions/knowledge.md` §33–§48. This replaces the T3 projection tables, which were disposable and are dropped by a later migration (`0002`).
+- **Tables (one migration, observed-only, about eight).**
+  - `entity`: id and canonical identifier. No type column: a type is a `rastro:type` claim.
+  - `claim`.
+  - `justification` (renames *claim support*): id = hash(claim id, extractor id, derivation key), plus kind (provenance, inference or confirmation; only provenance is used now), extractor and version.
+  - `justification_span`: the evidence spans of one derivation; all are required (AND). A justification is live only while every span is. The premise table arrives with the first inference.
+  - `occurrence`: per justification, id = hash(justification id, opening event key); replaces *known interval*.
+  - `claim_link`.
+  - `extraction_checkpoint`.
+  - `projection_publication`: insert-only log, outside the swapped tables.
+  - Aliases are `rastro:alias` claims with an index on (`rastro:alias`, value); there is no alias table. Not in this migration: intents, rules, artifacts, merge, premise, valid-time and lens tables. Each arrives in its own additive migration with its own insert-only triggers and forget path.
+- **Slot.** A scalar slot is (source, scope, location, field, subject, predicate). The field group for conflicts between extractors is the slot without the rule.
+- **Portable evidence key** = hash(source, scope, location, field, start, end, quote, `captured_at`), computed at projection time and stored on the span. No hash uses a local evidence id.
+- **Event order and occurrences.** Replay order is the event key (`captured_at`, portable evidence key); the local evidence id is only the local tie-break. Known intervals are half-open and may be zero-length; a closed occurrence and a recurrence at equal `captured_at` are separate rows. Claim presence is computed on event order.
+- **Revision v2.** Tag `rastro/revision/v2`: hash of status, the sorted, deduplicated set of visible support portable keys, link claim ids and validity. No versions, rule ids or local ids. This repairs a change made under the v1 tag. Entity and claim id encodings stay v1, and the revision still changes when a second support is added. The meta-claims are `rastro:type` and `rastro:alias`; the `rastro:` prefix is reserved to the core.
+- **Valid time** is reported `unknown` by the API, with no column (replaces "stored as unknown").
+- **Publication log.** Each publication inserts one `projection_publication` row: extractor and vocabulary versions and the evidence high-water mark. It is the only non-disposable table in the migration.
+- **Publication P1.** The TEMP shadow-swap in one transaction, with explicit TEMP DDL instead of rewriting `REFERENCES`. Move to generation keys when a publication takes over 60 s or the WAL exceeds twice the database. The writer runs `ANALYZE` on the projection tables at publication (a read-only open cannot).
+- **Scope mechanism.** A scoped read recomputes exactly from visible justifications and visible intents; stored full-scope state is only an acceleration for unscoped reads. Each occurrence carries (source, scope, location, field, `captured_at`, `source_updated_at`, portable key), indexed, plus an index to read a subject's or object's claims by recency. A benchmark gate (20k-claim hub, 100k-claim database, cold and warm, two scope sets, p95 under 200 ms) applies before the scoped read ships; if it fails, a cache for common scope sets is added, with the exact recompute as fallback and a work budget that fails honestly. Required tests: random scope *sets*, hidden-input invariance, per-scope rebuild equals scoped read.
+- **Retirement.** On an extractor version bump, old-version justifications are replaced in the same transaction as the final batch of the replay; a failed upgrade keeps the last good output (`0008`).
+- **Considered and rejected:** 19–25 tables now; per-scope-set lenses; generation prefixes on every key (P2); hashing definition versions into the revision.

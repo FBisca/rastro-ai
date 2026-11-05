@@ -30,3 +30,7 @@ The vault is the owner's writing space plus a disposable view of the graph. It i
 
 ## Herdr
 Rastro can be a Herdr mod or layout (https://herdr.dev/gallery/): a pane showing the queue of proposals and questions, and a "needs you" status reported through herdr's Program Status Protocol (OSC 7501).
+
+## Added 2026-11-05 (knowledge graph deep dive)
+7. **Amends §5: intents can target a set of claims.** Once a merge exists (roadmap slice 4), a group of equivalent claims is targeted as its member claim ids, each with the revision seen (`knowledge.md` §35). A change to any member shows as a conflict. Group revision is a hash of the sorted (member id, revision) pairs.
+8. **Revision is computed from visible state only** (`knowledge.md` §45). A renderer's stale check still uses it; the durable binding of a confirmation or retraction uses the lifecycle state instead (`knowledge.md` §42).

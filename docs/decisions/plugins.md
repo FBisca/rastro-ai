@@ -53,3 +53,9 @@ Architecture: `../adr/0008-extractor-role-and-protocol.md`.
     If extraction fails after ingestion, `sync` exits non-zero, the source's coverage stays as read, its extraction state reads `failed`, and reads serve the last good projection.
 16. **One package may provide several kinds** (§4). The GitHub extractor provides `extractor` and `vocabulary`; that is no exception to `../adr/0001-rust-core-out-of-process-plugins.md`.
 17. **Extractor runs are logged** as runs (§9) with plugin id, version and counts, apart from connector coverage.
+
+## Added 2026-11-05 (knowledge graph deep dive)
+Architecture: amendments of 2026-11-05 to `../adr/0008-extractor-role-and-protocol.md`.
+18. **Direction for slice 5: derivation is a replaceable plugin.** A plugin submits claims with declared premises (for example "lift a promise to the Person"); the core does generic validation and maintenance only. No fixed core rule registry, since domain rules in the core contradict §3 and `vocabulary.md` §1. Derivation is an extractor role, not a new kind of plugin, so the glossary gets no new term. It needs a protocol message first; see the slice 5 plan.
+19. **Retirement and several extractors (amends §15).** One binding per source stays. When an extractor's version changes, its old justifications are replaced atomically once the replay completes (`knowledge.md` §40). Several extractors on one field give one claim with several labelled justifications (`knowledge.md` §39).
+20. **Location context (clarifies §14).** An extractor may receive companion fields of a changed record, within a bound: same source, scope and location, evidence no newer than the batch's high-water mark, and recomputable on replay. The ids actually delivered are kept for replay. This is recorded in the amendment to ADR 0008.

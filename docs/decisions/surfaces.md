@@ -57,3 +57,9 @@ Architecture: `../adr/0009-claims-projection.md`, `../adr/0007-typed-operation-c
 24. **`why(claim, limit?, full?)`.** Returns the claim (subject, predicate, object with display aliases, status, revision, known intervals, valid time, conflict and supersession links), the extractor, extraction rule and vocabulary versions, and its supports, bounded by `limit` (default 20, 1–50) with `truncated`. Each support carries evidence id, source, scope, location, field, span, `captured_at`, `source_updated_at`, trust class and a UTF-8-safe excerpt with clipping flags (§12); the full quote comes only with `full`. An unknown or hidden-only claim id is an operation error.
 25. **Both state coverage** for every visible (source, scope) pair, plus extraction state per pair and extractor version (`knowledge.md` §29).
 26. **Launch `--scope` filters every derived field** (resolution, aliases, types, status, revision, links, counts, extraction state) from visible supports before the limit (§15). A visible claim is never hidden by a hidden replacement.
+
+## Added 2026-11-05 (knowledge graph deep dive)
+27. **Agents get fixed catalog operations,** no SQL, SPARQL or Cypher over MCP. The set stays `search`, `coverage`, `about` (one hop; one-hop identity grouping from `knowledge.md` §35 once slice 4 lands) and `why`.
+28. **Bounded expansion waits for evidence.** It is added only after an equal-token evaluation on 40–60 owner questions shows it beats full-text search. Its budgets (5 seeds, depth at most 2, 25 neighbours, 2,000 examined, 50 returned, 64 KiB) are placeholders until measured. Later parameters are additive and amend ADR 0007.
+29. **A bare name stays an operation error** (§23, unchanged). There is no ad-hoc query surface for the owner for now; revisit with sharing and export.
+30. **Clarifies §24:** "supports" means justifications and their spans (`knowledge.md` §38).
