@@ -13,3 +13,8 @@ submit = ["issue", "comment"]
 scopes = ["personal"]
 env = ["RASTRO_TEST_SCRIPT"]
 actions = []
+
+[[source_options]]
+name = "repo"
+required = false
+help = "Free-form selector the scripted connector ignores"

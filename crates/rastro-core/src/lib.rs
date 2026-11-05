@@ -63,6 +63,18 @@ pub struct Source {
 }
 
 impl Source {
+    /// A source with the default freshness rule and window, and no options yet.
+    pub fn new(name: String, connector: String, scope: Scope) -> Self {
+        Self {
+            name,
+            connector,
+            selector: BTreeMap::new(),
+            scope,
+            freshness_rule: "1h".into(),
+            window_start: Utc::now() - Duration::days(90),
+            keep_original: false,
+        }
+    }
     pub fn github(name: String, repo: String, scope: Scope) -> Self {
         Self {
             name,
@@ -88,18 +100,6 @@ impl Source {
             "connector must not be empty"
         );
         ensure!(!self.scope.0.trim().is_empty(), "scope must not be empty");
-        if self.connector == "github" {
-            let parts: Vec<_> = self
-                .selector
-                .get("repo")
-                .context("github requires --repo")?
-                .split('/')
-                .collect();
-            ensure!(
-                parts.len() == 2 && parts.iter().all(|p| !p.trim().is_empty()),
-                "repo must be owner/repository"
-            );
-        }
         let rule = &self.freshness_rule;
         ensure!(
             rule.len() > 1,
@@ -461,6 +461,7 @@ impl<S: Storage> Rastro<S> {
     }
     pub fn add_source(&mut self, source: Source) -> Result<Source> {
         source.validate()?;
+        host::check_source_options(&self.locations, &source, None)?;
         let _lock = self.locations.config_lock()?;
         self.config = Config::load(&self.locations)?;
         ensure!(

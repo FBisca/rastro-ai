@@ -5,6 +5,7 @@ edition.workspace = true
 
 [dependencies]
 anyhow.workspace = true
+regex = "1.13.1"
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true

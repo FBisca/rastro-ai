@@ -47,6 +47,37 @@ pub fn discover(
     })
 }
 
+/// Checks a source's options against its connector's declaration: the installed manifest's,
+/// or for GitHub the bundled one when the installed one declares none. A connector that isn't
+/// installed is not checked here (`None`), but is at sync before binding.
+pub(crate) fn check_source_options(
+    locations: &Locations,
+    source: &crate::Source,
+    installed: Option<&Manifest>,
+) -> Result<()> {
+    let found;
+    let manifest = match installed {
+        Some(manifest) => Some(manifest),
+        None => {
+            found = find(locations, &source.connector).map(|(manifest, _)| manifest);
+            found.as_ref()
+        }
+    };
+    let bundled;
+    let declared = match manifest {
+        Some(m) if !m.source_options.is_empty() => &m.source_options,
+        _ if source.connector == "github" => {
+            bundled = Manifest::parse(include_str!(
+                "../../../rastro-connector-github/rastro-plugin.toml"
+            ))?;
+            &bundled.source_options
+        }
+        Some(m) => &m.source_options,
+        None => return Ok(()),
+    };
+    Manifest::check_options(&source.connector, declared, &source.selector)
+}
+
 /// The manifest whose `id` is `id`, before any check of what it provides.
 pub(crate) fn find(locations: &Locations, id: &str) -> Option<(Manifest, PathBuf)> {
     let mut roots = vec![locations.plugins()];
