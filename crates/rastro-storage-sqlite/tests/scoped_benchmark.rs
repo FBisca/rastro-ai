@@ -23,7 +23,7 @@ fn fixture(path: &std::path::Path) {
     let hub = rastro_core::claims::entity_id(HUB);
     db.execute("INSERT INTO entity VALUES (?1, ?2)", [&hub, HUB])
         .unwrap();
-    db.execute("INSERT INTO claim SELECT printf('c_%032x',x), printf('e_%032x',x), 'code:in_repository', CASE WHEN x<=20000 THEN ?1 ELSE printf('e_%032x',x) END, NULL, NULL, 0, 'observed', '', '' FROM numbers", [&hub]).unwrap();
+    db.execute("INSERT INTO claim SELECT printf('c_%032x',x), printf('e_%032x',x), 'code:in_repository', CASE WHEN x<=20000 THEN ?1 ELSE printf('e_%032x',x) END, NULL, NULL, 0, 'observed', '', '', '[]' FROM numbers", [&hub]).unwrap();
     db.execute_batch("        INSERT INTO justification SELECT printf('j_%032x',x), printf('c_%032x',x), 'provenance', 'fixture', '1', '1', printf('d_%032x',x), 'rule', 1, 1 FROM numbers;
         INSERT INTO justification_span SELECT printf('j_%032x',x), x, printf('v_%032x',x), '/url', 0, 1 FROM numbers;
 ANALYZE; PRAGMA wal_checkpoint(TRUNCATE);")
@@ -50,19 +50,37 @@ fn S28b_scoped_about_hub_cold_and_warm_p95_under_200ms() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("bench.sqlite3");
     fixture(&path);
+    let limit = Duration::from_millis(200);
     for names in [vec!["personal"], vec!["personal", "work"]] {
         let scopes: Vec<_> = names.iter().map(|s| Scope((*s).into())).collect();
+        let run = |storage: &mut SqliteStorage| {
+            let start = Instant::now();
+            let answer = storage
+                .read(|view| view.about_scoped(HUB, &AboutOptions::default(), &scopes))
+                .unwrap();
+            assert_eq!(answer.len(), 21);
+            start.elapsed()
+        };
+        // Cold: a fresh read-only connection per sample, no process-local cache exists.
+        let mut cold: Vec<_> = (0..SAMPLES)
+            .map(|_| run(&mut SqliteStorage::open_read_only(&path).unwrap().unwrap()))
+            .collect();
+        // Warm: repeated reads on one connection in the same process.
         let mut storage = SqliteStorage::open_read_only(&path).unwrap().unwrap();
-        let start = Instant::now();
-        let answer = storage
-            .read(|view| view.about_scoped(HUB, &AboutOptions::default(), &scopes))
-            .unwrap();
-        let elapsed = start.elapsed();
-        assert_eq!(answer.len(), 21);
-        println!("uncached scoped about {names:?}: {elapsed:?}");
+        run(&mut storage);
+        let mut warm: Vec<_> = (0..SAMPLES).map(|_| run(&mut storage)).collect();
+        let (cold, warm) = (p95(&mut cold), p95(&mut warm));
+        println!("scoped about {names:?}: cold p95 {cold:?}, warm p95 {warm:?}");
         assert!(
-            elapsed < Duration::from_millis(200),
-            "scoped replay needs the ADR cache fallback"
+            cold < limit && warm < limit,
+            "scoped read misses p95 < 200 ms"
         );
     }
+}
+
+const SAMPLES: usize = 20;
+
+fn p95(samples: &mut [Duration]) -> Duration {
+    samples.sort();
+    samples[(samples.len() * 95).div_ceil(100) - 1]
 }

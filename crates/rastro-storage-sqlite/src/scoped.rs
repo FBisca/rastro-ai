@@ -52,7 +52,7 @@ pub(super) fn projection(
         Target::Claim(claim) => ("SELECT subject FROM claim WHERE id = ?1", claim),
     };
     let candidate_sql = format!("WITH roots AS ({root}), components AS (
-        SELECT DISTINCT subject, predicate FROM claim WHERE subject IN roots OR object_entity IN roots
+        SELECT subject, predicate FROM claim WHERE subject IN roots UNION ALL SELECT subject, predicate FROM claim WHERE object_entity IN roots
     ), neighbors AS (
         SELECT c.id, c.subject, c.object_entity FROM claim c JOIN components k ON c.subject = k.subject AND c.predicate = k.predicate
     ) SELECT id FROM neighbors UNION SELECT id FROM claim WHERE predicate IN ('rastro:type','rastro:alias') AND subject IN (SELECT subject FROM neighbors UNION SELECT object_entity FROM neighbors)");
@@ -65,6 +65,7 @@ pub(super) fn projection(
     let result = Connection::open_in_memory()?;
     result.execute_batch("PRAGMA foreign_keys = OFF;")?;
     result.execute_batch(include_str!("projection_temp.sql"))?;
+    result.execute_batch("BEGIN")?;
     // Evidence is immutable; only cited rows are needed by the private replay and citations.
     result.execute_batch("CREATE TABLE evidence (id INTEGER PRIMARY KEY, source TEXT, scope TEXT, location TEXT, field TEXT, start INTEGER, end INTEGER, quote TEXT, captured_at TEXT, source_updated_at TEXT, trust_class TEXT, original TEXT)")?;
     // Every required span must be visible. Partial bundles never become weaker proofs.
@@ -114,6 +115,7 @@ pub(super) fn projection(
         &[evidence],
     )?;
     replay(&result)?;
+    result.execute_batch("COMMIT")?;
     Ok(result)
 }
 
