@@ -68,8 +68,26 @@ impl View<'_> {
         entity: &str,
         options: &AboutOptions,
     ) -> Result<Vec<ClaimSummary>> {
-        let resolved: Option<String> = self.0.query_row(
-            "SELECT id FROM entity WHERE id = ?1 OR identifier = ?1 UNION SELECT subject FROM claim WHERE predicate = 'rastro:alias' AND status = 'observed' AND object_value = ?1 ORDER BY 1 LIMIT 1", [entity], |row| row.get(0)).optional()?;
+        let exact: Option<String> = self.0.query_row(
+            "SELECT id FROM entity WHERE id = ?1 OR identifier = ?1 ORDER BY (id = ?1) DESC LIMIT 1", [entity], |row| row.get(0)).optional()?;
+        let resolved = match exact {
+            Some(id) => Some(id),
+            None => {
+                let candidates = self.0.prepare("SELECT DISTINCT e.id, e.identifier FROM claim c JOIN entity e ON e.id = c.subject WHERE c.predicate = 'rastro:alias' AND c.status = 'observed' AND c.object_value = ?1 ORDER BY e.id")?
+                    .query_map([entity], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?)))?.collect::<Result<Vec<_>, _>>()?;
+                if candidates.len() > 1 {
+                    bail!(
+                        "ambiguous alias {entity}; candidates: {}",
+                        candidates
+                            .iter()
+                            .map(|(id, identifier)| format!("{id} ({identifier})"))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                }
+                candidates.into_iter().next().map(|(id, _)| id)
+            }
+        };
         let Some(entity) = resolved else {
             return Ok(vec![]);
         };
@@ -114,7 +132,7 @@ impl View<'_> {
         let Some(claim) = self.summary(claim)? else {
             return Ok(None);
         };
-        let mut statement = self.0.prepare("SELECT id, kind, extractor, extractor_version, extraction_rule, vocabulary_version, current FROM justification WHERE claim_id = ?1 ORDER BY id LIMIT ?2")?;
+        let mut statement = self.0.prepare("SELECT id, kind, extractor, extractor_version, extraction_rule, vocabulary_version, current FROM justification WHERE claim_id = ?1 ORDER BY current DESC, id LIMIT ?2")?;
         let mut supports = statement
             .query_map(params![claim.claim.id, (options.limit + 1) as i64], |row| {
                 Ok(JustificationView {
@@ -194,7 +212,7 @@ impl View<'_> {
                 captured_at: parse_time(captured)?,
                 source_updated_at: updated.map(parse_time).transpose()?,
                 trust_class: trust_class(&trust)?,
-                excerpt: rastro_core::search::excerpt(span, None, start),
+                excerpt: rastro_core::knowledge::CitationExcerpt::new(span, start),
                 quote: full.then(|| span.into()),
             })
         })

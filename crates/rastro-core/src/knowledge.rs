@@ -27,6 +27,7 @@ pub struct ClaimSummary {
     pub claim: ClaimView,
     pub subject_aliases: Vec<String>,
     pub object_aliases: Vec<String>,
+    /// Number of live justifications, independent of the explanation page limit.
     pub support_count: usize,
 }
 #[derive(Debug, JsonSchema, Serialize)]
@@ -76,11 +77,11 @@ impl<S: ReadStorage> Reader<S> {
             (1..=50).contains(&options.limit),
             "limit must be from 1 to 50"
         );
-        read_only::snapshot(
+        read_only::snapshot_live(
             &self.locations,
             &mut self.storage,
             &self.scopes,
-            |view, unfinished| {
+            |view, unfinished, live| {
                 let claims = match view {
                     Some(view) => view.about(entity, options)?,
                     None => vec![],
@@ -94,7 +95,7 @@ impl<S: ReadStorage> Reader<S> {
                     &self.scopes,
                 )?;
                 let extraction =
-                    extraction_of(view, &self.locations, &self.config.sources, &coverage)?;
+                    extraction_of(view, &self.locations, &self.config.sources, &coverage, live)?;
                 Ok(answer(claims, options.limit, coverage, extraction))
             },
         )
@@ -110,8 +111,13 @@ impl<S: Storage> Rastro<S> {
         self.storage.snapshot(|view| {
             let coverage =
                 read_only::coverage_of(Some(view), &[], &self.config.sources, None, false, &[])?;
-            let extraction =
-                extraction_of(Some(view), &self.locations, &self.config.sources, &coverage)?;
+            let extraction = extraction_of(
+                Some(view),
+                &self.locations,
+                &self.config.sources,
+                &coverage,
+                true,
+            )?;
             Ok(answer(
                 view.about(entity, options)?,
                 options.limit,
@@ -131,6 +137,7 @@ pub struct JustificationView {
     pub extractor_version: String,
     pub extraction_rule: String,
     pub vocabulary_version: String,
+    /// False for a historical justification that no longer supports the current claim.
     pub current: bool,
     pub spans: Vec<Citation>,
 }
@@ -147,9 +154,32 @@ pub struct Citation {
     pub captured_at: DateTime<Utc>,
     pub source_updated_at: Option<DateTime<Utc>>,
     pub trust_class: crate::TrustClass,
-    pub excerpt: crate::search::Match,
+    pub excerpt: CitationExcerpt,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub quote: Option<String>,
+}
+/// A UTF-8-safe prefix of a cited span; no search query or matching word is involved.
+#[derive(Debug, JsonSchema, Serialize)]
+pub struct CitationExcerpt {
+    /// Byte offset of the excerpt in the cited field.
+    pub start: u64,
+    /// Byte offset just past the excerpt in the cited field.
+    pub end: u64,
+    pub text: String,
+    pub clipped_before: bool,
+    pub clipped_after: bool,
+}
+impl CitationExcerpt {
+    pub fn new(quote: &str, origin: u64) -> Self {
+        let excerpt = crate::search::excerpt(quote, None, origin);
+        Self {
+            start: excerpt.start,
+            end: excerpt.end,
+            text: excerpt.text,
+            clipped_before: excerpt.clipped_before,
+            clipped_after: excerpt.clipped_after,
+        }
+    }
 }
 #[derive(Debug, JsonSchema, Serialize)]
 pub struct Explanation {
@@ -182,11 +212,11 @@ impl<S: ReadStorage> Reader<S> {
             (1..=50).contains(&options.limit),
             "limit must be from 1 to 50"
         );
-        read_only::snapshot(
+        read_only::snapshot_live(
             &self.locations,
             &mut self.storage,
             &self.scopes,
-            |view, unfinished| {
+            |view, unfinished, live| {
                 let mut why = view
                     .map(|view| view.explain(claim, options))
                     .transpose()?
@@ -200,8 +230,13 @@ impl<S: ReadStorage> Reader<S> {
                     false,
                     &self.scopes,
                 )?;
-                why.extraction =
-                    extraction_of(view, &self.locations, &self.config.sources, &why.coverage)?;
+                why.extraction = extraction_of(
+                    view,
+                    &self.locations,
+                    &self.config.sources,
+                    &why.coverage,
+                    live,
+                )?;
                 Ok(why)
             },
         )
@@ -224,6 +259,7 @@ impl<S: Storage> Rastro<S> {
                 &self.locations,
                 &self.config.sources,
                 &why.coverage,
+                true,
             )?;
             Ok(why)
         })
@@ -236,10 +272,11 @@ fn extraction_of(
     locations: &crate::Locations,
     config: &[crate::Source],
     coverage: &[Coverage],
+    live: bool,
 ) -> Result<Vec<crate::runs::ExtractionPair>> {
     use crate::runs::{ExtractionFacts, ExtractionPair, ExtractionStatus, extraction_pair};
     let bindings = view
-        .map(|view| view.extraction_sources())
+        .map(|view| view.extraction_sources(&[]))
         .transpose()?
         .unwrap_or_default();
     coverage
@@ -274,7 +311,7 @@ fn extraction_of(
             };
             let mut source = source.clone();
             source.scope = pair.scope.clone();
-            extraction_pair(locations, &source, extractor, |version| {
+            extraction_pair(locations, &source, extractor, live, |version| {
                 view.map(|view| view.extraction_facts(&source, extractor, version))
                     .unwrap_or_else(|| Ok(ExtractionFacts::default()))
             })

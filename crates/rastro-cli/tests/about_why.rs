@@ -60,6 +60,15 @@ impl Env {
         SqliteStorage::open(&self.home.path().join("data/rastro.sqlite3")).unwrap()
     }
     fn claim(&self, predicate: &str, object: Object, captured: DateTime<Utc>) -> String {
+        self.claim_for(URL, predicate, object, captured)
+    }
+    fn claim_for(
+        &self,
+        identifier: &str,
+        predicate: &str,
+        object: Object,
+        captured: DateTime<Utc>,
+    ) -> String {
         let source = Source::github("project".into(), "o/p".into(), Scope("work".into()));
         let mut db = self.db();
         let run = db
@@ -72,7 +81,7 @@ impl Env {
         let e = Evidence {
             source: source.name.clone(),
             scope: source.scope.clone(),
-            location: URL.into(),
+            location: identifier.into(),
             field: format!("/{predicate}"),
             start: 0,
             end: quote.len() as u64,
@@ -87,10 +96,15 @@ impl Env {
             .pending_evidence(("fixture", "1"), &source)
             .unwrap()
             .into_iter()
-            .find(|(_, item)| item.field == e.field && item.captured_at == captured)
+            .find(|(_, item)| {
+                item.location == e.location
+                    && item.field == e.field
+                    && item.quote == e.quote
+                    && item.captured_at == captured
+            })
             .unwrap()
             .0;
-        let subject = Entity::new(URL.into(), "code:PullRequest".into());
+        let subject = Entity::new(identifier.into(), "code:PullRequest".into());
         let id = claims::claim_id(&subject.id, predicate, &object);
         db.record_claims(
             run,
@@ -129,6 +143,12 @@ fn S20_about_resolves_exact_forms_and_returns_one_hop_with_aliases() {
     let state = env.claim("code:state", literal("open"), time());
     env.claim("rastro:alias", literal("github:pr/o/p/1"), time());
     let entity = Entity::new("github:account/42".into(), "code:Account".into());
+    env.claim_for(
+        &entity.identifier,
+        "rastro:alias",
+        literal("github:login/ana"),
+        time(),
+    );
     let author = env.claim(
         "code:author",
         Object::Entity {
@@ -150,9 +170,43 @@ fn S20_about_resolves_exact_forms_and_returns_one_hop_with_aliases() {
     assert_eq!(row["predicate"], "code:state");
     assert_eq!(row["subject_aliases"], json!(["github:pr/o/p/1"]));
     assert_eq!(row["support_count"], 1);
+    let author_row = rows.iter().find(|r| r["id"] == author).unwrap();
+    assert_eq!(author_row["object_aliases"], json!(["github:login/ana"]));
     let incoming = env.ok(&["about", &entity.id]);
-    assert_eq!(incoming["claims"][0]["id"], author);
-    assert_eq!(incoming["claims"].as_array().unwrap().len(), 1);
+    assert!(
+        incoming["claims"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["id"] == author)
+    );
+    assert_eq!(incoming["claims"].as_array().unwrap().len(), 2);
+    let other = "github:account/99";
+    env.claim_for(other, "rastro:alias", literal("github:login/ana"), time());
+    let (ok, error) = env.run(&["about", "github:login/ana"]);
+    assert!(!ok, "{error}");
+    let error = error["error"].as_str().unwrap();
+    assert!(
+        error.contains("ambiguous alias")
+            && error.contains(&entity.id)
+            && error.contains(&entity.identifier)
+            && error.contains(&claims::entity_id(other))
+            && error.contains(other),
+        "{error}"
+    );
+    // Aliases cannot shadow an exact identifier or entity id.
+    for exact in [URL.to_string(), claims::entity_id(URL)] {
+        env.claim_for(&entity.identifier, "rastro:alias", literal(&exact), time());
+        let resolved = env.ok(&["about", &exact]);
+        assert_eq!(resolved["claims"].as_array().unwrap().len(), 3);
+        assert!(
+            resolved["claims"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .any(|c| c["id"] == state)
+        );
+    }
     for bad in ["me", "felippe", "o/p", "https://github.com/o p/pull/1"] {
         let (ok, error) = env.run(&["about", bad]);
         assert!(!ok, "{error}");
@@ -302,8 +356,24 @@ fn S24_why_bounds_complete_justifications_and_clips_utf8_quotes() {
         )
         .unwrap();
     }
+    // Published-state fixture: retain historical justifications whose hashes sort before
+    // the one live alternative, so a hash-only page would hide current evidence.
+    let connection =
+        rusqlite::Connection::open(env.home.path().join("data/rastro.sqlite3")).unwrap();
+    connection.execute("UPDATE justification SET current = (id = (SELECT max(id) FROM justification WHERE claim_id = ?1)) WHERE claim_id = ?1", [&id]).unwrap();
+    drop(connection);
     drop(db);
     let why = env.ok(&["why", &id]);
+    assert_eq!(why["claim"]["support_count"], 1);
+    assert_eq!(why["supports"][0]["current"], true);
+    assert!(
+        why["supports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .skip(1)
+            .all(|s| s["current"] == false)
+    );
     assert_eq!(why["supports"].as_array().unwrap().len(), 20);
     assert_eq!(why["truncated"], true);
     assert_eq!(why["claim"]["valid_time"], "unknown");
@@ -317,6 +387,8 @@ fn S24_why_bounds_complete_justifications_and_clips_utf8_quotes() {
     let limited = env.ok(&["why", &id, "--limit", "1"]);
     assert_eq!(limited["supports"].as_array().unwrap().len(), 1);
     assert_eq!(limited["truncated"], true);
+    assert_eq!(limited["claim"]["support_count"], 1);
+    assert_eq!(limited["supports"][0]["current"], true);
     let all = env.ok(&["why", &id, "--limit", "50", "--full"]);
     assert_eq!(all["supports"].as_array().unwrap().len(), 22);
     assert_eq!(all["truncated"], false);
@@ -344,6 +416,7 @@ fn S24_why_bounds_complete_justifications_and_clips_utf8_quotes() {
             assert_eq!(span["captured_at"], "2026-11-01T00:00:00Z");
             assert_eq!(span["source_updated_at"], "2026-11-01T00:00:00Z");
             let excerpt = &span["excerpt"];
+            assert!(excerpt.get("located").is_none());
             let start = excerpt["start"].as_u64().unwrap() as usize;
             let end = excerpt["end"].as_u64().unwrap() as usize;
             assert!(quote.is_char_boundary(start) && quote.is_char_boundary(end));
@@ -356,6 +429,17 @@ fn S24_why_bounds_complete_justifications_and_clips_utf8_quotes() {
             );
         }
     }
+    let human = Command::new(support::rastro())
+        .env("RASTRO_HOME", env.home.path())
+        .args(["why", &id, "--limit", "50"])
+        .output()
+        .unwrap();
+    assert!(human.status.success());
+    let human = String::from_utf8(human.stdout).unwrap();
+    assert!(
+        human.contains("Current: true") && human.contains("Current: false"),
+        "{human}"
+    );
     let full = all["supports"]
         .as_array()
         .unwrap()

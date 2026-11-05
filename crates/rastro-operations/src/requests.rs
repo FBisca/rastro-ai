@@ -19,6 +19,8 @@ pub trait Operation {
     const SURFACES: &'static [Surface];
     /// True when the operation changes nothing.
     const READ_ONLY: bool;
+    /// Whether the CLI uses the read-only Reader rather than the writing open path.
+    const CLI_READ_PATH: bool = false;
     type Output: JsonSchema + serde::Serialize;
     fn into_request(self) -> Request;
     fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<Self::Output>;

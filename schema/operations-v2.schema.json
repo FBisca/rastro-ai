@@ -17,7 +17,7 @@
           "type": "integer"
         },
         "excerpt": {
-          "$ref": "#/$defs/Match"
+          "$ref": "#/$defs/CitationExcerpt"
         },
         "field": {
           "type": "string"
@@ -66,6 +66,41 @@
         "source_updated_at",
         "trust_class",
         "excerpt"
+      ],
+      "type": "object"
+    },
+    "CitationExcerpt": {
+      "additionalProperties": false,
+      "description": "A UTF-8-safe prefix of a cited span; no search query or matching word is involved.",
+      "properties": {
+        "clipped_after": {
+          "type": "boolean"
+        },
+        "clipped_before": {
+          "type": "boolean"
+        },
+        "end": {
+          "description": "Byte offset just past the excerpt in the cited field.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "start": {
+          "description": "Byte offset of the excerpt in the cited field.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "text": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "start",
+        "end",
+        "text",
+        "clipped_before",
+        "clipped_after"
       ],
       "type": "object"
     },
@@ -132,6 +167,7 @@
           "type": "array"
         },
         "support_count": {
+          "description": "Number of live justifications, independent of the explanation page limit.",
           "format": "uint",
           "minimum": 0,
           "type": "integer"
@@ -436,6 +472,7 @@
       "description": "A complete derivation. The limit counts bundles, never individual required spans.",
       "properties": {
         "current": {
+          "description": "False for a historical justification that no longer supports the current claim.",
           "type": "boolean"
         },
         "extraction_rule": {

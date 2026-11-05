@@ -56,3 +56,14 @@ fn S26_about_and_why_are_additive_v2_and_existing_schemas_are_unchanged() {
         "committed schema differs from generated catalog"
     );
 }
+
+#[test]
+fn S29_catalog_declares_claim_cli_read_paths_without_changing_existing_routes() {
+    use rastro_operations::catalog::CATALOG;
+    for spec in &CATALOG {
+        assert_eq!(spec.read_path, ["about", "why"].contains(&spec.name));
+        if spec.read_path {
+            assert!(spec.read_only);
+        }
+    }
+}

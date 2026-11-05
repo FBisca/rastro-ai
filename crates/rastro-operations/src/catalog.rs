@@ -31,6 +31,8 @@ pub struct OperationSpec {
     decode: fn(Value) -> serde_json::Result<Request>,
     /// Whether the operation only reads.
     pub read_only: bool,
+    /// CLI opens a Reader for this operation, without projection or recovery.
+    pub read_path: bool,
 }
 
 /// One input of an operation.
@@ -102,6 +104,7 @@ const fn spec<T: Operation + Args + JsonSchema + DeserializeOwned>() -> Operatio
         command: || command::<T>(T::NAME),
         decode: |arguments| serde_json::from_value::<T>(arguments).map(T::into_request),
         read_only: T::READ_ONLY,
+        read_path: T::CLI_READ_PATH,
     }
 }
 
@@ -157,12 +160,14 @@ macro_rules! operations {
             slot: $slot:literal, name: $name:literal,
             surfaces: [$($surface:ident),*], read_only: $read_only:literal
             $(, reader: $reader:ident)?
+            $(, cli_read_path: $cli_read_path:literal)?
          })
     )*) => {
         $(impl Operation for $input {
             const NAME: &'static str = $name;
             const SURFACES: &'static [Surface] = &[$(Surface::$surface),*];
             const READ_ONLY: bool = $read_only;
+            $(const CLI_READ_PATH: bool = $cli_read_path;)?
             type Output = $output;
             fn into_request(self) -> Request {
                 let $value = self;
@@ -255,10 +260,10 @@ operations! {
         },
     }
     About(AboutRequest => AboutResult) {
-        slot: 8, name: "about", surfaces: [Cli], read_only: true, reader: run_read
+        slot: 8, name: "about", surfaces: [Cli], read_only: true, reader: run_read, cli_read_path: true
     }
     Why(WhyRequest => WhyResult) {
-        slot: 6, name: "why", surfaces: [Cli], read_only: true, reader: run_read
+        slot: 6, name: "why", surfaces: [Cli], read_only: true, reader: run_read, cli_read_path: true
     }
 }
 

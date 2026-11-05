@@ -201,13 +201,14 @@ fn why_text(why: &WhyResult) -> String {
     }
     for support in &why.supports {
         lines.push(format!(
-            "  Justification: {} | Kind: {} | Extractor: {} {} | Rule: {} | Vocabulary: {}",
+            "  Justification: {} | Kind: {} | Extractor: {} {} | Rule: {} | Vocabulary: {} | Current: {}",
             support.justification_id,
             display_safe(&support.justification_kind),
             display_safe(&support.extractor),
             display_safe(&support.extractor_version),
             display_safe(&support.extraction_rule),
-            display_safe(&support.vocabulary_version)
+            display_safe(&support.vocabulary_version),
+            support.current
         ));
         for s in &support.spans {
             let shown = s.quote.as_deref().unwrap_or(&s.excerpt.text);
@@ -290,7 +291,7 @@ fn human(response: &Response) -> String {
 }
 fn execute(request: Request) -> Result<Outcome> {
     let locations = Locations::resolve()?;
-    if matches!(request, Request::About(_) | Request::Why(_)) {
+    if catalog::find(request.name()).is_some_and(|spec| spec.read_only && spec.read_path) {
         let mut reader = Rastro::open_read_only(locations, SqliteStorage::open_read_only)?;
         let response = request.run_read(&mut reader)?;
         let text = human(&response);

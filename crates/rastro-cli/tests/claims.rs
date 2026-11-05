@@ -758,10 +758,6 @@ fn lifecycle_projection(env: &Env) -> Vec<Value> {
             let mut why = env.json(&["why", id]);
             why.as_object_mut().unwrap().remove("coverage");
             why.as_object_mut().unwrap().remove("extraction");
-            // Extractor run metadata belongs to the audit log, outside the projection.
-            for support in why["supports"].as_array_mut().unwrap() {
-                support.as_object_mut().unwrap().remove("run_id");
-            }
             why
         })
         .collect()
@@ -1369,7 +1365,10 @@ fn S18_an_extractor_that_reports_failure_after_claims_stores_nothing_and_the_nex
         "{failed}"
     );
     assert_eq!(env.count("claim"), claims);
-    assert_eq!(env.json(&["why", OPEN]), before);
+    let after = env.json(&["why", OPEN]);
+    assert_eq!(after["claim"], before["claim"]);
+    assert_eq!(after["supports"], before["supports"]);
+    assert_eq!(after["extraction"][0]["state"], "failed");
     assert_eq!(extraction_states(&env)[0].2, "failed");
 
     env.observe(&[state("closed")]);
