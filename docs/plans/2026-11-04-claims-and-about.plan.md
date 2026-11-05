@@ -73,6 +73,7 @@ The owner confirmed C1–C18 and D1–D15 of `docs/research/kg-deep-dive/` (`40-
 | D15, D16 | Unchanged. No grouping yet (no merges); `why` shows justification kind, spans, extractor and version | surfaces §23–§24; D6 |
 | D18 | Scoped reads recompute exactly from visible justifications, with a benchmark gate before sign-off | knowledge §44; D9 |
 | D24 | T4 and T5 are reworked in place (same IDs; Codex builds T4, Claude builds T5). T5 starts beside T4 on files T4 doesn't own (extractor crate, vocabulary parsing, type grounding in validation, `rastro:` prefix, test retags), then rebases onto T4 and merges after it. T4 owns the `knowledge_v2` migration, storage and the lifecycle/rebuild code, and tells T5 when its schema lands. Scenarios S4b, S4c, S8a, S9a, S11a, S15a, S15b, S16a, S16b, S18b, S28a and S28b are added to make the amended rows testable | A separate T4′/T5′ ID (converge and the ledger take `T<n>` only) | Owner, 2026-11-05: "do the amends on T4 and T5 and proceed" | Owner, 2026-11-05 session |
+| D24 | Exception, 2026-11-05: Codex workers reached their usage limit, so Claude workers finish T4, T6 and T8 from the branches and uncommitted work they left | Waiting for the Codex limit to reset | Owner: "try to resume their work using claude until we finish the plan" | Owner, 2026-11-05 session |
 
 ## Scenarios
 **Connector and re-read**
