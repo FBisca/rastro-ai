@@ -898,6 +898,7 @@ pub struct History {
 }
 
 #[cfg(test)]
+#[allow(non_snake_case)]
 mod tests {
     use super::*;
 
@@ -928,7 +929,7 @@ mod tests {
     }
 
     #[test]
-    fn an_undo_removes_only_its_intents_contribution_and_a_link_clears_a_cannot_link() {
+    fn S6_an_undo_removes_only_its_intents_contribution_and_a_link_clears_a_cannot_link() {
         let p = target("rastro:person/1", "person");
         let a = target("github:account/1", "account");
         let create = intent(
@@ -975,7 +976,7 @@ mod tests {
     }
 
     #[test]
-    fn rows_are_checked_on_their_own() {
+    fn S8_rows_are_checked_on_their_own() {
         let p = target("rastro:person/1", "person");
         let a = target("github:account/1", "account");
         assert!(
@@ -1070,7 +1071,7 @@ mod tests {
     }
 
     #[test]
-    fn the_newest_name_wins_and_undoing_it_restores_the_older() {
+    fn S4_the_newest_name_wins_and_undoing_it_restores_the_older() {
         let p = target("rastro:person/1", "person");
         let name = |value: &str, id: &str| {
             let mut i = intent(IntentKind::Name, Targets::entity(p.clone()), None, id);

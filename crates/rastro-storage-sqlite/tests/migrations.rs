@@ -261,7 +261,7 @@ fn temp_shadow_tables_match_the_migrated_projection_tables() {
 /// The owner-intent migration adds the insert-only intent table and leaves the projection a
 /// database already holds in place: no claim is lost to the upgrade
 #[test]
-fn the_owner_intent_migration_keeps_the_existing_projection() {
+fn S10_the_owner_intent_migration_keeps_the_existing_projection() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("rastro.sqlite3");
     let before: [(&str, &str); 8] = [

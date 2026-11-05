@@ -227,7 +227,7 @@ fn S11_an_intent_written_after_a_cached_scoped_read_shows_in_the_next_one() {
 /// The intent table is insert-only: no update, no delete, no replace, and a malformed row is
 /// refused by the table itself
 #[test]
-fn the_intent_table_is_insert_only() {
+fn S8_the_intent_table_is_insert_only() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("db");
     let mut db = SqliteStorage::open(&path).unwrap();
@@ -275,7 +275,7 @@ fn the_intent_table_is_insert_only() {
 
 /// A sync that touches nothing intent-backed keeps every intent-backed claim
 #[test]
-fn a_sync_keeps_the_claims_intents_back() {
+fn S10_a_sync_keeps_the_claims_intents_back() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("db");
     let mut db = SqliteStorage::open(&path).unwrap();
@@ -298,7 +298,7 @@ fn a_sync_keeps_the_claims_intents_back() {
 
 /// `me` is visible in every scope; a Person with no linked account in none but the unscoped read
 #[test]
-fn me_is_visible_in_every_scope_and_an_unlinked_person_in_none() {
+fn S9_me_is_visible_in_every_scope_and_an_unlinked_person_in_none() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("db");
     let mut db = SqliteStorage::open(&path).unwrap();
