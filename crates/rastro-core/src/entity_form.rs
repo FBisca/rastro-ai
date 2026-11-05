@@ -80,6 +80,13 @@ mod tests {
             "1http://x",
             "http://",
             "http://a b",
+            "git\thub:login/x",
+            "github:log\nin/x",
+            "github:login/x\u{a0}",
+            "github:login/\u{a0}x",
+            "e_0123456789abcdef0123456789abcde",
+            "e_0123456789abcdef0123456789abcdef0",
+            "github:/v",
         ] {
             let error = check(bad).unwrap_err();
             assert!(error.contains("<namespace>:<kind>/<value>"), "{error}");

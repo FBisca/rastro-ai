@@ -2014,7 +2014,8 @@ fn S24_a_claim_with_an_identifier_outside_the_accepted_forms_is_rejected_and_cou
         first_state_support(),
     );
     bad_subject["subject"]["identifier"] = json!("foo:bar");
-    // Typed in the same submission, so only the identifier's form can reject them.
+    // Typed in the same submission, so only the subject's form can reject these. The object
+    // check is covered by the `validate` unit test in the core.
     env.extract(&[
         typed_pr(),
         entity_type(repo, "code:Repository"),
@@ -2035,17 +2036,16 @@ fn S24_a_claim_with_an_identifier_outside_the_accepted_forms_is_rejected_and_cou
 #[test]
 fn S25_alias_kinds_and_values_are_checked_and_inner_whitespace_is_accepted() {
     let original = include_str!("../../rastro-test-extractor/vocabulary.toml");
-    let alias = |kind: &str| {
+    let with_kind = |kind: &str| {
         format!(
             "{original}\n[[aliases]]\nkind = \"{kind}\"\ndomain = [\"code:PullRequest\"]\n\
              definition = \"A name.\"\nnot_to_confuse_with = \"A login.\"\nexamples = [\"Ana\"]\n\
-             counter_examples = [\"\"]\nevidence_requirement = \"A structured field.\"\n"
+             counter_examples = [\"x\"]\nevidence_requirement = \"A structured field.\"\n"
         )
     };
-    let counter = alias("name").replace("counter_examples = [\"\"]", "counter_examples = [\"x\"]");
-    for kind in ["a/b", "a:b", "a b"] {
+    for kind in ["", "a/b", "a:b", "a b"] {
         let env = Env::new(Some("test-extractor"));
-        let vocabulary = counter.replace("kind = \"name\"", &format!("kind = \"{kind}\""));
+        let vocabulary = with_kind(kind);
         fs::write(
             env.plugin_dir("test-extractor").join("vocabulary.toml"),
             vocabulary,
@@ -2064,7 +2064,7 @@ fn S25_alias_kinds_and_values_are_checked_and_inner_whitespace_is_accepted() {
     let env = Env::new(Some("test-extractor"));
     fs::write(
         env.plugin_dir("test-extractor").join("vocabulary.toml"),
-        &counter,
+        with_kind("name"),
     )
     .unwrap();
     env.add_source("project", "test");

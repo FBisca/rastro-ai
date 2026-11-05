@@ -262,7 +262,7 @@ pub fn validate(
     let typed = |t: &String| vocabulary.has_type(t);
     let subject = submit.subject;
     crate::entity_form::check(&subject.identifier)?;
-    if subject.identifier.is_empty() || !typed(&subject.entity_type) {
+    if !typed(&subject.entity_type) {
         return Err("subject outside the predicate's domain".into());
     }
     // The text an alias claim's supports must quote.
@@ -291,7 +291,9 @@ pub fn validate(
                 return Err("subject outside the alias kind's domain".into());
             }
             if !crate::entity_form::is_alias_value(&value) {
-                return Err("an alias value is non-empty with no whitespace at either end".into());
+                return Err(
+                    "an alias value must be non-empty, with no whitespace at either end".into(),
+                );
             }
             // A new observation of the field an alias is read from ends the previous alias
             // there, so a rename's two logins show when each held.
@@ -574,6 +576,40 @@ mod tests {
         ] {
             assert!(check(wrong).is_err());
         }
+    }
+
+    /// claims/R30: a subject or object identifier outside the entity forms is rejected
+    #[test]
+    fn S24_an_identifier_outside_the_entity_forms_is_rejected() {
+        let mut bad_subject = submit(TYPE_PREDICATE, "x:Account", "x:Account", TYPE_DATATYPE);
+        bad_subject.subject.identifier = "foo:bar".into();
+        assert!(
+            check(bad_subject)
+                .unwrap_err()
+                .contains("<namespace>:<kind>/<value>")
+        );
+        // The object is well typed and in range; only its identifier is malformed.
+        let vocabulary = Vocabulary::parse(&format!(
+            "namespace = \"x\"\nversion = \"1\"\n\
+             [[types]]\nid = \"x:Account\"\n{WORDS}\
+             [[predicates]]\nid = \"x:knows\"\ncardinality = \"many\"\n\
+             domain = [\"x:Account\"]\nrange = [\"x:Account\"]\nfreshness = \"source\"\nauthority = \"newer_comparable_observation\"\n\
+             sensitivity = \"low\"\n{WORDS}"
+        ))
+        .unwrap();
+        let knows = |object: &str| -> ClaimSubmit {
+            serde_json::from_value(serde_json::json!({
+                "subject": {"identifier": "github:account/1", "type": "x:Account"},
+                "predicate": "x:knows",
+                "object": {"kind": "entity", "identifier": object, "type": "x:Account"},
+                "extraction_rule": "r",
+                "supports": [{"evidence_id": 1, "field": "/user/login", "start": 0, "end": 7}],
+            }))
+            .unwrap()
+        };
+        let run = |object: &str| validate(knows(object), &delivered(), &manifest(), &vocabulary);
+        assert!(run("github:account/2").is_ok());
+        assert!(run("github:login").is_err());
     }
 
     fn typed(identifier: &str, entity_type: &str) -> ObservedClaim {

@@ -1723,6 +1723,17 @@ fn scoped_replay_filters_metadata_and_hidden_replacements_before_limit() {
         assert!(!answer.to_string().contains("hidden:"));
         assert!(!answer.to_string().contains("Secret"));
     }
+    // Non-vacuous: with every scope visible the same form resolves.
+    assert!(
+        !claim_result(
+            &mut everything,
+            "about",
+            json!({"entity": "https:string/hidden:alias"})
+        )["claims"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
     assert_eq!(
         claim_result(
             &mut session,
