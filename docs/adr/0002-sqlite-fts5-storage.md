@@ -31,3 +31,8 @@ Status stays accepted. Roadmap slice 2 adds a reader that runs beside a sync (`0
 - **A missing database** answers from config (every source "never looked") and no file is created.
 - **Locking.** A reader tries `sync.lock` shared and never waits: if a sync holds it, the reader treats that sync as live. It holds the lock only until its snapshot is taken. A missing `sync.lock` is probed again after the snapshot is taken. The writing open retries `try_lock` while only readers hold the lock, up to 50 times 10 ms apart (about 0.5 s). If it still can't get the lock, or a sync is live, it skips recovery, and the next `sync` recovers once it holds the lock.
 - **Files.** The read-only open never creates the database file. SQLite may create `-wal` and `-shm` beside it; where it can't, the read is refused as not readable.
+
+## Amended 2026-11-05
+Status stays accepted. The knowledge graph deep dive re-affirmed SQLite as the only engine (`../research/kg-deep-dive/42-proposed-decisions.md`). No embedded graph or RDF engine now; any other engine would be a disposable sidecar, never authoritative.
+- **Rationale date corrected.** The engine the research records dying is Kùzu, archived 2025-10-10; its fork Bighorn was archived 2026-10-23. Read "dying in 2026" above accordingly (`../research/kg-deep-dive/12-engines.md`).
+- **Migration rule, noted.** Applied migrations are never edited. A projection that proves wrong is replaced by a later migration that drops the disposable tables and creates the new ones, which is how the claims projection moves to its second schema (`0009-claims-projection.md`). Each precious table gets insert-only triggers in the migration that creates it.

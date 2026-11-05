@@ -55,3 +55,58 @@ Architecture: `../adr/0008-extractor-role-and-protocol.md`, `../adr/0009-claims-
 30. **Repository rename or transfer, and URL redirects,** give a new canonical identifier, so a new entity.
 31. **List removal is unsupported.** List evidence stays per-index (`../specs/evidence.md` R38), so a removed element is not seen as removed.
 32. **Rank leakage across scopes remains** as in `surfaces.md` §21; a scope isn't an isolation boundary until slice 14.
+
+## Added 2026-11-05 (knowledge graph deep dive)
+Research and options: `../research/kg-deep-dive/` (`40-decision-brief.md`, `42-proposed-decisions.md`, owner log `41-owner-decisions.md`). Architecture: amendments of 2026-11-05 to `../adr/0008-extractor-role-and-protocol.md`, `../adr/0009-claims-projection.md` and `../adr/0002-sqlite-fts5-storage.md`. Observed-only stays the rule for the next slice (§23); the meaning of later slices is decided now so the schema stays open. Where an entry changes an older one, it names it.
+33. **Claim ids are never re-keyed.** A claim id is a content hash. A merge, an unmerge or a retype never changes it.
+34. **Amends §4: a merge is an overlay claim.**
+    - It is undone without deleting history. There is no `owl:sameAs` and no OWL equality or functional-property reasoning.
+    - An undo records a durable *cannot-link* that survives a rebuild, so a rebuild never re-creates the merge. One operation, no "undo versus they are different" choice.
+    - A merge links entities of the same kind. An account is linked to a Person by a claim, never merged into it (`vocabulary.md` §14; glossary "Merge").
+35. **Clarifies §5: one claim per exact statement; equivalents are grouped on read.** From slice 4, once a merge exists, `about` groups equivalent claims by default ("one identity per thing", concept §1).
+    - A group carries all its member claim ids with their own statuses and revisions. Its revision is a hash of the sorted (member id, revision) pairs. It counts as one toward `limit`.
+    - There is no representative id, and the group fingerprint is never a claim id.
+    - A confirmation targets the member claims atomically. A change to any member shows as a conflict (`renderers.md` §5).
+    - Slice 3 has no merges, so nothing changes there. The `about` result shape changes in slice 4 (additive). How a group of mixed statuses is shown is set in the slice 4 ADR.
+36. **Person ids are never derived from email text.** Amends nothing in §24, and does not extend it.
+    - A Person exists through an owner intent (an accepted Ask), an address-book resource id, or an owner Rule (a precious input, so automation is replayable and can be switched off).
+    - Account-to-Person and email links are time-bounded claims. An equal vouched email *justifies* a reversible link to an existing Person, or proposes one as an Ask. Equal emails over non-overlapping intervals never join Persons. Two Persons are never joined by email alone.
+    - No provider normalisation (dots in Gmail addresses) is baked into identity. The exact formula is set in the slice 4 ADR.
+    - This honours §4: exact identifiers merge automatically, through the Rule path. Fewer automatic joins until a Rule or address book exists; meanwhile, Asks.
+37. **History is stored per occurrence. Amends §25 and §26.**
+    - An *occurrence* is one stretch during which one justification holds a claim. A claim's known interval is built from occurrences, not from accumulated claim-to-claim links. `superseded_by` marks only the current transition.
+    - Transitions are ordered by event order: the observation's `captured_at`, then a portable key of the evidence, with the local evidence id only as the local tie-break. Equal timestamps are allowed; a closed occurrence and a later recurrence at the same `captured_at` stay separate. Intervals are half-open and may be zero-length.
+    - A claim is present when any of its justifications has an open occurrence, judged on event order, not timestamp.
+    - Valid time stays `unknown` (§25). It is reported as `unknown`, with no stored column.
+38. **Justification replaces claim support. Clarifies §5, §6 and §14.**
+    - A justification (provenance, inference or confirmation) is one derivation. Several justifications on a claim are OR alternatives. Within one, the evidence spans and, once inference exists, the premise claims are all required (AND).
+    - Forgetting any span of a derivation kills that derivation, and only that one (§14). "Two supports" in §5 means two derivations.
+    - A premise is live while any justification of the premise claim is live. Cycles are rejected over the whole dependency graph (provenance, premises, confirmations); an anchor is not its own premise.
+    - No blanket deletion of descendants: an independent proof survives.
+39. **Amends §5 and §26 for several extractors on one field.** It stays one claim with several justifications, each labelled by its extractor. A count is not independent corroboration; `why` names extractors and sources separately. Authority across extractors is judged per field, not per rule. An owner override is a Rule, later.
+40. **Retiring an extractor version.** A version bump replays the (source, scope) pair into new-version justifications. When that replay completes, the old version's justifications are replaced in one transaction with the final batch. Reads serve the old output until then, and a failed upgrade keeps the last good output. So a rebuild equals an incremental run, and the old and new interpretations are never both visible. One binding per source stays (`plugins.md` §15); a contract for several bound extractors waits until a second one exists.
+41. **Inference.** A deterministic rule over observed or confirmed premises can produce an `observed` claim; inference over a hypothesis stays a hypothesis. A confirmation does not by itself grant an Act. Domain inference is not a core rule registry: no inference exists in the next slice. For slice 5, derivation is a replaceable plugin that submits claims with declared premises and the core validates them (`plugins.md` §18).
+42. **Confirmation, retraction and undo (built in slice 7).**
+    - A confirmation stores the full reviewed statement, insert-only and outside the rebuildable projection. It isn't re-checked at rebuild (§12).
+    - An owner intent binds to the *lifecycle state the owner saw*: the claim's current occurrence plus its conflict and supersession links. Not the whole revision, so extra corroboration doesn't expire a yes.
+    - A retraction hides the statement while that state holds. If the state changes (the occurrence closes, the claim is superseded, reopens after a gap, or gains a conflict), the retraction lapses: the claim reappears with its evidence-derived status, marked "earlier retracted", and an Ask is raised.
+    - A confirmation keeps the statement alive on its own and survives a provenance change or an extractor's retirement. If the state changes it goes *stale*: shown with its history, no longer deterministic evidence, so no basis for an Act. An Ask is raised.
+    - A new yes on a retracted claim is an explicit reverse; the latest owner intent wins, and it is recorded. Undoing a yes removes only the yes.
+    - A permanent "never show me this again" is an owner Rule, not an intent.
+    - An intent applies in every scope that can see a justification of its target. Its issuer must be able to see the target; an undo from a context that can't is refused.
+    - Precedence: valid retraction, then valid confirmation, then deterministic observed (including a rule over observed or confirmed premises), then hypothesis, then superseded. This places confirmation in the order of §26.
+    - A confirmation stores the exact reviewed claim set with its anchor identified. Rejecting the anchor retracts the slots whose only justification is conditioned on it. A slot with an independent observed justification survives, and the owner can retract slots one by one.
+    - The exact definition of the lifecycle fingerprint, and how it differs from the revision a renderer sends, is set in the slice 7 ADR.
+43. **Carry-through delivery (amends §10).** Until a durable outbox exists (written in the same transaction as the intent or the projection publication, with idempotent consumers, and proposals re-evaluated against alternative derivations instead of withdrawn wholesale), roadmap slice 8 may not run an Action on a knowledge-derived basis. Slices 6 and 7 emit events best effort; nothing executes on them.
+44. **Scoped answers come from visible justifications only (§14, §26).** A hidden replacement never hides a visible claim, and no new global statistic feeds a scoped answer (the FTS rank leak stays the accepted limit, `surfaces.md` §21). The mechanism is exact recomputation at read time from visible justifications and visible intents. Stored full-scope state only accelerates unscoped reads. A benchmark gate on the real scoped read applies before the MCP-and-scopes ticket is signed off (`../plans/2026-11-04-claims-and-about.plan.md`); lenses are designed only if it fails, and a read that exceeds its work budget fails honestly instead of returning a weaker answer.
+45. **Revision (clarifies `renderers.md` §5).** A claim's revision depends on its visible state only: status, the set of visible support keys (portable, deduplicated; no local ids, no versions), links and validity. A vocabulary definition edit or an extractor upgrade doesn't expire an owner's pending tick; `why` and the publication log tell "same state, new rules".
+46. **Clarifies §12: what is precious.** In the next slice, evidence, confirmations, rules and outcomes remain the only precious inputs, and rebuild is replay through deterministic extractors. Direction for slice 5: a model's output is recorded, replayed, and never re-called at rebuild. Re-extraction is an explicit action that writes new records. Whether the recording is precious and exported, or only the owner's confirmed interpretations are kept, is decided when slice 5 is planned; expect the former. §12's text changes only then.
+    - **Entry conditions for slice 5's migration:** insert-only triggers and a forget path for every copied payload in the migration that creates its table; a request's identity separate from an execution's; activating a re-extraction retires the older execution. Whether untrusted content may back a hypothesis only through an owner Rule is also decided then.
+    - A vocabulary definition change means deterministic replay now. For hypotheses it will mean re-validate and mark `behind`, without a model call.
+47. **"As of" and the served-answer audit (slice 7, §7, §25).** "As of t" is a reconstruction: recompute from evidence captured by t under today's pinned rules, and say so in the answer. One insert-only publication-log row per projection publication records the extractor and vocabulary versions and the evidence high-water mark. Answer receipts wait for a consumer. "Why did you say X on Tuesday?" gets today's rules on Tuesday's evidence; an Action run already records its own justification.
+48. **Entry conditions for later slices.**
+    - Slice 4: the identity ADR sets the formulas for Person minting and links (§36), group presentation (§35) and the core predicates of `vocabulary.md` §14.
+    - Slice 5: §46, and §41's derivation direction.
+    - Slice 7: the ADR defining the lifecycle fingerprint (§42).
+    - Slice 8: §43.
+    - Slice 16: `sharing.md` §8.
