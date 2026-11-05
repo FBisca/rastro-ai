@@ -41,9 +41,9 @@ fn fixture(path: &std::path::Path, total: usize, hub: usize) {
         (0, "2026-11-01T00:00:00Z", "open", "co"),
         (changed, "2026-11-02T00:00:00Z", "closed", "cc"),
     ] {
-        db.execute(&format!("INSERT INTO evidence (id, source, scope, location, field, start, end, quote, captured_at, source_updated_at, trust_class)
+        db.execute("INSERT INTO evidence (id, source, scope, location, field, start, end, quote, captured_at, source_updated_at, trust_class)
             SELECT ?1 + ?2 + x, CASE x%3 WHEN 0 THEN 'personal' WHEN 1 THEN 'work' ELSE 'health' END, CASE x%3 WHEN 0 THEN 'personal' WHEN 1 THEN 'work' ELSE 'health' END,
-            'https://example.org/item/' || x, '/state', 0, 1, 'x', ?3, ?3, 'structured' FROM numbers WHERE x<=?4"),
+            'https://example.org/item/' || x, '/state', 0, 1, 'x', ?3, ?3, 'structured' FROM numbers WHERE x<=?4",
             rusqlite::params![total_i, offset, captured, changed]).unwrap();
         db.execute(&format!("INSERT INTO claim SELECT printf('{prefix}_%032x',x), printf('e_%032x',x), 'code:state', NULL, '{state}', 'string', 1, 'observed', '', '', '[]' FROM numbers WHERE x<=?1"), [changed]).unwrap();
         db.execute(&format!("INSERT INTO justification SELECT printf('j{prefix}_%032x',x), printf('{prefix}_%032x',x), 'provenance', 'fixture', '1', '1', printf('d{prefix}_%032x',x), 'state', 1, 1 FROM numbers WHERE x<=?1"), [changed]).unwrap();
