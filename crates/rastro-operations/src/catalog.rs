@@ -260,10 +260,10 @@ operations! {
         },
     }
     About(AboutRequest => AboutResult) {
-        slot: 8, name: "about", surfaces: [Cli], read_only: true, reader: run_read, cli_read_path: true
+        slot: 8, name: "about", surfaces: [Cli, Mcp], read_only: true, reader: run_read, cli_read_path: true
     }
     Why(WhyRequest => WhyResult) {
-        slot: 6, name: "why", surfaces: [Cli], read_only: true, reader: run_read, cli_read_path: true
+        slot: 6, name: "why", surfaces: [Cli, Mcp], read_only: true, reader: run_read, cli_read_path: true
     }
 }
 

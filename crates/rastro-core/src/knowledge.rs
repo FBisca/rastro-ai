@@ -1,4 +1,4 @@
-//! Bounded claim reads. Unscoped reads use the published state; surfaces supply no scopes yet.
+//! Bounded claim reads. Scoped reads recompute from visible justifications.
 use crate::claims::ClaimView;
 use crate::{Coverage, Rastro, ReadStorage, Reader, Storage, read_only};
 use anyhow::{Result, ensure};
@@ -70,10 +70,6 @@ impl<S: ReadStorage> Reader<S> {
     pub fn about(&mut self, entity: &str, options: &AboutOptions) -> Result<About> {
         validate_entity(entity)?;
         ensure!(
-            self.scopes.is_empty(),
-            "scoped claim reads are not available yet"
-        );
-        ensure!(
             (1..=50).contains(&options.limit),
             "limit must be from 1 to 50"
         );
@@ -83,7 +79,7 @@ impl<S: ReadStorage> Reader<S> {
             &self.scopes,
             |view, unfinished, live| {
                 let claims = match view {
-                    Some(view) => view.about(entity, options)?,
+                    Some(view) => view.about_scoped(entity, options, &self.scopes)?,
                     None => vec![],
                 };
                 let coverage = read_only::coverage_of(
@@ -205,10 +201,6 @@ impl Default for WhyOptions {
 impl<S: ReadStorage> Reader<S> {
     pub fn explain(&mut self, claim: &str, options: &WhyOptions) -> Result<Explanation> {
         ensure!(
-            self.scopes.is_empty(),
-            "scoped claim reads are not available yet"
-        );
-        ensure!(
             (1..=50).contains(&options.limit),
             "limit must be from 1 to 50"
         );
@@ -218,7 +210,7 @@ impl<S: ReadStorage> Reader<S> {
             &self.scopes,
             |view, unfinished, live| {
                 let mut why = view
-                    .map(|view| view.explain(claim, options))
+                    .map(|view| view.explain_scoped(claim, options, &self.scopes))
                     .transpose()?
                     .flatten()
                     .ok_or_else(|| anyhow::anyhow!("unknown claim: {claim}"))?;

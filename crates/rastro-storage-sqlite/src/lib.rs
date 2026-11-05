@@ -19,6 +19,7 @@ mod knowledge;
 /// `(name, sql)`, named `YYYYMMDDHHmm_<what>` so migrations from different branches
 /// order by time. Never edit one that has shipped; add a new one.
 mod lifecycle;
+mod scoped;
 
 const MIGRATIONS: [(&str, &str); 8] = [
     (
@@ -876,6 +877,31 @@ impl View<'_> {
     }
 }
 impl Snapshot for View<'_> {
+    fn about_scoped(
+        &self,
+        entity: &str,
+        options: &rastro_core::knowledge::AboutOptions,
+        scopes: &[Scope],
+    ) -> Result<Vec<rastro_core::knowledge::ClaimSummary>> {
+        if scopes.is_empty() {
+            return self.about_claims(entity, options);
+        }
+        let projection = scoped::projection(self.0, scopes, scoped::Target::Entity(entity))?;
+        View(&projection).about_claims(entity, options)
+    }
+    fn explain_scoped(
+        &self,
+        claim: &str,
+        options: &rastro_core::knowledge::WhyOptions,
+        scopes: &[Scope],
+    ) -> Result<Option<rastro_core::knowledge::Explanation>> {
+        if scopes.is_empty() {
+            return self.explanation(claim, options);
+        }
+        let projection = scoped::projection(self.0, scopes, scoped::Target::Claim(claim))?;
+        View(&projection).explanation(claim, options)
+    }
+
     fn explain(
         &self,
         claim: &str,

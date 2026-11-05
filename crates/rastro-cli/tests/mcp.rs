@@ -271,12 +271,12 @@ fn tool<'a>(tools: &'a [Value], name: &str) -> &'a Value {
 
 /// surfaces/R3: each tool's name, description and input schema equal the catalog entry
 #[test]
-fn listed_tools_equal_the_catalog_entries() {
+fn S27_listed_tools_equal_the_catalog_entries() {
     let env = Env::new();
     let mut session = env.start();
     session.initialize();
     let tools = session.list_tools();
-    for name in ["search", "coverage"] {
+    for name in ["search", "coverage", "about", "why"] {
         let spec = catalog::find(name).unwrap();
         let listed = tool(&tools, name);
         assert_eq!(listed["name"], spec.name);
@@ -287,7 +287,7 @@ fn listed_tools_equal_the_catalog_entries() {
 
 /// surfaces/R4: exactly search and coverage, read-only; any other tool is a JSON-RPC error and runs nothing
 #[test]
-fn only_search_and_coverage_are_listed_and_other_tools_are_protocol_errors() {
+fn S27_exactly_four_read_only_tools_and_writes_are_protocol_errors() {
     let env = seeded();
     let config = env.home.path().join("config/config.toml");
     let config_before = fs::read(&config).unwrap();
@@ -296,7 +296,7 @@ fn only_search_and_coverage_are_listed_and_other_tools_are_protocol_errors() {
     let tools = session.list_tools();
     let mut names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     names.sort();
-    assert_eq!(names, ["coverage", "search"]);
+    assert_eq!(names, ["about", "coverage", "search", "why"]);
     for t in &tools {
         assert_eq!(t["annotations"]["readOnlyHint"], true, "{t}");
         assert_eq!(t["annotations"]["openWorldHint"], false, "{t}");
@@ -316,6 +316,7 @@ fn only_search_and_coverage_are_listed_and_other_tools_are_protocol_errors() {
         ),
         ("source.list", json!({})),
         ("index.rebuild", json!({})),
+        ("claims.rebuild", json!({})),
     ] {
         let response = session.call(name, arguments);
         assert!(response.get("result").is_none(), "{name}: {response}");
@@ -533,14 +534,14 @@ fn every_stdout_line_is_a_json_rpc_message() {
 
 /// surfaces/R21: an unsupported revision gets the pinned one back, and the session proceeds
 #[test]
-fn an_unsupported_revision_is_answered_with_the_pinned_revision() {
+fn S27_an_unsupported_revision_is_answered_with_the_pinned_revision() {
     let env = seeded();
     for asked in ["2025-06-18", "2024-11-05", "1999-01-01", "2099-01-01"] {
         let mut session = env.start();
         let init = session.initialize_as(asked, "scripted-client");
         assert_eq!(init["result"]["protocolVersion"], PINNED, "asked {asked}");
         // Codex's default request (2025-06-18) proceeds: it lists tools and calls one.
-        assert_eq!(session.list_tools().len(), 2, "asked {asked}");
+        assert_eq!(session.list_tools().len(), 4, "asked {asked}");
         let call = session.call("coverage", json!({}));
         ok_result(&call["result"]);
     }
@@ -582,7 +583,7 @@ fn closing_stdin_exits_zero_and_diagnostics_stay_on_stderr_within_a_bound() {
 
 /// surfaces/R21: a client that starts with `server/discover` (Claude Code's v2 flow) keeps its session
 #[test]
-fn server_discover_first_does_not_end_the_session_and_initialize_then_works() {
+fn S27_server_discover_first_does_not_end_the_session_and_initialize_then_works() {
     let env = seeded();
     let mut session = env.start();
     let discovered = session.request("server/discover", json!({}));
@@ -593,7 +594,7 @@ fn server_discover_first_does_not_end_the_session_and_initialize_then_works() {
     }
     let init = session.initialize();
     assert_eq!(init["result"]["protocolVersion"], PINNED);
-    assert_eq!(session.list_tools().len(), 2);
+    assert_eq!(session.list_tools().len(), 4);
 }
 
 /// surfaces/R25: two clients with different clientInfo get identical results; no name is stored
@@ -1464,5 +1465,310 @@ fn hidden_unfinished_runs_are_neither_loaded_nor_counted() {
         assert_eq!(coverage[0]["reason"], "interrupted");
         assert!(!answer.to_string().contains("office-secret"));
         assert!(!answer.to_string().contains("work"));
+    }
+}
+
+const CLAIM_ENTITY: &str = "https://example.org/item";
+impl Env {
+    fn claim(&self, scope: &str, predicate: &str, value: &str, day: i64) -> String {
+        use rastro_core::claims::{self, Entity, Object, ObservedClaim, Support};
+        use rastro_core::{Evidence, Scope, Source, Storage, TrustClass};
+        let source = Source::github(format!("claims-{scope}"), "o/p".into(), Scope(scope.into()));
+        let captured = "2026-11-01T00:00:00Z"
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .unwrap()
+            + chrono::Duration::days(day);
+        let mut db = rastro_storage_sqlite::SqliteStorage::open(&self.database()).unwrap();
+        db.project_sources(std::slice::from_ref(&source)).unwrap();
+        let run = db
+            .start_run(&source, ("fixture", "1"), captured, (captured, captured))
+            .unwrap();
+        let evidence = Evidence {
+            source: source.name.clone(),
+            scope: source.scope.clone(),
+            location: CLAIM_ENTITY.into(),
+            field: format!("/{predicate}"),
+            start: 0,
+            end: value.len() as u64,
+            quote: value.into(),
+            trust_class: TrustClass::Structured,
+            captured_at: captured,
+            source_updated_at: Some(captured),
+            original: None,
+        };
+        db.append_evidence(run, &evidence).unwrap();
+        let (evidence_id, evidence) = db
+            .pending_evidence(("fixture", "1"), &source)
+            .unwrap()
+            .into_iter()
+            .rev()
+            .find(|(_, e)| e.field == evidence.field && e.quote == value)
+            .unwrap();
+        let subject = Entity::new(CLAIM_ENTITY.into(), "".into());
+        let object = Object::Literal {
+            value: value.into(),
+            datatype: "string".into(),
+        };
+        let id = claims::claim_id(&subject.id, predicate, &object);
+        db.record_claims(
+            run,
+            ("fixture", "1"),
+            &[ObservedClaim {
+                id: id.clone(),
+                subject,
+                predicate: predicate.into(),
+                object,
+                scalar: predicate == "code:state",
+                supports: std::collections::BTreeSet::from([Support {
+                    evidence_id,
+                    portable_key: claims::portable_evidence_key(&evidence),
+                    field: evidence.field,
+                    start: 0,
+                    end: evidence.end,
+                    extraction_rule: "fixture-rule".into(),
+                }]),
+            }],
+            None,
+        )
+        .unwrap();
+        db.finish_run(
+            run,
+            &rastro_core::RunEnd {
+                finished_at: captured,
+                status: "ok".into(),
+                reason: None,
+                counts: Default::default(),
+            },
+        )
+        .unwrap();
+        id
+    }
+    fn scoped(&self, scopes: &[&str]) -> Session {
+        let mut args = vec!["mcp"];
+        for scope in scopes {
+            args.extend(["--scope", scope]);
+        }
+        let mut session = Session::start(self.command(&args));
+        session.initialize();
+        session
+    }
+}
+fn claim_result(session: &mut Session, tool: &str, args: Value) -> Value {
+    let response = session.call(tool, args);
+    ok_result(&response["result"])["result"].clone()
+}
+
+#[test]
+fn S22_unknown_and_hidden_only_entity_have_the_same_empty_scoped_answer() {
+    let env = Env::new();
+    env.claim("work", "code:state", "open", 0);
+    let mut session = env.scoped(&["personal"]);
+    let hidden = claim_result(&mut session, "about", json!({"entity": CLAIM_ENTITY}));
+    let unknown = claim_result(
+        &mut session,
+        "about",
+        json!({"entity": "https://example.org/unknown"}),
+    );
+    assert_eq!(hidden, unknown);
+    assert_eq!(hidden["claims"], json!([]));
+    assert!(hidden["coverage"].is_array());
+}
+#[test]
+fn S25_unknown_and_hidden_only_claim_are_the_same_scoped_operation_error() {
+    let env = Env::new();
+    let hidden = env.claim("work", "code:state", "open", 0);
+    let mut session = env.scoped(&["personal"]);
+    for id in [hidden.as_str(), "c_unknown"] {
+        let response = session.call("why", json!({"claim": id}));
+        assert!(response.get("error").is_none(), "{response}");
+        assert_eq!(response["result"]["isError"], true, "{response}");
+        // Request ids may appear in diagnostics; neither path reveals stored state.
+        assert_eq!(
+            response["result"]["structuredContent"]["error"],
+            format!("unknown claim: {id}")
+        );
+    }
+}
+#[test]
+fn S27_about_and_why_cli_mcp_envelopes_are_equal() {
+    let env = Env::new();
+    let id = env.claim("personal", "code:state", "open", 0);
+    let mut session = env.start();
+    session.initialize();
+    for (name, value, args) in [
+        (
+            "about",
+            CLAIM_ENTITY,
+            json!({"entity": CLAIM_ENTITY, "history": true, "limit": 1}),
+        ),
+        (
+            "why",
+            id.as_str(),
+            json!({"claim": id, "full": true, "limit": 1}),
+        ),
+    ] {
+        let flag = if name == "about" {
+            "--history"
+        } else {
+            "--full"
+        };
+        let output = env
+            .command(&[name, value, flag, "--limit", "1", "--json"])
+            .output()
+            .unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let cli: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let mcp = session.call(name, args);
+        assert_eq!(ok_result(&mcp["result"]), &cli);
+    }
+}
+#[test]
+fn S28_scoped_replay_filters_metadata_and_hidden_replacements_before_limit() {
+    let env = Env::new();
+    let open = env.claim("personal", "code:state", "open", 0);
+    env.claim("work", "code:state", "open", 0);
+    env.claim("personal", "rastro:alias", "visible:alias", 0);
+    env.claim("personal", "rastro:type", "code:Issue", 0);
+    env.claim("work", "code:state", "closed", 1);
+    env.claim("work", "rastro:alias", "hidden:alias", 1);
+    env.claim("work", "rastro:type", "code:Secret", 1);
+    for n in 0..55 {
+        env.claim("work", &format!("hidden:{n}"), "secret", 2);
+    }
+    let mut session = env.scoped(&["personal"]);
+    let about = claim_result(
+        &mut session,
+        "about",
+        json!({"entity": CLAIM_ENTITY, "limit": 50}),
+    );
+    assert_eq!(about["claims"].as_array().unwrap().len(), 3);
+    assert_eq!(about["truncated"], false);
+    let why = claim_result(&mut session, "why", json!({"claim": open, "full": true}));
+    assert_eq!(why["claim"]["status"], "observed");
+    assert_eq!(why["claim"]["support_count"], 1);
+    assert_eq!(why["supports"].as_array().unwrap().len(), 1);
+    assert_eq!(why["claim"]["subject"]["type"], "code:Issue");
+    assert_eq!(why["claim"]["subject_aliases"], json!(["visible:alias"]));
+    assert_eq!(why["claim"]["superseded_by"], json!([]));
+    assert_eq!(why["claim"]["conflicts_with"], json!([]));
+    assert_eq!(why["claim"]["known_intervals"].as_array().unwrap().len(), 1);
+    assert_eq!(why["claim"]["known_intervals"][0]["end"], Value::Null);
+    for answer in [&about, &why] {
+        assert!(
+            answer["coverage"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|r| r["scope"] == "personal")
+        );
+        assert!(
+            answer["extraction"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .all(|r| r["scope"] == "personal")
+        );
+        assert!(!answer.to_string().contains("hidden:"));
+        assert!(!answer.to_string().contains("Secret"));
+    }
+    assert_eq!(
+        claim_result(&mut session, "about", json!({"entity": "hidden:alias"}))["claims"],
+        json!([])
+    );
+}
+
+fn portable_answer(mut value: Value) -> Value {
+    fn clean(value: &mut Value) {
+        match value {
+            Value::Object(map) => {
+                map.remove("evidence_id");
+                for item in map.values_mut() {
+                    clean(item);
+                }
+            }
+            Value::Array(items) => {
+                for item in items {
+                    clean(item);
+                }
+            }
+            _ => {}
+        }
+    }
+    clean(&mut value);
+    value
+}
+#[test]
+fn S28a_random_scope_sets_equal_visible_rebuild_and_ignore_hidden_inputs() {
+    let scopes = ["personal", "work", "health"];
+    let mut seed = 0x8325_u64;
+    let mut rows = Vec::new();
+    for day in 0..9 {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        rows.push((
+            scopes[(seed >> 32) as usize % 3],
+            "code:state".to_string(),
+            if seed & 1 == 0 { "open" } else { "closed" }.to_string(),
+            day,
+        ));
+    }
+    for scope in scopes {
+        rows.push((scope, "rastro:alias".into(), format!("alias:{scope}"), 0));
+        rows.push((scope, "rastro:type".into(), format!("type:{scope}"), 0));
+    }
+    let mut masks = std::collections::BTreeSet::new();
+    while masks.len() < 7 {
+        seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
+        masks.insert(((seed >> 32) % 7 + 1) as u8);
+    }
+    rows.sort_by_key(|row| row.3);
+    for mask in masks {
+        let visible: Vec<_> = scopes
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| (mask & (1 << i) != 0).then_some(*s))
+            .collect();
+        let all = Env::new();
+        let rebuilt = Env::new();
+        let mut ids = std::collections::BTreeSet::new();
+        for (scope, predicate, value, day) in &rows {
+            let id = all.claim(scope, predicate, value, *day);
+            if visible.contains(scope) {
+                rebuilt.claim(scope, predicate, value, *day);
+                ids.insert(id);
+            }
+        }
+        let mut scoped = all.scoped(&visible);
+        let mut oracle = rebuilt.start();
+        oracle.initialize();
+        for history in [false, true] {
+            let args = json!({"entity": CLAIM_ENTITY, "history": history, "limit": 50});
+            assert_eq!(
+                portable_answer(claim_result(&mut scoped, "about", args.clone())),
+                portable_answer(claim_result(&mut oracle, "about", args)),
+                "mask {mask}"
+            );
+        }
+        for id in ids {
+            let args = json!({"claim": id, "full": true});
+            assert_eq!(
+                portable_answer(claim_result(&mut scoped, "why", args.clone())),
+                portable_answer(claim_result(&mut oracle, "why", args)),
+                "mask {mask}"
+            );
+        }
+        let Some(hidden) = scopes.iter().find(|s| !visible.contains(s)) else {
+            continue;
+        };
+        let args = json!({"entity": CLAIM_ENTITY, "history": true, "limit": 50});
+        let before = claim_result(&mut scoped, "about", args.clone());
+        all.claim(hidden, "code:state", "hidden-new", 20);
+        all.claim(hidden, "rastro:alias", "hidden:latest", 20);
+        assert_eq!(before, claim_result(&mut scoped, "about", args.clone()));
+        // Forget hidden projection inputs; visible replay must remain exactly unchanged.
+        let db = all.db();
+        db.execute("DELETE FROM occurrence WHERE justification_id IN (SELECT s.justification_id FROM justification_span s JOIN evidence e ON e.id = s.evidence_id WHERE e.scope = ?1)", [hidden]).unwrap();
+        db.execute("DELETE FROM justification_span WHERE evidence_id IN (SELECT id FROM evidence WHERE scope = ?1)", [hidden]).unwrap();
+        db.execute("DELETE FROM justification WHERE NOT EXISTS (SELECT 1 FROM justification_span s WHERE s.justification_id = justification.id)", []).unwrap();
+        assert_eq!(before, claim_result(&mut scoped, "about", args));
     }
 }

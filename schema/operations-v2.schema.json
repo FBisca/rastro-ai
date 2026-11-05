@@ -1551,7 +1551,8 @@
         "type": "object"
       },
       "surfaces": [
-        "cli"
+        "cli",
+        "mcp"
       ]
     },
     {
@@ -1657,7 +1658,8 @@
         "type": "object"
       },
       "surfaces": [
-        "cli"
+        "cli",
+        "mcp"
       ]
     }
   ]
