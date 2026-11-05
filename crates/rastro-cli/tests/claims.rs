@@ -584,6 +584,114 @@ fn disagreeing_types_conflict_unless_related_by_supertype_and_a_newer_type_repla
     assert_eq!(status("code:Repository"), "observed");
 }
 
+/// Types the PR from evidence at `location`, read by `source` (the entity is one, the locations differ).
+fn type_pr_at(env: &Env, source: &str, location: &str, kind: &str, day: u32) {
+    let typed = json!({"subject": {"identifier": PR, "type": kind}, "predicate": "rastro:type",
+        "object": {"kind": "literal", "value": kind, "datatype": "rastro:type"},
+        "extraction_rule": "state-field", "supports": [first_state_support()]});
+    env.extract_raw(&[typed]);
+    let mut observation = observation(location, "/state", &format!("open{day}"), "structured");
+    observation["source_updated_at"] = json!(format!("2026-11-{day:02}T00:00:00Z"));
+    env.observe(&[observation]);
+    env.json(&["sync", source]);
+}
+fn type_claim(env: &Env, kind: &str) -> String {
+    env.sql(&format!(
+        "SELECT id FROM claim WHERE predicate = 'rastro:type' AND object_value = '{kind}'"
+    ))
+}
+fn two_type_sources() -> Env {
+    let env = Env::new(Some("test-extractor"));
+    let path = env.plugin_dir("test-extractor").join("vocabulary.toml");
+    let mut text = fs::read_to_string(&path).unwrap();
+    text.push_str(
+        "\n[[types]]\nid = \"code:Draft\"\nsupertype = \"code:PullRequest\"\n\
+         definition = \"d\"\nnot_to_confuse_with = \"n\"\nexamples = [\"e\"]\n\
+         counter_examples = [\"c\"]\nevidence_requirement = \"r\"\n",
+    );
+    fs::write(path, text).unwrap();
+    env.add_source("a", "test");
+    env.add_source("b", "test");
+    env
+}
+const ELSEWHERE: &str = "https://github.com/o/p/pull/2";
+
+/// vocabulary/S15: unrelated types at different locations conflict both ways, neither supersedes
+#[test]
+fn S15_unrelated_types_at_different_locations_conflict_and_neither_supersedes() {
+    let env = two_type_sources();
+    type_pr_at(&env, "a", PR, "code:PullRequest", 1);
+    type_pr_at(&env, "b", ELSEWHERE, "code:Repository", 2);
+    let (pull, repo) = (
+        type_claim(&env, "code:PullRequest"),
+        type_claim(&env, "code:Repository"),
+    );
+    for (id, other) in [(&pull, &repo), (&repo, &pull)] {
+        let why = env.json(&["why", id]);
+        assert_eq!(why["claim"]["status"], "observed", "{why}");
+        assert_eq!(why["claim"]["conflicts_with"], json!([other]), "{why}");
+        assert_eq!(why["claim"]["superseded_by"], json!([]), "{why}");
+        assert_eq!(why["claim"]["supersedes"], json!([]), "{why}");
+    }
+}
+
+/// vocabulary/S16: a type and its supertype at different locations do not conflict; the most
+/// specific type is displayed whichever claim id sorts first
+#[test]
+fn S16_a_type_and_its_supertype_do_not_conflict_and_the_most_specific_is_displayed() {
+    for (first, second) in [
+        ("code:Draft", "code:PullRequest"),
+        ("code:PullRequest", "code:Draft"),
+    ] {
+        let env = two_type_sources();
+        type_pr_at(&env, "a", PR, first, 1);
+        type_pr_at(&env, "b", ELSEWHERE, second, 2);
+        for kind in [first, second] {
+            let why = env.json(&["why", &type_claim(&env, kind)]);
+            assert_eq!(why["claim"]["conflicts_with"], json!([]), "{why}");
+            assert_eq!(why["claim"]["subject"]["type"], "code:Draft", "{why}");
+        }
+    }
+}
+
+/// vocabulary/S17: conflicting types display the one with the newest known time
+#[test]
+fn S17_conflicting_types_display_the_newest_known_type() {
+    for (first, second) in [
+        ("code:PullRequest", "code:Repository"),
+        ("code:Repository", "code:PullRequest"),
+    ] {
+        let env = two_type_sources();
+        type_pr_at(&env, "a", PR, first, 1);
+        type_pr_at(&env, "b", ELSEWHERE, second, 2);
+        let why = env.json(&["why", &type_claim(&env, first)]);
+        assert_eq!(why["claim"]["subject"]["type"], second, "{why}");
+        let about = env.json(&["about", PR]);
+        assert!(
+            !about.to_string().contains(&format!("\"type\":\"{first}\"")),
+            "{about}"
+        );
+    }
+}
+
+/// vocabulary/S18: the same location's type changing supersedes the old type claim
+#[test]
+fn S18_a_changed_type_at_one_location_supersedes_the_old_one() {
+    let env = two_type_sources();
+    type_pr_at(&env, "a", PR, "code:Repository", 1);
+    type_pr_at(&env, "a", PR, "code:PullRequest", 2);
+    let (old, new) = (
+        type_claim(&env, "code:Repository"),
+        type_claim(&env, "code:PullRequest"),
+    );
+    let old = env.json(&["why", &old]);
+    assert_eq!(old["claim"]["status"], "superseded", "{old}");
+    assert_eq!(old["claim"]["superseded_by"], json!([new]), "{old}");
+    assert_eq!(old["claim"]["conflicts_with"], json!([]), "{old}");
+    let new = env.json(&["why", &new]);
+    assert_eq!(new["claim"]["subject"]["type"], "code:PullRequest", "{new}");
+}
+
 /// claims/R20: a vocabulary the core refuses to load fails the run, and no claim is accepted under it
 #[test]
 fn a_refused_vocabulary_fails_the_extraction_and_accepts_no_claim() {

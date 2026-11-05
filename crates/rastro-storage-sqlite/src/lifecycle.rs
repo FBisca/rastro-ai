@@ -341,6 +341,7 @@ impl Replay {
             }
         }
         let mut edges = BTreeSet::new();
+        let is_type = predicate == rastro_core::claims::TYPE_PREDICATE;
         for group in &self.groups {
             let mut current = BTreeSet::new();
             let mut old = BTreeSet::new();
@@ -362,7 +363,26 @@ impl Replay {
                         edges.insert((from, to, "supersedes"));
                     }
                 }
+                // A type conflicts with every unrelated type live anywhere in the component.
+                if is_type {
+                    continue;
+                }
                 for &to in &current {
+                    if from != to && !self.compatible_types(from, to) {
+                        edges.insert((from, to, "conflicts_with"));
+                    }
+                }
+            }
+        }
+        if is_type {
+            let live: BTreeSet<&str> = self
+                .derivations
+                .iter()
+                .filter(|d| d.scalar && d.current)
+                .map(|d| d.claim.as_str())
+                .collect();
+            for &from in &live {
+                for &to in &live {
                     if from != to && !self.compatible_types(from, to) {
                         edges.insert((from, to, "conflicts_with"));
                     }
