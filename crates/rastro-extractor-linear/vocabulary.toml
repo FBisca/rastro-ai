@@ -1,0 +1,86 @@
+# The `tracker` vocabulary: what Rastro may say about an issue tracker, as read from Linear.
+#
+# Every type, predicate and alias kind says what it means, what it isn't, examples and
+# counter-examples, and the evidence it needs. Predicates also give their domain and range,
+# cardinality, freshness, authority and sensitivity. The core refuses a claim outside this file.
+#
+# Canonical identifiers (decisions/vocabulary.md §26): a workspace user is
+# `linear:user/<uuid>`, an issue `linear:issue/<uuid>`, each the record's own Linear id.
+namespace = "tracker"
+version = "0.1.0"
+
+[[types]]
+id = "tracker:Account"
+definition = "A Linear workspace user, identified by its Linear id, whatever its name, display name or email is now."
+not_to_confuse_with = "A Person: an account doesn't prove a human, and one human may hold accounts in several sources (an account is linked to a Person, never merged into one). Not a team, nor an integration acting without a user."
+examples = ["linear:user/2f1c0e6a-1b7e-4c55-9d1a-0c3f5e7a9b21, name Ana Silva, email ana@example.com"]
+counter_examples = ["the name `Ana Silva` on its own (an alias, not the account)", "an email written in an issue description", "a GitHub account with the same name"]
+evidence_requirement = "A structured `/id` observation at the location `linear:user/<uuid>` whose quote is that uuid, or a structured `/creator/id` or `/assignee/id` observation at an issue naming it."
+
+[[types]]
+id = "tracker:Issue"
+definition = "A Linear issue, identified by its Linear id, whatever its team key, number, title or URL is now."
+not_to_confuse_with = "Its identifier such as ENG-123 (which changes when the issue moves team); a GitHub issue (a code:Issue); a project or a cycle; a task or Commitment (an issue may hold neither, or several)."
+examples = ["linear:issue/7d3e9a10-4b2c-4f8e-a1d5-6e2b0c9f8a34, identifier ENG-123"]
+counter_examples = ["ENG-123 written in a GitHub pull request", "a Linear comment on an issue (not read)", "a Linear project"]
+evidence_requirement = "A structured `/id` observation at the location `linear:issue/<uuid>` whose quote is that uuid."
+
+[[predicates]]
+id = "tracker:active"
+definition = "Whether a workspace user is active (`true`) or deactivated (`false`), exactly as Linear's `active` field says. One value per subject and observation context (source, scope, location, field)."
+not_to_confuse_with = "Whether the person is online or still works somewhere; a guest or admin role; a suspended integration."
+examples = ["linear:user/2f1c0e6a-1b7e-4c55-9d1a-0c3f5e7a9b21 tracker:active \"true\"", "a user an admin removed from the workspace: tracker:active \"false\""]
+counter_examples = ["\"false\" read from a description saying someone left", "an active state guessed from the absence of recent issues"]
+evidence_requirement = "Structured `/id` and `/active` observations at the user's location; `/active` quotes exactly `true` or `false`."
+domain = ["tracker:Account"]
+range = ["boolean"]
+cardinality = "one"
+freshness = "source"
+authority = "newer_comparable_observation"
+sensitivity = "Personal: it says whether someone is still in the workspace. Visible only in the source's scope."
+
+[[predicates]]
+id = "tracker:creator"
+definition = "The workspace user who created an issue, as Linear's `creator` field names it. One value per subject and observation context."
+not_to_confuse_with = "The assignee or a subscriber; a Person (an account isn't a human); a name written in the description."
+examples = ["linear:issue/7d3e9a10-4b2c-4f8e-a1d5-6e2b0c9f8a34 tracker:creator linear:user/2f1c0e6a-1b7e-4c55-9d1a-0c3f5e7a9b21"]
+counter_examples = ["a creator guessed for an issue an integration created (`creator` null records nothing)", "\"reported by Ana\" in a description"]
+evidence_requirement = "Structured `/id` and `/creator/id` observations at the issue's location; `/creator/id` quotes a Linear user id."
+domain = ["tracker:Issue"]
+range = ["tracker:Account"]
+cardinality = "one"
+freshness = "source"
+authority = "newer_comparable_observation"
+sensitivity = "Personal: it says who asked for what. Visible only in the source's scope."
+
+[[predicates]]
+id = "tracker:assignee"
+definition = "The workspace user an issue is assigned to, as Linear's `assignee` field names it. One value per subject and observation context."
+not_to_confuse_with = "The creator or a subscriber; a Person (an account isn't a human); someone asked in the description to take it."
+examples = ["linear:issue/7d3e9a10-4b2c-4f8e-a1d5-6e2b0c9f8a34 tracker:assignee linear:user/2f1c0e6a-1b7e-4c55-9d1a-0c3f5e7a9b21"]
+counter_examples = ["an assignee guessed for an unassigned issue (`assignee` null records nothing)", "\"@ana can you take this\" in a description"]
+evidence_requirement = "Structured `/id` and `/assignee/id` observations at the issue's location; `/assignee/id` quotes a Linear user id."
+domain = ["tracker:Issue"]
+range = ["tracker:Account"]
+cardinality = "one"
+freshness = "source"
+authority = "newer_comparable_observation"
+sensitivity = "Personal: it says who is expected to do what. Visible only in the source's scope."
+
+[[aliases]]
+kind = "email"
+definition = "An email address Linear lists for a workspace user when it was observed. A change adds an address; the old one stays an alias of the same account."
+not_to_confuse_with = "The account's identity (its Linear id); a Person; an address written in an issue. Compared across sources only by the identity rule (whole address, ASCII case-folded)."
+examples = ["ana@example.com for linear:user/2f1c0e6a-1b7e-4c55-9d1a-0c3f5e7a9b21"]
+counter_examples = ["ana@example.com quoted in a description", "an address with whitespace or without `@`"]
+evidence_requirement = "A structured `/email` observation, with `/id` at the same location."
+domain = ["tracker:Account"]
+
+[[aliases]]
+kind = "name"
+definition = "The full name Linear lists for a workspace user when it was observed. A change adds a name; the old one stays an alias of the same account."
+not_to_confuse_with = "The display name (a handle, not read as an alias); a Person's name (`rastro:name/…`, set by the owner); proof that two accounts are one human (names never merge)."
+examples = ["Ana Silva for linear:user/2f1c0e6a-1b7e-4c55-9d1a-0c3f5e7a9b21"]
+counter_examples = ["`ana` as a display name", "a name written in an issue title"]
+evidence_requirement = "A structured `/name` observation, with `/id` at the same location."
+domain = ["tracker:Account"]
