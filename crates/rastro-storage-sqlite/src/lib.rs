@@ -483,7 +483,7 @@ impl Storage for SqliteStorage {
                  SELECT e.*, row_number() OVER (PARTITION BY e.location, e.field
                      ORDER BY e.captured_at DESC, e.id DESC) AS newest
                  FROM evidence e
-                 WHERE e.source = ?1 AND e.scope = ?2
+                 WHERE e.source = ?1 AND e.scope = ?2 AND e.trust_class = 'structured'
                      AND e.location IN (SELECT value FROM json_each(?3))
                      AND (e.captured_at, e.id) <= (?4, ?5)
              ) WHERE newest = 1 ORDER BY captured_at, id",

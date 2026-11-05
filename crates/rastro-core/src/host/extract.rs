@@ -11,7 +11,7 @@ use rastro_plugin_sdk::{
     SourceScope, Span, Vocabulary,
 };
 use std::{
-    collections::{BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap},
     fs,
     path::{Component, Path},
     process::Command,
@@ -62,16 +62,20 @@ pub fn extract<S: Storage>(
                 source,
             )?;
             evidence = pending.len();
-            let context = context(storage, source, &pending)?;
-            let run = Run {
-                plugin,
-                vocabulary,
-                source,
-                run_id,
-                context,
-                pending,
-            };
-            drive(storage, &run, &mut counts)
+            match context(storage, source, &pending)? {
+                Err(reason) => Err(reason),
+                Ok(context) => {
+                    let run = Run {
+                        plugin,
+                        vocabulary,
+                        source,
+                        run_id,
+                        context,
+                        pending,
+                    };
+                    drive(storage, &run, &mut counts)
+                }
+            }
         }
     };
     let reason = outcome.err().map(String::from);
@@ -100,36 +104,55 @@ pub fn extract<S: Storage>(
     })
 }
 
-/// Companion fields delivered at most per pending observation, so context stays bounded.
-const CONTEXT_PER_EVIDENCE: usize = 4;
+/// Most companion fields delivered for one location. A location with more fails the run: a
+/// partial context would make the claims depend on what was left out, so nothing is trimmed.
+const MAX_CONTEXT_FIELDS: usize = 64;
+/// Why a run fails when a location's context exceeds `MAX_CONTEXT_FIELDS`.
+const CONTEXT_TOO_LARGE: &str = "context_too_large";
 
-/// Location context: for the records the pending evidence changes, the other fields of the
-/// same source, scope and location, as they stood at the batch's high-water mark (its last
-/// observation). Fields that have pending evidence arrive as that evidence. Bounded: past
-/// `CONTEXT_PER_EVIDENCE` per pending observation only the observations nearest the mark are
-/// kept. The set is a function of the stored evidence and the mark, so a replay delivers the
-/// same one.
+/// Location context: for the records the pending evidence changes, every other structured
+/// field of the same source, scope and location, as it stood at the batch's high-water mark (its
+/// last observation). Only structured evidence can support a claim, so nothing else is
+/// delivered. Fields that have pending evidence arrive as that evidence. The set is a function
+/// of the stored evidence and the mark, so a replay delivers the same one. A location with more
+/// than `MAX_CONTEXT_FIELDS` such fields fails the run.
 fn context<S: Storage>(
     storage: &S,
     source: &Source,
     pending: &[(i64, Evidence)],
-) -> Result<Vec<(i64, Evidence)>> {
-    let Some((_, e)) = pending.last() else {
-        return Ok(vec![]);
+) -> Result<std::result::Result<Vec<(i64, Evidence)>, &'static str>> {
+    // The mark is the checkpoint's boundary: its append and that append's capture time.
+    let Some((mark, e)) = checkpoint_boundary(pending) else {
+        return Ok(Ok(vec![]));
     };
-    // The mark is the checkpoint's: the newest time and the highest local id of the batch.
-    let mark = pending.iter().map(|(id, _)| *id).max().unwrap_or_default();
     let at: BTreeSet<&str> = pending.iter().map(|(_, e)| &*e.location).collect();
     let at: Vec<String> = at.into_iter().map(String::from).collect();
+    let found = storage.location_context(source, &at, (e.captured_at, mark))?;
+    Ok(companions(found, pending))
+}
+
+/// The companion fields among what a location holds: structured ones with no pending evidence,
+/// or the reason the run fails.
+fn companions(
+    mut found: Vec<(i64, Evidence)>,
+    pending: &[(i64, Evidence)],
+) -> std::result::Result<Vec<(i64, Evidence)>, &'static str> {
     let changed: BTreeSet<(&str, &str)> = pending
         .iter()
         .map(|(_, e)| (&*e.location, &*e.field))
         .collect();
-    let mut context = storage.location_context(source, &at, (e.captured_at, mark))?;
-    context.retain(|(_, e)| !changed.contains(&(&*e.location, &*e.field)));
-    let keep = CONTEXT_PER_EVIDENCE * pending.len();
-    context.drain(..context.len().saturating_sub(keep));
-    Ok(context)
+    found.retain(|(_, e)| {
+        e.trust_class == crate::TrustClass::Structured
+            && !changed.contains(&(&*e.location, &*e.field))
+    });
+    let mut per_location: BTreeMap<&str, usize> = BTreeMap::new();
+    for (_, e) in &found {
+        *per_location.entry(&e.location).or_default() += 1;
+    }
+    if per_location.values().any(|n| *n > MAX_CONTEXT_FIELDS) {
+        return Err(CONTEXT_TOO_LARGE);
+    }
+    Ok(found)
 }
 
 /// The extractor's own vocabulary: a file inside its directory, defining a namespace it lists
@@ -358,6 +381,7 @@ fn item((id, e): &(i64, Evidence)) -> BatchItem {
 #[allow(non_snake_case)]
 mod tests {
     use super::*;
+    use crate::{Scope, TrustClass};
     #[test]
     fn S3_checkpoint_boundary_names_one_append_even_when_capture_order_differs() {
         let observation = |captured: &str| Evidence {
@@ -384,6 +408,70 @@ mod tests {
         assert_eq!(
             claims::portable_evidence_key(boundary),
             claims::portable_evidence_key(&later_append)
+        );
+    }
+
+    fn seen(id: i64, location: &str, field: &str, trust: TrustClass) -> (i64, Evidence) {
+        (
+            id,
+            Evidence {
+                source: "s".into(),
+                scope: Scope("personal".into()),
+                location: location.into(),
+                field: field.into(),
+                start: 0,
+                end: 1,
+                quote: "x".into(),
+                trust_class: trust,
+                captured_at: Utc::now(),
+                source_updated_at: None,
+                original: None,
+            },
+        )
+    }
+
+    #[test]
+    fn S15b_context_is_every_structured_companion_field_of_a_changed_location() {
+        let pending = [seen(9, "l", "/user/login", TrustClass::Structured)];
+        let found = vec![
+            seen(1, "l", "/user/id", TrustClass::Structured),
+            seen(2, "l", "/user/login", TrustClass::Structured),
+            seen(3, "l", "/title", TrustClass::UntrustedContent),
+            seen(4, "l", "/labels/0/name", TrustClass::Structured),
+        ];
+        let kept: Vec<_> = companions(found, &pending)
+            .unwrap()
+            .into_iter()
+            .map(|(id, _)| id)
+            .collect();
+        // The changed field and the untrusted one are left out; nothing else is trimmed.
+        assert_eq!(kept, [1, 4]);
+    }
+
+    #[test]
+    fn S15b_a_location_over_the_context_cap_fails_instead_of_being_trimmed() {
+        let pending = [seen(900, "l", "/state", TrustClass::Structured)];
+        let many = |n: usize, at: &str| -> Vec<_> {
+            (0..n)
+                .map(|i| seen(i as i64, at, &format!("/f/{i}"), TrustClass::Structured))
+                .collect()
+        };
+        assert_eq!(
+            companions(many(MAX_CONTEXT_FIELDS, "l"), &pending)
+                .unwrap()
+                .len(),
+            MAX_CONTEXT_FIELDS
+        );
+        assert_eq!(
+            companions(many(MAX_CONTEXT_FIELDS + 1, "l"), &pending).err(),
+            Some(CONTEXT_TOO_LARGE)
+        );
+        // The cap is per location, not per run.
+        let mut two = many(MAX_CONTEXT_FIELDS, "l");
+        two.extend(many(MAX_CONTEXT_FIELDS, "m"));
+        assert_eq!(
+            companions(two, &pending).unwrap().len(),
+            2 * MAX_CONTEXT_FIELDS
         );
     }
 }

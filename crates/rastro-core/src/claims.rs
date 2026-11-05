@@ -606,6 +606,7 @@ mod tests {
         };
         ObservedClaim {
             scalar: false,
+            type_ancestors: Vec::new(),
             id: claim_id(&subject.id, TYPE_PREDICATE, &object),
             subject,
             predicate: TYPE_PREDICATE.into(),
@@ -627,6 +628,7 @@ mod tests {
         };
         ObservedClaim {
             scalar: false,
+            type_ancestors: Vec::new(),
             id: claim_id(&subject.id, "x:author", &object),
             subject,
             predicate: "x:author".into(),

@@ -79,11 +79,19 @@ fn parse_url(location: &str) -> Option<Url> {
     let [host, owner, repo, section, number] = parts[..] else {
         return None;
     };
-    let host_ok = host
-        .bytes()
-        .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'.' || b == b'-');
+    // Dot-separated labels of lowercase letters, digits and inner hyphens.
+    let host_ok = host.split('.').all(|label| {
+        !label.is_empty()
+            && !label.starts_with('-')
+            && !label.ends_with('-')
+            && label
+                .bytes()
+                .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
+    });
     let name_ok = |name: &str| {
         !name.is_empty()
+            && name != "."
+            && name != ".."
             && name
                 .bytes()
                 .all(|b| b.is_ascii_alphanumeric() || b"._-".contains(&b))
@@ -358,6 +366,14 @@ mod tests {
             "https://github.com:443/o/p/pull/4",
             "https://u@github.com/o/p/pull/4",
             "https://github.com/o/p",
+            "https://github.com/../p/pull/4",
+            "https://github.com/o/../pull/4",
+            "https://github.com/./p/pull/4",
+            "https://.github.com/o/p/pull/4",
+            "https://github..com/o/p/pull/4",
+            "https://github.com./o/p/pull/4",
+            "https://-github.com/o/p/pull/4",
+            "https://github-.com/o/p/pull/4",
         ] {
             assert_eq!(parse_url(url), None, "{url}");
         }

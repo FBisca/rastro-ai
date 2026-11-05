@@ -381,3 +381,60 @@ fn S14_instructions_in_a_title_or_body_yield_no_claim_or_display_name() {
     let human = env.ok(&["why", &env.claim(PR, "code:state", "open")]);
     assert!(!human.contains("Ignore previous"), "{human}");
 }
+
+/// S13: after an owner's login changes across many pull requests, each carrying many labels
+/// beside its `/user/id`, the incremental sync, a re-read and a rebuild give one projection
+#[test]
+fn S13_a_rename_across_many_labelled_pull_requests_projects_like_a_rebuild() {
+    let mut labelled = World::default();
+    for number in 10..17 {
+        let mut pr = item(number, true, "open", "t", "b", octocat("octocat"));
+        pr["labels"] = (0..8)
+            .map(|n| json!({"name": format!("label-{n}")}))
+            .collect();
+        labelled.items.push(pr);
+    }
+    let fixture = Fixture::start(labelled);
+    let env = Env::new(&fixture.base);
+    assert_eq!(env.sync(&[])["state"], "current");
+    fixture.change(|w| {
+        for item in &mut w.items {
+            item["user"] = octocat("octocat-renamed");
+        }
+    });
+    let projection = |env: &Env| -> Vec<Value> {
+        env.column("SELECT id FROM claim ORDER BY id")
+            .iter()
+            .map(|id| {
+                let mut why = env.json(&["why", id]);
+                for support in why["supports"].as_array_mut().unwrap() {
+                    support.as_object_mut().unwrap().remove("run_id");
+                }
+                why
+            })
+            .collect()
+    };
+    // Only `/user/login` changed on every pull request.
+    let extraction = env.sync(&[]);
+    assert_eq!(extraction["state"], "current", "{extraction}");
+    assert_eq!(extraction["counts"]["rejected"], 0, "{extraction}");
+    let incremental = projection(&env);
+    let old = env.why(OCTOCAT, "rastro:alias", "octocat");
+    assert!(
+        !old["claim"]["known_intervals"][0]["end"].is_null(),
+        "{old}"
+    );
+    env.claim(OCTOCAT, "rastro:alias", "octocat-renamed");
+    assert_eq!(env.sync(&["--reread"])["state"], "current");
+    assert_eq!(
+        projection(&env),
+        incremental,
+        "a re-read changed the projection"
+    );
+    env.ok(&["claims", "rebuild"]);
+    assert_eq!(
+        projection(&env),
+        incremental,
+        "a rebuild differs from the incremental one"
+    );
+}

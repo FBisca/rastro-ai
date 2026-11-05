@@ -463,6 +463,8 @@ pub struct AliasKind {
 /// The prefix the core owns: its meta-predicates and datatypes live under it, so no
 /// vocabulary may define a name there.
 pub const CORE_PREFIX: &str = "rastro:";
+/// The literal datatypes a predicate's range may name (lexical identity, vocabulary.md §14).
+pub const DATATYPES: [&str; 5] = ["string", "integer", "number", "boolean", "datetime"];
 impl Vocabulary {
     /// Parses a vocabulary file and refuses one with a term left undefined.
     pub fn parse(text: &str) -> Result<Self> {
@@ -583,6 +585,14 @@ impl Vocabulary {
             );
             if let Some(t) = domain.iter().find(|t| !self.has_type(t)) {
                 anyhow::bail!("vocabulary term {id:?} applies to {t:?}, which it doesn't define");
+            }
+            // A range entry is a type this file defines or a known datatype; a name with a
+            // namespace that isn't a defined type (`rastro:` included) is refused.
+            for entry in range.into_iter().flatten() {
+                anyhow::ensure!(
+                    self.has_type(entry) || DATATYPES.contains(&entry.as_str()),
+                    "vocabulary term {id:?} takes {entry:?}, which is neither a type it defines nor a known datatype"
+                );
             }
         }
         Ok(())
@@ -757,5 +767,33 @@ evidence_requirement = "r"
             "{}",
             error(&dangling)
         );
+    }
+
+    #[test]
+    fn S15a_a_supertype_cycle_is_refused() {
+        let text = format!(
+            "namespace = \"x\"\nversion = \"1\"\npredicates = []\n\
+             [[types]]\nid = \"x:A\"\nsupertype = \"x:B\"\n{WORDS}\
+             [[types]]\nid = \"x:B\"\nsupertype = \"x:A\"\n{WORDS}"
+        );
+        assert!(error(&text).contains("supertype"), "{}", error(&text));
+    }
+
+    #[test]
+    fn S15a_a_range_names_a_defined_type_or_a_known_datatype() {
+        for bad in ["x:Missing", "rastro:type", "text"] {
+            let text = vocabulary(POLICY).replacen(
+                "range = [\"string\"]",
+                &format!("range = [\"{bad}\"]"),
+                1,
+            );
+            assert!(error(&text).contains(bad), "{bad}: {}", error(&text));
+        }
+        let ok = vocabulary(POLICY).replacen(
+            "range = [\"string\"]",
+            "range = [\"x:T\", \"integer\"]",
+            1,
+        );
+        assert!(Vocabulary::parse(&ok).is_ok());
     }
 }
