@@ -266,6 +266,7 @@ fn main() -> Result<()> {
 }
 
 #[cfg(test)]
+#[allow(non_snake_case)]
 mod tests {
     use super::*;
     use rastro_plugin_sdk::Span;
@@ -302,7 +303,7 @@ mod tests {
 
     /// Only canonical record locations whose `/id` agrees name a record
     #[test]
-    fn only_canonical_locations_whose_id_agrees_name_a_record() {
+    fn S20_only_canonical_locations_whose_id_agrees_name_a_record() {
         let location = format!("linear:user/{USER}");
         assert_eq!(extract(&user(&location, USER)).len(), 4);
         for (location, id) in [
@@ -320,7 +321,7 @@ mod tests {
 
     /// Titles, descriptions, display names and untrusted fields are never read
     #[test]
-    fn titles_descriptions_and_untrusted_fields_are_never_read() {
+    fn S20_titles_descriptions_and_untrusted_fields_are_never_read() {
         let issue = format!("linear:issue/{ITEM}");
         let account = format!("linear:user/{USER}");
         let items = [
@@ -335,7 +336,7 @@ mod tests {
 
     /// Malformed values yield no claim about them
     #[test]
-    fn malformed_values_yield_no_claim_about_them() {
+    fn S20_malformed_values_yield_no_claim_about_them() {
         let location = format!("linear:user/{USER}");
         let items = [
             observed(1, &location, "/id", USER, "structured"),
@@ -357,7 +358,7 @@ mod tests {
     /// Creator and assignee are each one bundle with the issue's `/id`, and their accounts are
     /// typed in the same run
     #[test]
-    fn creator_and_assignee_are_bundles_with_typed_accounts() {
+    fn S20_creator_and_assignee_are_bundles_with_typed_accounts() {
         let issue = format!("linear:issue/{ITEM}");
         let items = [
             observed(1, &issue, "/id", ITEM, "structured"),

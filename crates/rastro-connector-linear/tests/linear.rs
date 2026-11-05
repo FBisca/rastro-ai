@@ -236,7 +236,7 @@ fn S20_issues_outside_the_window_are_skipped_and_missing_people_record_nothing()
 
 /// A rate limit part-way keeps what was read and is never "found"
 #[test]
-fn a_rate_limit_keeps_what_was_read_and_records_when_to_retry() {
+fn S20_a_rate_limit_keeps_what_was_read_and_records_when_to_retry() {
     let reset_ms = (chrono::Utc::now().timestamp() + 600) * 1000;
     let fixture = Fixture::with_route(world(), move |req, _| {
         (req.operation == "Issues").then(|| {
@@ -262,7 +262,7 @@ fn a_rate_limit_keeps_what_was_read_and_records_when_to_retry() {
 
 /// Failures map to typed reasons, never raw error text
 #[test]
-fn failures_map_to_typed_reasons() {
+fn S22_failures_map_to_typed_reasons_in_coverage() {
     for (reply, reason) in [
         (Reply::error(400, "FORBIDDEN"), "forbidden"),
         (Reply::status(429, json!({})), "rate_limited"),
