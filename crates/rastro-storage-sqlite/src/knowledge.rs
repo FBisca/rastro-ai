@@ -201,7 +201,9 @@ impl View<'_> {
             return Ok(AboutClaims::default());
         };
         let since = options.since.map(crate::stamp);
-        let summaries = |ids: Vec<String>, accounts: &BTreeSet<String>| {
+        // In a Person's view a claim names the linked account it is about, and every
+        // `rastro:held_by` names its account, a superseded one included.
+        let summaries = |ids: Vec<String>, accounts: Option<&BTreeSet<String>>| {
             ids.into_iter()
                 .map(|id| {
                     let summary = self
@@ -211,10 +213,18 @@ impl View<'_> {
                         Object::Entity { id, .. } => Some(id),
                         Object::Literal { .. } => None,
                     };
+                    let Some(accounts) = accounts else {
+                        return Ok(AboutClaim {
+                            summary,
+                            account: None,
+                        });
+                    };
+                    let link = summary.claim.predicate == rastro_core::identity::HELD_BY;
                     let account = [Some(&summary.claim.subject.id), object]
                         .into_iter()
                         .flatten()
                         .find(|e| accounts.contains(*e))
+                        .or(link.then_some(&summary.claim.subject.id))
                         .cloned();
                     Ok(AboutClaim { summary, account })
                 })
@@ -234,7 +244,7 @@ impl View<'_> {
                 .collect::<Result<Vec<_>, _>>()?;
             return Ok(AboutClaims {
                 resolved: true,
-                claims: summaries(ids, &BTreeSet::new())?,
+                claims: summaries(ids, None)?,
                 person: None,
             });
         }
@@ -277,7 +287,7 @@ impl View<'_> {
                 row.get::<_, String>(0)
             })?
             .collect::<Result<Vec<_>, _>>()?;
-        let claims = summaries(ids, &accounts)?;
+        let claims = summaries(ids, Some(&accounts))?;
         let mut linked = Vec::new();
         for account in &accounts {
             let Entity {

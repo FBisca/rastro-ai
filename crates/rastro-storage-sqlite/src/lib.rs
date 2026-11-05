@@ -24,6 +24,8 @@ mod scoped;
 #[doc(hidden)]
 pub use scoped::{cache_len as scoped_cache_len, clear_cache as clear_scoped_cache};
 
+/// The migration recording when an intent's contribution ended; applying it replays the intents.
+const INTENT_END: &str = "202611081000_intent_justification_end";
 const MIGRATIONS: [(&str, &str); 10] = [
     (
         "202611041200_initial",
@@ -62,7 +64,7 @@ const MIGRATIONS: [(&str, &str); 10] = [
         include_str!("../migrations/202611071000_owner_intents.sql"),
     ),
     (
-        "202611081000_intent_justification_end",
+        INTENT_END,
         include_str!("../migrations/202611081000_intent_justification_end.sql"),
     ),
 ];
@@ -149,6 +151,12 @@ impl SqliteStorage {
             )?;
             if !done {
                 transaction.execute_batch(sql)?;
+                if name == INTENT_END {
+                    // The intents already stored replay once, so what they ended reads as
+                    // history right after the upgrade, without waiting for a rebuild.
+                    identity::apply(&transaction)?;
+                    lifecycle::publish(&transaction)?;
+                }
                 mark(&transaction, name)?;
             }
             transaction.commit()?;

@@ -991,6 +991,20 @@ fn S36_an_undone_link_or_merge_stays_as_a_superseded_claim() {
         assert_eq!(support["intent"]["id"], undone.as_str(), "{why}");
         assert_eq!(support["current"], false, "{why}");
     }
+    // In the Person's view with history, the undone link still names its account.
+    let view = env.ok(&["about", &ana, "--history"]);
+    let link = view["claims"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["predicate"] == "rastro:held_by")
+        .unwrap_or_else(|| panic!("no held_by: {view}"));
+    assert_eq!(link["status"], "superseded", "{view}");
+    assert_eq!(
+        link["account"],
+        claims::entity_id("github:account/7").as_str(),
+        "{view}"
+    );
     // Linking again reopens the same claim: a second interval, observed.
     env.ok(&["identity", "link", &octocat, &ana]);
     let about = env.about(&octocat);

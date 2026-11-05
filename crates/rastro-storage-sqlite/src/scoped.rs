@@ -148,9 +148,9 @@ fn build(
         Target::Entity(entity) => (
             // Alias roots are the matching alias claims with a fully visible justification;
             // stored status is full-scope, so it plays no part here. The replay applies the
-            // status set, the ambiguity and its marks. A form that may name a Person also roots
-            // the Persons merged with it and the accounts they hold (`?3`), so a Person's view
-            // replays its accounts; which of them the scope set sees is decided in the replay.
+            // status set, the ambiguity and its marks. A form that may name a visible Person
+            // also roots the visible Persons merged with it and the visible accounts they hold
+            // (`?3`), so a Person's view replays its accounts and nothing past a hidden Person.
             format!(
                 "SELECT id FROM entity WHERE id = ?1 OR identifier = ?1 UNION SELECT subject FROM ({}) a \
                  WHERE EXISTS (SELECT 1 FROM justification j WHERE j.claim_id = a.claim AND {VISIBLE_JUSTIFICATION}) \
@@ -161,7 +161,7 @@ fn build(
             vec![
                 entity.to_string(),
                 scopes.clone(),
-                serde_json::to_string(&super::identity::roots(db, entity)?)?,
+                serde_json::to_string(&super::identity::roots(db, entity, scope_set)?)?,
             ],
         ),
         // A claim's own slot only, plus its endpoints' type and alias claims below.

@@ -387,6 +387,8 @@ pub struct Resolution {
     entities: BTreeMap<String, EntityTarget>,
     intents: BTreeMap<String, Intent>,
     issued: BTreeMap<String, DateTime<Utc>>,
+    /// Intent ids in acceptance order.
+    order: Vec<String>,
 }
 fn sorted(a: &str, b: &str) -> (String, String) {
     if b < a {
@@ -408,6 +410,7 @@ impl Resolution {
             let id = intent.id.clone();
             r.issued.insert(id.clone(), intent.issued_at);
             r.intents.insert(id.clone(), intent.clone());
+            r.order.push(id.clone());
             for entity in intent.targets.entities() {
                 r.entities
                     .entry(entity.id.clone())
@@ -647,6 +650,13 @@ impl Resolution {
                 _ => continue,
             };
             let intent = &self.intents[id];
+            // An undone name a newer name had already replaced ended at the replacement.
+            let ended = match (status, intent.kind, by) {
+                (IntentStatus::Undone, IntentKind::Name, Some(by)) => self
+                    .replacing_name(id, by)
+                    .map_or(ended, |at| at.min(ended)),
+                _ => ended,
+            };
             match (
                 intent.kind,
                 intent.targets.endpoints(),
@@ -688,10 +698,25 @@ impl Resolution {
         }
         out
     }
-    /// The Persons a form could name, before visibility: `me`, a Person's id or identifier, or
-    /// any name a Person has or had (`rastro:name/<name>`); with every Person merged with them,
-    /// and every account any of them holds. Ids only, for a scoped read's replay roots.
-    pub fn roots(&self, form: &str) -> BTreeSet<String> {
+    /// When a name intent accepted after `name` and before `undo` first named the same Person.
+    fn replacing_name(&self, name: &str, undo: &str) -> Option<DateTime<Utc>> {
+        let person = self.intents[name].targets.single()?.id.clone();
+        self.order
+            .iter()
+            .skip_while(|id| *id != name)
+            .skip(1)
+            .take_while(|id| *id != undo)
+            .map(|id| &self.intents[id])
+            .find(|i| {
+                i.kind == IntentKind::Name && i.targets.single().is_some_and(|p| p.id == person)
+            })
+            .map(|i| i.issued_at)
+    }
+    /// The Persons a form could name among the `visible` entities: `me`, a Person's id or
+    /// identifier, or any name a Person has or had (`rastro:name/<name>`); with every Person
+    /// merged with them through merges whose two Persons are both visible, and every visible
+    /// account any of them holds. Ids only, for a scoped read's replay roots.
+    pub fn roots(&self, form: &str, visible: &BTreeSet<String>) -> BTreeSet<String> {
         let mut persons: BTreeSet<String> = BTreeSet::new();
         if form == ME {
             persons.extend(self.me.clone());
@@ -712,6 +737,7 @@ impl Resolution {
                     .filter_map(|i| i.targets.single().map(|p| p.id.clone())),
             );
         }
+        persons.retain(|p| visible.contains(p));
         let mut pending: Vec<String> = persons.iter().cloned().collect();
         while let Some(next) = pending.pop() {
             for (a, b) in self.merges.keys() {
@@ -722,7 +748,7 @@ impl Resolution {
                 } else {
                     continue;
                 };
-                if persons.insert(other.clone()) {
+                if visible.contains(other) && persons.insert(other.clone()) {
                     pending.push(other.clone());
                 }
             }
@@ -730,7 +756,7 @@ impl Resolution {
         let accounts: Vec<String> = self
             .links
             .keys()
-            .filter(|(_, p)| persons.contains(p))
+            .filter(|(a, p)| persons.contains(p) && visible.contains(a))
             .map(|(a, _)| a.clone())
             .collect();
         persons.extend(accounts);

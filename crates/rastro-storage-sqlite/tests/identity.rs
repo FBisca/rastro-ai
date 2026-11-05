@@ -612,3 +612,107 @@ fn S36_an_older_name_stays_superseded_and_still_resolves() {
         assert!(!claims.is_empty(), "{form}");
     }
 }
+
+fn same_as(id: &str, a: &EntityTarget, b: &EntityTarget) -> Intent {
+    let mut merge = cannot_link(id, a, b, &[]);
+    merge.kind = IntentKind::SameAs;
+    merge.domain_key = merge.expected_domain().unwrap();
+    merge
+}
+
+/// S33: a merge chain through a Person the scope set can't see costs nothing past it: `about P`
+/// in `personal`, with P–Q–R merged and Q held only through a `work` account, replays only P's
+/// own account, so the budget P alone needs is enough
+#[test]
+fn S33_a_merge_chain_through_a_hidden_person_adds_no_work_past_it() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("db");
+    let mut db = SqliteStorage::open(&path).unwrap();
+    let (a1, a2, a3) = (
+        account(&mut db, 1, "personal"),
+        account(&mut db, 2, "work"),
+        account(&mut db, 3, "personal"),
+    );
+    let (p, q, r) = (person(1), person(2), person(3));
+    issue(
+        &mut db,
+        vec![
+            create("i_1", &p),
+            create("i_2", &q),
+            create("i_3", &r),
+            link("i_4", &a1, &p, &[]),
+            link("i_5", &a2, &q, &[]),
+            link("i_6", &a3, &r, &[]),
+            same_as("i_7", &p, &q),
+            same_as("i_8", &q, &r),
+        ],
+    )
+    .unwrap();
+    let personal = [Scope("personal".into())];
+    let options = AboutOptions::default();
+    let claims = db
+        .about_scoped_within(&p.identifier, &options, &personal, 1)
+        .unwrap();
+    // P's type, its link and its account's type; nothing of Q or R.
+    assert_eq!(claims.len(), 3, "{claims:?}");
+    // Unscoped, the whole chain is one class: three spans.
+    assert!(
+        db.about_scoped_within(&p.identifier, &options, &[], 2)
+            .is_err()
+    );
+    assert!(
+        db.about_scoped_within(&p.identifier, &options, &[], 3)
+            .is_ok()
+    );
+}
+
+/// S36: undoing a name a newer one had already replaced ends it at the replacement, not at the
+/// undo, so the two names never overlap
+#[test]
+fn S36_undoing_an_already_replaced_name_ends_it_at_the_replacement() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("db");
+    let mut db = SqliteStorage::open(&path).unwrap();
+    let ana = person(1);
+    let older = named("i_2", &ana, "Ana", 1);
+    let mut undone = undo("i_4", &older, &[]);
+    undone.issued_at = time() + chrono::Duration::minutes(3);
+    issue(
+        &mut db,
+        vec![
+            create("i_1", &ana),
+            older,
+            named("i_3", &ana, "Ana Silva", 2),
+            undone,
+        ],
+    )
+    .unwrap();
+    let history = AboutOptions {
+        history: true,
+        ..AboutOptions::default()
+    };
+    let claims = db
+        .snapshot(|view| view.about(&ana.identifier, &history))
+        .unwrap();
+    let interval = |value: &str| {
+        let claim = claims
+            .iter()
+            .find(|c| matches!(&c.claim.object, Object::Literal { value: v, .. } if v == value))
+            .unwrap_or_else(|| panic!("no name {value}"));
+        (
+            claim.claim.status.clone(),
+            claim.claim.known_intervals.clone(),
+        )
+    };
+    let (status, intervals) = interval("Ana");
+    assert_eq!(status, "superseded");
+    assert_eq!(intervals.len(), 1);
+    assert_eq!(intervals[0].start, time() + chrono::Duration::minutes(1));
+    assert_eq!(
+        intervals[0].end,
+        Some(time() + chrono::Duration::minutes(2))
+    );
+    let (status, intervals) = interval("Ana Silva");
+    assert_eq!(status, "observed");
+    assert_eq!(intervals[0].start, time() + chrono::Duration::minutes(2));
+}

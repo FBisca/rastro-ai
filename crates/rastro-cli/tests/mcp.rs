@@ -2249,9 +2249,22 @@ fn S32_mcp_about_says_whether_the_identifier_resolved() {
     }
 }
 
-/// S31: the random scope-set oracle with owner intents: Persons, names, links (some undone) and a
-/// merge. Each scoped answer, a link shown only where both its ends are, equals a rebuild that
-/// holds only the visible evidence and the visible intents. (Automatic links don't exist yet.)
+/// The answer of a session to `why` on `claim`, as a result or an error text.
+fn why_text(session: &mut Session, claim: &str) -> Value {
+    let response = session.call("why", json!({"claim": claim, "limit": 50}));
+    if response["result"]["isError"] == true {
+        return response["result"]["structuredContent"]["error"].clone();
+    }
+    portable_answer(ok_result(&response["result"])["result"].clone())
+}
+
+/// S31: the scope-set oracle with owner intents, over every scope set: Persons, names (one named
+/// again), links (one undone, with its cannot-link), and a merge chain P1–P2–P3 whose accounts
+/// sit in three scopes, so every scope set meets a merge with one end hidden and, without
+/// `work`, a chain through a hidden middle Person. A seed places a fourth account and extra
+/// links. Each scoped `about` (with and without history) and each `why` on an intent-backed
+/// claim, a link shown only where both its ends are, equals a rebuild that holds only the
+/// visible evidence and the visible intents. (Automatic links don't exist yet.)
 #[test]
 fn S31_random_scope_sets_with_intents_equal_a_per_scope_rebuild() {
     use rastro_core::claims::entity_id;
@@ -2303,47 +2316,49 @@ fn S31_random_scope_sets_with_intents_equal_a_per_scope_rebuild() {
             endpoints,
         }
     };
+    let entity = |p: &EntityTarget| Targets::Entity {
+        version: SHAPE_VERSION,
+        entity: p.clone(),
+    };
     let mut seed = 0x5131_u64;
     let mut next = || {
         seed = seed.wrapping_mul(6364136223846793005).wrapping_add(1);
         seed >> 33
     };
+    // P1, P2 and P3 hold one account each, in `personal`, `work` and `health`; the fourth
+    // account's scope is random.
     let accounts: Vec<(String, &str)> = (1..=4)
-        .map(|n| (format!("github:account/{n}"), scopes[next() as usize % 3]))
+        .map(|n| {
+            let scope = if n <= 3 {
+                scopes[n - 1]
+            } else {
+                scopes[next() as usize % 3]
+            };
+            (format!("github:account/{n}"), scope)
+        })
         .collect();
     let persons = [
         target("rastro:person/me", "person"),
         target("rastro:person/p1", "person"),
         target("rastro:person/p2", "person"),
+        target("rastro:person/p3", "person"),
     ];
     // Each intent with the accounts and Persons it needs visible to be shown.
-    let mut log: Vec<(Intent, Vec<String>, Vec<usize>)> = Vec::new();
-    let mut n = 0;
-    let mut add =
-        |log: &mut Vec<_>, kind, targets, name, accounts: Vec<String>, needs: Vec<usize>| {
-            n += 1;
-            log.push((intent(n, kind, targets, name), accounts, needs));
-        };
-    let mut me = intent(
-        0,
-        IntentKind::CreatePerson,
-        Targets::Entity {
-            version: SHAPE_VERSION,
-            entity: persons[0].clone(),
-        },
-        None,
-    );
+    type Logged = (Intent, Vec<String>, Vec<usize>);
+    let mut log: Vec<Logged> = Vec::new();
+    let mut me = intent(0, IntentKind::CreatePerson, entity(&persons[0]), None);
     me.domain_key = ME_DOMAIN.into();
     log.push((me, vec![], vec![]));
-    for (p, name) in [(1, "P1"), (2, "P2")] {
-        let entity = Targets::Entity {
-            version: SHAPE_VERSION,
-            entity: persons[p].clone(),
-        };
+    let mut n = 0;
+    let mut add = |log: &mut Vec<Logged>, kind, targets, name, accounts: Vec<String>, needs| {
+        n += 1;
+        log.push((intent(n, kind, targets, name), accounts, needs));
+    };
+    for (p, name) in [(1, "P1"), (2, "P2"), (3, "P3")] {
         add(
             &mut log,
             IntentKind::CreatePerson,
-            entity.clone(),
+            entity(&persons[p]),
             None,
             vec![],
             vec![p],
@@ -2351,7 +2366,7 @@ fn S31_random_scope_sets_with_intents_equal_a_per_scope_rebuild() {
         add(
             &mut log,
             IntentKind::Name,
-            entity.clone(),
+            entity(&persons[p]),
             Some(name),
             vec![],
             vec![p],
@@ -2361,17 +2376,14 @@ fn S31_random_scope_sets_with_intents_equal_a_per_scope_rebuild() {
     add(
         &mut log,
         IntentKind::Name,
-        Targets::Entity {
-            version: SHAPE_VERSION,
-            entity: persons[1].clone(),
-        },
+        entity(&persons[1]),
         Some("P1 again"),
         vec![],
         vec![1],
     );
     let mut links = Vec::new();
-    for (account, _) in &accounts {
-        let holder = next() as usize % 3;
+    for (i, (account, _)) in accounts.iter().enumerate() {
+        let holder = if i < 3 { i + 1 } else { next() as usize % 4 };
         let a = target(account, "account");
         add(
             &mut log,
@@ -2383,7 +2395,7 @@ fn S31_random_scope_sets_with_intents_equal_a_per_scope_rebuild() {
         );
         links.push((log.last().unwrap().0.clone(), account.clone(), holder));
         if next() % 3 == 0 {
-            let other = (holder + 1) % 3;
+            let other = (holder + 1) % 4;
             add(
                 &mut log,
                 IntentKind::Link,
@@ -2394,7 +2406,36 @@ fn S31_random_scope_sets_with_intents_equal_a_per_scope_rebuild() {
             );
         }
     }
-    // One link is undone (with its cannot-link), and P1 and P2 merge.
+    // The fourth account links to `me` as well, so `me` always holds one.
+    let fourth = target(&accounts[3].0, "account");
+    if links[3].2 != 0 {
+        add(
+            &mut log,
+            IntentKind::Link,
+            pair(false, &fourth, &persons[0]),
+            None,
+            vec![accounts[3].0.clone()],
+            vec![0],
+        );
+    }
+    // The merge chain P1–P2–P3.
+    add(
+        &mut log,
+        IntentKind::SameAs,
+        pair(true, &persons[1], &persons[2]),
+        None,
+        vec![],
+        vec![1, 2],
+    );
+    add(
+        &mut log,
+        IntentKind::SameAs,
+        pair(true, &persons[2], &persons[3]),
+        None,
+        vec![],
+        vec![2, 3],
+    );
+    // One link is undone, with its cannot-link.
     let (undone, account, holder) = links[next() as usize % links.len()].clone();
     let mut undo = intent(90, IntentKind::Undo, undone.targets.clone(), None);
     undo.domain_key = undone.domain_key.clone();
@@ -2411,17 +2452,8 @@ fn S31_random_scope_sets_with_intents_equal_a_per_scope_rebuild() {
         vec![account.clone()],
         vec![holder],
     ));
-    log.push((
-        intent(
-            92,
-            IntentKind::SameAs,
-            pair(true, &persons[1], &persons[2]),
-            None,
-        ),
-        vec![],
-        vec![1, 2],
-    ));
     let undone_id = undone.id.clone();
+    let mut hard = (false, false);
     for mask in 1..8u8 {
         let visible: Vec<_> = scopes
             .iter()
@@ -2434,7 +2466,7 @@ fn S31_random_scope_sets_with_intents_equal_a_per_scope_rebuild() {
                 .any(|(a, scope)| a == account && visible.contains(scope))
         };
         // A Person is visible through an effective link to a visible account; `me` always.
-        let mut seen = [true, false, false];
+        let mut seen = [true, false, false, false];
         for (intent, accounts, needs) in &log {
             if intent.kind == IntentKind::Link
                 && intent.id != undone_id
@@ -2443,6 +2475,8 @@ fn S31_random_scope_sets_with_intents_equal_a_per_scope_rebuild() {
                 seen[needs[0]] = true;
             }
         }
+        hard.0 |= seen[1] != seen[2];
+        hard.1 |= seen[1] && !seen[2] && seen[3];
         let all = Env::new();
         let rebuilt = Env::new();
         for (day, (account, scope)) in accounts.iter().enumerate() {
@@ -2474,20 +2508,82 @@ fn S31_random_scope_sets_with_intents_equal_a_per_scope_rebuild() {
         );
         let mut scoped = all.scoped(&visible);
         let mut oracle = rebuilt.scoped(&[]);
-        let mut forms: Vec<String> = vec![
-            "me".into(),
-            "rastro:name/P1".into(),
-            "rastro:name/P1 again".into(),
-            "rastro:name/P2".into(),
-        ];
+        let mut forms: Vec<String> = [
+            "me",
+            "rastro:name/P1",
+            "rastro:name/P1 again",
+            "rastro:name/P2",
+            "rastro:name/P3",
+        ]
+        .map(String::from)
+        .to_vec();
         forms.extend(persons.iter().map(|p| p.identifier.clone()));
         forms.extend(accounts.iter().map(|(a, _)| a.clone()));
-        for form in forms {
+        for form in &forms {
+            for history in [false, true] {
+                let args = json!({"entity": form, "history": history, "limit": 50});
+                let answer = |session: &mut Session| {
+                    let response = session.call("about", args.clone());
+                    if response["result"]["isError"] == true {
+                        return response["result"]["structuredContent"]["error"].clone();
+                    }
+                    portable_answer(ok_result(&response["result"])["result"].clone())
+                };
+                assert_eq!(
+                    answer(&mut scoped),
+                    answer(&mut oracle),
+                    "mask {mask} {form} history {history}"
+                );
+            }
+        }
+        // `why` on every intent-backed claim, visible or not.
+        let claims: Vec<String> = all
+            .db()
+            .prepare("SELECT DISTINCT claim_id FROM intent_justification ORDER BY 1")
+            .unwrap()
+            .query_map([], |r| r.get(0))
+            .unwrap()
+            .map(Result::unwrap)
+            .collect();
+        assert!(claims.len() >= 12, "{claims:?}");
+        for claim in claims {
             assert_eq!(
-                about_text(&mut scoped, &form),
-                about_text(&mut oracle, &form),
-                "mask {mask} {form}"
+                why_text(&mut scoped, &claim),
+                why_text(&mut oracle, &claim),
+                "mask {mask} why {claim}"
             );
         }
+    }
+    // Non-vacuous: some scope set hides one end of P1–P2, and one hides the middle of the chain.
+    assert_eq!(hard, (true, true));
+}
+
+/// S37: a scoped `why` on an intent-backed claim lists only the issuer scopes the session can
+/// see; a scope the session can't see is never named
+#[test]
+fn S37_a_scoped_why_never_names_an_issuer_scope_the_session_cant_see() {
+    let env = Env::new();
+    env.add_scoped_source("mine", "personal");
+    env.add_scoped_source("secret", "health-secret");
+    env.json(&["identity", "me"]);
+    let mut everything = env.scoped(&[]);
+    let about = claim_result(&mut everything, "about", json!({"entity": "me"}));
+    let claim = about["claims"][0]["id"].clone();
+    let full = claim_result(&mut everything, "why", json!({"claim": claim}));
+    assert_eq!(
+        full["supports"][0]["intent"]["issuer"]["scopes"],
+        json!(["health-secret", "personal"]),
+        "{full}"
+    );
+    let mut personal = env.scoped(&["personal"]);
+    let why = claim_result(&mut personal, "why", json!({"claim": claim}));
+    assert_eq!(
+        why["supports"][0]["intent"]["issuer"]["scopes"],
+        json!(["personal"]),
+        "{why}"
+    );
+    let about = claim_result(&mut personal, "about", json!({"entity": "me"}));
+    for answer in [&why, &about] {
+        assert!(!answer.to_string().contains("health-secret"), "{answer}");
     }
 }

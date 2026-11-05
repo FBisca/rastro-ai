@@ -318,3 +318,161 @@ fn S10_the_owner_intent_migration_keeps_the_existing_projection() {
         3
     );
 }
+
+/// S36: the migration that records when an intent's contribution ended replays the intents a
+/// database already holds, so a link undone before the upgrade is a superseded claim right after
+/// it, with no rebuild and no new intent
+#[test]
+fn S36_the_intent_end_migration_replays_existing_intents() {
+    use rastro_core::claims::entity_id;
+    use rastro_core::identity::{
+        EntityTarget, FORMAT_VERSION, IntentKind, IssuerContext, OWNER, Payload, SHAPE_VERSION,
+        Targets,
+    };
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("rastro.sqlite3");
+    let mut before: Vec<(&str, &str)> = vec![
+        (
+            "202611041200_initial",
+            include_str!("../migrations/202611041200_initial.sql"),
+        ),
+        (
+            "202611041500_evidence_insert_guard",
+            include_str!("../migrations/202611041500_evidence_insert_guard.sql"),
+        ),
+        (
+            "202611041700_evidence_full_text_index",
+            include_str!("../migrations/202611041700_evidence_full_text_index.sql"),
+        ),
+        (
+            "202611050900_run_window",
+            include_str!("../migrations/202611050900_run_window.sql"),
+        ),
+        (
+            "202611051100_run_evidence",
+            include_str!("../migrations/202611051100_run_evidence.sql"),
+        ),
+        (
+            "202611051300_coverage_pair_indexes",
+            include_str!("../migrations/202611051300_coverage_pair_indexes.sql"),
+        ),
+        (
+            "202611061000_claims_projection",
+            include_str!("../migrations/202611061000_claims_projection.sql"),
+        ),
+        (
+            "202611061200_knowledge_v2",
+            include_str!("../migrations/202611061200_knowledge_v2.sql"),
+        ),
+    ];
+    before.push((
+        "202611071000_owner_intents",
+        include_str!("../migrations/202611071000_owner_intents.sql"),
+    ));
+    drop(SqliteStorage::open_with(&path, &before).unwrap());
+    let target = |identifier: &str, role: &str| EntityTarget {
+        id: entity_id(identifier),
+        identifier: identifier.into(),
+        role: role.into(),
+    };
+    let (person, account) = (
+        target("rastro:person/1", "person"),
+        target("github:account/7", "account"),
+    );
+    let link = Targets::Pair {
+        version: SHAPE_VERSION,
+        symmetric: false,
+        endpoints: [account.clone(), person.clone()],
+    };
+    let mut refusal = [account.clone(), person.clone()];
+    refusal.sort();
+    let link_domain = format!("held_by/{}/{}", account.id, person.id);
+    let rows = [
+        (
+            "i_1",
+            IntentKind::CreatePerson,
+            Targets::Entity {
+                version: SHAPE_VERSION,
+                entity: person.clone(),
+            },
+            format!("person/{}", person.id),
+            None,
+            "2026-11-01T00:00:00.000Z",
+        ),
+        (
+            "i_2",
+            IntentKind::Link,
+            link.clone(),
+            link_domain.clone(),
+            None,
+            "2026-11-01T00:01:00.000Z",
+        ),
+        (
+            "i_3",
+            IntentKind::Undo,
+            link,
+            link_domain,
+            Some("i_2"),
+            "2026-11-01T00:02:00.000Z",
+        ),
+        (
+            "i_4",
+            IntentKind::CannotLink,
+            Targets::Pair {
+                version: SHAPE_VERSION,
+                symmetric: true,
+                endpoints: refusal.clone(),
+            },
+            format!("cannot_link/{}/{}", refusal[0].id, refusal[1].id),
+            None,
+            "2026-11-01T00:02:00.000Z",
+        ),
+    ];
+    let connection = Connection::open(&path).unwrap();
+    let issuer = serde_json::to_string(&IssuerContext::owner_cli(&[])).unwrap();
+    let payload = serde_json::to_string(&Payload {
+        version: SHAPE_VERSION,
+        name: None,
+    })
+    .unwrap();
+    for (id, kind, targets, domain, undo_of, at) in rows {
+        connection
+            .execute(
+                "INSERT INTO intent (id, format_version, kind, owner_id, issuer_context, issued_at, \
+                 domain_key, targets_json, payload_json, undo_of) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+                rusqlite::params![
+                    id,
+                    FORMAT_VERSION,
+                    kind.as_str(),
+                    OWNER,
+                    issuer,
+                    at,
+                    domain,
+                    serde_json::to_string(&targets).unwrap(),
+                    payload,
+                    undo_of
+                ],
+            )
+            .unwrap();
+    }
+    let count = |sql: &str| -> i64 { connection.query_row(sql, [], |r| r.get(0)).unwrap() };
+    let publications = count("SELECT count(*) FROM projection_publication");
+    drop(SqliteStorage::open(&path).unwrap());
+    let link: (String, Option<String>) = connection
+        .query_row(
+            "SELECT c.status, ij.ended_at FROM claim c JOIN intent_justification ij ON ij.claim_id = c.id \
+             WHERE c.predicate = 'rastro:held_by'",
+            [],
+            |r| Ok((r.get(0)?, r.get(1)?)),
+        )
+        .unwrap();
+    assert_eq!(
+        link,
+        ("superseded".into(), Some("2026-11-01T00:02:00.000Z".into()))
+    );
+    assert_eq!(count("SELECT count(*) FROM intent"), 4);
+    assert_eq!(
+        count("SELECT count(*) FROM projection_publication"),
+        publications + 1
+    );
+}

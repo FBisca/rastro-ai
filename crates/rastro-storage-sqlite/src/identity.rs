@@ -149,18 +149,13 @@ pub(crate) fn insert_all(
 /// an incremental write give the same rows.
 pub(crate) fn apply(db: &Connection) -> Result<()> {
     let resolution = Resolution::of(&load(db)?);
+    // The claims intents backed before; any of them nothing justifies afterwards goes. A claim
+    // no intent ever backed is left alone.
+    let before: Vec<String> = db
+        .prepare("SELECT DISTINCT claim_id FROM intent_justification")?
+        .query_map([], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
     db.execute("DELETE FROM intent_justification", [])?;
-    db.execute(
-        &format!(
-            "DELETE FROM claim_link WHERE from_claim IN ({0}) OR to_claim IN ({0})",
-            crate::UNJUSTIFIED
-        ),
-        [],
-    )?;
-    db.execute(
-        &format!("DELETE FROM claim WHERE id IN ({})", crate::UNJUSTIFIED),
-        [],
-    )?;
     // Each claim's intents, and whether each still holds.
     let mut supports = BTreeMap::<String, Vec<(String, bool)>>::new();
     for claim in resolution.claims() {
@@ -241,6 +236,19 @@ pub(crate) fn apply(db: &Connection) -> Result<()> {
             since
         ])?;
     }
+    let gone = format!(
+        "SELECT value FROM json_each(?1) WHERE value IN ({})",
+        crate::UNJUSTIFIED
+    );
+    let before = serde_json::to_string(&before)?;
+    db.execute(
+        &format!("DELETE FROM claim_link WHERE from_claim IN ({gone}) OR to_claim IN ({gone})"),
+        [&before],
+    )?;
+    db.execute(
+        &format!("DELETE FROM claim WHERE id IN ({gone})"),
+        [&before],
+    )?;
     db.execute("DELETE FROM entity WHERE id NOT IN (SELECT subject FROM claim UNION SELECT object_entity FROM claim WHERE object_entity IS NOT NULL)", [])?;
     Ok(())
 }
@@ -291,22 +299,9 @@ pub(crate) fn copy_visible(db: &Connection, target: &Connection, scopes: &[Scope
     )?;
     let intents = load(db)?;
     let resolution = Resolution::of(&intents);
-    let scope_set = serde_json::to_string(scopes)?;
-    let mut accounts = BTreeMap::<String, bool>::new();
-    let mut account = |id: &str| -> Result<bool> {
-        if let Some(&seen) = accounts.get(id) {
-            return Ok(seen);
-        }
-        let seen = scopes.is_empty() || account_visible(db, id, &scope_set)?;
-        accounts.insert(id.into(), seen);
-        Ok(seen)
-    };
-    let mut persons: BTreeSet<String> = resolution.me.iter().cloned().collect();
-    for (a, p) in resolution.links.keys() {
-        if account(a)? {
-            persons.insert(p.clone());
-        }
-    }
+    let mut sight = Sight::new(db, scopes)?;
+    let persons = sight.persons(&resolution)?;
+    let mut account = |id: &str| sight.account(id);
     let claims: Vec<(String, String, String, Option<String>)> = db
         .prepare(
             "SELECT c.id, c.predicate, c.subject, c.object_entity FROM claim c
@@ -361,6 +356,12 @@ pub(crate) fn copy_visible(db: &Connection, target: &Connection, scopes: &[Scope
         needed.insert(intent.clone());
     }
     for intent in intents.iter().filter(|i| needed.contains(&i.id)) {
+        // The issuer's recorded scopes are shown only as far as this scope set sees: a scope the
+        // reader can't see is never named.
+        let mut issuer = intent.issuer_context.clone();
+        if !scopes.is_empty() {
+            issuer.scopes.retain(|scope| scopes.contains(scope));
+        }
         target.execute(
             &format!("INSERT INTO intent ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)"),
             params![
@@ -369,7 +370,7 @@ pub(crate) fn copy_visible(db: &Connection, target: &Connection, scopes: &[Scope
                 intent.format_version,
                 intent.kind.as_str(),
                 intent.owner_id,
-                serde_json::to_string(&intent.issuer_context)?,
+                serde_json::to_string(&issuer)?,
                 stamp(intent.issued_at),
                 intent.domain_key,
                 serde_json::to_string(&intent.targets)?,
@@ -402,6 +403,54 @@ pub(crate) fn me(db: &Connection) -> Result<Option<String>> {
 /// The entities a scoped `about` on `form` replays besides the form's own: when the form may
 /// name a Person, that Person, the Persons merged with it and the accounts they hold. Chosen
 /// from every intent; what the scope set sees of them is decided in the replay.
-pub(crate) fn roots(db: &Connection, form: &str) -> Result<BTreeSet<String>> {
-    Ok(Resolution::of(&load(db)?).roots(form))
+pub(crate) fn roots(db: &Connection, form: &str, scopes: &[Scope]) -> Result<BTreeSet<String>> {
+    let resolution = Resolution::of(&load(db)?);
+    let mut sight = Sight::new(db, scopes)?;
+    let mut visible = sight.persons(&resolution)?;
+    for (account, _) in resolution.links.keys() {
+        if sight.account(account)? {
+            visible.insert(account.clone());
+        }
+    }
+    Ok(resolution.roots(form, &visible))
+}
+
+/// What a scope set (empty: every scope) sees of identity, by one rule for every scoped read: an
+/// account where a justification of a claim about it is visible; a Person where an effective
+/// link holds it to a visible account, and `me` everywhere (ADR 0010, Visibility).
+struct Sight<'a> {
+    db: &'a Connection,
+    scopes: Option<String>,
+    accounts: BTreeMap<String, bool>,
+}
+impl<'a> Sight<'a> {
+    fn new(db: &'a Connection, scopes: &[Scope]) -> Result<Self> {
+        Ok(Self {
+            db,
+            scopes: (!scopes.is_empty())
+                .then(|| serde_json::to_string(scopes))
+                .transpose()?,
+            accounts: BTreeMap::new(),
+        })
+    }
+    fn account(&mut self, id: &str) -> Result<bool> {
+        if let Some(&seen) = self.accounts.get(id) {
+            return Ok(seen);
+        }
+        let seen = match &self.scopes {
+            None => true,
+            Some(scopes) => account_visible(self.db, id, scopes)?,
+        };
+        self.accounts.insert(id.into(), seen);
+        Ok(seen)
+    }
+    fn persons(&mut self, resolution: &Resolution) -> Result<BTreeSet<String>> {
+        let mut persons: BTreeSet<String> = resolution.me.iter().cloned().collect();
+        for (a, p) in resolution.links.keys() {
+            if self.account(a)? {
+                persons.insert(p.clone());
+            }
+        }
+        Ok(persons)
+    }
 }
