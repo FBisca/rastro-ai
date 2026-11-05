@@ -259,31 +259,18 @@ pub(crate) fn apply(db: &Connection) -> Result<()> {
     Ok(())
 }
 
-/// Whether a scope set (empty: every scope) can see an entity. An account is visible where a
-/// justification of a claim about it is; a Person where at least one of its linked accounts is,
-/// and `me` everywhere (ADR 0010, Visibility).
+/// Whether a scope set (empty: every scope) can see an entity, by the rule of [`Sight`].
 pub(crate) fn visible(
     db: &Connection,
     resolution: &Resolution,
     id: &str,
     scopes: &[Scope],
 ) -> Result<bool> {
-    if scopes.is_empty() {
-        return Ok(true);
+    let mut sight = Sight::new(db, scopes)?;
+    if resolution.is_person(id) {
+        return Ok(sight.persons(resolution)?.contains(id));
     }
-    let scopes = serde_json::to_string(scopes)?;
-    if let Some(person) = resolution.persons.get(id) {
-        if person.me {
-            return Ok(true);
-        }
-        for (account, _) in resolution.links.keys().filter(|(_, p)| p == id) {
-            if account_visible(db, account, &scopes)? {
-                return Ok(true);
-            }
-        }
-        return Ok(false);
-    }
-    account_visible(db, id, &scopes)
+    sight.account(id)
 }
 fn account_visible(db: &Connection, id: &str, scopes: &str) -> Result<bool> {
     let sql = format!(
@@ -408,8 +395,8 @@ pub(crate) fn me(db: &Connection) -> Result<Option<String>> {
 }
 
 /// The entities a scoped `about` on `form` replays besides the form's own: when the form may
-/// name a Person, that Person, the Persons merged with it and the accounts they hold. Chosen
-/// from every intent; what the scope set sees of them is decided in the replay.
+/// name a Person the scope set sees, that Person, the visible Persons merged with it through
+/// merges whose two Persons are visible, and the visible accounts they hold (rule of [`Sight`]).
 pub(crate) fn roots(db: &Connection, form: &str, scopes: &[Scope]) -> Result<BTreeSet<String>> {
     let resolution = Resolution::of(&load(db)?);
     let mut sight = Sight::new(db, scopes)?;
@@ -422,9 +409,10 @@ pub(crate) fn roots(db: &Connection, form: &str, scopes: &[Scope]) -> Result<BTr
     Ok(resolution.roots(form, &visible))
 }
 
-/// What a scope set (empty: every scope) sees of identity, by one rule for every scoped read: an
-/// account where a justification of a claim about it is visible; a Person where an effective
-/// link holds it to a visible account, and `me` everywhere (ADR 0010, Visibility).
+/// What a scope set sees of identity, by one rule for the issuer's check and every scoped read:
+/// an account where a justification of a claim about it is visible; a Person where an effective
+/// link holds it to a visible account, and `me` everywhere (ADR 0010, Visibility). The empty set
+/// is every scope, and sees every account and every Person.
 struct Sight<'a> {
     db: &'a Connection,
     scopes: Option<String>,
@@ -452,6 +440,10 @@ impl<'a> Sight<'a> {
         Ok(seen)
     }
     fn persons(&mut self, resolution: &Resolution) -> Result<BTreeSet<String>> {
+        // Every scope sees every Person.
+        if self.scopes.is_none() {
+            return Ok(resolution.persons.keys().cloned().collect());
+        }
         let mut persons: BTreeSet<String> = resolution.me.iter().cloned().collect();
         for (a, p) in resolution.links.keys() {
             if self.account(a)? {

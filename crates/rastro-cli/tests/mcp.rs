@@ -2601,4 +2601,14 @@ fn S37_a_scoped_why_never_names_an_issuer_scope_the_session_cant_see() {
     for answer in [&why, &about] {
         assert!(!answer.to_string().contains("health-secret"), "{answer}");
     }
+    // A session whose scopes share none with the issuer's sees an empty list.
+    let mut work = env.scoped(&["work"]);
+    let why = claim_result(&mut work, "why", json!({"claim": claim}));
+    assert_eq!(
+        why["supports"][0]["intent"]["issuer"]["scopes"],
+        json!([]),
+        "{why}"
+    );
+    assert!(!why.to_string().contains("health-secret"), "{why}");
+    assert!(!why.to_string().contains("personal"), "{why}");
 }

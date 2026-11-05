@@ -24,7 +24,8 @@ mod scoped;
 #[doc(hidden)]
 pub use scoped::{cache_len as scoped_cache_len, clear_cache as clear_scoped_cache};
 
-/// The migration recording when an intent's contribution ended; applying it replays the intents.
+/// The migration recording when an intent's contribution ended; an open that applies it replays
+/// the stored intents once all migrations are in.
 const INTENT_END: &str = "202611081000_intent_justification_end";
 const MIGRATIONS: [(&str, &str); 10] = [
     (
@@ -141,6 +142,7 @@ impl SqliteStorage {
             bail!("database has migration {unknown}, which this version of rastro doesn't know");
         }
         transaction.commit()?;
+        let mut replay = false;
         for (name, sql) in migrations {
             let transaction =
                 connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -151,17 +153,22 @@ impl SqliteStorage {
             )?;
             if !done {
                 transaction.execute_batch(sql)?;
-                let intents: bool = name == INTENT_END
-                    && transaction
-                        .query_row("SELECT EXISTS (SELECT 1 FROM intent)", [], |r| r.get(0))?;
-                if intents {
-                    // The intents already stored replay once, so what they ended reads as
-                    // history right after the upgrade, without waiting for a rebuild. A database
-                    // with none has nothing to replay and publishes nothing.
-                    identity::apply(&transaction)?;
-                    lifecycle::publish(&transaction)?;
-                }
+                replay |= name == INTENT_END;
                 mark(&transaction, name)?;
+            }
+            transaction.commit()?;
+        }
+        if replay {
+            // The intents already stored replay once, after every migration, so today's replay
+            // meets today's schema: what they ended reads as history right after the upgrade,
+            // without waiting for a rebuild. A database with none publishes nothing.
+            let transaction =
+                connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+            let intents: bool =
+                transaction.query_row("SELECT EXISTS (SELECT 1 FROM intent)", [], |r| r.get(0))?;
+            if intents {
+                identity::apply(&transaction)?;
+                lifecycle::publish(&transaction)?;
             }
             transaction.commit()?;
         }
