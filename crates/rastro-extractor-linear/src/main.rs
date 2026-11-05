@@ -33,11 +33,12 @@
 //! - `issue`: an issue's `/id` → its `rastro:type` claim, `tracker:Issue`.
 //! - `creator` and `assignee`: `/creator/id` or `/assignee/id` naming a uuid, with the issue's
 //!   `/id` → `tracker:creator` or `tracker:assignee` `linear:user/<uuid>`, and that user's
-//!   `rastro:type` claim supported by the field: `tracker:Bot` when `/creator/app` or
-//!   `/assignee/app` beside it quotes `true`, otherwise `tracker:Account`, with that flag as a
-//!   support when there is one. The connector reads an actor's flag just before its id, so a flag
-//!   newer than the id belongs to the next actor: until that id arrives, the actor is not
-//!   claimed. A null creator or assignee records no evidence, so no claim.
+//!   `rastro:type` claim supported by the field: `tracker:Bot` when that id's `/creator/app` or
+//!   `/assignee/app` flag quotes `true`, otherwise `tracker:Account`, with the flag as a support
+//!   when there is one. An id's flag is worked out over the whole run (`actor_flags`): the
+//!   connector reads it just before the id, but an unchanged observation is never stored again,
+//!   so it may come before an earlier id or, for an issue read before flags were, after the id.
+//!   A null creator or assignee records no evidence, so no claim.
 //!
 //! Observations are read in replay order. At each one, the claims its location supports given
 //! the latest observation of each field so far are sent, each once per run.
@@ -158,9 +159,56 @@ fn user_type(app: Option<(&BatchItem, bool)>) -> (&'static str, Vec<&BatchItem>)
 /// The latest observation of each field at one location, with its place in replay order.
 type Fields<'a> = BTreeMap<&'a str, (usize, &'a BatchItem)>;
 
-/// The claims a location supports, given the latest observation of each field there and, at a
-/// user, the latest `/app` flag the run delivers there.
-fn claims_at(location: &str, fields: &Fields, app: Option<&BatchItem>) -> Vec<ClaimSubmit> {
+/// Each issue actor id's `app` flag, keyed by the id's place in replay order and worked out over
+/// the whole run, so the actor is typed one way however the run is read. An unchanged
+/// observation is never stored again, so an id and its flag may lie apart: the flag of an id is
+/// the latest flag of that actor before it with no other id between them; otherwise the first
+/// flag after it with no id between (an id read before the connector read flags, backfilled
+/// later); otherwise the latest earlier flag (unchanged since an earlier id).
+fn actor_flags(items: &[BatchItem]) -> BTreeMap<usize, &BatchItem> {
+    // Per issue and actor: its ids (`true`) and flags (`false`) in replay order.
+    type Seq<'a> = Vec<(usize, bool, &'a BatchItem)>;
+    let mut actors: BTreeMap<(&str, &str), Seq> = BTreeMap::new();
+    for (seen, item) in items.iter().enumerate() {
+        let (actor, is_id) = match item.span.field.as_str() {
+            "/creator/id" => ("creator", true),
+            "/creator/app" => ("creator", false),
+            "/assignee/id" => ("assignee", true),
+            "/assignee/app" => ("assignee", false),
+            _ => continue,
+        };
+        if item.trust_class != "structured" || (!is_id && flag(item).is_none()) {
+            continue;
+        }
+        let key = (item.location.as_str(), actor);
+        actors.entry(key).or_default().push((seen, is_id, item));
+    }
+    let mut flags = BTreeMap::new();
+    for seq in actors.values() {
+        let is_flag = |entry: &&(usize, bool, &BatchItem)| !entry.1;
+        for (k, &(seen, is_id, _)) in seq.iter().enumerate() {
+            if !is_id {
+                continue;
+            }
+            let before = seq[..k].iter().rev().take_while(is_flag).next();
+            let after = seq[k + 1..].iter().take_while(is_flag).next();
+            let earlier = seq[..k].iter().rev().find(is_flag);
+            if let Some(&(_, _, item)) = before.or(after).or(earlier) {
+                flags.insert(seen, item);
+            }
+        }
+    }
+    flags
+}
+
+/// The claims a location supports, given the latest observation of each field there; at a
+/// user, the latest `/app` flag the run delivers there; at an issue, each actor id's flag.
+fn claims_at(
+    location: &str,
+    fields: &Fields,
+    app: Option<&BatchItem>,
+    actor_flags: &BTreeMap<usize, &BatchItem>,
+) -> Vec<ClaimSubmit> {
     let Some((record_kind, uuid_text)) = record(location) else {
         return vec![];
     };
@@ -229,24 +277,14 @@ fn claims_at(location: &str, fields: &Fields, app: Option<&BatchItem>) -> Vec<Cl
         }
         return claims;
     }
-    for (field, app_field, predicate, rule) in [
-        ("/creator/id", "/creator/app", "tracker:creator", "creator"),
-        (
-            "/assignee/id",
-            "/assignee/app",
-            "tracker:assignee",
-            "assignee",
-        ),
+    for (field, predicate, rule) in [
+        ("/creator/id", "tracker:creator", "creator"),
+        ("/assignee/id", "tracker:assignee", "assignee"),
     ] {
         let Some(&(seen, item)) = fields.get(field).filter(|(_, i)| uuid(&i.span.quote)) else {
             continue;
         };
-        let app = fields.get(app_field);
-        // A flag newer than the id is the next actor's, whose id is still to come.
-        if app.is_some_and(|(flag_seen, _)| *flag_seen > seen) {
-            continue;
-        }
-        let (user_kind, flagged) = user_type(app.and_then(|(_, i)| flag(i)));
+        let (user_kind, flagged) = user_type(actor_flags.get(&seen).and_then(|i| flag(i)));
         let user = format!("linear:user/{}", item.span.quote);
         claims.extend([
             claim(
@@ -281,6 +319,7 @@ fn extract(items: &[BatchItem]) -> Vec<ClaimSubmit> {
         .filter(|i| i.span.field == "/app" && flag(i).is_some())
         .map(|i| (i.location.as_str(), i))
         .collect();
+    let actor_flags = actor_flags(items);
     let mut latest: BTreeMap<&str, Fields> = BTreeMap::new();
     let mut sent = BTreeSet::new();
     let mut claims = Vec::new();
@@ -292,7 +331,7 @@ fn extract(items: &[BatchItem]) -> Vec<ClaimSubmit> {
         let fields = latest.entry(&item.location).or_default();
         fields.insert(field, (seen, item));
         let app = apps.get(item.location.as_str()).copied();
-        for claim in claims_at(&item.location, fields, app) {
+        for claim in claims_at(&item.location, fields, app, &actor_flags) {
             if sent.insert(serde_json::to_string(&claim).unwrap_or_default()) {
                 claims.push(claim);
             }
@@ -573,6 +612,56 @@ mod tests {
             .map(|s| (s.evidence_id, s.field.as_str()))
             .collect();
         assert_eq!(spans, [(1, "/id"), (3, "/creator/id"), (2, "/creator/app")]);
+    }
+
+    /// S38: an issue read before the connector read actors' flags gets its flag later, after
+    /// the unchanged id (which is never stored again): that flag is the id's, so an app creator
+    /// is typed `tracker:Bot` and never `tracker:Account`. An unchanged flag before an earlier
+    /// id still holds for a later id, and a flag after a later id is not an earlier id's
+    #[test]
+    fn S38_a_flag_read_after_an_unchanged_id_types_that_id() {
+        let issue = format!("linear:issue/{ITEM}");
+        let at =
+            |id: i64, field: &str, quote: &str| observed(id, &issue, field, quote, "structured");
+        let users = |id: &str| format!("linear:user/{id}");
+        // Backfill: the id was read before the flag existed.
+        let backfill = [
+            at(1, "/id", ITEM),
+            at(2, "/creator/id", USER),
+            at(10, "/creator/app", "true"),
+        ];
+        assert_eq!(
+            types(&extract(&backfill)),
+            [
+                (issue.clone(), ISSUE.to_string()),
+                (users(USER), BOT.to_string())
+            ]
+            .into()
+        );
+        // The creator's flag, unchanged, is stored once before its first id and holds for the
+        // next. The assignee changed twice before any flag was read: the flag read after the
+        // second is the second's, not the first's.
+        const FOURTH: &str = "0b5a8c1e-0000-4000-8000-000000000005";
+        let history = [
+            at(1, "/id", ITEM),
+            at(2, "/creator/app", "true"),
+            at(3, "/creator/id", USER),
+            at(4, "/creator/id", OTHER),
+            at(5, "/assignee/id", THIRD),
+            at(6, "/assignee/id", FOURTH),
+            at(7, "/assignee/app", "true"),
+        ];
+        assert_eq!(
+            types(&extract(&history)),
+            [
+                (issue.clone(), ISSUE.to_string()),
+                (users(USER), BOT.to_string()),
+                (users(OTHER), BOT.to_string()),
+                (users(THIRD), ACCOUNT.to_string()),
+                (users(FOURTH), BOT.to_string()),
+            ]
+            .into()
+        );
     }
 
     /// S38: the `tracker` vocabulary declares `tracker:Account` an account and `tracker:Bot`

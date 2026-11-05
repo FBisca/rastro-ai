@@ -171,6 +171,23 @@ impl<S: Storage> Rastro<S> {
                             eprintln!("source {}: {error:#}", source.name);
                             "protocol"
                         })?;
+                    // A single-source connector reads only the first of its sources in the
+                    // config; a later one (stored before the refusal, or while the connector
+                    // wasn't installed) fails before the connector runs.
+                    if plugin.manifest.single_source
+                        && let Some(first) = self
+                            .config
+                            .sources
+                            .iter()
+                            .find(|s| s.connector == source.connector)
+                        && first.name != source.name
+                    {
+                        eprintln!(
+                            "source {}: connector {} takes a single source, and source {} already uses it",
+                            source.name, source.connector, first.name
+                        );
+                        return Err("protocol");
+                    }
                     Ok(plugin)
                 },
             );

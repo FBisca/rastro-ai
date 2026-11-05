@@ -15,8 +15,9 @@
 //!   and URL (whose slug is made from the title) are untrusted content, the rest structured;
 //! - `app` is Linear's flag for an app (integration) user, `true` or `false`. An issue's
 //!   creator or assignee flag is recorded just before its id, so a reader going in order never
-//!   pairs a new actor's id with the previous actor's flag. The field read is `User.app`; the
-//!   tests run against a scripted API, so that name is not yet checked against the live one;
+//!   pairs a new actor's id with the previous actor's flag. The field is `User.app` of Linear's
+//!   public schema (`app: Boolean!`). Whether `users(includeDisabled: true)` lists app users is
+//!   not checked against the live API: the tests run against a scripted one;
 //! - whose API key it is, at `linear:viewer`: `/id`. One slot, so a key of another user
 //!   replaces it.
 //!

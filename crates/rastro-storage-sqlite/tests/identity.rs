@@ -257,6 +257,40 @@ fn S35_a_link_whose_account_side_isnt_typed_as_an_account_is_refused() {
     assert_eq!(count(&path), 3);
 }
 
+/// S35: a refusal never names a type the issuer can't see: an account another scope types a
+/// bot is refused for a scoped issuer without naming the bot, and for an unscoped one by name
+#[test]
+fn S35_a_refusal_never_names_a_type_from_a_scope_the_issuer_cannot_see() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("db");
+    let mut db = SqliteStorage::open(&path).unwrap();
+    let me = person(1);
+    let mut minted = create("i_1", &me);
+    minted.domain_key = rastro_core::identity::ME_DOMAIN.into();
+    issue(&mut db, vec![minted]).unwrap();
+    let shared = typed(
+        &mut db,
+        "github:account/9",
+        "code:Account",
+        &[ACCOUNT_TYPE],
+        "personal",
+    );
+    typed(&mut db, "github:account/9", "code:Bot", &[], "work");
+    let error = issue(&mut db, vec![link("i_2", &shared, &me, &["personal"])])
+        .unwrap_err()
+        .to_string();
+    assert!(
+        error.contains("only an account is held by a Person"),
+        "{error}"
+    );
+    assert!(!error.contains("code:Bot"), "{error}");
+    let error = issue(&mut db, vec![link("i_2", &shared, &me, &[])])
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("is a code:Bot"), "{error}");
+    assert_eq!(count(&path), 1);
+}
+
 /// S11: an intent written after a scoped read was cached shows in the next scoped read
 #[test]
 fn S11_an_intent_written_after_a_cached_scoped_read_shows_in_the_next_one() {

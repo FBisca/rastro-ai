@@ -1,6 +1,6 @@
 id = "linear"
 name = "Rastro Linear connector"
-version = "0.1.0"
+version = "0.2.0"
 author = "Rastro"
 kinds = ["connector"]
 protocol = 1
