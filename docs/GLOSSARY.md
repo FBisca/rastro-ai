@@ -32,7 +32,7 @@ The core's own language. Code, docs, plugins and the interface all use these wor
 | **Context** | What a level hangs on: a person, project, source or channel. The most specific match wins | |
 | **Cell** | One action × context pair, with its level and the trust behind it | |
 | **Proposal / Question** | One pending Propose or Ask | |
-| **Intent** | A typed input from the owner: `confirm`, `accept`, `edit`, `reject`, `answer`, `undo`, `stop`, `promote`, `missed` | |
+| **Intent** | A typed input from the owner: `confirm`, `accept`, `edit`, `reject`, `answer`, `undo`, `stop`, `promote`, `missed`; identity adds `create_person`, `name`, `link`, `cannot_link`, `same_as` | |
 | **Outcome** | What happened to a proposal, question, action run or notification. Recorded as evidence | |
 | **Missed** | The owner reports something Rastro should have caught | |
 | **Trust** | Should it act alone? Derived from outcomes, per cell | Usefulness |
