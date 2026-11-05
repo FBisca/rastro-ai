@@ -45,7 +45,7 @@ Status: `todo` · `planning` · `doing` · `done`
 
 | # | Slice | Outcome: from here on you can… | Builds on | Concept / decisions | Status |
 |---|---|---|---|---|---|
-| 13 | **Export and rebuild** | Export evidence, confirmations, rules, outcomes and owner intents; rebuild the knowledge anywhere; swap an extractor and replay | 7 | knowledge §12; sharing §1; vocabulary §6 | todo |
+| 13 | **Export and rebuild** | Export evidence, confirmations, rules, outcomes and owner intents; rebuild the knowledge anywhere; swap an extractor and replay | 7 | knowledge §12, §53; sharing §1; vocabulary §6 | todo |
 | 14 | **Scopes and forgetting** | Grant scopes per plugin and renderer, and forget evidence with that carrying through to everything derived from it | 7 | knowledge §2, §14; renderers §3 | todo |
 | 15 | **Plugin install and permissions** | Install a plugin in one step, approve its permissions, see permission diffs on update, revoke them. Starter pack included | 2 | plugins §4–5, §11 | todo |
 | 16 | **Sharing** | Share scoped claims with another owner, who receives them as evidence from a person and accepts them explicitly | 13, 14 | sharing (all) | todo |

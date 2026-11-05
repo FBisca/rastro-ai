@@ -69,7 +69,7 @@ The exact `domain_key` formats are set at build.
 
 - An undo names one earlier intent (`undo_of`) and removes only its contribution. The other intents stand.
 - Undoing a link records a cannot-link for the (account, Person) pair; undoing a merge records one for the (Person, Person) pair. A rebuild therefore never re-creates what the owner undid (`../decisions/knowledge.md` §34).
-- An explicit link or merge by the owner is the only thing that clears a cannot-link, and only for the pair it names. The refusal stays in the history, marked reversed.
+- An explicit link or merge by the owner is the only thing that clears a cannot-link, and only for the pair it names.
 - An intent is refused when it is invalid: a `held_by` from a Person, a merge of two accounts or of an entity with itself, a target that does not exist, an undo of a missing or already-undone intent, an undo of a `cannot_link` intent (only an explicit owner link or merge clears one). Nothing is stored.
 
 ## Intent-backed claims
@@ -158,3 +158,4 @@ The lifecycle fingerprint, lapse and stale, the precedence rules, the `confirmed
 - Draft `domain_key` formats: `person/<id>` (`person/me` reserved), `person/<id>/name`, `held_by/<account>/<person>`, `cannot_link/<a>/<b>`, `same_as/<a>/<b>`.
 - Every row is validated atomically: JSON shapes, non-empty ids and kinds, unique set members, a valid anchor, and a hash that agrees with the snapshot.
 - The slice-13 export keeps the intents' relative acceptance order.
+- A cleared cannot-link stays in `rastro identity history`, marked reversed.
