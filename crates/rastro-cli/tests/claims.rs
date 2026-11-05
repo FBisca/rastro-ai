@@ -635,6 +635,23 @@ fn S15_unrelated_types_at_different_locations_conflict_and_neither_supersedes() 
     }
 }
 
+/// vocabulary/S15: replacing one location's type removes the conflict links on the refresh
+#[test]
+fn S15_a_conflict_disappears_when_one_locations_type_is_replaced() {
+    let env = two_type_sources();
+    type_pr_at(&env, "a", PR, "code:PullRequest", 1);
+    type_pr_at(&env, "b", ELSEWHERE, "code:Repository", 2);
+    let pull = type_claim(&env, "code:PullRequest");
+    let why = env.json(&["why", &pull]);
+    assert_eq!(why["claim"]["conflicts_with"].as_array().unwrap().len(), 1);
+    // Source b now reads the same location as a PullRequest: Repository is superseded.
+    type_pr_at(&env, "b", ELSEWHERE, "code:PullRequest", 3);
+    for kind in ["code:PullRequest", "code:Repository"] {
+        let why = env.json(&["why", &type_claim(&env, kind)]);
+        assert_eq!(why["claim"]["conflicts_with"], json!([]), "{kind}: {why}");
+    }
+}
+
 /// vocabulary/S16: a type and its supertype at different locations do not conflict; the most
 /// specific type is displayed whichever claim id sorts first
 #[test]
@@ -651,6 +668,15 @@ fn S16_a_type_and_its_supertype_do_not_conflict_and_the_most_specific_is_display
             assert_eq!(why["claim"]["conflicts_with"], json!([]), "{why}");
             assert_eq!(why["claim"]["subject"]["type"], "code:Draft", "{why}");
         }
+        let about = env.json(&["about", PR]);
+        assert!(
+            about.to_string().contains("\"type\":\"code:Draft\""),
+            "{about}"
+        );
+        assert!(
+            !about.to_string().contains("\"type\":\"code:PullRequest\""),
+            "{about}"
+        );
     }
 }
 
@@ -667,6 +693,12 @@ fn S17_conflicting_types_display_the_newest_known_type() {
         let why = env.json(&["why", &type_claim(&env, first)]);
         assert_eq!(why["claim"]["subject"]["type"], second, "{why}");
         let about = env.json(&["about", PR]);
+        assert!(
+            about
+                .to_string()
+                .contains(&format!("\"type\":\"{second}\"")),
+            "{about}"
+        );
         assert!(
             !about.to_string().contains(&format!("\"type\":\"{first}\"")),
             "{about}"
