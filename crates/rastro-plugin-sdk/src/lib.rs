@@ -499,11 +499,25 @@ impl Vocabulary {
         };
         a == b || above(a, b) || above(b, a)
     }
-    /// Whether the type has a supertype or is the supertype of another type of this file.
-    pub fn has_relatives(&self, id: &str) -> bool {
-        self.types
-            .iter()
-            .any(|t| (t.id == id && t.supertype.is_some()) || t.supertype.as_deref() == Some(id))
+    /// The type's supertypes at every distance, sorted: what a claim typing an entity with it
+    /// is compatible with. Empty for a type with no supertype or one this file doesn't define.
+    pub fn ancestors(&self, id: &str) -> Vec<String> {
+        let mut found = std::collections::BTreeSet::new();
+        let mut at = id;
+        // A chain is at most as long as the file; `check` refuses cycles.
+        for _ in 0..=self.types.len() {
+            let Some(up) = self
+                .types
+                .iter()
+                .find(|t| t.id == at)
+                .and_then(|t| t.supertype.as_deref())
+            else {
+                break;
+            };
+            found.insert(up.to_string());
+            at = up;
+        }
+        found.into_iter().collect()
     }
     fn check(&self) -> Result<()> {
         let reserved = |name: &str| name.starts_with(CORE_PREFIX) || name == "rastro";
@@ -760,6 +774,8 @@ evidence_requirement = "r"
         assert!(parsed.related("x:Bot", "x:Account") && parsed.related("x:Account", "x:Bot"));
         assert!(parsed.related("x:Item", "x:Item"));
         assert!(!parsed.related("x:Bot", "x:Item"));
+        assert_eq!(parsed.ancestors("x:Bot"), ["x:Account"]);
+        assert!(parsed.ancestors("x:Account").is_empty());
         // A supertype must be a type the file defines.
         let dangling = text.replace("supertype = \"x:Account\"", "supertype = \"x:Nothing\"");
         assert!(

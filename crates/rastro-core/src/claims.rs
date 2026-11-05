@@ -266,15 +266,17 @@ pub fn validate(
     }
     // The text an alias claim's supports must quote.
     let mut alias = None;
-    // Whether two live values conflict. A type conflicts with another type of the entity unless
-    // the vocabulary relates them by `supertype`; the projection only compares values of one
-    // predicate, so a type that has relatives is many-valued and one that has none is scalar.
+    // Every `rastro:type` claim is scalar: a newer type read from the same field replaces the
+    // older, and two live types conflict unless the vocabulary relates them by `supertype`.
+    // The projection can't see the vocabulary, so a type claim carries its supertypes.
     let scalar;
+    let mut type_ancestors = Vec::new();
     let object = match (submit.predicate.as_str(), submit.object) {
         (TYPE_PREDICATE, ClaimObject::Literal { value, datatype })
             if datatype == TYPE_DATATYPE && value == subject.entity_type =>
         {
-            scalar = !vocabulary.has_relatives(&value);
+            scalar = true;
+            type_ancestors = vocabulary.ancestors(&value);
             Object::Literal { value, datatype }
         }
         (TYPE_PREDICATE, _) => return Err("a type claim names its subject's own type".into()),
@@ -373,7 +375,7 @@ pub fn validate(
     }
     let subject = Entity::new(subject.identifier, subject.entity_type);
     Ok(ObservedClaim {
-        type_ancestors: Vec::new(),
+        type_ancestors,
         scalar,
         id: claim_id(&subject.id, &submit.predicate, &object),
         subject,

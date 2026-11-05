@@ -506,50 +506,82 @@ fn S4c_an_endpoint_typed_only_by_an_earlier_submission_is_rejected_and_counted()
     assert_eq!(env.count("claim WHERE object_value = 'closed'"), 0);
 }
 
-/// S4c: two submissions typing one entity differently leave both visible as a conflict, unless
-/// the vocabulary relates the types by `supertype`
+/// S4c: two submissions typing one entity differently leave both visible as a conflict, both
+/// ways, unless one type is a `supertype` ancestor of the other; a newer type read from the
+/// same field replaces the older
 #[test]
-fn S4c_disagreeing_types_from_two_submissions_conflict_unless_related_by_supertype() {
-    for related in [false, true] {
+fn S4c_disagreeing_types_conflict_unless_related_by_supertype_and_a_newer_type_replaces() {
+    let words = "definition = \"d\"\nnot_to_confuse_with = \"n\"\nexamples = [\"e\"]\n\
+        counter_examples = [\"c\"]\nevidence_requirement = \"r\"\n";
+    let vocabulary = |env: &Env| {
+        let path = env.plugin_dir("test-extractor").join("vocabulary.toml");
+        let mut text = fs::read_to_string(&path).unwrap();
+        // Two families: Draft under PullRequest, Fork under Repository.
+        text.push_str(&format!(
+            "\n[[types]]\nid = \"code:Draft\"\nsupertype = \"code:PullRequest\"\n{words}\
+             \n[[types]]\nid = \"code:Fork\"\nsupertype = \"code:Repository\"\n{words}"
+        ));
+        fs::write(path, text).unwrap();
+    };
+    let typed_as = |kind: &str| {
+        json!({"subject": {"identifier": PR, "type": kind}, "predicate": "rastro:type",
+            "object": {"kind": "literal", "value": kind, "datatype": "rastro:type"},
+            "extraction_rule": "state-field", "supports": [first_state_support()]})
+    };
+    for (first, second, conflict) in [
+        ("code:PullRequest", "code:Repository", true),
+        ("code:PullRequest", "code:Draft", false),
+        ("code:Draft", "code:PullRequest", false),
+        // Both have relatives, in different families: still a conflict.
+        ("code:Draft", "code:Fork", true),
+    ] {
         let env = Env::new(Some("test-extractor"));
-        if related {
-            let path = env.plugin_dir("test-extractor").join("vocabulary.toml");
-            let text = fs::read_to_string(&path).unwrap().replacen(
-                "id = \"code:Repository\"",
-                "id = \"code:Repository\"\nsupertype = \"code:PullRequest\"",
-                1,
-            );
-            fs::write(path, text).unwrap();
-        }
+        vocabulary(&env);
         env.add_source("a", "test");
         env.add_source("b", "test");
-        let as_repository = json!({"subject": {"identifier": PR, "type": "code:Repository"},
-            "predicate": "rastro:type",
-            "object": {"kind": "literal", "value": "code:Repository", "datatype": "rastro:type"},
-            "extraction_rule": "state-field", "supports": [first_state_support()]});
-        for (source, claim) in [("a", typed_pr()), ("b", as_repository)] {
-            env.extract_raw(&[claim]);
+        for (source, kind) in [("a", first), ("b", second)] {
+            env.extract_raw(&[typed_as(kind)]);
             let mut observation = state("open");
             observation["source_updated_at"] = json!("2026-11-01T00:00:00Z");
             env.observe(&[observation]);
             env.json(&["sync", source]);
         }
-        let ids = |value: &str| -> String {
-            env.sql(&format!(
-                "SELECT id FROM claim WHERE predicate = 'rastro:type' AND object_value = '{value}'"
-            ))
-        };
-        for value in ["code:PullRequest", "code:Repository"] {
-            let why = env.json(&["why", &ids(value)]);
+        for kind in [first, second] {
+            let id: String = env.sql(&format!(
+                "SELECT id FROM claim WHERE predicate = 'rastro:type' AND object_value = '{kind}'"
+            ));
+            let why = env.json(&["why", &id]);
             assert_eq!(why["claim"]["status"], "observed", "{why}");
             let conflicts = why["claim"]["conflicts_with"].as_array().unwrap();
             assert_eq!(
                 conflicts.is_empty(),
-                related,
-                "{value} related={related}: {why}"
+                !conflict,
+                "{first} vs {second}, seen from {kind}: {why}"
             );
         }
     }
+    // One source later reading another type from the same field replaces the first, even when
+    // the first type has relatives.
+    let env = Env::new(Some("test-extractor"));
+    vocabulary(&env);
+    env.add_source("a", "test");
+    for (value, updated, kind) in [
+        ("open", "2026-11-01T00:00:00Z", "code:Draft"),
+        ("closed", "2026-11-02T00:00:00Z", "code:Repository"),
+    ] {
+        env.extract_raw(&[typed_as(kind)]);
+        let mut observation = state(value);
+        observation["source_updated_at"] = json!(updated);
+        env.observe(&[observation]);
+        env.json(&["sync", "a"]);
+    }
+    let status = |kind: &str| -> String {
+        env.sql(&format!(
+            "SELECT status FROM claim WHERE predicate = 'rastro:type' AND object_value = '{kind}'"
+        ))
+    };
+    assert_eq!(status("code:Draft"), "superseded");
+    assert_eq!(status("code:Repository"), "observed");
 }
 
 /// S15a: a vocabulary the core refuses to load fails the run, and no claim is accepted under it
