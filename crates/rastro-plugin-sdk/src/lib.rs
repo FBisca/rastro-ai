@@ -676,8 +676,9 @@ evidence_requirement = "r"
         format!("{:#}", Vocabulary::parse(text).unwrap_err())
     }
 
+    /// claims/R19: a vocabulary with every definition field loads
     #[test]
-    fn S15_a_vocabulary_with_every_definition_field_loads() {
+    fn a_vocabulary_with_every_definition_field_loads() {
         let parsed = Vocabulary::parse(&vocabulary(POLICY)).unwrap();
         assert!(parsed.has_type("x:T"));
         assert_eq!(parsed.predicates[0].freshness, Freshness::Source);
@@ -688,8 +689,9 @@ evidence_requirement = "r"
         assert_eq!(parsed.predicates[0].cardinality, Cardinality::Many);
     }
 
+    /// claims/R20: a vocabulary missing a definition field is refused
     #[test]
-    fn S15a_a_vocabulary_missing_a_definition_field_is_refused() {
+    fn a_vocabulary_missing_a_definition_field_is_refused() {
         for (field, line) in [
             ("not_to_confuse_with", "not_to_confuse_with = \"n\"\n"),
             ("counter_examples", "counter_examples = [\"c\"]\n"),
@@ -717,8 +719,9 @@ evidence_requirement = "r"
         assert!(Vocabulary::parse(&foreign).is_err());
     }
 
+    /// claims/R20: an unknown field or a bad cardinality is refused naming it
     #[test]
-    fn S15a_an_unknown_field_or_a_bad_cardinality_is_refused_naming_it() {
+    fn an_unknown_field_or_a_bad_cardinality_is_refused_naming_it() {
         let top = format!("flavour = \"x\"\n{}", vocabulary(POLICY));
         assert!(error(&top).contains("flavour"), "{}", error(&top));
         for place in ["id = \"x:T\"\n", "id = \"x:p\"\n"] {
@@ -734,8 +737,9 @@ evidence_requirement = "r"
         assert!(Vocabulary::parse(&vocabulary(&bad)).is_err());
     }
 
+    /// claims/R20: a name under the rastro prefix is refused
     #[test]
-    fn S15a_a_name_under_the_rastro_prefix_is_refused() {
+    fn a_name_under_the_rastro_prefix_is_refused() {
         let named = |id: &str| vocabulary(POLICY).replacen("x:T", id, 2);
         assert!(
             error(&named("rastro:T")).contains("rastro:"),
@@ -762,8 +766,9 @@ evidence_requirement = "r"
         );
     }
 
+    /// claims/R5: a supertype relates two types so they do not conflict
     #[test]
-    fn S4c_a_supertype_relates_two_types_so_they_do_not_conflict() {
+    fn a_supertype_relates_two_types_so_they_do_not_conflict() {
         let text = format!(
             "namespace = \"x\"\nversion = \"1\"\npredicates = []\n\
              [[types]]\nid = \"x:Account\"\n{WORDS}\
@@ -785,8 +790,9 @@ evidence_requirement = "r"
         );
     }
 
+    /// claims/R20: a supertype cycle is refused
     #[test]
-    fn S15a_a_supertype_cycle_is_refused() {
+    fn a_supertype_cycle_is_refused() {
         let text = format!(
             "namespace = \"x\"\nversion = \"1\"\npredicates = []\n\
              [[types]]\nid = \"x:A\"\nsupertype = \"x:B\"\n{WORDS}\
@@ -795,8 +801,9 @@ evidence_requirement = "r"
         assert!(error(&text).contains("supertype"), "{}", error(&text));
     }
 
+    /// claims/R20: a range names a defined type or a known datatype
     #[test]
-    fn S15a_a_range_names_a_defined_type_or_a_known_datatype() {
+    fn a_range_names_a_defined_type_or_a_known_datatype() {
         for bad in ["x:Missing", "rastro:type", "text"] {
             let text = vocabulary(POLICY).replacen(
                 "range = [\"string\"]",

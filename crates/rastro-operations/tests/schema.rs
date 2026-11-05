@@ -13,8 +13,9 @@ fn generated_schema_equals_the_committed_file() {
     );
 }
 
+/// surfaces/R1: about and why are additive v2 and existing schemas are unchanged
 #[test]
-fn S26_about_and_why_are_additive_v2_and_existing_schemas_are_unchanged() {
+fn about_and_why_are_additive_v2_and_existing_schemas_are_unchanged() {
     use serde_json::{Value, json};
     let generated: Value = serde_json::from_str(&rastro_operations::schema::generate()).unwrap();
     let existing: Value =
@@ -57,8 +58,9 @@ fn S26_about_and_why_are_additive_v2_and_existing_schemas_are_unchanged() {
     );
 }
 
+/// surfaces/R30: catalog declares claim cli read paths without changing existing routes
 #[test]
-fn S29_catalog_declares_claim_cli_read_paths_without_changing_existing_routes() {
+fn catalog_declares_claim_cli_read_paths_without_changing_existing_routes() {
     use rastro_operations::catalog::CATALOG;
     for spec in &CATALOG {
         assert_eq!(spec.read_path, ["about", "why"].contains(&spec.name));

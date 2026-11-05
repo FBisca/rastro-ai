@@ -194,10 +194,10 @@ fn first_state_support() -> Value {
     support(json!("$evidence:0"), "/state", json!("$end:0"))
 }
 
-/// S3: a bound extractor runs over its source's pending evidence after ingestion, its claims
+/// claims/R1: a bound extractor runs over its source's pending evidence after ingestion, its claims
 /// read through `why`, its run is logged on its own, and coverage is as without it
 #[test]
-fn S3_a_bound_extractor_turns_its_sources_evidence_into_claims_read_through_why() {
+fn a_bound_extractor_turns_its_sources_evidence_into_claims_read_through_why() {
     let env = Env::new(Some("test-extractor"));
     env.connector("other", None);
     env.add_source("project", "test");
@@ -280,10 +280,10 @@ fn S3_a_bound_extractor_turns_its_sources_evidence_into_claims_read_through_why(
     assert_eq!(env.count("coverage WHERE source = 'project'"), 1);
 }
 
-/// S4: a claim whose support is untrusted, undelivered, outside its evidence or from a rule
+/// claims/R2: a claim whose support is untrusted, undelivered, outside its evidence or from a rule
 /// not declared deterministic is rejected, counted, and leaves nothing behind
 #[test]
-fn S4_claims_with_untrusted_undelivered_outside_or_nondeterministic_supports_are_rejected() {
+fn claims_with_untrusted_undelivered_outside_or_nondeterministic_supports_are_rejected() {
     let env = Env::new(Some("test-extractor"));
     env.connector("other", None);
     env.add_source("elsewhere", "other");
@@ -381,10 +381,10 @@ fn S4_claims_with_untrusted_undelivered_outside_or_nondeterministic_supports_are
     );
 }
 
-/// S4: an extractor that submits more claims than the run allows fails, and nothing of the
+/// claims/R2: an extractor that submits more claims than the run allows fails, and nothing of the
 /// run is stored
 #[test]
-fn S4_an_extractor_exceeding_the_claim_cap_fails_and_stores_nothing() {
+fn an_extractor_exceeding_the_claim_cap_fails_and_stores_nothing() {
     let env = Env::new(Some("test-extractor"));
     env.add_source("project", "test");
     env.observe(&[state("open")]);
@@ -418,10 +418,10 @@ fn S4_an_extractor_exceeding_the_claim_cap_fails_and_stores_nothing() {
     );
 }
 
-/// S4a: a predicate outside the vocabulary, or a subject or object outside its domain or
+/// claims/R3: a predicate outside the vocabulary, or a subject or object outside its domain or
 /// range, is rejected and counted
 #[test]
-fn S4a_claims_outside_the_vocabulary_are_rejected() {
+fn claims_outside_the_vocabulary_are_rejected() {
     let env = Env::new(Some("test-extractor"));
     env.add_source("project", "test");
     env.observe(&[state("open")]);
@@ -471,10 +471,10 @@ fn S4a_claims_outside_the_vocabulary_are_rejected() {
     );
 }
 
-/// S4c: an endpoint's type comes from a `rastro:type` claim in the same submission, even when an
+/// claims/R5: an endpoint's type comes from a `rastro:type` claim in the same submission, even when an
 /// earlier submission typed the entity
 #[test]
-fn S4c_an_endpoint_typed_only_by_an_earlier_submission_is_rejected_and_counted() {
+fn an_endpoint_typed_only_by_an_earlier_submission_is_rejected_and_counted() {
     let env = Env::new(Some("test-extractor"));
     env.add_source("project", "test");
     env.observe(&[state("open")]);
@@ -506,11 +506,11 @@ fn S4c_an_endpoint_typed_only_by_an_earlier_submission_is_rejected_and_counted()
     assert_eq!(env.count("claim WHERE object_value = 'closed'"), 0);
 }
 
-/// S4c: two submissions typing one entity differently leave both visible as a conflict, both
+/// claims/R5: two submissions typing one entity differently leave both visible as a conflict, both
 /// ways, unless one type is a `supertype` ancestor of the other; a newer type read from the
 /// same field replaces the older
 #[test]
-fn S4c_disagreeing_types_conflict_unless_related_by_supertype_and_a_newer_type_replaces() {
+fn disagreeing_types_conflict_unless_related_by_supertype_and_a_newer_type_replaces() {
     let words = "definition = \"d\"\nnot_to_confuse_with = \"n\"\nexamples = [\"e\"]\n\
         counter_examples = [\"c\"]\nevidence_requirement = \"r\"\n";
     let vocabulary = |env: &Env| {
@@ -584,9 +584,9 @@ fn S4c_disagreeing_types_conflict_unless_related_by_supertype_and_a_newer_type_r
     assert_eq!(status("code:Repository"), "observed");
 }
 
-/// S15a: a vocabulary the core refuses to load fails the run, and no claim is accepted under it
+/// claims/R20: a vocabulary the core refuses to load fails the run, and no claim is accepted under it
 #[test]
-fn S15a_a_refused_vocabulary_fails_the_extraction_and_accepts_no_claim() {
+fn a_refused_vocabulary_fails_the_extraction_and_accepts_no_claim() {
     let original = include_str!("../../rastro-test-extractor/vocabulary.toml");
     let broken = [
         ("an unknown field", format!("flavour = \"x\"\n{original}")),
@@ -618,10 +618,10 @@ fn S15a_a_refused_vocabulary_fails_the_extraction_and_accepts_no_claim() {
     }
 }
 
-/// S5: a bound extractor that isn't installed reads `not_installed` and the sync succeeds;
+/// claims/R6: a bound extractor that isn't installed reads `not_installed` and the sync succeeds;
 /// an installed extractor no source is bound to never runs
 #[test]
-fn S5_a_missing_bound_extractor_reads_not_installed_and_an_unbound_one_never_runs() {
+fn a_missing_bound_extractor_reads_not_installed_and_an_unbound_one_never_runs() {
     let env = Env::new(Some("missing-extractor"));
     env.add_source("project", "test");
     env.observe(&[state("open")]);
@@ -656,10 +656,10 @@ fn S5_a_missing_bound_extractor_reads_not_installed_and_an_unbound_one_never_run
     assert_eq!(unbound.count("claim"), 0);
 }
 
-/// S6: an existing GitHub source is bound to `rastro-extractor-github` by its connector,
+/// claims/R7: an existing GitHub source is bound to `rastro-extractor-github` by its connector,
 /// without the owner editing config
 #[test]
-fn S6_an_existing_github_source_is_bound_to_the_github_extractor() {
+fn an_existing_github_source_is_bound_to_the_github_extractor() {
     let env = Env::new(None);
     // The GitHub connector's own manifest, run by the test connector.
     let mut manifest: toml::Table =
@@ -692,10 +692,10 @@ fn S6_an_existing_github_source_is_bound_to_the_github_extractor() {
     );
 }
 
-/// S7: two sources observing the same PR with the same state give one PR entity and one
+/// claims/R8: two sources observing the same PR with the same state give one PR entity and one
 /// `code:state` claim with two supports
 #[test]
-fn S7_two_sources_observing_the_same_pr_state_share_one_entity_and_one_claim() {
+fn two_sources_observing_the_same_pr_state_share_one_entity_and_one_claim() {
     let env = Env::new(Some("test-extractor"));
     env.add_source("a", "test");
     env.add_source("b", "test");
@@ -716,10 +716,10 @@ fn S7_two_sources_observing_the_same_pr_state_share_one_entity_and_one_claim() {
     assert_eq!(sources, ["a", "b"], "{why}");
 }
 
-/// S18a: an extractor run left unfinished is marked interrupted at the next writing open,
+/// claims/R28: an extractor run left unfinished is marked interrupted at the next writing open,
 /// and no source coverage window is created for it
 #[test]
-fn S18a_an_unfinished_extractor_run_is_marked_interrupted_without_a_coverage_window() {
+fn an_unfinished_extractor_run_is_marked_interrupted_without_a_coverage_window() {
     let env = Env::new(Some("test-extractor"));
     env.add_source("project", "test");
     env.observe(&[state("open")]);
@@ -785,8 +785,9 @@ fn sync_state(env: &Env, source: &str, value: &str) {
     env.observe(&[state(value)]);
     env.json(&["sync", source]);
 }
+/// claims/R9: second support keeps id and changes revision
 #[test]
-fn S8_second_support_keeps_id_and_changes_revision() {
+fn second_support_keeps_id_and_changes_revision() {
     let env = Env::new(Some("test-extractor"));
     env.add_source("a", "test");
     env.add_source("b", "test");
@@ -798,8 +799,9 @@ fn S8_second_support_keeps_id_and_changes_revision() {
     assert_ne!(first["claim"]["revision"], second["claim"]["revision"]);
     assert_eq!(second["supports"].as_array().unwrap().len(), 2);
 }
+/// claims/R11: open closed open reuses id and keeps intervals
 #[test]
-fn S9_open_closed_open_reuses_id_and_keeps_intervals() {
+fn open_closed_open_reuses_id_and_keeps_intervals() {
     let env = Env::new(Some("test-extractor"));
     env.add_source("a", "test");
     sync_state(&env, "a", "open");
@@ -828,8 +830,9 @@ fn S9_open_closed_open_reuses_id_and_keeps_intervals() {
     assert_eq!(closed["claim"]["superseded_by"], json!([OPEN]));
 }
 
+/// claims/R13: missing null and not returned never supersede
 #[test]
-fn S10_missing_null_and_not_returned_never_supersede() {
+fn missing_null_and_not_returned_never_supersede() {
     let env = Env::new(Some("test-extractor"));
     env.add_source("a", "test");
     sync_state(&env, "a", "open");
@@ -845,8 +848,9 @@ fn S10_missing_null_and_not_returned_never_supersede() {
         assert_eq!(before["supports"], after_read["supports"]);
     }
 }
+/// claims/R16: known time uses evidence capture and valid time is unknown
 #[test]
-fn S12_known_time_uses_evidence_capture_and_valid_time_is_unknown() {
+fn known_time_uses_evidence_capture_and_valid_time_is_unknown() {
     let env = Env::new(Some("test-extractor"));
     env.add_source("a", "test");
     sync_state(&env, "a", "open");
@@ -869,8 +873,9 @@ fn S12_known_time_uses_evidence_capture_and_valid_time_is_unknown() {
         new["supports"][0]["spans"][0]["captured_at"]
     );
 }
+/// claims/R14: newer comparable source wins ties and unknown times conflict
 #[test]
-fn S11_newer_comparable_source_wins_ties_and_unknown_times_conflict() {
+fn newer_comparable_source_wins_ties_and_unknown_times_conflict() {
     for (older, newer, expected) in [
         (
             Some("2026-11-01T00:00:00Z"),
@@ -933,8 +938,9 @@ fn lifecycle_projection(env: &Env) -> Vec<Value> {
         })
         .collect()
 }
+/// claims/R22: rebuild matches incremental ids revisions supports and intervals
 #[test]
-fn S16_rebuild_matches_incremental_ids_revisions_supports_and_intervals() {
+fn rebuild_matches_incremental_ids_revisions_supports_and_intervals() {
     for connector in ["test", "github"] {
         let env = Env::new(Some("test-extractor"));
         env.connector(connector, Some("test-extractor"));
@@ -965,8 +971,9 @@ fn S16_rebuild_matches_incremental_ids_revisions_supports_and_intervals() {
     }
 }
 
+/// claims/R29: failed rebuild preserves projection and concurrent readers see complete generations
 #[test]
-fn S19_failed_rebuild_preserves_projection_and_concurrent_readers_see_complete_generations() {
+fn failed_rebuild_preserves_projection_and_concurrent_readers_see_complete_generations() {
     let env = Env::new(Some("test-extractor"));
     env.add_source("a", "test");
     env.add_source("b", "test");
@@ -1027,8 +1034,9 @@ fn S19_failed_rebuild_preserves_projection_and_concurrent_readers_see_complete_g
     }
 }
 
+/// claims/R4: one bad span rejects the entire bundle and counts it
 #[test]
-fn S4b_one_bad_span_rejects_the_entire_bundle_and_counts_it() {
+fn one_bad_span_rejects_the_entire_bundle_and_counts_it() {
     let env = Env::new(Some("test-extractor"));
     env.add_source("a", "test");
     env.observe(&[state("open"), body("untrusted")]);
@@ -1060,13 +1068,15 @@ fn S4b_one_bad_span_rejects_the_entire_bundle_and_counts_it() {
     );
 }
 
+/// claims/R23: version replay serves old claims until atomic retirement
 #[test]
-fn S16a_version_replay_serves_old_claims_until_atomic_retirement() {
+fn version_replay_serves_old_claims_until_atomic_retirement() {
     assert_atomic_replay(false);
 }
 
+/// claims/R23: vocabulary only bump replays without new evidence and retires atomically
 #[test]
-fn S16a_vocabulary_only_bump_replays_without_new_evidence_and_retires_atomically() {
+fn vocabulary_only_bump_replays_without_new_evidence_and_retires_atomically() {
     assert_atomic_replay(true);
 }
 
@@ -1157,8 +1167,9 @@ fn assert_atomic_replay(vocabulary_only: bool) {
     );
 }
 
+/// claims/R24: sync and rebuild publish receipts and fresh statistics
 #[test]
-fn S16b_sync_and_rebuild_publish_receipts_and_fresh_statistics() {
+fn sync_and_rebuild_publish_receipts_and_fresh_statistics() {
     let env = Env::new(Some("test-extractor"));
     env.add_source("a", "test");
     sync_state(&env, "a", "open");
@@ -1198,8 +1209,9 @@ fn S16b_sync_and_rebuild_publish_receipts_and_fresh_statistics() {
     );
 }
 
+/// claims/R22: rebuild skips missing extractors and forbidden historical pairs
 #[test]
-fn S16_rebuild_skips_missing_extractors_and_forbidden_historical_pairs() {
+fn rebuild_skips_missing_extractors_and_forbidden_historical_pairs() {
     let env = Env::new(Some("test-extractor"));
     env.connector("unavailable", Some("not-installed"));
     env.add_source("a", "test");
@@ -1282,9 +1294,9 @@ fn failing_sync(env: &Env, source: &str) -> Value {
     value["result"].clone()
 }
 
+/// claims/R25: the next writing sync extracts evidence a failed sync kept even when it accepts nothing new
 #[test]
-fn S17_the_next_writing_sync_extracts_evidence_a_failed_sync_kept_even_when_it_accepts_nothing_new()
-{
+fn the_next_writing_sync_extracts_evidence_a_failed_sync_kept_even_when_it_accepts_nothing_new() {
     let env = Env::new(Some("test-extractor"));
     env.add_source("a", "test");
     env.observe(&[state("open")]);
@@ -1308,8 +1320,9 @@ fn S17_the_next_writing_sync_extracts_evidence_a_failed_sync_kept_even_when_it_a
     assert_eq!(env.count("claim"), 2);
 }
 
+/// claims/R26: an extractor crash fails the sync keeps coverage and the last projection and resumes
 #[test]
-fn S18_an_extractor_crash_fails_the_sync_keeps_coverage_and_the_last_projection_and_resumes() {
+fn an_extractor_crash_fails_the_sync_keeps_coverage_and_the_last_projection_and_resumes() {
     let env = Env::new(Some("test-extractor"));
     env.add_source("a", "test");
     sync_state(&env, "a", "open");
@@ -1353,8 +1366,9 @@ fn S18_an_extractor_crash_fails_the_sync_keeps_coverage_and_the_last_projection_
     assert_eq!(extraction_states(&env)[0].2, "current");
 }
 
+/// claims/R27: a failed version replay keeps the old versions claims and reads failed
 #[test]
-fn S18b_a_failed_version_replay_keeps_the_old_versions_claims_and_reads_failed() {
+fn a_failed_version_replay_keeps_the_old_versions_claims_and_reads_failed() {
     let env = Env::new(Some("test-extractor"));
     env.add_source("a", "test");
     sync_state(&env, "a", "open");
@@ -1430,8 +1444,9 @@ fn read_only_states(env: &Env) -> Vec<(String, String, String)> {
         .collect()
 }
 
+/// claims/R26: read only extraction state reads running only while a sync holds the lock
 #[test]
-fn S18_read_only_extraction_state_reads_running_only_while_a_sync_holds_the_lock() {
+fn read_only_extraction_state_reads_running_only_while_a_sync_holds_the_lock() {
     let env = Env::new(Some("test-extractor"));
     env.add_source("a", "test");
     sync_state(&env, "a", "open");
@@ -1462,8 +1477,9 @@ fn S18_read_only_extraction_state_reads_running_only_while_a_sync_holds_the_lock
     assert_eq!(env.count("runs WHERE finished_at IS NULL"), 1);
 }
 
+/// claims/R26: a scoped reader sees only the extraction state of its scopes
 #[test]
-fn S18_a_scoped_reader_sees_only_the_extraction_state_of_its_scopes() {
+fn a_scoped_reader_sees_only_the_extraction_state_of_its_scopes() {
     let env = Env::new(Some("test-extractor"));
     env.add_source("a", "test");
     sync_state(&env, "a", "open");
@@ -1490,8 +1506,9 @@ fn S18_a_scoped_reader_sees_only_the_extraction_state_of_its_scopes() {
     assert_eq!(scoped(&["work"]), 0);
 }
 
+/// claims/R26: not installed outranks an unfinished run and a failed check still names its version
 #[test]
-fn S18_not_installed_outranks_an_unfinished_run_and_a_failed_check_still_names_its_version() {
+fn not_installed_outranks_an_unfinished_run_and_a_failed_check_still_names_its_version() {
     let env = Env::new(Some("missing-extractor"));
     env.add_source("a", "test");
     env.observe(&[state("open")]);
@@ -1524,8 +1541,9 @@ fn S18_not_installed_outranks_an_unfinished_run_and_a_failed_check_still_names_i
     );
 }
 
+/// claims/R26: an extractor that reports failure after claims stores nothing and the next sync resumes
 #[test]
-fn S18_an_extractor_that_reports_failure_after_claims_stores_nothing_and_the_next_sync_resumes() {
+fn an_extractor_that_reports_failure_after_claims_stores_nothing_and_the_next_sync_resumes() {
     let env = Env::new(Some("test-extractor"));
     env.add_source("a", "test");
     sync_state(&env, "a", "open");
@@ -1559,8 +1577,9 @@ fn S18_an_extractor_that_reports_failure_after_claims_stores_nothing_and_the_nex
     assert_eq!(extraction_states(&env)[0].2, "current");
 }
 
+/// claims/R25: evidence stored before the connector failed is extracted by the next sync
 #[test]
-fn S17_evidence_stored_before_the_connector_failed_is_extracted_by_the_next_sync() {
+fn evidence_stored_before_the_connector_failed_is_extracted_by_the_next_sync() {
     let env = Env::new(Some("test-extractor"));
     env.add_source("a", "test");
     // The connector submits evidence, then fails its run.
@@ -1589,8 +1608,9 @@ fn S17_evidence_stored_before_the_connector_failed_is_extracted_by_the_next_sync
     assert_eq!(env.count("claim"), 2);
 }
 
+/// claims/R26: a vocabulary version bump alone reads behind until the replay succeeds
 #[test]
-fn S18_a_vocabulary_version_bump_alone_reads_behind_until_the_replay_succeeds() {
+fn a_vocabulary_version_bump_alone_reads_behind_until_the_replay_succeeds() {
     let env = Env::new(Some("test-extractor"));
     env.add_source("a", "test");
     sync_state(&env, "a", "open");

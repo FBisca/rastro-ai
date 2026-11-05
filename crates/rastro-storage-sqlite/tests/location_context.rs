@@ -73,8 +73,9 @@ fn quotes(found: Vec<(i64, Evidence)>) -> Vec<(String, String, String)> {
     found
 }
 
+/// claims/R21: a changed field arrives with the companion fields no newer than the high water mark
 #[test]
-fn S15b_a_changed_field_arrives_with_the_companion_fields_no_newer_than_the_high_water_mark() {
+fn a_changed_field_arrives_with_the_companion_fields_no_newer_than_the_high_water_mark() {
     let (storage, source, _home) = store(0, &[0, 1, 2, 3, 4, 5]);
     let at_pr = [PR.to_string()];
     // The batch ends at the new login (second 5): the state at second 6 is newer, the old login
@@ -101,8 +102,9 @@ fn S15b_a_changed_field_arrives_with_the_companion_fields_no_newer_than_the_high
     assert!(quotes(earlier).contains(&want(PR, "/user/login", "old")));
 }
 
+/// claims/R21: a rebuild delivers the same context whatever the ids
 #[test]
-fn S15b_a_rebuild_delivers_the_same_context_whatever_the_ids() {
+fn a_rebuild_delivers_the_same_context_whatever_the_ids() {
     let (one, source, _a) = store(0, &[0, 1, 2, 3, 4, 5]);
     // Another database, the same evidence behind other observations: other ids, same set.
     let (two, _, _b) = store(3, &[0, 1, 2, 3, 4, 5]);
@@ -117,8 +119,9 @@ fn S15b_a_rebuild_delivers_the_same_context_whatever_the_ids() {
     );
 }
 
+/// claims/R21: context never crosses scopes
 #[test]
-fn S15b_context_never_crosses_scopes() {
+fn context_never_crosses_scopes() {
     let (mut storage, source, _home) = store(0, &[0, 1]);
     let work = Source::github("project".into(), "o/p".into(), Scope("work".into()));
     storage.project_sources(&[source.clone(), work]).unwrap();

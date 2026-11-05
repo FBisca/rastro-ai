@@ -81,11 +81,11 @@ fn cite(field: &str, quote: &str, rule: &str) -> (String, u64, u64, String, Stri
     )
 }
 
-/// S15: the GitHub extractor emits `code:state`, `code:author` and `code:in_repository` claims
+/// claims/R19: the GitHub extractor emits `code:state`, `code:author` and `code:in_repository` claims
 /// with their type claims, each cited at the right field and span, and the core loads its
 /// `code` vocabulary, which has every required definition field
 #[test]
-fn S15_the_github_extractor_emits_cited_code_claims_from_a_complete_vocabulary() {
+fn the_github_extractor_emits_cited_code_claims_from_a_complete_vocabulary() {
     let fixture = Fixture::start(world("Add cache", "adds a cache"));
     let env = Env::new(&fixture.base);
     let extraction = env.sync(&[]);
@@ -237,10 +237,10 @@ fn S15_the_github_extractor_emits_cited_code_claims_from_a_complete_vocabulary()
     }
 }
 
-/// S13: a renamed account stays one `code:Account` with both logins as aliases, a `Bot` is a
+/// claims/R17: a renamed account stays one `code:Account` with both logins as aliases, a `Bot` is a
 /// `code:Bot`, and nothing is typed `Person`
 #[test]
-fn S13_a_renamed_account_keeps_its_entity_and_both_logins_and_a_bot_is_a_bot() {
+fn a_renamed_account_keeps_its_entity_and_both_logins_and_a_bot_is_a_bot() {
     let fixture = Fixture::start(world("Add cache", "adds a cache"));
     let env = Env::new(&fixture.base);
     assert_eq!(env.sync(&[])["state"], "current");
@@ -340,9 +340,9 @@ fn S13_a_renamed_account_keeps_its_entity_and_both_logins_and_a_bot_is_a_bot() {
     assert!(env.column("SELECT count(*) FROM claim WHERE object_value LIKE '%Person%'") == ["0"]);
 }
 
-/// S14: instruction-like text in a title or body yields no claim and no display name
+/// claims/R18: instruction-like text in a title or body yields no claim and no display name
 #[test]
-fn S14_instructions_in_a_title_or_body_yield_no_claim_or_display_name() {
+fn instructions_in_a_title_or_body_yield_no_claim_or_display_name() {
     let fixture = Fixture::start(world(INJECTION, INJECTION));
     let env = Env::new(&fixture.base);
     assert_eq!(env.sync(&[])["state"], "current");
@@ -394,10 +394,10 @@ fn S14_instructions_in_a_title_or_body_yield_no_claim_or_display_name() {
     assert!(!human.contains("Ignore previous"), "{human}");
 }
 
-/// S13: after an owner's login changes across many pull requests, each carrying many labels
+/// claims/R17: after an owner's login changes across many pull requests, each carrying many labels
 /// beside its `/user/id`, the incremental sync, a re-read and a rebuild give one projection
 #[test]
-fn S13_a_rename_across_many_labelled_pull_requests_projects_like_a_rebuild() {
+fn a_rename_across_many_labelled_pull_requests_projects_like_a_rebuild() {
     let mut labelled = World::default();
     for number in 10..17 {
         let mut pr = item(number, true, "open", "t", "b", octocat("octocat"));

@@ -780,8 +780,9 @@ fn a_non_loopback_api_base_url_sends_no_request_and_is_couldnt_look_protocol() {
     }
 }
 
+/// evidence/R72: authors are structured evidence at each item and comment location
 #[test]
-fn S1_authors_are_structured_evidence_at_each_item_and_comment_location() {
+fn authors_are_structured_evidence_at_each_item_and_comment_location() {
     let fixture = Fixture::start(|req, base| {
         let mut reply = standard(req, base);
         if req.path == "/search/issues" {
