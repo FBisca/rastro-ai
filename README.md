@@ -6,7 +6,29 @@
 
 Rastro is an open, pluggable personal assistant. It keeps a cited understanding of a person's world (people, commitments, decisions, sources) and acts, proposes or asks on their behalf, learning over time which to do. Every claim leaves a *rastro*, a trail back to its evidence.
 
-Status: the evidence slice is built (register sources, sync them, search with citations and coverage from the `rastro` command), and this slice adds `rastro mcp` so an agent tool can ask. The rest is concept.
+## What works today
+
+Rastro is early: it remembers and answers, but doesn't act yet.
+
+- **Evidence with receipts.** Register a source, `rastro sync` it, and `rastro search` it. Every hit cites its source, location, span and capture time. Evidence is append-only.
+- **Honest gaps.** `rastro coverage` says what each source has been checked for and how fresh that is, so "found nothing" is never confused with "never looked".
+- **Claims.** Extractors turn structured evidence into claims. `rastro about <entity>` lists what is known about something, and `rastro why <claim>` traces a claim back to its evidence.
+- **Agents can ask.** `rastro mcp` serves the same read operations to Claude Code, Codex or any MCP client. See below.
+- **Plugins out of process.** Connectors and extractors are separate programs that speak a small protocol over stdin/stdout. The first source is GitHub (issues, pull requests and comments involving you).
+
+## How it's built
+
+A Rust workspace in `crates/`:
+
+| Crate | Role |
+|---|---|
+| `rastro-core` | Evidence, coverage, search, claims, and the host that runs plugins |
+| `rastro-operations` | The operation catalog: every operation defined once and exposed on the CLI and MCP |
+| `rastro-storage-sqlite` | Local storage for evidence and the claims projection |
+| `rastro-plugin-sdk` | Protocol and manifest types shared by the core and plugins |
+| `rastro-cli` | The `rastro` command, including the MCP server |
+| `rastro-connector-github`, `rastro-extractor-github` | The GitHub connector and its extractor |
+| `rastro-test-connector`, `rastro-test-extractor` | Plugins driven by a script, used in tests |
 
 - North star: `docs/concept.md`
 - Language: `docs/GLOSSARY.md`
