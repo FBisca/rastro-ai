@@ -63,3 +63,6 @@ Architecture: `../adr/0009-claims-projection.md`, `../adr/0007-typed-operation-c
 28. **Bounded expansion waits for evidence.** It is added only after an equal-token evaluation on 40–60 owner questions shows it beats full-text search. Its budgets (5 seeds, depth at most 2, 25 neighbours, 2,000 examined, 50 returned, 64 KiB) are placeholders until measured. Later parameters are additive and amend ADR 0007.
 29. **A bare name stays an operation error** (§23, unchanged). There is no ad-hoc query surface for the owner for now; revisit with sharing and export.
 30. **Clarifies §24:** "supports" means justifications and their spans (`knowledge.md` §38).
+
+## Added 2026-11-05 (roadmap slice 3 sign-off)
+31. **A canonical alias is written `<namespace>:<kind>/<value>`** (for example `github:login/FBisca`). It resolves to the entities with an observed `rastro:alias` claim of that kind and exact value whose canonical identifier is in that namespace. Exact entity ids and identifiers resolve first. A bare value stays an operation error (§29, `knowledge.md` §24). A value held by several entities is the ambiguous-alias error. No match gives the same empty answer with coverage as an unknown entity. Found at the owner's sign-off; plan D25, `../specs/claims.md` R31.
