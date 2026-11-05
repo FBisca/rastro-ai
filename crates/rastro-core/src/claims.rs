@@ -261,6 +261,7 @@ pub fn validate(
     }
     let typed = |t: &String| vocabulary.has_type(t);
     let subject = submit.subject;
+    crate::entity_form::check(&subject.identifier)?;
     if subject.identifier.is_empty() || !typed(&subject.entity_type) {
         return Err("subject outside the predicate's domain".into());
     }
@@ -289,6 +290,9 @@ pub fn validate(
             if !kind.domain.contains(&subject.entity_type) {
                 return Err("subject outside the alias kind's domain".into());
             }
+            if !crate::entity_form::is_alias_value(&value) {
+                return Err("an alias value is non-empty with no whitespace at either end".into());
+            }
             // A new observation of the field an alias is read from ends the previous alias
             // there, so a rename's two logins show when each held.
             scalar = true;
@@ -310,7 +314,7 @@ pub fn validate(
                 ClaimObject::Entity {
                     identifier,
                     entity_type,
-                } if !identifier.is_empty()
+                } if crate::entity_form::check(&identifier).is_ok()
                     && typed(&entity_type)
                     && predicate.range.contains(&entity_type) =>
                 {

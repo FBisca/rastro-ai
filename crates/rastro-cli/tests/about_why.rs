@@ -670,8 +670,6 @@ fn about_resolves_a_canonical_alias_by_namespace_kind_and_exact_value() {
         "github:email/FBisca",
         "github:login/fbisca",
         "github:login/FBisca/x",
-        "github:login/",
-        "github:FBisca",
     ] {
         let empty = env.ok(&["about", miss]);
         assert_eq!(empty["claims"], json!([]), "{miss}");
@@ -789,5 +787,79 @@ fn S2_an_entity_that_regained_a_login_resolves_directly() {
     assert_eq!(
         env.ok(&["about", "github:login/b"])["claims"],
         expected["claims"]
+    );
+}
+
+const FORMS: &str = "entity id";
+const BAD_FORMS: [&str; 10] = [
+    "foo:bar",
+    "github:FBisca",
+    "github:login/",
+    ":x/y",
+    "e_0000000000000000000000000000000A",
+    "git hub:login/x",
+    "github:lo gin/x",
+    " github:login/x",
+    "github:login/x ",
+    "github:login/ x",
+];
+
+#[test]
+fn S21_a_malformed_entity_form_is_an_operation_error_naming_the_three_forms() {
+    let env = Env::new();
+    for bad in BAD_FORMS {
+        let (ok, error) = env.run(&["about", bad]);
+        assert!(!ok, "{bad}");
+        let message = error["error"].as_str().unwrap();
+        for part in [FORMS, "URL", "<namespace>:<kind>/<value>"] {
+            assert!(message.contains(part), "{bad}: {message}");
+        }
+    }
+}
+
+#[test]
+fn S22_a_well_formed_form_that_matches_nothing_is_empty_with_coverage() {
+    let env = Env::new();
+    env.claim("code:state", literal("open"), time());
+    for miss in [
+        "gitlab:login/x",
+        "github:login/FBisca/x",
+        "github:login/a b",
+    ] {
+        let empty = env.ok(&["about", miss]);
+        assert_eq!(empty["claims"], json!([]), "{miss}");
+        assert!(empty["coverage"].is_array(), "{miss}");
+    }
+}
+
+#[test]
+fn S23_real_identifiers_are_accepted() {
+    let env = Env::new();
+    let url = "https://github.com/o/p/pull/1#issuecomment-5";
+    env.claim_for(url, "code:state", literal("open"), time());
+    let account = "github:account/42";
+    env.claim_for(
+        account,
+        "rastro:alias",
+        alias("login", "vercel[bot]"),
+        time(),
+    );
+    assert_eq!(
+        env.ok(&["about", url])["claims"].as_array().unwrap().len(),
+        1
+    );
+    assert_eq!(
+        env.ok(&["about", account])["claims"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    assert_eq!(
+        env.ok(&["about", "github:login/vercel[bot]"])["claims"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
     );
 }

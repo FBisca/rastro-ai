@@ -532,6 +532,15 @@ impl Vocabulary {
         if let Some(name) = names.into_iter().find(|n| reserved(n)) {
             anyhow::bail!("vocabulary defines {name:?}, a name under the core's `rastro:` prefix");
         }
+        // An alias kind sits between `:` and `/` in a canonical alias, so it can't hold either
+        // or whitespace.
+        if let Some(a) = self
+            .aliases
+            .iter()
+            .find(|a| a.kind.contains(['/', ':']) || a.kind.contains(char::is_whitespace))
+        {
+            anyhow::bail!("alias kind {:?} contains `/`, `:` or whitespace", a.kind);
+        }
         let unknown = self.types.iter().map(|t| (&t.id, &t.unknown));
         let unknown = unknown.chain(self.predicates.iter().map(|p| (&p.id, &p.unknown)));
         let unknown = unknown.chain(self.aliases.iter().map(|a| (&a.kind, &a.unknown)));
@@ -735,6 +744,22 @@ evidence_requirement = "r"
         assert!(error(&alias).contains("shade"), "{}", error(&alias));
         let bad = POLICY.replace("\"one\"", "\"several\"");
         assert!(Vocabulary::parse(&vocabulary(&bad)).is_err());
+    }
+
+    /// claims/R20: an alias kind with `/`, `:` or whitespace is refused
+    #[test]
+    fn an_alias_kind_with_a_separator_or_whitespace_is_refused() {
+        for kind in ["a/b", "a:b", "a b", "a\tb"] {
+            let alias = format!(
+                "{}[[aliases]]\nkind = {kind:?}\ndomain = [\"x:T\"]\n{WORDS}",
+                vocabulary(POLICY)
+            );
+            assert!(
+                error(&alias).contains("alias kind"),
+                "{kind}: {}",
+                error(&alias)
+            );
+        }
     }
 
     /// claims/R20: a name under the rastro prefix is refused

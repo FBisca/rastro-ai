@@ -38,18 +38,7 @@ pub struct About {
     pub extraction: Vec<crate::runs::ExtractionPair>,
 }
 fn validate_entity(entity: &str) -> Result<()> {
-    let id = entity
-        .strip_prefix("e_")
-        .is_some_and(|id| id.len() == 32 && id.bytes().all(|b| b.is_ascii_hexdigit()));
-    let canonical = entity
-        .split_once(':')
-        .is_some_and(|(prefix, value)| !prefix.is_empty() && !value.is_empty())
-        && !entity.chars().any(char::is_whitespace);
-    ensure!(
-        id || canonical,
-        "entity must be an entity id, canonical alias or exact canonical URL"
-    );
-    Ok(())
+    crate::entity_form::check(entity).map_err(anyhow::Error::msg)
 }
 fn answer(
     mut claims: Vec<ClaimSummary>,
