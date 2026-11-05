@@ -254,8 +254,11 @@ operations! {
             slot: 7, name: "claims.rebuild", surfaces: [Cli], read_only: false
         },
     }
+    About(AboutRequest => AboutResult) {
+        slot: 8, name: "about", surfaces: [Cli], read_only: true, reader: run_read
+    }
     Why(WhyRequest => WhyResult) {
-        slot: 6, name: "why", surfaces: [Cli], read_only: true
+        slot: 6, name: "why", surfaces: [Cli], read_only: true, reader: run_read
     }
 }
 

@@ -24,6 +24,18 @@ impl SearchRequest {
     }
 }
 
+impl AboutRequest {
+    pub(crate) fn run_read<S: ReadStorage>(self, reader: &mut Reader<S>) -> Result<AboutResult> {
+        reader.about(&self.entity, &self.options())
+    }
+}
+
+impl WhyRequest {
+    pub(crate) fn run_read<S: ReadStorage>(self, reader: &mut Reader<S>) -> Result<WhyResult> {
+        reader.explain(&self.claim, &self.options())
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

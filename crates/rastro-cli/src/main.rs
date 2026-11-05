@@ -122,23 +122,66 @@ fn sync_line(run: &RunReport) -> String {
     }
     line
 }
-fn why_text(why: &WhyResult) -> String {
-    let c = &why.claim;
+fn extraction_line(pair: &rastro_core::runs::ExtractionPair) -> String {
+    format!(
+        "{} | Scope: {} | Extraction: {} | Extractor: {} {}",
+        display_safe(&pair.source),
+        display_safe(&pair.scope),
+        pair.state.as_str(),
+        display_safe(&pair.extractor),
+        display_safe(pair.extractor_version.as_deref().unwrap_or("unknown"))
+    )
+}
+fn claim_line(summary: &rastro_core::knowledge::ClaimSummary) -> String {
+    let c = &summary.claim;
+    let aliases = |identifier: &str, names: &[String]| {
+        let mut shown = display_safe(identifier);
+        if !names.is_empty() {
+            shown += &format!(
+                " ({})",
+                names
+                    .iter()
+                    .map(|s| display_safe(s))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        shown
+    };
     let object = match &c.object {
-        rastro_core::claims::Object::Entity { identifier, .. } => display_safe(identifier),
+        rastro_core::claims::Object::Entity { identifier, .. } => {
+            aliases(identifier, &summary.object_aliases)
+        }
         rastro_core::claims::Object::Literal { value, .. } => {
             format!("\"{}\"", display_safe(value))
         }
     };
-    let mut lines = vec![format!(
-        "{} {} {} | Status: {} | Claim: {} | Revision: {}",
-        display_safe(&c.subject.identifier),
+    format!(
+        "{} {} {} | Status: {} | Claim: {} | Revision: {} | Supports: {}",
+        aliases(&c.subject.identifier, &summary.subject_aliases),
         display_safe(&c.predicate),
         object,
         c.status,
         c.id,
-        c.revision
-    )];
+        c.revision,
+        summary.support_count
+    )
+}
+fn about_text(about: &rastro_operations::results::AboutResult) -> String {
+    let mut lines: Vec<_> = about.claims.iter().map(claim_line).collect();
+    if lines.is_empty() {
+        lines.push("No claims found".into());
+    }
+    if about.truncated {
+        lines.push("More claims exist; raise --limit (at most 50)".into());
+    }
+    lines.extend(about.coverage.iter().map(coverage_line));
+    lines.extend(about.extraction.iter().map(extraction_line));
+    lines.join("\n")
+}
+fn why_text(why: &WhyResult) -> String {
+    let c = &why.claim.claim;
+    let mut lines = vec![claim_line(&why.claim)];
     lines.push("  Valid time: unknown".into());
     for interval in &c.known_intervals {
         lines.push(format!(
@@ -156,14 +199,28 @@ fn why_text(why: &WhyResult) -> String {
             lines.push(format!("  {kind}: {}", links.join(", ")));
         }
     }
-    lines.extend(why.supports.iter().map(|s| {
-        format!(
-            "  \"{}\" | Link: {} | Field: {} | Span: [{}, {}) | Captured: {} | Trust class: {} | Scope: {} | Source: {} | Rule: {} ({} {})",
-            display_safe(&s.quote), display_safe(&s.location), display_safe(&s.field), s.start, s.end,
-            stamp(s.captured_at), s.trust_class.as_str(), s.scope.0, s.source,
-            display_safe(&s.extraction_rule), display_safe(&s.extractor), display_safe(&s.extractor_version)
-        )
-    }));
+    for support in &why.supports {
+        lines.push(format!(
+            "  Justification: {} | Kind: {} | Extractor: {} {} | Rule: {} | Vocabulary: {}",
+            support.justification_id,
+            display_safe(&support.justification_kind),
+            display_safe(&support.extractor),
+            display_safe(&support.extractor_version),
+            display_safe(&support.extraction_rule),
+            display_safe(&support.vocabulary_version)
+        ));
+        for s in &support.spans {
+            let shown = s.quote.as_deref().unwrap_or(&s.excerpt.text);
+            lines.push(format!("  \"{}{}{}\" | Link: {} | Field: {} | Span: [{}, {}) | Captured: {} | Source updated: {} | Trust class: {} | Scope: {} | Source: {}",
+                if s.quote.is_none() && s.excerpt.clipped_before { "…" } else { "" }, display_safe(shown), if s.quote.is_none() && s.excerpt.clipped_after { "…" } else { "" },
+                display_safe(&s.location), display_safe(&s.field), s.start, s.end, stamp(s.captured_at), s.source_updated_at.map(stamp).unwrap_or_else(|| "unknown".into()), s.trust_class.as_str(), display_safe(&s.scope.0), display_safe(&s.source)));
+        }
+    }
+    if why.truncated {
+        lines.push("More justifications exist; raise --limit (at most 50)".into());
+    }
+    lines.extend(why.coverage.iter().map(coverage_line));
+    lines.extend(why.extraction.iter().map(extraction_line));
     lines.join("\n")
 }
 fn search_text(text: &str, found: &SearchResponse) -> String {
@@ -228,10 +285,17 @@ fn human(response: &Response) -> String {
         Response::IndexRebuild(r) => format!("Index rebuilt: {} observations", r.indexed),
         Response::Search(r) => search_text(&r.query, r),
         Response::Why(r) => why_text(r),
+        Response::About(r) => about_text(r),
     }
 }
 fn execute(request: Request) -> Result<Outcome> {
     let locations = Locations::resolve()?;
+    if matches!(request, Request::About(_) | Request::Why(_)) {
+        let mut reader = Rastro::open_read_only(locations, SqliteStorage::open_read_only)?;
+        let response = request.run_read(&mut reader)?;
+        let text = human(&response);
+        return Ok((response, text));
+    }
     let storage = SqliteStorage::open(&locations.database())?;
     let mut rastro = Rastro::open(locations, storage)?;
     let response = request.run(&mut rastro)?;
