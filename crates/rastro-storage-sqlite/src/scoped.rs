@@ -312,7 +312,7 @@ fn build(
     )?;
     replay(&result)?;
     // Hidden data may suppress an automatic link but never create one.
-    let allowed = super::automatic::linked_pairs(db)?;
+    let allowed = super::automatic::linked_windows(db)?;
     super::automatic::apply_within(&result, Some(&allowed))?;
     result.execute_batch("COMMIT")?;
     Ok((result, work))
