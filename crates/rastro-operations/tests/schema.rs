@@ -317,6 +317,8 @@ fn S3_identity_operations_are_cli_only() {
     assert_eq!(
         names,
         [
+            "identity.answer",
+            "identity.candidates",
             "identity.history",
             "identity.link",
             "identity.me",
@@ -334,7 +336,7 @@ fn S3_identity_operations_are_cli_only() {
         );
         assert_eq!(
             spec.read_only,
-            spec.name == "identity.history",
+            ["identity.history", "identity.candidates"].contains(&spec.name),
             "{}",
             spec.name
         );

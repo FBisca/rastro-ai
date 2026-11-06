@@ -94,6 +94,84 @@
       ],
       "type": "object"
     },
+    "Candidate": {
+      "additionalProperties": false,
+      "description": "Two accounts that may be one human, and why.",
+      "properties": {
+        "accounts": {
+          "description": "The two accounts, in identifier order.",
+          "items": {
+            "$ref": "#/$defs/CandidateAccount"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        },
+        "name": {
+          "description": "The name a yes gives the Person it creates when neither account is held: the longest\nname either account has (alphabetically first among equals), else the matched login.",
+          "type": "string"
+        },
+        "reasons": {
+          "items": {
+            "$ref": "#/$defs/CandidateReason"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "accounts",
+        "reasons",
+        "name"
+      ],
+      "type": "object"
+    },
+    "CandidateAccount": {
+      "additionalProperties": false,
+      "description": "An account of a candidate pair.",
+      "properties": {
+        "held_by": {
+          "description": "The Persons holding it now, by canonical identifier.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "identifier": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "identifier",
+        "held_by"
+      ],
+      "type": "object"
+    },
+    "CandidateReason": {
+      "additionalProperties": false,
+      "description": "One signal, with the value each account of the pair gave, in the pair's order.",
+      "properties": {
+        "reason": {
+          "$ref": "#/$defs/Signal"
+        },
+        "values": {
+          "items": {
+            "type": "string"
+          },
+          "maxItems": 2,
+          "minItems": 2,
+          "type": "array"
+        }
+      },
+      "required": [
+        "reason",
+        "values"
+      ],
+      "type": "object"
+    },
     "Citation": {
       "additionalProperties": false,
       "properties": {
@@ -1292,6 +1370,21 @@
       ],
       "type": "object"
     },
+    "Signal": {
+      "description": "Why two accounts may be one human.",
+      "oneOf": [
+        {
+          "const": "same name",
+          "description": "Equal full names after case and accent folding.",
+          "type": "string"
+        },
+        {
+          "const": "email matches login",
+          "description": "An email's local part equals the other account's login.",
+          "type": "string"
+        }
+      ]
+    },
     "Source": {
       "additionalProperties": false,
       "properties": {
@@ -1349,6 +1442,21 @@
         "unknown"
       ],
       "type": "string"
+    },
+    "Verdict": {
+      "description": "The owner's answer to a candidate pair.",
+      "oneOf": [
+        {
+          "const": "yes",
+          "description": "One person: link both accounts to one Person.",
+          "type": "string"
+        },
+        {
+          "const": "no",
+          "description": "Not one person: record a cannot-link, so the pair never returns.",
+          "type": "string"
+        }
+      ]
     },
     "Window": {
       "additionalProperties": false,
@@ -1856,6 +1964,54 @@
               "type": "object"
             }
           }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "identity.candidates"
+            },
+            "result": {
+              "additionalProperties": false,
+              "description": "The fuzzy candidates, computed on read, each with its two accounts and its reasons.",
+              "properties": {
+                "candidates": {
+                  "items": {
+                    "$ref": "#/$defs/Candidate"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "candidates"
+              ],
+              "title": "IdentityCandidatesResult",
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "identity.answer"
+            },
+            "result": {
+              "additionalProperties": false,
+              "description": "The intents an identity write accepted, in acceptance order; none when it was already in force.",
+              "properties": {
+                "intents": {
+                  "items": {
+                    "$ref": "#/$defs/IntentView"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "intents"
+              ],
+              "title": "IdentityWriteResult",
+              "type": "object"
+            }
+          }
         }
       ],
       "required": [
@@ -1884,7 +2040,9 @@
         "identity.link",
         "identity.merge",
         "identity.undo",
-        "identity.history"
+        "identity.history",
+        "identity.candidates",
+        "identity.answer"
       ]
     },
     "result": {
@@ -2672,6 +2830,93 @@
           "intents"
         ],
         "title": "History",
+        "type": "object"
+      },
+      "surfaces": [
+        "cli"
+      ]
+    },
+    {
+      "description": "List pairs of accounts from different sources that may be one person, and why: an equal name after case and accent folding, or an email whose local part is the other's login. Computed on read; answer each with `rastro identity answer`.",
+      "input": {
+        "additionalProperties": false,
+        "description": "List pairs of accounts from different sources that may be one person, and why: an equal name after case and accent folding, or an email whose local part is the other's login. Computed on read; answer each with `rastro identity answer`.",
+        "title": "IdentityCandidatesRequest",
+        "type": "object"
+      },
+      "name": "identity.candidates",
+      "result": {
+        "additionalProperties": false,
+        "description": "The fuzzy candidates, computed on read, each with its two accounts and its reasons.",
+        "properties": {
+          "candidates": {
+            "items": {
+              "$ref": "#/$defs/Candidate"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "candidates"
+        ],
+        "title": "IdentityCandidatesResult",
+        "type": "object"
+      },
+      "surfaces": [
+        "cli"
+      ]
+    },
+    {
+      "description": "Answer a candidate pair. Yes links both accounts to the Person one of them has, or to a new Person named from the candidate; no records a cannot-link between them.",
+      "input": {
+        "additionalProperties": false,
+        "description": "Answer a candidate pair. Yes links both accounts to the Person one of them has, or to a new Person named from the candidate; no records a cannot-link between them.",
+        "properties": {
+          "account": {
+            "description": "One account of the pair: entity id, canonical alias or exact canonical URL.",
+            "type": "string"
+          },
+          "name": {
+            "default": null,
+            "description": "The name of the Person a yes creates when neither account is held; the candidate's name by default.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "other": {
+            "description": "The other account of the pair.",
+            "type": "string"
+          },
+          "verdict": {
+            "$ref": "#/$defs/Verdict",
+            "description": "`yes` or `no`."
+          }
+        },
+        "required": [
+          "account",
+          "other",
+          "verdict"
+        ],
+        "title": "IdentityAnswerRequest",
+        "type": "object"
+      },
+      "name": "identity.answer",
+      "result": {
+        "additionalProperties": false,
+        "description": "The intents an identity write accepted, in acceptance order; none when it was already in force.",
+        "properties": {
+          "intents": {
+            "items": {
+              "$ref": "#/$defs/IntentView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "intents"
+        ],
+        "title": "IdentityWriteResult",
         "type": "object"
       },
       "surfaces": [

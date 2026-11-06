@@ -1695,3 +1695,301 @@ fn S37_an_intent_records_the_configured_scopes_of_its_issuer() {
     let why = env.human(&["why", &claim_id(&env.about(person), "rastro:alias")]);
     assert!(why.contains("Scopes: personal, work"), "{why}");
 }
+
+/// A `name` alias on the account `identifier` (typed `kind`), read at `location`, field `/name`.
+fn named(env: &Env, identifier: &str, kind: &str, name: &str, location: &str) {
+    let subject = Entity::new(identifier.into(), kind.into());
+    let alias = Object::Literal {
+        value: name.into(),
+        datatype: "name".into(),
+    };
+    env.record(
+        &subject,
+        claims::ALIAS_PREDICATE,
+        alias,
+        (location, "/name"),
+    );
+}
+/// The candidate pairs `rastro identity candidates` lists, each as its two identifiers and its
+/// reasons.
+fn candidates(env: &Env) -> Vec<(String, String, Vec<String>)> {
+    let listed = env.ok(&["identity", "candidates"]);
+    let pairs = listed["candidates"].as_array().unwrap().iter();
+    pairs
+        .map(|c| {
+            let identifier = |i: usize| c["accounts"][i]["identifier"].as_str().unwrap().into();
+            let reasons = c["reasons"].as_array().unwrap().iter();
+            let reasons = reasons.map(|r| r["reason"].as_str().unwrap().into());
+            (identifier(0), identifier(1), reasons.collect())
+        })
+        .collect()
+}
+
+/// S23: a GitHub account and a Linear account whose full names are equal after case and accent
+/// folding are listed with reason `same name`, until one Person holds both
+#[test]
+fn S23_accounts_with_one_folded_name_are_listed_as_same_name() {
+    let env = Env::new();
+    env.account(41, "asilva");
+    let github = "github:account/41";
+    named(
+        &env,
+        github,
+        "code:Account",
+        "Ana Silva",
+        "https://api.github.com/users/41",
+    );
+    let linear = tracker_account(&env, "u-41", "ana.s@example.org");
+    named(
+        &env,
+        &linear,
+        "tracker:Account",
+        "ANA SÍLVA",
+        "https://linear.app/users/u-41",
+    );
+    let pair = (
+        github.to_string(),
+        linear.clone(),
+        vec!["same name".to_string()],
+    );
+    assert_eq!(candidates(&env), [pair]);
+    let text = env.human(&["identity", "candidates"]);
+    assert!(
+        text.contains("github:account/41 ~ linear:user/u-41"),
+        "{text}"
+    );
+    assert!(text.contains("same name: Ana Silva = ANA SÍLVA"), "{text}");
+    let person = env.person("Ana Silva");
+    env.ok(&["identity", "link", github, &person]);
+    assert_eq!(
+        candidates(&env).len(),
+        1,
+        "one account held is still a candidate"
+    );
+    env.ok(&["identity", "link", &linear, &person]);
+    assert!(candidates(&env).is_empty());
+    assert_eq!(
+        env.human(&["identity", "candidates"]).trim(),
+        "No candidates"
+    );
+}
+
+/// S24: a Linear email whose local part equals a GitHub login is listed with reason
+/// `email matches login`
+#[test]
+fn S24_a_linear_email_whose_local_part_is_a_github_login_is_listed() {
+    let env = Env::new();
+    env.account(42, "bcosta");
+    let linear = tracker_account(&env, "u-42", "bcosta@example.org");
+    let reason = vec!["email matches login".to_string()];
+    assert_eq!(
+        candidates(&env),
+        [("github:account/42".into(), linear, reason)]
+    );
+    let text = env.human(&["identity", "candidates"]);
+    assert!(
+        text.contains("email matches login: bcosta = bcosta@example.org"),
+        "{text}"
+    );
+    assert!(text.contains("Name: bcosta"), "{text}");
+}
+
+/// S27: a pair within one namespace, or with a bot (a GitHub `code:Bot` or a Linear app user),
+/// is never a candidate, even when the names or the email and login match
+#[test]
+fn S27_a_pair_in_one_namespace_or_with_a_bot_is_never_a_candidate() {
+    let env = Env::new();
+    for n in [71, 72] {
+        env.account(n, &format!("ana{n}"));
+        let location = format!("https://api.github.com/users/{n}");
+        named(
+            &env,
+            &format!("github:account/{n}"),
+            "code:Account",
+            "Ana Silva",
+            &location,
+        );
+    }
+    let bot = "github:account/73";
+    let location = "https://api.github.com/users/73";
+    env.typed_account(bot, "code:Bot", ("login", "blima"), location);
+    named(&env, bot, "code:Bot", "Bea Lima", location);
+    let linear = tracker_account(&env, "u-73", "blima@example.org");
+    named(
+        &env,
+        &linear,
+        "tracker:Account",
+        "Bea Lima",
+        "https://linear.app/users/u-73",
+    );
+    let app = "linear:user/app-74";
+    let location = "https://linear.app/users/app-74";
+    env.typed_account(app, "tracker:Bot", ("name", "Caio Reis"), location);
+    env.account(74, "creis");
+    let location = "https://api.github.com/users/74";
+    named(
+        &env,
+        "github:account/74",
+        "code:Account",
+        "Caio Reis",
+        location,
+    );
+    assert!(candidates(&env).is_empty(), "{:?}", candidates(&env));
+}
+
+/// The identifiers of the accounts a Person view lists, sorted.
+fn held_accounts(about: &Value) -> Vec<String> {
+    let accounts = about["person"]["accounts"].as_array().unwrap().iter();
+    let mut found: Vec<String> = accounts
+        .map(|a| a["identifier"].as_str().unwrap().into())
+        .collect();
+    found.sort();
+    found
+}
+
+/// S25: a yes to a pair neither account of which is held creates one Person, named from the
+/// candidate, holding both; a yes to a pair with one account held links the other to that
+/// Person; either way the pair no longer appears, and answering it again is refused
+#[test]
+fn S25_a_yes_holds_both_accounts_by_one_person() {
+    let env = Env::new();
+    env.account(51, "asilva");
+    let github = "github:account/51";
+    named(
+        &env,
+        github,
+        "code:Account",
+        "Ana Silva",
+        "https://api.github.com/users/51",
+    );
+    let linear = tracker_account(&env, "u-51", "ana@example.org");
+    named(
+        &env,
+        &linear,
+        "tracker:Account",
+        "ana silva",
+        "https://linear.app/users/u-51",
+    );
+    let answered = env.ok(&["identity", "answer", github, &linear, "yes"]);
+    let kinds: Vec<_> = (answered["intents"].as_array().unwrap().iter())
+        .map(|i| i["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["create_person", "name", "link", "link"]);
+    let person = env.about("rastro:name/Ana Silva");
+    assert_eq!(held_accounts(&person), [github.to_string(), linear.clone()]);
+    assert!(candidates(&env).is_empty());
+    env.ok(&["identity", "me"]);
+    let mine = env.account(52, "fbisca");
+    env.ok(&["identity", "link", &mine, "me"]);
+    let work = tracker_account(&env, "u-52", "fbisca@example.org");
+    let before = env.intents();
+    env.ok(&["identity", "answer", &work, &mine, "yes"]);
+    assert_eq!(env.intents(), before + 1, "one link, no new Person");
+    let me = held_accounts(&env.about("me"));
+    assert_eq!(me, ["github:account/52".to_string(), work]);
+    assert!(candidates(&env).is_empty());
+    let before = env.intents();
+    let error = env.refused(&["identity", "answer", github, &linear, "yes"]);
+    assert!(error.contains("not a candidate pair"), "{error}");
+    assert_eq!(env.intents(), before);
+}
+
+/// S26: a no records a cannot-link between the two accounts, never a claim; the pair never
+/// appears again, including after `claims rebuild`
+#[test]
+fn S26_a_no_records_a_cannot_link_and_the_pair_never_returns() {
+    let env = Env::new();
+    env.account(61, "asilva");
+    let github = "github:account/61";
+    named(
+        &env,
+        github,
+        "code:Account",
+        "Ana Silva",
+        "https://api.github.com/users/61",
+    );
+    let linear = tracker_account(&env, "u-61", "asilva@example.org");
+    named(
+        &env,
+        &linear,
+        "tracker:Account",
+        "Ana Silva",
+        "https://linear.app/users/u-61",
+    );
+    assert_eq!(candidates(&env).len(), 1);
+    let claims: i64 = env.sql("SELECT count(*) FROM claim");
+    let answered = env.ok(&["identity", "answer", &linear, github, "no"]);
+    assert_eq!(answered["intents"].as_array().unwrap().len(), 1);
+    assert_eq!(answered["intents"][0]["kind"], "cannot_link");
+    assert_eq!(env.sql::<i64>("SELECT count(*) FROM claim"), claims);
+    assert!(candidates(&env).is_empty());
+    let history = env.ok(&["identity", "history", github]);
+    assert_eq!(
+        kinds(&history),
+        [("cannot_link".into(), "effective".into())]
+    );
+    env.ok(&["claims", "rebuild"]);
+    assert!(candidates(&env).is_empty());
+    let error = env.refused(&["identity", "answer", github, &linear, "yes"]);
+    assert!(error.contains("not a candidate pair"), "{error}");
+}
+
+/// S23: a name with a precomposed accent the old letter table missed (Romanian `Ș`) folds like
+/// its plain spelling, so the two accounts are listed as `same name`
+#[test]
+fn S23_a_precomposed_accent_folds_like_its_plain_letter() {
+    let env = Env::new();
+    env.account(8101, "stefan");
+    let github = "github:account/8101";
+    named(
+        &env,
+        github,
+        "code:Account",
+        "Ștefan Pop",
+        "https://api.github.com/users/8101",
+    );
+    let linear = tracker_account(&env, "u-8101", "different@example.org");
+    named(
+        &env,
+        &linear,
+        "tracker:Account",
+        "Stefan Pop",
+        "https://linear.app/users/u-8101",
+    );
+    assert_eq!(candidates(&env).len(), 1);
+}
+
+/// S25: a yes to a pair whose one account is held by two Persons the owner has merged links the
+/// other account to that merged Person, and the pair no longer appears
+#[test]
+fn S25_a_yes_links_to_a_holder_merged_with_another() {
+    let env = Env::new();
+    env.account(8102, "ana");
+    let github = "github:account/8102";
+    named(
+        &env,
+        github,
+        "code:Account",
+        "Ana Silva",
+        "https://api.github.com/users/8102",
+    );
+    let linear = tracker_account(&env, "u-8102", "different@example.org");
+    named(
+        &env,
+        &linear,
+        "tracker:Account",
+        "Ana Silva",
+        "https://linear.app/users/u-8102",
+    );
+    let p = env.person("First");
+    let q = env.person("Second");
+    env.ok(&["identity", "link", github, &p]);
+    env.ok(&["identity", "link", github, &q]);
+    env.ok(&["identity", "merge", &p, &q]);
+    assert_eq!(candidates(&env).len(), 1);
+    let answered = env.ok(&["identity", "answer", github, &linear, "yes"]);
+    let intents = answered["intents"].as_array().unwrap();
+    assert_eq!(intents.len(), 1, "one link, no new Person");
+    assert_eq!(intents[0]["kind"], "link");
+    assert!(candidates(&env).is_empty());
+}

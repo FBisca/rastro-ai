@@ -117,6 +117,11 @@ pub trait Snapshot {
     fn resolve_entity(&self, _form: &str) -> Result<Option<(String, String)>> {
         anyhow::bail!("storage does not support entity resolution")
     }
+    /// What the fuzzy-candidate rules read: every entity with a current `name`, `login` or
+    /// `email` alias, unscoped (only the CLI, which sees every scope, lists candidates).
+    fn identity_accounts(&self) -> Result<Vec<crate::identity::AccountFacts>> {
+        anyhow::bail!("storage does not support identity candidates")
+    }
     /// What storage recorded for the source, before the freshness rule is applied.
     fn coverage(&self, pair: &Pair, all_windows: bool) -> Result<Coverage>;
     /// Allowed (source, scope) pairs storage holds anything for, with stored freshness rules.

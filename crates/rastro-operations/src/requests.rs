@@ -426,3 +426,51 @@ impl IdentityHistoryRequest {
         rastro.identity_history(&self.entity)
     }
 }
+
+/// List pairs of accounts from different sources that may be one person, and why: an equal name after case and accent folding, or an email whose local part is the other's login. Computed on read; answer each with `rastro identity answer`.
+#[derive(Args, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IdentityCandidatesRequest {}
+impl IdentityCandidatesRequest {
+    pub(crate) fn run<S: Storage>(
+        self,
+        rastro: &mut Rastro<S>,
+    ) -> Result<IdentityCandidatesResult> {
+        Ok(IdentityCandidatesResult {
+            candidates: rastro.identity_candidates()?,
+        })
+    }
+}
+
+/// The owner's answer to a candidate pair.
+#[derive(Clone, Copy, Debug, Deserialize, JsonSchema, clap::ValueEnum)]
+#[serde(rename_all = "snake_case")]
+pub enum Verdict {
+    /// One person: link both accounts to one Person.
+    Yes,
+    /// Not one person: record a cannot-link, so the pair never returns.
+    No,
+}
+
+/// Answer a candidate pair. Yes links both accounts to the Person one of them has, or to a new Person named from the candidate; no records a cannot-link between them.
+#[derive(Args, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct IdentityAnswerRequest {
+    /// One account of the pair: entity id, canonical alias or exact canonical URL.
+    pub account: String,
+    /// The other account of the pair.
+    pub other: String,
+    /// `yes` or `no`.
+    pub verdict: Verdict,
+    /// The name of the Person a yes creates when neither account is held; the candidate's name by default.
+    #[arg(long)]
+    #[serde(default)]
+    pub name: Option<String>,
+}
+impl IdentityAnswerRequest {
+    pub(crate) fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<IdentityWriteResult> {
+        let yes = matches!(self.verdict, Verdict::Yes);
+        let issued = rastro.answer(&self.account, &self.other, yes, self.name.as_deref())?;
+        Ok(IdentityWriteResult::of(issued))
+    }
+}

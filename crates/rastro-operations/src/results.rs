@@ -120,6 +120,12 @@ fn views(intents: &[rastro_core::identity::Intent]) -> Vec<IntentView> {
 }
 pub type IdentityHistoryResult = rastro_core::identity::History;
 
+/// The fuzzy candidates, computed on read, each with its two accounts and its reasons.
+#[derive(Debug, JsonSchema, Serialize)]
+pub struct IdentityCandidatesResult {
+    pub candidates: Vec<rastro_core::identity::Candidate>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -204,6 +210,8 @@ mod tests {
                 entity: None,
                 intents: vec![],
             }),
+            Response::IdentityCandidates(IdentityCandidatesResult { candidates: vec![] }),
+            Response::IdentityAnswer(IdentityWriteResult { intents: vec![] }),
         ];
         let arguments = |name: &str| match name {
             "source.add" => {
@@ -217,6 +225,9 @@ mod tests {
             "identity.merge" => serde_json::json!({"person": "me", "other": "rastro:name/Ana"}),
             "identity.undo" => serde_json::json!({"intent": "i_1"}),
             "identity.history" => serde_json::json!({"entity": "me"}),
+            "identity.answer" => {
+                serde_json::json!({"account": "github:login/a", "other": "linear:user/u", "verdict": "no"})
+            }
             _ => serde_json::json!({}),
         };
         assert_eq!(CATALOG.len(), responses.len());

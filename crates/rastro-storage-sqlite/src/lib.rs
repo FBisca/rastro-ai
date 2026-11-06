@@ -900,6 +900,9 @@ impl Snapshot for View<'_> {
     fn intents(&self) -> Result<Vec<rastro_core::identity::Intent>> {
         identity::load(self.0)
     }
+    fn identity_accounts(&self) -> Result<Vec<rastro_core::identity::AccountFacts>> {
+        identity::accounts(self.0)
+    }
     fn resolve_entity(&self, form: &str) -> Result<Option<(String, String)>> {
         let Some(id) = self.resolve(form)? else {
             return Ok(None);

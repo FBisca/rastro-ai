@@ -1151,6 +1151,66 @@ fn S19_a_linear_key_switching_to_an_app_closes_the_token_link_in_scope_too() {
     );
     assert_eq!(scoped, full);
 }
+
+/// S23, S27: the candidate rules read each entity's current name, login and email aliases, the
+/// Persons holding it now, and whether every current type of it is an account (a bot's isn't)
+#[test]
+fn S23_storage_reads_the_facts_the_candidate_rules_need() {
+    let home = tempfile::tempdir().unwrap();
+    let mut db = SqliteStorage::open(&home.path().join("db")).unwrap();
+    let alias = claims::ALIAS_PREDICATE;
+    let github = account(&mut db, 1, "personal");
+    fact(
+        &mut db,
+        &github.identifier,
+        alias,
+        ("asilva", "login"),
+        "personal",
+    );
+    let linear = typed(
+        &mut db,
+        "linear:user/u-1",
+        "tracker:Account",
+        &[ACCOUNT_TYPE],
+        "work",
+    );
+    fact(
+        &mut db,
+        &linear.identifier,
+        alias,
+        ("Ana Silva", "name"),
+        "work",
+    );
+    let bot = typed(&mut db, "github:account/9", "code:Bot", &[], "personal");
+    fact(
+        &mut db,
+        &bot.identifier,
+        alias,
+        ("Ana Silva", "name"),
+        "personal",
+    );
+    let p = person(1);
+    issue(
+        &mut db,
+        vec![create("i_1", &p), link("i_2", &github, &p, &[])],
+    )
+    .unwrap();
+    let facts = db.snapshot(|view| view.identity_accounts()).unwrap();
+    let find = |target: &EntityTarget| {
+        let found = facts.iter().find(|f| f.id == target.id);
+        found
+            .unwrap_or_else(|| panic!("{}: {facts:?}", target.identifier))
+            .clone()
+    };
+    let (github, linear, bot) = (find(&github), find(&linear), find(&bot));
+    assert_eq!(github.logins, ["asilva"]);
+    assert!(github.account && github.names.is_empty() && github.emails.is_empty());
+    assert_eq!(github.holders, BTreeSet::from([p.id.clone()]));
+    assert_eq!(linear.names, ["Ana Silva"]);
+    assert!(linear.account && linear.holders.is_empty());
+    assert!(!bot.account);
+}
+
 #[test]
 fn S40_scoped_token_windows_keep_the_longer_token_interval() {
     fn viewer(

@@ -412,6 +412,43 @@ fn person_text(result: &rastro_operations::results::IdentityPersonResult) -> Str
     }
     text
 }
+/// One line per candidate pair: both accounts (with the Persons holding them), each reason with
+/// the value each account gave, and the name a yes would give a new Person.
+fn candidates_text(result: &rastro_operations::results::IdentityCandidatesResult) -> String {
+    if result.candidates.is_empty() {
+        return "No candidates".into();
+    }
+    let account = |a: &rastro_core::identity::CandidateAccount| {
+        let mut text = display_safe(&a.identifier);
+        if !a.held_by.is_empty() {
+            let held: Vec<String> = a.held_by.iter().map(|p| display_safe(p)).collect();
+            text += &format!(" (held by {})", held.join(", "));
+        }
+        text
+    };
+    let reason = |r: &rastro_core::identity::CandidateReason| {
+        let name = serde_json::to_value(r.reason).ok();
+        format!(
+            "{}: {} = {}",
+            name.as_ref().and_then(|v| v.as_str()).unwrap_or_default(),
+            display_safe(&r.values[0]),
+            display_safe(&r.values[1])
+        )
+    };
+    let lines: Vec<String> = (result.candidates.iter())
+        .map(|c| {
+            let reasons: Vec<String> = c.reasons.iter().map(reason).collect();
+            format!(
+                "{} ~ {} | {} | Name: {}",
+                account(&c.accounts[0]),
+                account(&c.accounts[1]),
+                reasons.join(" | "),
+                display_safe(&c.name)
+            )
+        })
+        .collect();
+    lines.join("\n")
+}
 /// The result of an operation, its human form, and whether it succeeded.
 type Outcome = (Response, String);
 
@@ -454,9 +491,13 @@ fn human(response: &Response) -> String {
         Response::Why(r) => why_text(r),
         Response::About(r) => about_text(r),
         Response::IdentityMe(r) | Response::IdentityPersonCreate(r) => person_text(r),
-        Response::IdentityLink(r) | Response::IdentityMerge(r) | Response::IdentityUndo(r) => {
+        Response::IdentityLink(r)
+        | Response::IdentityMerge(r)
+        | Response::IdentityUndo(r)
+        | Response::IdentityAnswer(r) => {
             intents_text(&r.intents, "Already in force; nothing recorded")
         }
+        Response::IdentityCandidates(r) => candidates_text(r),
         Response::IdentityHistory(r) => match &r.entity {
             Some(entity) => format!(
                 "{}\n{}",
