@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 /// evidence/R4: stored evidence rejects updates and deletes
 #[test]
-fn S13_stored_evidence_rejects_updates_and_deletes_after_coverage_migration() {
+fn stored_evidence_rejects_updates_and_deletes() {
     for legacy in [false, true] {
         let home = tempfile::tempdir().unwrap();
         let path = home.path().join("rastro.sqlite3");
@@ -55,7 +55,7 @@ fn S13_stored_evidence_rejects_updates_and_deletes_after_coverage_migration() {
 
 /// evidence/R5: migrations apply once in timestamp order and unknown ones are refused
 #[test]
-fn S13_migrations_apply_once_in_timestamp_order_and_unknown_ones_are_refused() {
+fn migrations_apply_once_in_timestamp_order_and_unknown_ones_are_refused() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("rastro.sqlite3");
     let a = ("202611040001_a", "CREATE TABLE a (x)");

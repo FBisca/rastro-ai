@@ -340,7 +340,7 @@ fn last_migration(db: &Connection) -> String {
 
 /// surfaces/R12: launch applies the pending migration, recovers the crashed run and switches on WAL
 #[test]
-fn S13_launch_migrates_recovers_and_turns_on_wal_before_the_first_answer() {
+fn launch_migrates_recovers_and_turns_on_wal_before_the_first_answer() {
     let env = Env::new();
     env.add_source("project");
     let db = env.db();
