@@ -87,6 +87,7 @@ The kalios data has one human and no email, so a second source there would join 
 | D58 | A yes is stored as plain link intents; undoing one of those links can bring the pair back as a candidate (the undo records its own cannot-link for that account and Person) | An `answered` marker in the intent payload | Undoing a link is new information; no intent-format change | Owner Q42 (2026-11-06), from the T7 plan |
 | D59 | Deactivated Linear users and Linear guests may be candidates; bots never are | Exclude guests and deactivated users | Guests can't link automatically, but the owner may still join them | Owner Q43 (2026-11-06), from the T7 plan |
 | D60 | Candidates and answers are CLI only and read every scope; nothing on MCP for now | Scoped candidates over MCP | The CLI sees every scope (D35) | Owner Q44 (2026-11-06), from the T7 plan |
+| D61 | Narrows D13: GitHub profile emails are not read at all; candidates use names and the `email matches login` signal from verified Linear emails | Keep profile emails as unverified candidate inputs | Self-asserted and often empty; as aliases they made the owner's verified-email alias ambiguous | Owner Q46 (2026-11-06), from the final gap review |
 
 ## Scenarios
 **Source registration**

@@ -98,7 +98,7 @@ There is no separate candidate id, answer intent kind or answered marker in the 
 
 An automatic link is not an intent: it is derived on every projection build and rebuild, never from live credentials. Extractors emit `rastro:verified_email` and `rastro:token_owner` claims from evidence. The core derives links only from these claims, `me` and owner intents; it does not interpret plugin evidence kinds or name plugin types. Premise intervals and scope visibility come from the claim lifecycle (D44, accepted 2026-11-05).
 
-**Verified email.** A verified email is a Linear workspace member's email, or one of the token owner's own verified GitHub emails (`/user/emails`, `verified: true`). Guests, bots and GitHub profile emails never supply `rastro:verified_email`; a profile email is self-asserted and feeds only fuzzy candidates. Emails are also stored as `email` alias claims, displayed as `<namespace>:email/<address>`.
+**Verified email.** A verified email is a Linear workspace member's email, or one of the token owner's own verified GitHub emails (`/user/emails`, `verified: true`). Guests, bots and GitHub profile emails never supply `rastro:verified_email`; Rastro does not read GitHub profile emails at all (narrowed 2026-11-06, owner Q46): they are self-asserted and often empty, and as aliases they made the token owner's verified-email alias ambiguous. Candidates rely on names and logins. Emails are also stored as `email` alias claims, displayed as `<namespace>:email/<address>`.
 
 **The comparison.** Two addresses are equal when the whole address matches after ASCII case-folding. No provider normalisation: no dot or plus rules (`../decisions/knowledge.md` §36).
 
