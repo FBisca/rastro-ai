@@ -14,13 +14,14 @@ fn pair(a: &str, b: &str) -> (String, String) {
     }
 }
 
-fn merge_class(db: &Connection, resolution: &Resolution, person: &str) -> Result<BTreeSet<String>> {
+/// The Persons merged with `person`, over every merge whether the scope sees it or not: hidden
+/// data may suppress an automatic link (D50).
+fn merge_class(resolution: &Resolution, person: &str) -> BTreeSet<String> {
     let mut class = BTreeSet::from([person.to_string()]);
     loop {
         let before = class.len();
         for (a, b) in resolution.merges.keys() {
-            let visible: bool = db.query_row("SELECT EXISTS (SELECT 1 FROM claim WHERE predicate = ?1 AND status = 'observed' AND ((subject = ?2 AND object_entity = ?3) OR (subject = ?3 AND object_entity = ?2)))", params![core::SAME_AS, a, b], |r| r.get(0))?;
-            if visible && (class.contains(a) || class.contains(b)) {
+            if class.contains(a) || class.contains(b) {
                 class.insert(a.clone());
                 class.insert(b.clone());
             }
@@ -29,11 +30,11 @@ fn merge_class(db: &Connection, resolution: &Resolution, person: &str) -> Result
             break;
         }
     }
-    Ok(class)
+    class
 }
 
 fn vetoed(db: &Connection, resolution: &Resolution, account: &str, person: &str) -> Result<bool> {
-    let class = merge_class(db, resolution, person)?;
+    let class = merge_class(resolution, person);
     if class
         .iter()
         .any(|p| resolution.cannot.contains_key(&pair(account, p)))
@@ -58,7 +59,7 @@ fn conflicts(db: &Connection, resolution: &Resolution) -> Result<BTreeSet<(Strin
         .query_map([core::HELD_BY], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
     let mut blocked = BTreeSet::new();
     for (i, (a, p)) in candidates.iter().enumerate() {
-        let class = merge_class(db, resolution, p)?;
+        let class = merge_class(resolution, p);
         for (b, q) in &candidates[i + 1..] {
             if a == b || !class.contains(q) || !resolution.cannot.contains_key(&pair(a, b)) {
                 continue;

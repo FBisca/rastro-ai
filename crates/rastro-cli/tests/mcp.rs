@@ -2649,6 +2649,58 @@ fn S31_random_scope_sets_with_intents_and_automatic_links_equal_a_per_scope_rebu
     assert_eq!(hard, (true, true));
 }
 
+/// S17: a cannot-link through a merge with a Person the scope can't see still vetoes the
+/// automatic link there (D50)
+#[test]
+fn S17_a_cannot_link_through_a_hidden_merge_vetoes_in_every_scope() {
+    let env = Env::new();
+    env.account_in("personal", "github:account/1", "code:Account", "anchor", 0);
+    env.account_in("personal", "github:account/2", "code:Account", "match", 0);
+    env.account_in("health", "github:account/3", "code:Account", "hidden", 0);
+    for n in [1, 2] {
+        let (account, location) = (
+            format!("github:account/{n}"),
+            format!("https://api.github.com/identity/{n}"),
+        );
+        env.claim_about(
+            "personal",
+            &account,
+            &location,
+            rastro_core::identity::VERIFIED_EMAIL,
+            ("same@example.com", "email"),
+            false,
+            1,
+        );
+    }
+    let person = |name: &str| {
+        env.json(&["identity", "person", "create", "--name", name])["person"]["identifier"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let (p, q) = (person("Anchor"), person("Hidden"));
+    env.json(&["identity", "link", "github:account/1", &p]);
+    env.json(&["identity", "link", "github:account/3", &q]);
+    // An undone link leaves a cannot-link between github:account/2 and Q.
+    let refused = env.json(&["identity", "link", "github:account/2", &q]);
+    env.json(&[
+        "identity",
+        "undo",
+        refused["intents"][0]["id"].as_str().unwrap(),
+    ]);
+    env.json(&["identity", "merge", &p, &q]);
+    let mut everything = env.scoped(&[]);
+    let all = about_text(&mut everything, &p);
+    assert_eq!(
+        linked(&all),
+        ["github:account/1", "github:account/3"],
+        "{all}"
+    );
+    let mut personal = env.scoped(&["personal"]);
+    let seen = about_text(&mut personal, &p);
+    assert_eq!(linked(&seen), ["github:account/1"], "{seen}");
+}
+
 /// S37: a scoped `why` on an intent-backed claim lists only the issuer scopes the session can
 /// see; a scope the session can't see is never named
 #[test]
