@@ -422,7 +422,11 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
                 if !self.profiles.contains_key(&id) {
                     let path = format!("/users/{}", login.replace('[', "%5B").replace(']', "%5D"));
                     let profile = match self.client.get(&path, &[]) {
-                        Ok(page) if page.body["id"].as_u64() == Some(id) => page.body,
+                        // Only what the name observation needs is kept, even as its
+                        // original: never the rest of the profile (its email, bio, ...).
+                        Ok(page) if page.body["id"].as_u64() == Some(id) => {
+                            json!({"id": page.body["id"], "name": page.body["name"]})
+                        }
                         Ok(_) => {
                             self.profile_gap("protocol");
                             Value::Null

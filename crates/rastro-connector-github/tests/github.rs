@@ -410,6 +410,27 @@ fn S12_a_kept_viewer_original_holds_only_its_id_and_type() {
 }
 
 #[test]
+fn S12_a_kept_author_profile_original_holds_only_its_id_and_name() {
+    let fixture = Fixture::start(|req, base| match req.path.as_str() {
+        "/users/me" => Reply::ok(
+            json!({"id": 123456789012345_u64, "login": "me", "type": "User", "name": "Owner Name", "email": "profile@example.com", "bio": "private bio"}),
+        ),
+        _ => standard(req, base),
+    });
+    let env = Env::with_source_args(&fixture.base, &["--keep-original"]);
+    assert_eq!(sync(&env)["status"], "ok");
+    let originals = env.rows(
+        "SELECT DISTINCT original FROM evidence WHERE field = '/user/name' AND quote = 'Owner Name'",
+    );
+    assert_eq!(originals.len(), 1, "{originals:?}");
+    let original: Value = serde_json::from_str(&originals[0][0]).unwrap();
+    assert_eq!(
+        original,
+        json!({"id": 123456789012345_u64, "name": "Owner Name"})
+    );
+}
+
+#[test]
 fn S12_an_unreadable_author_profile_is_a_gap_not_a_failed_sync() {
     let fixture = Fixture::start(|req, base| match req.path.as_str() {
         "/users/me" => Reply::status(404, json!({"message": "Not Found"})),
