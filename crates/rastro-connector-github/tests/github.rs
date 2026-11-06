@@ -382,6 +382,28 @@ fn S13_a_429_on_user_emails_is_a_coverage_gap() {
     assert_eq!(gap["reason"], "rate_limited", "{coverage}");
 }
 
+#[test]
+fn S12_a_kept_viewer_original_holds_only_its_id_and_type() {
+    let fixture = Fixture::start(|req, base| match req.path.as_str() {
+        "/user" => Reply::ok(
+            json!({"id": 123456789012345_u64, "login": "me", "type": "User", "name": "Owner Name", "email": "private@example.com"}),
+        ),
+        _ => standard(req, base),
+    });
+    let env = Env::with_source_args(&fixture.base, &["--keep-original"]);
+    assert_eq!(sync(&env)["status"], "ok");
+    let originals = env.rows("SELECT original FROM evidence WHERE location = 'github:viewer' AND field IN ('/id', '/type')");
+    assert_eq!(originals.len(), 2, "{originals:?}");
+    for row in &originals {
+        let original: Value = serde_json::from_str(&row[0]).unwrap();
+        assert_eq!(
+            original,
+            json!({"id": 123456789012345_u64, "type": "User"}),
+            "{row:?}"
+        );
+    }
+}
+
 /// evidence/R34: only owner involved items become evidence
 #[test]
 fn only_owner_involved_items_become_evidence() {

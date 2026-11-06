@@ -154,6 +154,9 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
     fn read_all(&mut self, from: &str, to: &str) -> Result<(), Failure> {
         let user = self.client.get("/user", &[])?;
         let viewer_id = user.body["id"].as_u64().map(|id| id.to_string());
+        // Kept as the original of the viewer's observations: only what identifies the token
+        // owner, never the rest of its profile.
+        let viewer = json!({"id": user.body["id"], "type": user.body["type"]});
         self.submit(
             "viewer",
             "github:viewer",
@@ -162,7 +165,7 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
             "structured",
             Origin {
                 updated: "",
-                original: &user.body,
+                original: &viewer,
             },
         )?;
         self.submit(
@@ -173,7 +176,7 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
             "structured",
             Origin {
                 updated: "",
-                original: &user.body,
+                original: &viewer,
             },
         )?;
         let emails = (|| -> Result<Vec<String>, Failure> {
