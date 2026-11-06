@@ -954,7 +954,7 @@ fn S36a_undoing_a_newer_name_leaves_a_gap_in_the_older_one() {
 
 /// S31: a scoped read replays the scope's identity premises (verified emails, token owners and
 /// their subjects' type and alias claims), never every visible claim: an unknown entity costs
-/// only those (B3, D20)
+/// only those (B3)
 #[test]
 fn S31_a_scoped_read_replays_only_identity_premises() {
     let home = tempfile::tempdir().unwrap();

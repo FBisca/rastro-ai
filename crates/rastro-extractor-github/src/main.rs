@@ -301,7 +301,7 @@ fn viewer_claims(fields: &BTreeMap<&str, &BatchItem>) -> Vec<ClaimSubmit> {
                 .map_or(snapshot.span.quote.as_str(), |(list, _)| list),
         )
     {
-        // This type claim cites the snapshot so even an empty one (`[]`) is in the projection: a newer snapshot then closes every address the older one listed (D46, D47).
+        // This type claim cites the snapshot so even an empty one (`[]`) is in the projection: a newer snapshot then closes every address the older one listed.
         out.push(claim(
             account(),
             TYPE,
@@ -336,7 +336,7 @@ fn viewer_claims(fields: &BTreeMap<&str, &BatchItem>) -> Vec<ClaimSubmit> {
                 alias.supports[1].start = start;
                 alias.supports[1].end = end;
                 out.push(alias);
-                // D49: the verified email cites its own address's span too, never the whole list.
+                // The verified email cites its own address's span too, never the whole list.
                 let mut verified = claim(
                     account(),
                     "rastro:verified_email",

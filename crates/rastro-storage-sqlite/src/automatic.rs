@@ -15,7 +15,7 @@ fn pair(a: &str, b: &str) -> (String, String) {
 }
 
 /// The Persons merged with `person`, over every merge whether the scope sees it or not: hidden
-/// data may suppress an automatic link (D50).
+/// data may suppress an automatic link.
 fn merge_class(resolution: &Resolution, person: &str) -> BTreeSet<String> {
     let mut class = BTreeSet::from([person.to_string()]);
     loop {
@@ -34,7 +34,7 @@ fn merge_class(resolution: &Resolution, person: &str) -> BTreeSet<String> {
 }
 
 /// A cannot-link between `account` and a Person of `person`'s merge class, or an account an owner
-/// link holds in it, visible or not (D48, D50).
+/// link holds in it, visible or not.
 fn vetoed(resolution: &Resolution, account: &str, person: &str) -> bool {
     let class = merge_class(resolution, person);
     class
@@ -45,7 +45,7 @@ fn vetoed(resolution: &Resolution, account: &str, person: &str) -> bool {
         })
 }
 
-/// D48: two qualifying automatic links into one merge class, cannot-linked to each other, block
+/// Two qualifying automatic links into one merge class, cannot-linked to each other, block
 /// each other in every interval; an owner link to the class wins.
 fn conflicts(
     resolution: &Resolution,
@@ -91,7 +91,7 @@ pub(crate) fn linked_pairs(db: &Connection) -> Result<BTreeSet<(String, String)>
 }
 
 /// In a scoped replay, `allowed` holds the (account, Person) pairs the full projection links
-/// automatically: hidden data may suppress a link there but never create one (D50).
+/// automatically: hidden data may suppress a link there but never create one.
 pub(crate) fn apply_within(
     db: &Connection,
     allowed: Option<&BTreeSet<(String, String)>>,
@@ -228,7 +228,7 @@ pub(crate) fn apply_within(
         if settled {
             break;
         }
-        // D48: the blocked set is recomputed from this pass's qualifying links, never accumulated,
+        // The blocked set is recomputed from this pass's qualifying links, never accumulated,
         // so a conflict that no longer qualifies stops blocking. Should the sets cycle, every set
         // in the cycle stays blocked and one last pass derives with their union.
         let next = conflicts(&resolution, &qualifying);

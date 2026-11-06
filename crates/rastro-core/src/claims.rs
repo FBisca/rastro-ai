@@ -354,7 +354,7 @@ pub fn validate(
             {
                 return Err("object outside the predicate's range".into());
             }
-            // D49: a verified email is quoted exactly, like an alias; a token owner is read from
+            // A verified email is quoted exactly, like an alias; a token owner is read from
             // its source's viewer observation.
             if id == crate::identity::VERIFIED_EMAIL {
                 email = Some(value.clone());
@@ -697,7 +697,7 @@ mod tests {
         validate(submit, &with_viewer(), &manifest(), &accounts())
     }
 
-    /// S12, D49: a verified email is exactly the text one of its supports quotes
+    /// S12: a verified email is exactly the text one of its supports quotes
     #[test]
     fn S12_a_verified_email_is_exactly_the_text_its_support_quotes() {
         let email = crate::identity::VERIFIED_EMAIL;

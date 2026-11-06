@@ -284,7 +284,7 @@ pub enum CoverageStatus {
     Complete,
     CouldntLook,
 }
-/// A part of a read that couldn't be looked at (D45), such as an unreadable `/user/emails`: the run stays found or ok.
+/// A part of a read that couldn't be looked at, such as an unreadable `/user/emails`: the run stays found or ok.
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct CoverageGap {
     pub selection: String,

@@ -405,7 +405,7 @@
     },
     "CoverageGap": {
       "additionalProperties": false,
-      "description": "A part of a read that couldn't be looked at (D45), such as an unreadable `/user/emails`: the run stays found or ok.",
+      "description": "A part of a read that couldn't be looked at, such as an unreadable `/user/emails`: the run stays found or ok.",
       "properties": {
         "reason": {
           "type": "string"

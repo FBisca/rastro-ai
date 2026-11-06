@@ -2350,7 +2350,7 @@ fn why_text(session: &mut Session, claim: &str) -> Value {
 /// links. Each scoped `about` (with and without history) and each `why` on an intent-backed
 /// claim, a link shown only where both its ends are, equals a rebuild that holds only the
 /// visible evidence and the visible intents, including automatic links.
-/// Hidden data may suppress an automatic link but never create one (D50): the oracle refuses, by
+/// Hidden data may suppress an automatic link but never create one: the oracle refuses, by
 /// a cannot-link, each automatic link the full projection doesn't hold.
 #[test]
 fn S31_random_scope_sets_with_intents_and_automatic_links_equal_a_per_scope_rebuild() {
@@ -2670,7 +2670,7 @@ fn S31_random_scope_sets_with_intents_and_automatic_links_equal_a_per_scope_rebu
                 .map(|(i, ..)| i.clone())
                 .collect(),
         );
-        // D50: refuse, in the oracle, every automatic link the full projection doesn't hold.
+        // Refuse, in the oracle, every automatic link the full projection doesn't hold.
         let held = |db: Connection| -> std::collections::BTreeSet<(String, String)> {
             db.prepare("SELECT DISTINCT s.identifier, o.identifier FROM claim c JOIN automatic_justification a ON a.claim_id = c.id JOIN entity s ON s.id = c.subject JOIN entity o ON o.id = c.object_entity")
                 .unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect()
@@ -2752,7 +2752,7 @@ fn S31_random_scope_sets_with_intents_and_automatic_links_equal_a_per_scope_rebu
 }
 
 /// S17: a cannot-link through a merge with a Person the scope can't see still vetoes the
-/// automatic link there (D50)
+/// automatic link there
 #[test]
 fn S17_a_cannot_link_through_a_hidden_merge_vetoes_in_every_scope() {
     let env = Env::new();
@@ -2804,7 +2804,7 @@ fn S17_a_cannot_link_through_a_hidden_merge_vetoes_in_every_scope() {
 }
 
 /// S17: a cannot-link with an account an owner link holds in the class, hidden from the scope,
-/// still vetoes the automatic link there (D50)
+/// still vetoes the automatic link there
 #[test]
 fn S17_a_cannot_link_with_a_hidden_held_account_vetoes_in_every_scope() {
     let env = Env::new();
@@ -2861,7 +2861,7 @@ fn S17_a_cannot_link_with_a_hidden_held_account_vetoes_in_every_scope() {
 }
 
 /// S17: B (visible) and D (hidden) both qualify for P and are refused to each other, so neither
-/// joins; B stays unlinked in a scope that can't see D (D48, D50)
+/// joins; B stays unlinked in a scope that can't see D
 #[test]
 fn S17_a_hidden_conflict_partner_keeps_the_visible_account_unlinked_in_every_scope() {
     let env = Env::new();
@@ -2913,8 +2913,8 @@ fn S17_a_hidden_conflict_partner_keeps_the_visible_account_unlinked_in_every_sco
     );
 }
 
-/// S31, D12: no scoped read (about, with history, or why) surfaces a hidden Person or an intent
-/// naming it, though every intent is replayed so hidden cannot-links still veto (D50)
+/// S31: no scoped read (about, with history, or why) surfaces a hidden Person or an intent
+/// naming it, though every intent is replayed so hidden cannot-links still veto
 #[test]
 fn S31_no_scoped_read_surfaces_a_hidden_intent_or_person() {
     let env = Env::new();

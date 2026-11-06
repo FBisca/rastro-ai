@@ -667,7 +667,7 @@ fn refuse(env: &Env, id: &str, a: u32, b: u32) {
 }
 
 /// S17: two automatic links refused to each other block each other over every interval; one
-/// that already closed is never written either (D48)
+/// that already closed is never written either
 #[test]
 fn S17_a_blocked_conflict_writes_no_automatic_link_in_any_interval() {
     let env = Env::new();
@@ -749,7 +749,7 @@ fn joined(
 }
 
 /// S17: a conflict whose one side no longer qualifies stops blocking the other: blocked links
-/// are recomputed from each pass, not accumulated (D48)
+/// are recomputed from each pass, not accumulated
 #[test]
 fn S17_a_conflict_that_no_longer_qualifies_stops_blocking() {
     // W(902) and V(903) share A's email e and are refused to each other: both blocked. X(904)
@@ -772,7 +772,7 @@ fn S17_a_conflict_that_no_longer_qualifies_stops_blocking() {
 }
 
 /// S17: when blocking one side would let the conflict come back, both stay blocked: a cycle
-/// suppresses, it never picks (D48)
+/// suppresses, it never picks
 #[test]
 fn S17_a_conflict_that_returns_once_unblocked_keeps_both_blocked() {
     // Y(912) joins through e; X(913) only through Y's g. Unblocked, they conflict again.

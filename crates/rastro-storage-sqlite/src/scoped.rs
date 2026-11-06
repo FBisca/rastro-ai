@@ -301,7 +301,7 @@ fn build(
         &[evidence],
     )?;
     replay(&result)?;
-    // D50: hidden data may suppress an automatic link but never create one.
+    // Hidden data may suppress an automatic link but never create one.
     let allowed = super::automatic::linked_pairs(db)?;
     super::automatic::apply_within(&result, Some(&allowed))?;
     result.execute_batch("COMMIT")?;

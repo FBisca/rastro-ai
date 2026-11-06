@@ -31,7 +31,7 @@ fn property_names(schema: &serde_json::Value) -> Vec<&str> {
     names
 }
 
-/// D45 adds an optional, typed list to coverage windows everywhere they appear.
+/// Coverage gains an optional, typed list to coverage windows everywhere they appear.
 fn remove_coverage_gaps(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(map) => {

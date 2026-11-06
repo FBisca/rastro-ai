@@ -249,7 +249,7 @@ fn claims_at(
         return claims;
     }
     if kind == ACCOUNT {
-        // These type claims cite an invalid email or a guest flag so that observation is in the projection: it then closes the verified email the older one supported (S16a, D47).
+        // These type claims cite an invalid email or a guest flag so that observation is in the projection: it then closes the verified email the older one supported (S16a).
         for field in ["/email", "/guest"] {
             if let Some((observation, value)) = quote(field)
                 && ((field == "/email" && !email(value)) || (field == "/guest" && value == "true"))

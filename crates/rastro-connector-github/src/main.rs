@@ -145,7 +145,7 @@ fn sync<R: BufRead, W: Write>(
 }
 
 impl<R: BufRead, W: Write> Run<'_, R, W> {
-    /// An author profile couldn't be read: reported once per reason, and the run goes on (D45).
+    /// An author profile couldn't be read: reported once per reason, and the run goes on.
     fn profile_gap(&mut self, reason: &str) {
         if !self
             .gaps
