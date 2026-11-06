@@ -33,30 +33,22 @@ fn merge_class(resolution: &Resolution, person: &str) -> BTreeSet<String> {
     class
 }
 
-fn vetoed(db: &Connection, resolution: &Resolution, account: &str, person: &str) -> Result<bool> {
+/// A cannot-link between `account` and a Person of `person`'s merge class, or an account an owner
+/// link holds in it, visible or not (D48, D50).
+fn vetoed(resolution: &Resolution, account: &str, person: &str) -> bool {
     let class = merge_class(resolution, person);
-    if class
+    class
         .iter()
         .any(|p| resolution.cannot.contains_key(&pair(account, p)))
-    {
-        return Ok(true);
-    }
-    let others: Vec<(String, String)> = db
-        .prepare(
-            "SELECT c.subject, c.object_entity FROM claim c WHERE c.predicate = ?1 AND c.status = 'observed' AND EXISTS (SELECT 1 FROM intent_justification i WHERE i.claim_id = c.id AND i.ended_at IS NULL)",
-        )?
-        .query_map([core::HELD_BY], |r| Ok((r.get(0)?, r.get(1)?)))?
-        .collect::<Result<_, _>>()?;
-    Ok(others.iter().any(|(other, p)| {
-        class.contains(p) && resolution.cannot.contains_key(&pair(account, other))
-    }))
+        || resolution.links.keys().any(|(other, p)| {
+            class.contains(p) && resolution.cannot.contains_key(&pair(account, other))
+        })
 }
 
 fn conflicts(db: &Connection, resolution: &Resolution) -> Result<BTreeSet<(String, String)>> {
     let candidates: Vec<(String, String)> = db.prepare("SELECT DISTINCT c.subject, c.object_entity FROM claim c JOIN automatic_justification a ON a.claim_id = c.id WHERE a.ended_at IS NULL")?
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
-    let owners: Vec<(String, String)> = db.prepare("SELECT DISTINCT c.subject, c.object_entity FROM claim c JOIN intent_justification i ON i.claim_id = c.id WHERE c.predicate = ?1 AND i.ended_at IS NULL")?
-        .query_map([core::HELD_BY], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
+    let owners: Vec<&(String, String)> = resolution.links.keys().collect();
     let mut blocked = BTreeSet::new();
     for (i, (a, p)) in candidates.iter().enumerate() {
         let class = merge_class(resolution, p);
@@ -109,7 +101,7 @@ pub(crate) fn apply(db: &Connection) -> Result<()> {
             "SELECT c.id, c.subject, e.identifier FROM claim c JOIN entity e ON e.id = c.subject WHERE c.predicate = ?1"
         )?.query_map([core::TOKEN_OWNER], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<Result<_, _>>()?;
             for (premise, account, identifier) in rows {
-                if vetoed(db, &resolution, &account, me)?
+                if vetoed(&resolution, &account, me)
                     || admit_account(&identifier, &identity::types(db, &account, &[])?).is_err()
                 {
                     continue;
@@ -157,7 +149,7 @@ pub(crate) fn apply(db: &Connection) -> Result<()> {
                     for (right_id, right_account, identifier, right_email) in &emails {
                         if right_account == left_account
                             || !left_email.eq_ignore_ascii_case(right_email)
-                            || vetoed(db, &resolution, right_account, &person)?
+                            || vetoed(&resolution, right_account, &person)
                             || admit_account(identifier, &identity::types(db, right_account, &[])?)
                                 .is_err()
                         {

@@ -2211,6 +2211,49 @@ fn linked(about: &Value) -> Vec<String> {
         .collect()
 }
 
+/// The owner refuses to link two accounts: an account-to-account cannot-link, which no CLI
+/// command issues.
+fn refuse_accounts(env: &Env, id: &str, a: &str, b: &str) {
+    use rastro_core::identity::{
+        EntityTarget, FORMAT_VERSION, Intent, IntentKind, IssuerContext, OWNER, Payload,
+        SHAPE_VERSION, Targets,
+    };
+    let target = |identifier: &str| EntityTarget {
+        id: rastro_core::claims::entity_id(identifier),
+        identifier: identifier.into(),
+        role: "account".into(),
+    };
+    let mut endpoints = [target(a), target(b)];
+    endpoints.sort_by(|x, y| x.id.cmp(&y.id));
+    let mut refusal = Intent {
+        id: id.into(),
+        append_seq: 0,
+        format_version: FORMAT_VERSION,
+        kind: IntentKind::CannotLink,
+        owner_id: OWNER.into(),
+        issuer_context: IssuerContext {
+            principal: OWNER.into(),
+            surface: "test".into(),
+            scopes: vec![],
+        },
+        issued_at: chrono::Utc::now(),
+        domain_key: String::new(),
+        targets: Targets::Pair {
+            version: SHAPE_VERSION,
+            symmetric: true,
+            endpoints,
+        },
+        payload: Payload {
+            version: SHAPE_VERSION,
+            name: None,
+        },
+        undo_of: None,
+        supersedes: None,
+    };
+    refusal.domain_key = refusal.expected_domain().unwrap();
+    env.issue(vec![refusal]);
+}
+
 /// S30: a scoped read that can't see any of a Person's linked accounts answers for it exactly as
 /// for an unknown entity; `about me` in any scope shows only the visible accounts and claims
 #[test]
@@ -2689,6 +2732,63 @@ fn S17_a_cannot_link_through_a_hidden_merge_vetoes_in_every_scope() {
         refused["intents"][0]["id"].as_str().unwrap(),
     ]);
     env.json(&["identity", "merge", &p, &q]);
+    let mut everything = env.scoped(&[]);
+    let all = about_text(&mut everything, &p);
+    assert_eq!(
+        linked(&all),
+        ["github:account/1", "github:account/3"],
+        "{all}"
+    );
+    let mut personal = env.scoped(&["personal"]);
+    let seen = about_text(&mut personal, &p);
+    assert_eq!(linked(&seen), ["github:account/1"], "{seen}");
+}
+
+/// S17: a cannot-link with an account an owner link holds in the class, hidden from the scope,
+/// still vetoes the automatic link there (D50)
+#[test]
+fn S17_a_cannot_link_with_a_hidden_held_account_vetoes_in_every_scope() {
+    let env = Env::new();
+    for (n, scope, login) in [
+        (1, "personal", "anchor"),
+        (2, "personal", "match"),
+        (3, "health", "hidden"),
+    ] {
+        env.account_in(
+            scope,
+            &format!("github:account/{n}"),
+            "code:Account",
+            login,
+            0,
+        );
+    }
+    for n in [1, 2] {
+        let (account, location) = (
+            format!("github:account/{n}"),
+            format!("https://api.github.com/identity/{n}"),
+        );
+        env.claim_about(
+            "personal",
+            &account,
+            &location,
+            rastro_core::identity::VERIFIED_EMAIL,
+            ("same@example.com", "email"),
+            false,
+            1,
+        );
+    }
+    let p = env.json(&["identity", "person", "create", "--name", "Anchor"])["person"]["identifier"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    env.json(&["identity", "link", "github:account/1", &p]);
+    env.json(&["identity", "link", "github:account/3", &p]); // in `health`: hidden from `personal`
+    refuse_accounts(
+        &env,
+        "i_s17_hidden_held",
+        "github:account/2",
+        "github:account/3",
+    );
     let mut everything = env.scoped(&[]);
     let all = about_text(&mut everything, &p);
     assert_eq!(
