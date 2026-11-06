@@ -400,3 +400,48 @@ fn half_configured_or_malformed_live_variables_fail_naming_them() {
         );
     }
 }
+
+/// S34: on a copy of the owner's database, after the owner synced a GitHub repository and
+/// Linear and ran `rastro identity me`, `about me` lists a GitHub and a Linear account, and
+/// `rastro identity candidates` answers without error.
+///
+/// Needs `RASTRO_LIVE_DB`: a COPY of the owner's database (for example made with
+/// `sqlite3 ~/.local/share/rastro/rastro.sqlite3 ".backup /tmp/rastro-copy.sqlite3"`). The test
+/// copies it again into a temporary home, so the file it is given is never written. Run with
+/// `cargo test -p rastro-cli --test live -- --ignored S34_`.
+#[test]
+#[ignore = "reads a copy of the owner's database; set RASTRO_LIVE_DB"]
+fn S34_the_owners_copy_lists_github_and_linear_accounts_and_runs_candidates() {
+    let Some(source) = std::env::var_os("RASTRO_LIVE_DB") else {
+        return;
+    };
+    let home = tempfile::tempdir().unwrap();
+    let data = home.path().join("data");
+    fs::create_dir_all(&data).unwrap();
+    fs::copy(&source, data.join("rastro.sqlite3")).unwrap();
+    let plugins = home.path().join("plugins");
+    fs::create_dir_all(&plugins).unwrap();
+
+    let about = rastro(home.path(), &plugins, &["about", "me"]);
+    let person = &about["result"]["person"];
+    let accounts: Vec<&str> = person["accounts"]
+        .as_array()
+        .unwrap_or_else(|| panic!("about me has no person accounts: {about}"))
+        .iter()
+        .filter_map(|a| a["identifier"].as_str())
+        .collect();
+    assert!(
+        accounts.iter().any(|a| a.starts_with("github:")),
+        "no GitHub account held by me: {accounts:?}"
+    );
+    assert!(
+        accounts.iter().any(|a| a.starts_with("linear:")),
+        "no Linear account held by me: {accounts:?}"
+    );
+
+    let listed = rastro(home.path(), &plugins, &["identity", "candidates"]);
+    assert!(
+        listed["result"]["candidates"].is_array(),
+        "candidates failed: {listed}"
+    );
+}
