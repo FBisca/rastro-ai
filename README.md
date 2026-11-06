@@ -89,7 +89,8 @@ flowchart LR
   classDef planning fill:#d0ebff,stroke:#1971c2,color:#0b3d6e
   classDef todo fill:#f1f3f5,stroke:#868e96,color:#495057
   class s1,s2,s3,s4 done
-  class s5,s6,s7,s8,s9,s10,s11,s12,s13,s14,s15,s16 todo
+  class s5 planning
+  class s6,s7,s8,s9,s10,s11,s12,s13,s14,s15,s16 todo
 ```
 
 ## Let an agent read evidence and claims (MCP)

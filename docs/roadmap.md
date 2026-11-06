@@ -2,6 +2,8 @@
 
 A rough, living list of thin end-to-end deliverables. Every slice ends in an **outcome**: something the owner can use from that day on. Slices group into milestones; each milestone is a point where Rastro replaces something the owner does today. Order and scope change freely; `concept.md` and `decisions/` still win. Each slice gets its own plan when it starts.
 
+**Switch day.** Each slice's plan names the first day the owner uses its outcome for a real job, and what they stop doing by hand from then on. A slice is done when that day has happened, not only when its scenarios pass.
+
 Status: `todo` · `planning` · `doing` · `done`
 
 ## M1: Ask my world, with receipts
@@ -19,7 +21,7 @@ Status: `todo` · `planning` · `doing` · `done`
 
 | # | Slice | Outcome: from here on you can… | Builds on | Concept / decisions | Status |
 |---|---|---|---|---|---|
-| 5 | **Commitments from conversations** | See commitments (asks, promises, dates, waiting-on) pulled from unstructured sources as hypotheses, each with its quoted span. Uses an agent tool adapter and a minimal standard vocabulary | 4 | knowledge §6, §13; vocabulary §1, §5; plugins §2, §10 | todo |
+| 5 | **Commitments from conversations** | See commitments (asks, promises, dates, waiting-on) from Teams meetings you choose, as hypotheses: each with its quoted span, its speaker (uncertain until you link it) and how its date was read, through a `commitments` list on CLI and MCP. A private meetings connector reads the work companion deterministically, outside this repo; a separate commitments extractor uses an agent tool adapter. A model's interpretation is recorded and replayed, never re-called at rebuild. Switch day: the morning after it lands, yesterday's meeting commitments are checked in Rastro, not by rereading notes | 4 | knowledge §6, §13, §17, §23, §46; vocabulary §1, §5; plugins §2, §10, §13 | planning |
 | 6 | **The commitments queue** | Work a terminal queue of proposals and questions, checked against what's known first: accept, edit, reject, answer, `missed`. Outcomes are recorded, and the renderer reports what it showed | 5 | renderers §1–2, §6; learning §2–3, §11 | todo |
 | 7 | **Correct anything** | Confirm, fix or retract any claim; a retraction carries through to derived claims and pending proposals; "as of" queries | 6 | knowledge §7, §10; renderers §5 | todo |
 
@@ -53,4 +55,8 @@ Status: `todo` · `planning` · `doing` · `done`
 ## Parking lot
 - News radar, project updates in the owner's voice, "find agent work a plain rule could do": workflows after 12.
 - Windows support.
+- Commitments from GitHub and Linear comments: the slice-5 extractor bound to those sources, once their connectors read comments.
+- Slack and mail through the work companion, after meetings prove useful; Slack per approved channel, each with its own coverage.
+- A versioned structured read contract from the work companion (asked of its maintainers), then a generic MCP bridge with private mapping packs.
+- Agentic connectors (an agent chooses what to read), first for online research. Amends plugins §13 and needs a read broker that constrains tools, scopes and arguments; evidence stays what the broker captured, and "empty" only comes from deterministic reads.
 - Open questions in `open-questions.md` get decided inside the slice that first needs them.
