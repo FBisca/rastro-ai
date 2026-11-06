@@ -51,13 +51,12 @@ use std::{
 };
 
 /// The fields any rule reads. Everything else is skipped unread.
-const FIELDS: [&str; 9] = [
+const FIELDS: [&str; 8] = [
     "/state",
     "/user/id",
     "/user/login",
     "/user/type",
     "/user/name",
-    "/user/email",
     "/id",
     "/type",
     "/emails/verified",
@@ -262,21 +261,6 @@ fn claims_at(location: &str, fields: &BTreeMap<&str, &BatchItem>) -> Vec<ClaimSu
                 literal(name, "name"),
                 "name",
                 &[id, name_item],
-            ));
-        }
-        if account_type == "code:Account"
-            && let Some((email_item, address)) = quote("/user/email")
-            && address
-                .split_once('@')
-                .is_some_and(|(a, b)| !a.is_empty() && !b.is_empty() && !b.contains('@'))
-            && !address.chars().any(|c| c.is_whitespace() || c.is_control())
-        {
-            claims.push(claim(
-                account(),
-                ALIAS,
-                literal(address, "email"),
-                "email",
-                &[id, email_item],
             ));
         }
     }

@@ -450,17 +450,6 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
                         original: &profile,
                     },
                 )?;
-                self.submit(
-                    kind,
-                    location,
-                    "/user/email",
-                    profile["email"].as_str(),
-                    "structured",
-                    Origin {
-                        updated: "",
-                        original: &profile,
-                    },
-                )?;
             }
         }
         Ok(())

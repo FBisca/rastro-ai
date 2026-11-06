@@ -261,8 +261,13 @@ fn S12_records_viewer_verified_emails_and_author_names() {
     );
     let alias = env.json(&["about", "github:email/owner@example.com"]);
     assert_eq!(alias["result"]["resolved"], true, "{alias}");
+    // A profile's public email is neither read nor an alias: only verified emails are.
     let profile = env.json(&["about", "github:email/profile@example.com"]);
-    assert_eq!(profile["result"]["resolved"], true, "{profile}");
+    assert_eq!(profile["result"]["resolved"], false, "{profile}");
+    assert!(
+        env.rows("SELECT quote FROM evidence WHERE field = '/user/email'")
+            .is_empty()
+    );
     assert!(
         !about["result"]["claims"]
             .as_array()
