@@ -206,6 +206,37 @@ pub fn candidate_pairs(accounts: &[AccountFacts], resolution: &Resolution) -> Ve
     found
 }
 
+/// What the owner's answer to the candidate pair `a`, `b` records, given every account's facts
+/// and the intents accepted so far: a no is a cannot-link between the two accounts. Refused when
+/// the pair isn't a candidate now.
+fn plan_answer(
+    a: EntityTarget,
+    b: EntityTarget,
+    facts: &[AccountFacts],
+    resolution: &Resolution,
+    yes: bool,
+    name: Option<&str>,
+) -> Result<(Vec<Intent>, Option<EntityTarget>, bool)> {
+    let intent = |kind, targets, payload| new_intent(kind, String::new(), targets, payload, None);
+    let pairs = candidate_pairs(facts, resolution);
+    let ids = [&a.id, &b.id];
+    let Some(candidate) = (pairs.iter()).find(|c| c.accounts.iter().all(|x| ids.contains(&&x.id)))
+    else {
+        bail!(
+            "{} and {} are not a candidate pair; `rastro identity candidates` lists the pairs",
+            a.identifier,
+            b.identifier
+        );
+    };
+    if !yes {
+        let pair = Targets::pair(true, a, b);
+        let refusal = intent(IntentKind::CannotLink, pair, Payload::empty())?;
+        return Ok((vec![refusal], None, false));
+    }
+    let _ = (candidate, name);
+    bail!("only a no is recorded so far")
+}
+
 impl<S: Storage> Rastro<S> {
     /// The fuzzy candidates, computed on read over every scope: only the CLI, which sees every
     /// scope, lists them.
@@ -213,6 +244,21 @@ impl<S: Storage> Rastro<S> {
         self.storage.snapshot(|view| {
             let resolution = Resolution::of(&view.intents()?);
             Ok(candidate_pairs(&view.identity_accounts()?, &resolution))
+        })
+    }
+    /// The owner's answer to the candidate pair `one`, `other`, any forms `about` accepts (see
+    /// `plan_answer`). Its intents are accepted together, or none is.
+    pub fn answer(
+        &mut self,
+        one: &str,
+        other: &str,
+        yes: bool,
+        name: Option<&str>,
+    ) -> Result<Issued> {
+        self.issue(|view, resolution| {
+            let a = resolve(view, resolution, one, "account")?;
+            let b = resolve(view, resolution, other, "account")?;
+            plan_answer(a, b, &view.identity_accounts()?, resolution, yes, name)
         })
     }
 }
@@ -256,6 +302,14 @@ mod tests {
         AccountFacts {
             holders: BTreeSet::from([person.id.clone()]),
             ..f.clone()
+        }
+    }
+    /// `f` as an intent names an account.
+    fn target(f: &AccountFacts) -> EntityTarget {
+        EntityTarget {
+            id: f.id.clone(),
+            identifier: f.identifier.clone(),
+            role: "account".into(),
         }
     }
 
@@ -364,5 +418,27 @@ mod tests {
         r.cannot
             .insert(sorted(&linear.id, &p.id), "i_undone".into());
         assert!(candidate_pairs(&[held(&github, &p), linear], &r).is_empty());
+    }
+
+    /// S26: a no records one cannot-link between the two accounts, after which the pair is no
+    /// candidate and answering it again is refused
+    #[test]
+    fn S26_a_no_records_a_cannot_link_between_the_two_accounts() {
+        let github = facts("github:account/1", &["Ana Silva"], &[], &[]);
+        let linear = facts("linear:user/u-1", &["ana silva"], &[], &[]);
+        let both = [github.clone(), linear.clone()];
+        let none = Resolution::default();
+        let (intents, person, _) =
+            plan_answer(target(&linear), target(&github), &both, &none, false, None).unwrap();
+        assert!(person.is_none());
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0].kind, IntentKind::CannotLink);
+        let (x, y) = sorted(&github.id, &linear.id);
+        assert_eq!(intents[0].domain_key, format!("cannot_link/{x}/{y}"));
+        let after = Resolution::of(&intents);
+        assert!(candidate_pairs(&both, &after).is_empty());
+        let again = plan_answer(target(&github), target(&linear), &both, &after, false, None);
+        let error = again.unwrap_err().to_string();
+        assert!(error.contains("not a candidate pair"), "{error}");
     }
 }
