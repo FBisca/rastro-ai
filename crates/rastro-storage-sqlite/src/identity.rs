@@ -7,10 +7,11 @@ use crate::{parse_time, stamp};
 use anyhow::{Context, Result, ensure};
 use rastro_core::Scope;
 use rastro_core::claims::{
-    Object, TYPE_PREDICATE, intent_justification_id_with_ordinal, revision_with_links,
+    ALIAS_PREDICATE, Object, TYPE_PREDICATE, intent_justification_id_with_ordinal,
+    revision_with_links,
 };
 use rastro_core::identity::{
-    HELD_BY, Intent, IntentKind, Resolution, SAME_AS, SeenType, admit_account,
+    AccountFacts, HELD_BY, Intent, IntentKind, Resolution, SAME_AS, SeenType, admit_account,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::{BTreeMap, BTreeSet};
@@ -425,6 +426,48 @@ pub(crate) fn copy_visible(db: &Connection, target: &Connection, scopes: &[Scope
         )?;
     }
     Ok(())
+}
+
+/// What the candidate rules read, from the whole projection: every entity with a current `name`,
+/// `login` or `email` alias, those aliases sorted by value, the Persons a current `held_by`
+/// claim gives it, and whether every current type of it is an account.
+pub(crate) fn accounts(db: &Connection) -> Result<Vec<AccountFacts>> {
+    let mut found: BTreeMap<String, AccountFacts> = BTreeMap::new();
+    let mut aliases = db.prepare(&format!(
+        "SELECT c.subject, e.identifier, c.object_datatype, c.object_value
+         FROM claim c JOIN entity e ON e.id = c.subject
+         WHERE c.predicate = '{ALIAS_PREDICATE}' AND c.status IN {CURRENT}
+         AND c.object_datatype IN ('name', 'login', 'email') ORDER BY c.subject, c.object_value"
+    ))?;
+    let rows = aliases.query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?;
+    for row in rows {
+        let (id, identifier, kind, value): (String, String, String, String) = row?;
+        let facts = found.entry(id.clone()).or_insert_with(|| AccountFacts {
+            id,
+            identifier,
+            ..AccountFacts::default()
+        });
+        match kind.as_str() {
+            "name" => facts.names.push(value),
+            "login" => facts.logins.push(value),
+            _ => facts.emails.push(value),
+        }
+    }
+    let mut held = db.prepare(&format!(
+        "SELECT subject, object_entity FROM claim WHERE predicate = '{HELD_BY}'
+         AND status IN {CURRENT} AND object_entity IS NOT NULL"
+    ))?;
+    let rows = held.query_map([], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?)))?;
+    for row in rows {
+        let (account, person) = row?;
+        if let Some(facts) = found.get_mut(&account) {
+            facts.holders.insert(person);
+        }
+    }
+    for facts in found.values_mut() {
+        facts.account = admit_account(&facts.identifier, &types(db, &facts.id, &[])?).is_ok();
+    }
+    Ok(found.into_values().collect())
 }
 
 /// The owner's Person, from the intent that minted it.
