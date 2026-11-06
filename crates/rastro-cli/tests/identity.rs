@@ -1836,3 +1836,100 @@ fn S27_a_pair_in_one_namespace_or_with_a_bot_is_never_a_candidate() {
     );
     assert!(candidates(&env).is_empty(), "{:?}", candidates(&env));
 }
+
+/// The identifiers of the accounts a Person view lists, sorted.
+fn held_accounts(about: &Value) -> Vec<String> {
+    let accounts = about["person"]["accounts"].as_array().unwrap().iter();
+    let mut found: Vec<String> = accounts
+        .map(|a| a["identifier"].as_str().unwrap().into())
+        .collect();
+    found.sort();
+    found
+}
+
+/// S25: a yes to a pair neither account of which is held creates one Person, named from the
+/// candidate, holding both; a yes to a pair with one account held links the other to that
+/// Person; either way the pair no longer appears, and answering it again is refused
+#[test]
+fn S25_a_yes_holds_both_accounts_by_one_person() {
+    let env = Env::new();
+    env.account(51, "asilva");
+    let github = "github:account/51";
+    named(
+        &env,
+        github,
+        "code:Account",
+        "Ana Silva",
+        "https://api.github.com/users/51",
+    );
+    let linear = tracker_account(&env, "u-51", "ana@example.org");
+    named(
+        &env,
+        &linear,
+        "tracker:Account",
+        "ana silva",
+        "https://linear.app/users/u-51",
+    );
+    let answered = env.ok(&["identity", "answer", github, &linear, "yes"]);
+    let kinds: Vec<_> = (answered["intents"].as_array().unwrap().iter())
+        .map(|i| i["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["create_person", "name", "link", "link"]);
+    let person = env.about("rastro:name/Ana Silva");
+    assert_eq!(held_accounts(&person), [github.to_string(), linear.clone()]);
+    assert!(candidates(&env).is_empty());
+    env.ok(&["identity", "me"]);
+    let mine = env.account(52, "fbisca");
+    env.ok(&["identity", "link", &mine, "me"]);
+    let work = tracker_account(&env, "u-52", "fbisca@example.org");
+    let before = env.intents();
+    env.ok(&["identity", "answer", &work, &mine, "yes"]);
+    assert_eq!(env.intents(), before + 1, "one link, no new Person");
+    let me = held_accounts(&env.about("me"));
+    assert_eq!(me, ["github:account/52".to_string(), work]);
+    assert!(candidates(&env).is_empty());
+    let before = env.intents();
+    let error = env.refused(&["identity", "answer", github, &linear, "yes"]);
+    assert!(error.contains("not a candidate pair"), "{error}");
+    assert_eq!(env.intents(), before);
+}
+
+/// S26: a no records a cannot-link between the two accounts, never a claim; the pair never
+/// appears again, including after `claims rebuild`
+#[test]
+fn S26_a_no_records_a_cannot_link_and_the_pair_never_returns() {
+    let env = Env::new();
+    env.account(61, "asilva");
+    let github = "github:account/61";
+    named(
+        &env,
+        github,
+        "code:Account",
+        "Ana Silva",
+        "https://api.github.com/users/61",
+    );
+    let linear = tracker_account(&env, "u-61", "asilva@example.org");
+    named(
+        &env,
+        &linear,
+        "tracker:Account",
+        "Ana Silva",
+        "https://linear.app/users/u-61",
+    );
+    assert_eq!(candidates(&env).len(), 1);
+    let claims: i64 = env.sql("SELECT count(*) FROM claim");
+    let answered = env.ok(&["identity", "answer", &linear, github, "no"]);
+    assert_eq!(answered["intents"].as_array().unwrap().len(), 1);
+    assert_eq!(answered["intents"][0]["kind"], "cannot_link");
+    assert_eq!(env.sql::<i64>("SELECT count(*) FROM claim"), claims);
+    assert!(candidates(&env).is_empty());
+    let history = env.ok(&["identity", "history", github]);
+    assert_eq!(
+        kinds(&history),
+        [("cannot_link".into(), "effective".into())]
+    );
+    env.ok(&["claims", "rebuild"]);
+    assert!(candidates(&env).is_empty());
+    let error = env.refused(&["identity", "answer", github, &linear, "yes"]);
+    assert!(error.contains("not a candidate pair"), "{error}");
+}
