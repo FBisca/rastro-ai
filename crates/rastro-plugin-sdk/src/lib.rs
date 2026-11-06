@@ -284,13 +284,14 @@ pub enum CoverageStatus {
     Complete,
     CouldntLook,
 }
-/// `coverage.report`. Whether it was found or empty is the core's call.
+/// A part of a read that couldn't be looked at (D45), such as an unreadable `/user/emails`: the run stays found or ok.
 #[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
 pub struct CoverageGap {
     pub selection: String,
     pub reason: String,
 }
 
+/// `coverage.report`. Whether it was found or empty is the core's call.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CoverageReport {
     pub status: CoverageStatus,

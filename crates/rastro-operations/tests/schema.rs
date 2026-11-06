@@ -63,7 +63,7 @@ fn remove_coverage_gaps(value: &mut serde_json::Value) {
 /// surfaces/R1: about and why are additive v2, `sync.extraction` and `claims.rebuild.pairs` are recorded
 /// additions, and existing schemas are unchanged
 #[test]
-fn S13_about_and_why_are_additive_v2_and_existing_schemas_are_unchanged() {
+fn about_and_why_are_additive_v2_and_existing_schemas_are_unchanged() {
     use serde_json::{Value, json};
     let generated: Value = serde_json::from_str(&rastro_operations::schema::generate()).unwrap();
     let existing: Value =
@@ -217,7 +217,7 @@ fn expanded(value: &serde_json::Value, defs: &serde_json::Value) -> serde_json::
 /// claim (S28), and accepts `me`; a justification gains an optional `intent`; nothing else
 /// differs
 #[test]
-fn S5_S13_S32_about_and_why_change_only_additively_for_identity() {
+fn S5_S32_about_and_why_change_only_additively_for_identity() {
     use serde_json::{Value, json};
     let generated: Value = serde_json::from_str(&rastro_operations::schema::generate()).unwrap();
     let ops = generated["x-operations"].as_array().unwrap();
