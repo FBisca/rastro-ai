@@ -134,20 +134,45 @@ pub(crate) fn apply(db: &Connection) -> Result<()> {
     apply_within(db, None)
 }
 
-/// The (account, Person) pairs `db` links automatically, in any interval.
-pub(crate) fn linked_pairs(db: &Connection) -> Result<BTreeSet<(String, String)>> {
-    Ok(db
-        .prepare("SELECT DISTINCT c.subject, c.object_entity FROM claim c JOIN automatic_justification a ON a.claim_id = c.id")?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-        .collect::<Result<_, _>>()?)
+/// The (account, Person) pairs `db` links automatically, each over every window it holds.
+pub(crate) fn linked_windows(db: &Connection) -> Result<BTreeSet<Held>> {
+    let rows: Vec<(String, String, String, Option<String>)> = db
+        .prepare("SELECT c.subject, c.object_entity, a.started_at, a.ended_at FROM claim c JOIN automatic_justification a ON a.claim_id = c.id")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .collect::<Result<_, _>>()?;
+    rows.into_iter()
+        .map(|(account, person, start, end)| {
+            Ok((
+                account,
+                person,
+                crate::parse_time(start)?,
+                end.map(crate::parse_time).transpose()?,
+            ))
+        })
+        .collect()
 }
 
-/// In a scoped replay, `allowed` holds the (account, Person) pairs the full projection links
-/// automatically: hidden data may suppress a link there but never create one.
-pub(crate) fn apply_within(
-    db: &Connection,
-    allowed: Option<&BTreeSet<(String, String)>>,
-) -> Result<()> {
+/// The parts of `window` in which `account` may hold `person`: all of it, or in a scoped replay
+/// only where the full projection links them.
+fn permitted(
+    allowed: Option<&BTreeSet<Held>>,
+    account: &str,
+    person: &str,
+    window: Window,
+) -> Vec<Window> {
+    match allowed {
+        None => vec![window],
+        Some(allowed) => windows(allowed, account, person)
+            .into_iter()
+            .filter_map(|held| overlap(window, held))
+            .collect(),
+    }
+}
+
+/// In a scoped replay, `allowed` holds the windows in which the full projection links each
+/// (account, Person) pair automatically: hidden data may suppress a link there but never create
+/// one.
+pub(crate) fn apply_within(db: &Connection, allowed: Option<&BTreeSet<Held>>) -> Result<()> {
     let resolution = Resolution::of(&identity::load(db)?);
     let mut affected: BTreeSet<String> = db
         .prepare("SELECT DISTINCT claim_id FROM automatic_justification")?
@@ -176,7 +201,6 @@ pub(crate) fn apply_within(
         )?.query_map([core::TOKEN_OWNER], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<Result<_, _>>()?;
             for (premise, account, identifier) in rows {
                 if vetoed(&resolution, &account, me)
-                    || allowed.is_some_and(|a| !a.contains(&(account.clone(), me.clone())))
                     || admit_account(&identifier, &identity::types(db, &account, &[])?).is_err()
                 {
                     continue;
@@ -192,9 +216,12 @@ pub(crate) fn apply_within(
                     if interval.end.is_some_and(|end| end <= start) {
                         continue;
                     }
-                    qualifying.insert((account.clone(), me.clone(), start, interval.end));
+                    let parts = permitted(allowed, &account, me, (start, interval.end));
+                    for &(start, end) in &parts {
+                        qualifying.insert((account.clone(), me.clone(), start, end));
+                    }
                     let minus = windows(&blocked, &account, me);
-                    for (start, end) in subtract((start, interval.end), &minus) {
+                    for (start, end) in parts.iter().flat_map(|&part| subtract(part, &minus)) {
                         db.execute("INSERT OR IGNORE INTO claim (id, subject, predicate, object_entity, scalar, status, revision) VALUES (?1, ?2, ?3, ?4, 0, 'observed', '')", params![claim, account, core::HELD_BY, me])?;
                         let id = format!("automatic/{claim}/token/{premise}/{}", stamp(start));
                         db.execute("INSERT OR IGNORE INTO automatic_justification (id, claim_id, reason, premise_a, premise_b, started_at, ended_at) VALUES (?1, ?2, 'token_owner', ?3, NULL, ?4, ?5)", params![id, claim, premise, stamp(start), end.map(stamp)])?;
@@ -226,9 +253,6 @@ pub(crate) fn apply_within(
                         if right_account == left_account
                             || !left_email.eq_ignore_ascii_case(right_email)
                             || vetoed(&resolution, right_account, &person)
-                            || allowed.is_some_and(|a| {
-                                !a.contains(&(right_account.clone(), person.clone()))
-                            })
                             || admit_account(identifier, &identity::types(db, right_account, &[])?)
                                 .is_err()
                         {
@@ -248,14 +272,20 @@ pub(crate) fn apply_within(
                                     if end.is_some_and(|end| end <= start) {
                                         continue;
                                     }
-                                    qualifying.insert((
-                                        right_account.clone(),
-                                        person.clone(),
-                                        start,
-                                        end,
-                                    ));
+                                    let parts =
+                                        permitted(allowed, right_account, &person, (start, end));
+                                    for &(start, end) in &parts {
+                                        qualifying.insert((
+                                            right_account.clone(),
+                                            person.clone(),
+                                            start,
+                                            end,
+                                        ));
+                                    }
                                     let minus = windows(&blocked, right_account, &person);
-                                    for (start, end) in subtract((start, end), &minus) {
+                                    for (start, end) in
+                                        parts.iter().flat_map(|&part| subtract(part, &minus))
+                                    {
                                         db.execute("INSERT OR IGNORE INTO claim (id, subject, predicate, object_entity, scalar, status, revision) VALUES (?1, ?2, ?3, ?4, 0, 'observed', '')", params![claim, right_account, core::HELD_BY, person])?;
                                         let id = format!(
                                             "automatic/{claim}/email/{left_id}/{right_id}/{seed}/{}/{}",

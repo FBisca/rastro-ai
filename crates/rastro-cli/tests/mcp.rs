@@ -2953,6 +2953,51 @@ fn S17_a_hidden_conflict_partner_keeps_the_visible_account_unlinked_in_every_sco
     );
 }
 
+/// S40: B (visible) and D (hidden) are refused to each other; D qualifies for P only from a later
+/// day, so B holds P only until then, and a scope that can't see D shows B no longer
+#[test]
+fn S40_a_hidden_overlap_keeps_the_visible_account_unlinked_over_it_in_every_scope() {
+    let env = Env::new();
+    // Day 36500 lies far after the link below is issued, so D's window starts after B's.
+    for (n, scope, login, day) in [
+        (1, "personal", "anchor", 1),
+        (2, "personal", "match", 1),
+        (4, "health", "partner", 36500),
+    ] {
+        let (account, location) = (
+            format!("github:account/{n}"),
+            format!("https://api.github.com/identity/{n}"),
+        );
+        env.account_in(scope, &account, "code:Account", login, 0);
+        env.claim_about(
+            scope,
+            &account,
+            &location,
+            rastro_core::identity::VERIFIED_EMAIL,
+            ("same@example.com", "email"),
+            false,
+            day,
+        );
+    }
+    let p = env.json(&["identity", "person", "create", "--name", "Anchor"])["person"]["identifier"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    env.json(&["identity", "link", "github:account/1", &p]);
+    refuse_accounts(
+        &env,
+        "i_s40_hidden_partner",
+        "github:account/2",
+        "github:account/4",
+    );
+    let mut everything = env.scoped(&[]);
+    let all = about_text(&mut everything, &p);
+    assert_eq!(linked(&all), ["github:account/1"], "{all}");
+    let mut personal = env.scoped(&["personal"]);
+    let seen = about_text(&mut personal, &p);
+    assert_eq!(linked(&seen), ["github:account/1"], "{seen}");
+}
+
 /// S31: no scoped read (about, with history, or why) surfaces a hidden Person or an intent
 /// naming it, though every intent is replayed so hidden cannot-links still veto
 #[test]
