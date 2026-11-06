@@ -45,9 +45,13 @@ fn vetoed(resolution: &Resolution, account: &str, person: &str) -> bool {
         })
 }
 
-fn conflicts(db: &Connection, resolution: &Resolution) -> Result<BTreeSet<(String, String)>> {
-    let candidates: Vec<(String, String)> = db.prepare("SELECT DISTINCT c.subject, c.object_entity FROM claim c JOIN automatic_justification a ON a.claim_id = c.id WHERE a.ended_at IS NULL")?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?.collect::<Result<_, _>>()?;
+/// D48: two qualifying automatic links into one merge class, cannot-linked to each other, block
+/// each other in every interval; an owner link to the class wins.
+fn conflicts(
+    resolution: &Resolution,
+    qualifying: &BTreeSet<(String, String)>,
+) -> BTreeSet<(String, String)> {
+    let candidates: Vec<&(String, String)> = qualifying.iter().collect();
     let owners: Vec<&(String, String)> = resolution.links.keys().collect();
     let mut blocked = BTreeSet::new();
     for (i, (a, p)) in candidates.iter().enumerate() {
@@ -62,19 +66,16 @@ fn conflicts(db: &Connection, resolution: &Resolution) -> Result<BTreeSet<(Strin
             let b_owner = owners
                 .iter()
                 .any(|(account, person)| account == b && class.contains(person));
-            if !a_owner {
-                for person in &class {
-                    blocked.insert((a.clone(), person.clone()));
-                }
-            }
-            if !b_owner {
-                for person in &class {
-                    blocked.insert((b.clone(), person.clone()));
+            for (side, owned) in [(a, a_owner), (b, b_owner)] {
+                if !owned {
+                    for person in &class {
+                        blocked.insert((side.clone(), person.clone()));
+                    }
                 }
             }
         }
     }
-    Ok(blocked)
+    blocked
 }
 
 pub(crate) fn apply(db: &Connection) -> Result<()> {
@@ -87,6 +88,7 @@ pub(crate) fn apply(db: &Connection) -> Result<()> {
         .query_map([core::HELD_BY], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?);
     let mut blocked = BTreeSet::new();
     loop {
+        let mut qualifying = BTreeSet::new();
         db.execute("DELETE FROM automatic_justification", [])?;
         db.execute("UPDATE claim SET status = 'superseded' WHERE predicate = ?1 AND NOT EXISTS (SELECT 1 FROM intent_justification WHERE claim_id = claim.id AND ended_at IS NULL) AND NOT EXISTS (SELECT 1 FROM justification WHERE claim_id = claim.id AND current = 1)", [core::HELD_BY])?;
         if let Some(me) = resolution.me.as_ref() {
@@ -117,7 +119,8 @@ pub(crate) fn apply(db: &Connection) -> Result<()> {
                     if interval.end.is_some_and(|end| end <= start) {
                         continue;
                     }
-                    if interval.end.is_none() && blocked.contains(&(account.clone(), me.clone())) {
+                    qualifying.insert((account.clone(), me.clone()));
+                    if blocked.contains(&(account.clone(), me.clone())) {
                         continue;
                     }
                     db.execute("INSERT OR IGNORE INTO claim (id, subject, predicate, object_entity, scalar, status, revision) VALUES (?1, ?2, ?3, ?4, 0, 'observed', '')", params![claim, account, core::HELD_BY, me])?;
@@ -169,10 +172,8 @@ pub(crate) fn apply(db: &Connection) -> Result<()> {
                                     if end.is_some_and(|end| end <= start) {
                                         continue;
                                     }
-                                    if end.is_none()
-                                        && blocked
-                                            .contains(&(right_account.clone(), person.clone()))
-                                    {
+                                    qualifying.insert((right_account.clone(), person.clone()));
+                                    if blocked.contains(&(right_account.clone(), person.clone())) {
                                         continue;
                                     }
                                     db.execute("INSERT OR IGNORE INTO claim (id, subject, predicate, object_entity, scalar, status, revision) VALUES (?1, ?2, ?3, ?4, 0, 'observed', '')", params![claim, right_account, core::HELD_BY, person])?;
@@ -201,7 +202,7 @@ pub(crate) fn apply(db: &Connection) -> Result<()> {
             }
         }
         let before = blocked.len();
-        blocked.extend(conflicts(db, &resolution)?);
+        blocked.extend(conflicts(&resolution, &qualifying));
         if blocked.len() == before {
             break;
         }

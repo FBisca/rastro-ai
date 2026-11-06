@@ -618,6 +618,98 @@ fn S17_a_direct_cannot_link_blocks_the_automatic_link_until_explicitly_linked() 
     assert!(held(&env.about(&p)), "the explicit link holds it");
 }
 
+/// The owner refuses to link `github:account/<a>` and `github:account/<b>`: an account-to-account
+/// cannot-link, which no CLI command issues.
+fn refuse(env: &Env, id: &str, a: u32, b: u32) {
+    use rastro_core::identity::{
+        EntityTarget, FORMAT_VERSION, Intent, IntentKind, IssuerContext, OWNER, Payload,
+        SHAPE_VERSION, Targets,
+    };
+    let target = |n| {
+        let identifier = format!("github:account/{n}");
+        EntityTarget {
+            id: claims::entity_id(&identifier),
+            identifier,
+            role: "account".into(),
+        }
+    };
+    let mut endpoints = [target(a), target(b)];
+    endpoints.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut refusal = Intent {
+        id: id.into(),
+        append_seq: 0,
+        format_version: FORMAT_VERSION,
+        kind: IntentKind::CannotLink,
+        owner_id: OWNER.into(),
+        issuer_context: IssuerContext {
+            principal: OWNER.into(),
+            surface: "test".into(),
+            scopes: vec![],
+        },
+        issued_at: Utc::now(),
+        domain_key: String::new(),
+        targets: Targets::Pair {
+            version: SHAPE_VERSION,
+            symmetric: true,
+            endpoints,
+        },
+        payload: Payload {
+            version: SHAPE_VERSION,
+            name: None,
+        },
+        undo_of: None,
+        supersedes: None,
+    };
+    refusal.domain_key = refusal.expected_domain().unwrap();
+    env.db()
+        .issue_intents(&[], |_| Ok((vec![refusal], ())))
+        .unwrap();
+}
+
+/// S17: two automatic links refused to each other block each other over every interval; one
+/// that already closed is never written either (D48)
+#[test]
+fn S17_a_blocked_conflict_writes_no_automatic_link_in_any_interval() {
+    let env = Env::new();
+    let a = env.account(701, "anchor");
+    env.account(702, "first");
+    env.account(703, "second");
+    let p = env.person("Anchor");
+    env.ok(&["identity", "link", &a, &p]);
+    refuse(&env, "i_s17_history", 702, 703);
+    let now = Utc::now();
+    let email = |n: u32, address: &str, hours: i64| {
+        env.record_at(
+            &Entity::new(format!("github:account/{n}"), "code:Account".into()),
+            rastro_core::identity::VERIFIED_EMAIL,
+            Object::Literal {
+                value: address.into(),
+                datatype: "email".into(),
+            },
+            (
+                &format!("https://api.github.com/users/{n}"),
+                "/verified-email",
+            ),
+            now + chrono::Duration::hours(hours),
+        )
+    };
+    email(701, "same@example.com", 1);
+    email(702, "same@example.com", 2);
+    email(702, "moved@example.com", 3); // 702 qualified only over [2h, 3h)
+    email(703, "same@example.com", 4);
+    assert_eq!(
+        env.sql::<i64>("SELECT count(*) FROM automatic_justification"),
+        0
+    );
+    let shown: Vec<String> = env.about(&p)["person"]["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["identifier"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(shown, ["github:account/701"]);
+}
+
 fn kinds(history: &Value) -> Vec<(String, String)> {
     history["intents"]
         .as_array()
