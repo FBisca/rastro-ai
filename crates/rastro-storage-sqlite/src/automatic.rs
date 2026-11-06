@@ -160,13 +160,30 @@ fn permitted(
     person: &str,
     window: Window,
 ) -> Vec<Window> {
-    match allowed {
-        None => vec![window],
+    let mut parts: Vec<Window> = match allowed {
+        None => return vec![window],
         Some(allowed) => windows(allowed, account, person)
             .into_iter()
             .filter_map(|held| overlap(window, held))
             .collect(),
+    };
+    // Windows the full projection holds for one pair may overlap (an email and the token owner):
+    // union them so each permitted stretch is written once, whole.
+    parts.sort();
+    let mut merged: Vec<Window> = Vec::new();
+    for (start, end) in parts {
+        if let Some(last) = merged.last_mut()
+            && last.1.is_none_or(|last_end| start < last_end)
+        {
+            last.1 = match (last.1, end) {
+                (Some(a), Some(b)) => Some(a.max(b)),
+                _ => None,
+            };
+            continue;
+        }
+        merged.push((start, end));
     }
+    merged
 }
 
 /// In a scoped replay, `allowed` holds the windows in which the full projection links each

@@ -1151,3 +1151,154 @@ fn S19_a_linear_key_switching_to_an_app_closes_the_token_link_in_scope_too() {
     );
     assert_eq!(scoped, full);
 }
+#[test]
+fn S40_scoped_token_windows_keep_the_longer_token_interval() {
+    fn viewer(
+        db: &mut SqliteStorage,
+        id: &str,
+        (entity_type, ancestors): (&str, &[&str]),
+        facts: &[(&str, &str, &str)],
+        hours: i64,
+    ) {
+        let source = Source::new("s-linear".into(), "linear".into(), Scope("personal".into()));
+        db.project_sources(std::slice::from_ref(&source)).unwrap();
+        let at = time() + chrono::Duration::hours(hours);
+        let run = db
+            .start_run(&source, ("fixture", "1"), at, (at, at))
+            .unwrap();
+        let e = Evidence {
+            source: source.name.clone(),
+            scope: source.scope.clone(),
+            location: "linear:viewer".into(),
+            field: "/id".into(),
+            start: 0,
+            end: format!("{id}:{hours}").len() as u64,
+            quote: format!("{id}:{hours}"),
+            trust_class: TrustClass::Structured,
+            captured_at: at,
+            source_updated_at: Some(at),
+            original: None,
+        };
+        db.append_evidence(run, &e).unwrap();
+        let (evidence_id, _) = db
+            .pending_evidence(("fixture", "1"), &source)
+            .unwrap()
+            .into_iter()
+            .rev()
+            .find(|(_, item)| item.location == "linear:viewer" && item.field == "/id")
+            .unwrap();
+        let observed: Vec<ObservedClaim> = facts
+            .iter()
+            .map(|&(predicate, value, datatype)| {
+                let subject = Entity::new(format!("linear:user/{id}"), entity_type.into());
+                let object = Object::Literal {
+                    value: value.into(),
+                    datatype: datatype.into(),
+                };
+                ObservedClaim {
+                    id: claims::claim_id(&subject.id, predicate, &object),
+                    subject,
+                    predicate: predicate.into(),
+                    object,
+                    scalar: predicate == claims::TYPE_PREDICATE,
+                    type_ancestors: ancestors.iter().map(|a| a.to_string()).collect(),
+                    supports: BTreeSet::from([Support {
+                        portable_key: claims::portable_evidence_key(&e),
+                        evidence_id,
+                        field: "/id".into(),
+                        start: 0,
+                        end: format!("{id}:{hours}").len() as u64,
+                        extraction_rule: "fixture-rule".into(),
+                    }]),
+                }
+            })
+            .collect();
+        db.record_claims(run, ("fixture", "1"), &observed, None)
+            .unwrap();
+    }
+
+    let home = tempfile::tempdir().unwrap();
+    let mut db = SqliteStorage::open(&home.path().join("db")).unwrap();
+    let (me, minted) = me(1);
+    issue(&mut db, vec![minted]).unwrap();
+    account(&mut db, 1, "personal");
+    fact(
+        &mut db,
+        "github:account/1",
+        rastro_core::identity::VERIFIED_EMAIL,
+        ("same@example.com", "email"),
+        "personal",
+    );
+    let owner = "00000000-0000-4000-8000-000000000001";
+    viewer(
+        &mut db,
+        owner,
+        ("tracker:Account", &[ACCOUNT_TYPE]),
+        &[
+            (
+                claims::TYPE_PREDICATE,
+                "tracker:Account",
+                claims::TYPE_DATATYPE,
+            ),
+            (rastro_core::identity::TOKEN_OWNER, "true", "boolean"),
+            (
+                rastro_core::identity::VERIFIED_EMAIL,
+                "same@example.com",
+                "email",
+            ),
+        ],
+        1,
+    );
+    viewer(
+        &mut db,
+        owner,
+        ("tracker:Account", &[ACCOUNT_TYPE]),
+        &[
+            (
+                claims::TYPE_PREDICATE,
+                "tracker:Account",
+                claims::TYPE_DATATYPE,
+            ),
+            (rastro_core::identity::TOKEN_OWNER, "true", "boolean"),
+        ],
+        5,
+    );
+    viewer(
+        &mut db,
+        "00000000-0000-4000-8000-000000000009",
+        ("tracker:Bot", &[]),
+        &[(claims::TYPE_PREDICATE, "tracker:Bot", claims::TYPE_DATATYPE)],
+        10,
+    );
+    let options = AboutOptions {
+        history: true,
+        limit: 50,
+        since: None,
+    };
+    let held = |claims: Vec<rastro_core::knowledge::ClaimSummary>| -> Vec<String> {
+        claims
+            .iter()
+            .filter(|s| s.claim.predicate == rastro_core::identity::HELD_BY)
+            .map(|s| {
+                format!(
+                    "{}: {:?}",
+                    s.claim.subject.identifier, s.claim.known_intervals
+                )
+            })
+            .collect()
+    };
+    let full = held(
+        db.about_scoped_within(&me.identifier, &options, &[], 100_000)
+            .unwrap(),
+    );
+    let scoped = held(
+        db.about_scoped_within(
+            &me.identifier,
+            &options,
+            &[Scope("personal".into())],
+            100_000,
+        )
+        .unwrap(),
+    );
+    assert_eq!(scoped, full);
+}
