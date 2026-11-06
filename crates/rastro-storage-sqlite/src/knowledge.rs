@@ -28,12 +28,14 @@ impl View<'_> {
             .query_map([entity], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?.collect::<Result<_, _>>()?;
         let mut aliases = BTreeSet::new();
         for (value, kind, identifier) in rows {
-            if kind == "email"
-                && let Some((namespace, _)) = identifier.split_once(':')
-            {
-                aliases.insert(format!("{namespace}:email/{value}"));
+            match identifier.split_once(':') {
+                Some((namespace, _)) if kind == "email" => {
+                    aliases.insert(format!("{namespace}:email/{value}"));
+                }
+                _ => {
+                    aliases.insert(value);
+                }
             }
-            aliases.insert(value);
         }
         Ok(aliases.into_iter().collect())
     }
@@ -305,7 +307,7 @@ impl View<'_> {
                 identifier,
                 entity_type,
             } = self.entity(account)?;
-            // Today a link's only reason is an owner intent that still holds.
+            // A link's reasons: each owner intent that still holds, then each automatic justification (token owner, verified email).
             let mut reasons: Vec<LinkReason> = self
                 .0
                 .prepare(

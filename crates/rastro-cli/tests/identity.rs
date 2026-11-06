@@ -1341,7 +1341,7 @@ fn S28_about_me_lists_the_person_its_linked_accounts_and_their_claims() {
     assert_eq!(accounts[1]["type"], "tracker:Account");
     assert_eq!(
         accounts[1]["aliases"],
-        json!(["ana@example.org", "linear:email/ana@example.org"])
+        json!(["linear:email/ana@example.org"])
     );
     let reasons = |account: &Value| -> Vec<(String, String)> {
         let mut found: Vec<_> = account["reasons"]
