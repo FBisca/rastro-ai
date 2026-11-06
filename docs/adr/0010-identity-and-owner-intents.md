@@ -74,6 +74,12 @@ The exact `domain_key` formats are set at build.
 - An explicit link or merge by the owner is the only thing that clears a cannot-link, and only for the pair it names.
 - An intent is refused when it is invalid: a `held_by` from a Person, a merge of two accounts or of an entity with itself, a target that does not exist, an undo of a missing or already-undone intent, an undo of a `cannot_link` intent (only an explicit owner link or merge clears one). Nothing is stored.
 
+## Candidates and answers (2026-11-06)
+
+Candidates are computed on read over every scope and never stored, either as claims or as intents (`../decisions/knowledge.md` §55, §63–64; CLI contract in `../decisions/surfaces.md` §37). Only answers are stored, using the existing identity intent kinds: a no is `cannot_link` between the two accounts; a yes is `link` for each unheld account to the existing holder, or `create_person`, `name` and two `link` intents when neither is held. Merged Persons count as one holder. The pair must be a candidate now; a yes with different, unmerged holders is refused. All intents for an answer are accepted together, or none is.
+
+There is no separate candidate id, answer intent kind or answered marker in the payload. Undo uses the ordinary link semantics above, so a formerly answered pair can become a candidate again when it is no longer settled. Naming and refusal rules live in `../decisions/knowledge.md` §65–67.
+
 ## Intent-backed claims
 
 - A Person (its `rastro:type` claim), its name, a link and a merge are claims in the projection, derived from the intent table. Their status is `observed` while current and `superseded` when undone or replaced; their justification has kind `owner_intent`, carrying the intent's id, time and issuer; `why` shows it (`../decisions/knowledge.md` §48).
