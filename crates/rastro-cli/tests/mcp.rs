@@ -2350,6 +2350,8 @@ fn why_text(session: &mut Session, claim: &str) -> Value {
 /// links. Each scoped `about` (with and without history) and each `why` on an intent-backed
 /// claim, a link shown only where both its ends are, equals a rebuild that holds only the
 /// visible evidence and the visible intents, including automatic links.
+/// Hidden data may suppress an automatic link but never create one (D50): the oracle refuses, by
+/// a cannot-link, each automatic link the full projection doesn't hold.
 #[test]
 fn S31_random_scope_sets_with_intents_and_automatic_links_equal_a_per_scope_rebuild() {
     use rastro_core::claims::entity_id;
@@ -2551,8 +2553,21 @@ fn S31_random_scope_sets_with_intents_and_automatic_links_equal_a_per_scope_rebu
         vec![account.clone()],
         vec![holder],
     ));
+    // A fifth account in `personal` shares the verified email and is refused for P3, the far end
+    // of the merge chain: a scope that hides part of the chain still vetoes it.
+    let fifth = target("github:account/5", "account");
+    log.push((
+        intent(
+            95,
+            IntentKind::CannotLink,
+            pair(true, &fifth, &persons[3]),
+            None,
+        ),
+        vec![fifth.identifier.clone()],
+        vec![3],
+    ));
     let undone_id = undone.id.clone();
-    let mut hard = (false, false);
+    let (mut hard, mut suppressed) = ((false, false), false);
     for mask in 1..8u8 {
         let visible: Vec<_> = scopes
             .iter()
@@ -2630,6 +2645,22 @@ fn S31_random_scope_sets_with_intents_and_automatic_links_equal_a_per_scope_rebu
                 }
             }
         }
+        let mut envs = vec![&all];
+        if visible.contains(&"personal") {
+            envs.push(&rebuilt);
+        }
+        for env in envs {
+            env.account_in("personal", &fifth.identifier, "code:Account", "login5", 5);
+            env.claim_about(
+                "personal",
+                &fifth.identifier,
+                "https://api.github.com/identity/5",
+                rastro_core::identity::VERIFIED_EMAIL,
+                ("shared@example.com", "email"),
+                false,
+                20,
+            );
+        }
         all.issue(log.iter().map(|(i, ..)| i.clone()).collect());
         rebuilt.issue(
             log.iter()
@@ -2639,6 +2670,32 @@ fn S31_random_scope_sets_with_intents_and_automatic_links_equal_a_per_scope_rebu
                 .map(|(i, ..)| i.clone())
                 .collect(),
         );
+        // D50: refuse, in the oracle, every automatic link the full projection doesn't hold.
+        let held = |db: Connection| -> std::collections::BTreeSet<(String, String)> {
+            db.prepare("SELECT DISTINCT s.identifier, o.identifier FROM claim c JOIN automatic_justification a ON a.claim_id = c.id JOIN entity s ON s.id = c.subject JOIN entity o ON o.id = c.object_entity")
+                .unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect()
+        };
+        let global = held(all.db());
+        let refusals: Vec<Intent> = held(rebuilt.db())
+            .difference(&global)
+            .enumerate()
+            .map(|(k, (account, person))| {
+                intent(
+                    200 + k,
+                    IntentKind::CannotLink,
+                    pair(
+                        true,
+                        &target(account.as_str(), "account"),
+                        &target(person.as_str(), "person"),
+                    ),
+                    None,
+                )
+            })
+            .collect();
+        suppressed |= !refusals.is_empty();
+        if !refusals.is_empty() {
+            rebuilt.issue(refusals);
+        }
         let mut scoped = all.scoped(&visible);
         let mut oracle = rebuilt.scoped(&[]);
         let mut forms: Vec<String> = [
@@ -2653,6 +2710,7 @@ fn S31_random_scope_sets_with_intents_and_automatic_links_equal_a_per_scope_rebu
         .to_vec();
         forms.extend(persons.iter().map(|p| p.identifier.clone()));
         forms.extend(accounts.iter().map(|(a, _)| a.clone()));
+        forms.push(fifth.identifier.clone());
         for form in &forms {
             for history in [false, true] {
                 let args = json!({"entity": form, "history": history, "limit": 50});
@@ -2690,6 +2748,7 @@ fn S31_random_scope_sets_with_intents_and_automatic_links_equal_a_per_scope_rebu
     }
     // Non-vacuous: some scope set hides one end of P1–P2, and one hides the middle of the chain.
     assert_eq!(hard, (true, true));
+    assert!(suppressed, "no scope set needed a suppression");
 }
 
 /// S17: a cannot-link through a merge with a Person the scope can't see still vetoes the
