@@ -620,7 +620,7 @@ fn rate_limit_mid_run_keeps_completed_pages_and_is_not_found() {
 
 /// evidence/R44: instruction like content never changes the requests
 #[test]
-fn S12_instruction_like_content_never_changes_the_requests() {
+fn instruction_like_content_never_changes_the_requests() {
     let fixture = Fixture::start(standard);
     let env = Env::new(&fixture.base);
     sync(&env);
