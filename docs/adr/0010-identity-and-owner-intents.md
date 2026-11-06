@@ -119,7 +119,7 @@ An automatic link is not an intent: it is derived on every projection build and 
 
 **Order independence (D48 and D51, accepted 2026-11-06).** An owner link always wins and vetoes an automatic link that would join a cannot-linked account. If two automatic links qualify for one Person but their accounts are cannot-linked, neither joins during their qualifying overlap; outside that overlap each may join. The veto checks all accounts of Persons joined through `same_as`, rather than choosing by ingest or projection order.
 
-**Current implementation limit (2026-11-06).** The merged automatic-link implementation blocks conflicting automatic links in every interval. Restricting that block to the qualifying overlap is accepted but still pending; the plan records the remaining scenario S40.
+Conflicting automatic links are blocked only over the time both qualify, and a scoped read keeps the same windows (`../specs/identity.md`).
 
 ## Visibility
 

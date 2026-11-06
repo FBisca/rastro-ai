@@ -135,7 +135,7 @@ Architecture: `../adr/0010-identity-and-owner-intents.md`. Plan: `../plans/2026-
 
 ## Added 2026-11-06 (automatic links)
 60. **Identity snapshots replace their predecessor.** A newer snapshot from the same source and selection closes claims supported only by the older snapshot, including a dropped address or an empty list. Only verified-email, token-owner and email-alias claims get this exception; other claims keep their lifecycle. Architecture: `../adr/0010-identity-and-owner-intents.md`. Plan D47.
-61. **Automatic links are order-independent; owner links win.** A conflicting automatic link never displaces an owner link. Two cannot-linked accounts qualifying for one Person block each other only during their qualifying overlap, including through merged Persons; outside it each may join. The overlap-only rule is accepted; the merged implementation still blocks every interval. Architecture and current limit: `../adr/0010-identity-and-owner-intents.md`. Plan D48 and D51.
+61. **Automatic links are order-independent; owner links win.** A conflicting automatic link never displaces an owner link. Two cannot-linked accounts qualifying for one Person block each other only during their qualifying overlap, including through merged Persons; outside it each may join. Architecture: `../adr/0010-identity-and-owner-intents.md`. Plan D48 and D51.
 62. **Hidden data may suppress an automatic link, never create one.** Owner refusals and automatic-link conflicts apply in every scope; only visible premises can create a link. An account may therefore stay unlinked without a visible reason. Architecture: `../adr/0010-identity-and-owner-intents.md`. Plan D50.
 
 ## Added 2026-11-06 (identity candidates and answers)
