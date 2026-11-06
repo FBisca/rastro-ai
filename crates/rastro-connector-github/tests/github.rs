@@ -441,6 +441,39 @@ fn S12_an_unreadable_author_profile_is_a_gap_not_a_failed_sync() {
     }
 }
 
+#[test]
+fn S12_a_verified_email_cites_only_its_own_address_span() {
+    let fixture = Fixture::start(|req, base| match req.path.as_str() {
+        "/user" => Reply::ok(json!({"id": 123456789012345_u64, "login": "me", "type": "User"})),
+        "/user/emails" => Reply::ok(
+            json!([{"email": "a@example.com", "verified": true}, {"email": "b@example.com", "verified": true}]),
+        ),
+        _ => standard(req, base),
+    });
+    let env = Env::new(&fixture.base);
+    env.install_extractor();
+    assert_eq!(sync(&env)["status"], "ok");
+    let about = env.json(&["about", "github:account/123456789012345"]);
+    for address in ["a@example.com", "b@example.com"] {
+        let claim = about["result"]["claims"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["predicate"] == "rastro:verified_email" && c["object"]["value"] == address)
+            .unwrap_or_else(|| panic!("{address}: {about}"));
+        let why = env.json(&["why", claim["id"].as_str().unwrap(), "--full"]);
+        let quotes: Vec<&str> = why["result"]["supports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|s| s["spans"].as_array().unwrap())
+            .filter(|s| s["field"] == "/emails/verified")
+            .map(|s| s["quote"].as_str().unwrap())
+            .collect();
+        assert_eq!(quotes, [address], "{why}");
+    }
+}
+
 /// evidence/R34: only owner involved items become evidence
 #[test]
 fn only_owner_involved_items_become_evidence() {

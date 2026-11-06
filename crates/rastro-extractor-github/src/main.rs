@@ -301,6 +301,7 @@ fn viewer_claims(fields: &BTreeMap<&str, &BatchItem>) -> Vec<ClaimSubmit> {
                 .map_or(snapshot.span.quote.as_str(), |(list, _)| list),
         )
     {
+        // This type claim cites the snapshot so even an empty one (`[]`) is in the projection: a newer snapshot then closes every address the older one listed (D46, D47).
         out.push(claim(
             account(),
             TYPE,
@@ -323,6 +324,8 @@ fn viewer_claims(fields: &BTreeMap<&str, &BatchItem>) -> Vec<ClaimSubmit> {
                         .flatten()
                 });
             if let Some(offset) = offset {
+                let start = snapshot.span.start + offset as u64;
+                let end = start + address.len() as u64;
                 let mut alias = claim(
                     account(),
                     ALIAS,
@@ -330,18 +333,22 @@ fn viewer_claims(fields: &BTreeMap<&str, &BatchItem>) -> Vec<ClaimSubmit> {
                     "email",
                     &[id, snapshot],
                 );
-                alias.supports[1].start = snapshot.span.start + offset as u64;
-                alias.supports[1].end = alias.supports[1].start + address.len() as u64;
+                alias.supports[1].start = start;
+                alias.supports[1].end = end;
                 out.push(alias);
+                // D49: the verified email cites its own address's span too, never the whole list.
+                let mut verified = claim(
+                    account(),
+                    "rastro:verified_email",
+                    literal(&address, "email"),
+                    "verified-email",
+                    &[id, kind, snapshot],
+                );
+                verified.supports[2].start = start;
+                verified.supports[2].end = end;
+                out.push(verified);
             }
             raw_offset = raw_offset.map(|offset| offset + address.len());
-            out.push(claim(
-                account(),
-                "rastro:verified_email",
-                literal(&address, "email"),
-                "verified-email",
-                &[id, kind, snapshot],
-            ));
         }
     }
     out
