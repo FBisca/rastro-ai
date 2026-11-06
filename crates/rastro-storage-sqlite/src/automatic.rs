@@ -87,6 +87,9 @@ pub(crate) fn apply(db: &Connection) -> Result<()> {
     affected.extend(db.prepare("SELECT id FROM claim WHERE predicate = ?1 AND EXISTS (SELECT 1 FROM intent_justification WHERE claim_id = claim.id)")?
         .query_map([core::HELD_BY], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?);
     let mut blocked = BTreeSet::new();
+    // Every blocked set tried so far, oldest first.
+    let mut tried: Vec<BTreeSet<(String, String)>> = Vec::new();
+    let mut settled = false;
     loop {
         let mut qualifying = BTreeSet::new();
         db.execute("DELETE FROM automatic_justification", [])?;
@@ -201,10 +204,27 @@ pub(crate) fn apply(db: &Connection) -> Result<()> {
                 break;
             }
         }
-        let before = blocked.len();
-        blocked.extend(conflicts(&resolution, &qualifying));
-        if blocked.len() == before {
+        if settled {
             break;
+        }
+        // D48: the blocked set is recomputed from this pass's qualifying links, never accumulated,
+        // so a conflict that no longer qualifies stops blocking. Should the sets cycle, every set
+        // in the cycle stays blocked and one last pass derives with their union.
+        let next = conflicts(&resolution, &qualifying);
+        if next == blocked {
+            break;
+        }
+        match tried.iter().position(|set| *set == next) {
+            Some(start) => {
+                blocked = tried[start..]
+                    .iter()
+                    .flatten()
+                    .chain(blocked.iter())
+                    .cloned()
+                    .collect();
+                settled = true;
+            }
+            None => tried.push(std::mem::replace(&mut blocked, next)),
         }
     }
     for id in affected {

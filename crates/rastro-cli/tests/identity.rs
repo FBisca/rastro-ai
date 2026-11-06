@@ -710,6 +710,87 @@ fn S17_a_blocked_conflict_writes_no_automatic_link_in_any_interval() {
     assert_eq!(shown, ["github:account/701"]);
 }
 
+fn joined(
+    env: &Env,
+    anchor: u32,
+    others: &[(u32, &str)],
+    refusals: &[(u32, u32)],
+    emails: &[(u32, &str)],
+) -> Vec<String> {
+    let a = env.account(anchor, "anchor");
+    for (n, login) in others {
+        env.account(*n, login);
+    }
+    let p = env.person("Anchor");
+    env.ok(&["identity", "link", &a, &p]);
+    for (k, (x, y)) in refusals.iter().enumerate() {
+        refuse(env, &format!("i_s17_joined_{k}"), *x, *y);
+    }
+    for (n, address) in emails {
+        env.record(
+            &Entity::new(format!("github:account/{n}"), "code:Account".into()),
+            rastro_core::identity::VERIFIED_EMAIL,
+            Object::Literal {
+                value: address.to_string(),
+                datatype: "email".into(),
+            },
+            (
+                &format!("https://api.github.com/users/{n}"),
+                &format!("/verified-email/{address}"),
+            ),
+        );
+    }
+    env.about(&p)["person"]["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["identifier"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// S17: a conflict whose one side no longer qualifies stops blocking the other: blocked links
+/// are recomputed from each pass, not accumulated (D48)
+#[test]
+fn S17_a_conflict_that_no_longer_qualifies_stops_blocking() {
+    // W(902) and V(903) share A's email e and are refused to each other: both blocked. X(904)
+    // qualifies only through W's second email f, so X–Y is no conflict once W is blocked: Y joins.
+    let shown = joined(
+        &Env::new(),
+        901,
+        &[(902, "w"), (903, "v"), (904, "x"), (905, "y")],
+        &[(902, 903), (904, 905)],
+        &[
+            (901, "e@example.com"),
+            (902, "e@example.com"),
+            (902, "f@example.com"),
+            (903, "e@example.com"),
+            (904, "f@example.com"),
+            (905, "e@example.com"),
+        ],
+    );
+    assert_eq!(shown, ["github:account/901", "github:account/905"]);
+}
+
+/// S17: when blocking one side would let the conflict come back, both stay blocked: a cycle
+/// suppresses, it never picks (D48)
+#[test]
+fn S17_a_conflict_that_returns_once_unblocked_keeps_both_blocked() {
+    // Y(912) joins through e; X(913) only through Y's g. Unblocked, they conflict again.
+    let shown = joined(
+        &Env::new(),
+        911,
+        &[(912, "y"), (913, "x")],
+        &[(912, 913)],
+        &[
+            (911, "e@example.com"),
+            (912, "e@example.com"),
+            (912, "g@example.com"),
+            (913, "g@example.com"),
+        ],
+    );
+    assert_eq!(shown, ["github:account/911"]);
+}
+
 fn kinds(history: &Value) -> Vec<(String, String)> {
     history["intents"]
         .as_array()
