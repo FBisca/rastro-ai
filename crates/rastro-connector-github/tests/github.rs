@@ -404,6 +404,38 @@ fn S12_a_kept_viewer_original_holds_only_its_id_and_type() {
     }
 }
 
+#[test]
+fn S12_an_unreadable_author_profile_is_a_gap_not_a_failed_sync() {
+    let fixture = Fixture::start(|req, base| match req.path.as_str() {
+        "/users/me" => Reply::status(404, json!({"message": "Not Found"})),
+        // The comment author is id 42; a profile with another id is a protocol gap.
+        "/users/helper%5Bbot%5D" => Reply::ok(json!({"id": 7, "name": "Impostor"})),
+        _ => standard(req, base),
+    });
+    let env = Env::new(&fixture.base);
+    assert_eq!(sync(&env)["status"], "ok");
+    assert!(
+        !env.rows("SELECT quote FROM evidence WHERE field = '/state'")
+            .is_empty()
+    );
+    assert!(
+        env.rows("SELECT quote FROM evidence WHERE field = '/user/name'")
+            .is_empty()
+    );
+    let coverage = env.json(&["coverage", "x"]);
+    let gaps = coverage["result"]["coverage"][0]["windows"][0]["gaps"]
+        .as_array()
+        .unwrap()
+        .clone();
+    for reason in ["not_found_or_hidden", "protocol"] {
+        assert!(
+            gaps.iter()
+                .any(|g| g["selection"] == "author profiles" && g["reason"] == reason),
+            "{reason}: {coverage}"
+        );
+    }
+}
+
 /// evidence/R34: only owner involved items become evidence
 #[test]
 fn only_owner_involved_items_become_evidence() {

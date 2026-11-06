@@ -43,7 +43,7 @@ struct Run<'a, R, W> {
     capped: bool,
     /// The host said the source keeps originals: attach the raw item or comment.
     keep_original: bool,
-    emails_gap: Option<&'static str>,
+    gaps: Vec<CoverageGap>,
 }
 
 fn main() -> Result<()> {
@@ -59,17 +59,11 @@ fn main() -> Result<()> {
     )?)?;
 
     let mut submitted = 0;
-    let mut emails_gap = None;
-    let outcome = sync(&mut transport, &params.run, &mut submitted, &mut emails_gap);
+    let mut gaps = Vec::new();
+    let outcome = sync(&mut transport, &params.run, &mut submitted, &mut gaps);
     let failure = outcome.err();
     let report = CoverageReport {
-        gaps: emails_gap
-            .into_iter()
-            .map(|reason| CoverageGap {
-                selection: "user emails".into(),
-                reason: reason.into(),
-            })
-            .collect(),
+        gaps,
         status: if failure.is_none() {
             CoverageStatus::Complete
         } else {
@@ -104,7 +98,7 @@ fn sync<R: BufRead, W: Write>(
     transport: &mut Transport<R, W>,
     binding: &RunBinding,
     submitted: &mut u64,
-    emails_gap: &mut Option<&'static str>,
+    gaps: &mut Vec<CoverageGap>,
 ) -> Result<(), Failure> {
     let repo = binding
         .selector
@@ -138,11 +132,11 @@ fn sync<R: BufRead, W: Write>(
         submitted: 0,
         capped: false,
         keep_original: binding.keep_original,
-        emails_gap: None,
+        gaps: Vec::new(),
     };
     let result = run.read_all(&binding.window.from, &binding.window.to);
     *submitted = run.submitted;
-    *emails_gap = run.emails_gap;
+    *gaps = std::mem::take(&mut run.gaps);
     result?;
     if run.capped {
         return Err(Failure::new("result_cap"));
@@ -151,6 +145,20 @@ fn sync<R: BufRead, W: Write>(
 }
 
 impl<R: BufRead, W: Write> Run<'_, R, W> {
+    /// An author profile couldn't be read: reported once per reason, and the run goes on (D45).
+    fn profile_gap(&mut self, reason: &str) {
+        if !self
+            .gaps
+            .iter()
+            .any(|g| g.selection == "author profiles" && g.reason == reason)
+        {
+            self.gaps.push(CoverageGap {
+                selection: "author profiles".into(),
+                reason: reason.into(),
+            });
+        }
+    }
+
     fn read_all(&mut self, from: &str, to: &str) -> Result<(), Failure> {
         let user = self.client.get("/user", &[])?;
         let viewer_id = user.body["id"].as_u64().map(|id| id.to_string());
@@ -231,7 +239,10 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
                 )?;
             }
             Err(failure) if matches!(failure.status, Some(401 | 403 | 404 | 429)) => {
-                self.emails_gap = Some(failure.reason);
+                self.gaps.push(CoverageGap {
+                    selection: "user emails".into(),
+                    reason: failure.reason.into(),
+                });
             }
             Err(failure) => return Err(failure),
         }
@@ -410,13 +421,24 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
             if !base.is_empty() && base.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
                 if !self.profiles.contains_key(&id) {
                     let path = format!("/users/{}", login.replace('[', "%5B").replace(']', "%5D"));
-                    let profile = self.client.get(&path, &[])?.body;
-                    if profile["id"].as_u64() != Some(id) {
-                        return Err(Failure::new("protocol"));
-                    }
+                    let profile = match self.client.get(&path, &[]) {
+                        Ok(page) if page.body["id"].as_u64() == Some(id) => page.body,
+                        Ok(_) => {
+                            self.profile_gap("protocol");
+                            Value::Null
+                        }
+                        Err(failure) if failure.status == Some(404) => {
+                            self.profile_gap(failure.reason);
+                            Value::Null
+                        }
+                        Err(failure) => return Err(failure),
+                    };
                     self.profiles.insert(id, profile);
                 }
                 let profile = self.profiles[&id].clone();
+                if profile.is_null() {
+                    return Ok(());
+                }
                 self.submit(
                     kind,
                     location,
