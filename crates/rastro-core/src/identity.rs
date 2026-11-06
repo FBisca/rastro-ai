@@ -10,6 +10,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
+mod candidates;
+pub use candidates::*;
+
 /// The canonical encoding version of an intent row.
 pub const FORMAT_VERSION: i64 = 1;
 /// The version of the tagged target and payload structures.
