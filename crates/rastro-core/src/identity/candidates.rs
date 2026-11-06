@@ -18,37 +18,27 @@ pub struct AccountFacts {
 
 /// A name as the `same name` signal compares it: lowercased, with the accents of Latin letters
 /// removed, whether precomposed or combining, and every run of whitespace made one space.
+/// Canonical decomposition (NFD) splits a precomposed letter into its base and combining marks,
+/// which are then dropped.
 pub fn fold_name(name: &str) -> String {
-    let folded: String = name
-        .chars()
-        .flat_map(char::to_lowercase)
+    let nfd = icu_normalizer::DecomposingNormalizerBorrowed::new_nfd();
+    let folded: String = nfd
+        .normalize_iter(name.chars().flat_map(char::to_lowercase))
         .filter(|c| !('\u{300}'..='\u{36f}').contains(c))
         .map(unaccented)
         .collect();
     folded.split_whitespace().collect::<Vec<_>>().join(" ")
 }
-/// A lowercase Latin letter without its accent.
+/// A lowercase Latin letter whose accent canonical decomposition doesn't remove (a stroke, a
+/// bar, a middle dot, a missing dot), without it.
 fn unaccented(c: char) -> char {
     match c {
-        'à'..='å' | 'ā' | 'ă' | 'ą' => 'a',
-        'ç' | 'ć' | 'ĉ' | 'ċ' | 'č' => 'c',
-        'ď' | 'đ' => 'd',
-        'è'..='ë' | 'ē' | 'ĕ' | 'ė' | 'ę' | 'ě' => 'e',
-        'ĝ' | 'ğ' | 'ġ' | 'ģ' => 'g',
-        'ĥ' | 'ħ' => 'h',
-        'ì'..='ï' | 'ĩ' | 'ī' | 'ĭ' | 'į' | 'ı' => 'i',
-        'ĵ' => 'j',
-        'ķ' => 'k',
-        'ĺ' | 'ļ' | 'ľ' | 'ŀ' | 'ł' => 'l',
-        'ñ' | 'ń' | 'ņ' | 'ň' => 'n',
-        'ò'..='ö' | 'ø' | 'ō' | 'ŏ' | 'ő' => 'o',
-        'ŕ' | 'ŗ' | 'ř' => 'r',
-        'ś' | 'ŝ' | 'ş' | 'š' => 's',
-        'ţ' | 'ť' | 'ŧ' => 't',
-        'ù'..='ü' | 'ũ' | 'ū' | 'ŭ' | 'ů' | 'ű' | 'ų' => 'u',
-        'ŵ' => 'w',
-        'ý' | 'ÿ' | 'ŷ' => 'y',
-        'ź' | 'ż' | 'ž' => 'z',
+        'đ' => 'd',
+        'ħ' => 'h',
+        'ı' => 'i',
+        'ŀ' | 'ł' => 'l',
+        'ø' => 'o',
+        'ŧ' => 't',
         other => other,
     }
 }
@@ -352,6 +342,8 @@ mod tests {
         assert_eq!(fold_name("  Ana \t  Silva "), "ana silva");
         assert_eq!(fold_name("Jose\u{301} Conceição"), "jose conceicao");
         assert_eq!(fold_name("Łukasz Øster"), "lukasz oster");
+        assert_eq!(fold_name("Ștefan Țepeș"), "stefan tepes");
+        assert_eq!(fold_name("Đặng Văn Bắc"), "dang van bac");
         assert_ne!(fold_name("Ana Silva"), fold_name("Ana Silveira"));
     }
 

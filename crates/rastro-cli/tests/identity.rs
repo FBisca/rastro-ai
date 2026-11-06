@@ -1933,3 +1933,28 @@ fn S26_a_no_records_a_cannot_link_and_the_pair_never_returns() {
     let error = env.refused(&["identity", "answer", github, &linear, "yes"]);
     assert!(error.contains("not a candidate pair"), "{error}");
 }
+
+/// S23: a name with a precomposed accent the old letter table missed (Romanian `Ș`) folds like
+/// its plain spelling, so the two accounts are listed as `same name`
+#[test]
+fn S23_a_precomposed_accent_folds_like_its_plain_letter() {
+    let env = Env::new();
+    env.account(8101, "stefan");
+    let github = "github:account/8101";
+    named(
+        &env,
+        github,
+        "code:Account",
+        "Ștefan Pop",
+        "https://api.github.com/users/8101",
+    );
+    let linear = tracker_account(&env, "u-8101", "different@example.org");
+    named(
+        &env,
+        &linear,
+        "tracker:Account",
+        "Stefan Pop",
+        "https://linear.app/users/u-8101",
+    );
+    assert_eq!(candidates(&env).len(), 1);
+}
