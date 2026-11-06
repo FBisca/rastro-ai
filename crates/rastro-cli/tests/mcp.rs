@@ -2854,6 +2854,83 @@ fn S17_a_hidden_conflict_partner_keeps_the_visible_account_unlinked_in_every_sco
     );
 }
 
+/// S31, D12: no scoped read (about, with history, or why) surfaces a hidden Person or an intent
+/// naming it, though every intent is replayed so hidden cannot-links still veto (D50)
+#[test]
+fn S31_no_scoped_read_surfaces_a_hidden_intent_or_person() {
+    let env = Env::new();
+    env.account_in("personal", "github:account/1", "code:Account", "anchor", 0);
+    env.account_in("personal", "github:account/2", "code:Account", "match", 0);
+    env.account_in(
+        "health",
+        "github:account/3",
+        "code:Account",
+        "secret-login",
+        0,
+    );
+    let person = |name: &str| {
+        env.json(&["identity", "person", "create", "--name", name])["person"]["identifier"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let (p, q) = (person("Anchor"), person("Hidden Q"));
+    env.json(&["identity", "link", "github:account/1", &p]);
+    env.json(&["identity", "link", "github:account/3", &q]);
+    let refused = env.json(&["identity", "link", "github:account/2", &q]);
+    env.json(&[
+        "identity",
+        "undo",
+        refused["intents"][0]["id"].as_str().unwrap(),
+    ]);
+    env.json(&["identity", "merge", &p, &q]);
+    // Every intent naming Q: its creation, name, links, the undo, the cannot-link, the merge.
+    let hidden: Vec<String> = env
+        .db()
+        .prepare("SELECT id FROM intent WHERE targets_json LIKE ?1")
+        .unwrap()
+        .query_map([format!("%{q}%")], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert!(hidden.len() >= 4, "{hidden:?}");
+    let mut personal = env.scoped(&["personal"]);
+    let mut answers: Vec<serde_json::Value> = [
+        "me",
+        p.as_str(),
+        q.as_str(),
+        "rastro:name/Hidden Q",
+        "rastro:name/Anchor",
+        "github:account/2",
+        "github:account/3",
+    ]
+    .iter()
+    .map(|form| about_text(&mut personal, form))
+    .collect();
+    // `why`, in `personal`, on every claim the full view of P shows (history included).
+    let mut everything = env.scoped(&[]);
+    for claim in about_text(&mut everything, &p)["claims"]
+        .as_array()
+        .unwrap()
+    {
+        answers.push(why_text(&mut personal, claim["id"].as_str().unwrap()));
+    }
+    let mut needles = vec![
+        q.clone(),
+        rastro_core::claims::entity_id(&q),
+        "Hidden Q".into(),
+        "secret-login".into(),
+        "github:account/3".into(),
+    ];
+    needles.extend(hidden);
+    for answer in &answers {
+        let text = answer.to_string();
+        for needle in &needles {
+            assert!(!text.contains(needle.as_str()), "{needle} leaked: {text}");
+        }
+    }
+}
+
 /// S37: a scoped `why` on an intent-backed claim lists only the issuer scopes the session can
 /// see; a scope the session can't see is never named
 #[test]
