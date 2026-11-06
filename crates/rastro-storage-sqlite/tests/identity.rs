@@ -89,6 +89,71 @@ fn typed(
         role: "account".into(),
     }
 }
+/// One claim `predicate` = `value` (`datatype`) about account `identifier`, read in `scope` at
+/// location `identifier`, field `/<predicate>`; never scalar except an alias, as the core makes them.
+fn fact(
+    db: &mut SqliteStorage,
+    identifier: &str,
+    predicate: &str,
+    (value, datatype): (&str, &str),
+    scope: &str,
+) {
+    let source = Source::github(format!("s-{scope}"), "o/p".into(), Scope(scope.into()));
+    db.project_sources(std::slice::from_ref(&source)).unwrap();
+    let run = db
+        .start_run(&source, ("fixture", "1"), time(), (time(), time()))
+        .unwrap();
+    let field = format!("/{predicate}");
+    let location = identifier.to_string();
+    let e = Evidence {
+        source: source.name.clone(),
+        scope: source.scope.clone(),
+        location: location.clone(),
+        field: field.clone(),
+        start: 0,
+        end: value.len() as u64,
+        quote: value.into(),
+        trust_class: TrustClass::Structured,
+        captured_at: time(),
+        source_updated_at: Some(time()),
+        original: None,
+    };
+    db.append_evidence(run, &e).unwrap();
+    let (evidence_id, _) = db
+        .pending_evidence(("fixture", "1"), &source)
+        .unwrap()
+        .into_iter()
+        .rev()
+        .find(|(_, item)| item.location == location && item.field == field)
+        .unwrap();
+    let subject = Entity::new(identifier.into(), "code:Account".into());
+    let object = Object::Literal {
+        value: value.into(),
+        datatype: datatype.into(),
+    };
+    db.record_claims(
+        run,
+        ("fixture", "1"),
+        &[ObservedClaim {
+            id: claims::claim_id(&subject.id, predicate, &object),
+            subject,
+            predicate: predicate.into(),
+            object,
+            scalar: predicate == claims::ALIAS_PREDICATE,
+            type_ancestors: Vec::new(),
+            supports: BTreeSet::from([Support {
+                portable_key: claims::portable_evidence_key(&e),
+                evidence_id,
+                field,
+                start: 0,
+                end: value.len() as u64,
+                extraction_rule: "fixture-rule".into(),
+            }]),
+        }],
+        None,
+    )
+    .unwrap();
+}
 fn intent(id: &str, kind: IntentKind, targets: Targets, scopes: &[&str]) -> Intent {
     let mut intent = Intent {
         id: id.into(),
@@ -885,4 +950,29 @@ fn S36a_undoing_a_newer_name_leaves_a_gap_in_the_older_one() {
         .snapshot(|view| view.about(&ana.identifier, &history))
         .unwrap();
     assert_eq!(format!("{again:?}"), format!("{claims:?}"));
+}
+
+/// S31: a scoped read replays the scope's identity premises (verified emails, token owners and
+/// their subjects' type and alias claims), never every visible claim: an unknown entity costs
+/// only those (B3, D20)
+#[test]
+fn S31_a_scoped_read_replays_only_identity_premises() {
+    let home = tempfile::tempdir().unwrap();
+    let mut db = SqliteStorage::open(&home.path().join("db")).unwrap();
+    account(&mut db, 1, "personal");
+    for n in 10..15 {
+        account(&mut db, n, "personal"); // five visible claims unrelated to identity
+    }
+    fact(
+        &mut db,
+        "github:account/1",
+        rastro_core::identity::VERIFIED_EMAIL,
+        ("a@example.com", "email"),
+        "personal",
+    );
+    let personal = [Scope("personal".into())];
+    // Premises: the email claim and account 1's type claim, one span each.
+    let answer =
+        db.about_scoped_within("github:account/99", &AboutOptions::default(), &personal, 2);
+    assert!(answer.unwrap().is_empty());
 }

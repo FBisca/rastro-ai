@@ -92,6 +92,13 @@ pub(crate) const VISIBLE_CLAIM: &str = "EXISTS (SELECT 1 FROM justification j WH
 /// The claim `c` is backed by an owner intent.
 const INTENT_BACKED: &str =
     "EXISTS (SELECT 1 FROM intent_justification ij WHERE ij.claim_id = c.id)";
+/// The identity premises a scope set (`?2`) sees, so the replay derives the scope's automatic
+/// links: every visible verified-email and token-owner claim, plus the type and alias claims of
+/// their subjects (a type claim may cite an email snapshot or guest flag, so a newer one still
+/// closes what the older supported). Only these, never every visible claim.
+const PREMISES: &str = "SELECT c.id FROM claim c WHERE c.predicate IN ('rastro:verified_email', 'rastro:token_owner') AND {VISIBLE_CLAIM} \
+    UNION SELECT t.id FROM claim t WHERE t.predicate IN ('rastro:type', 'rastro:alias') AND t.subject IN \
+    (SELECT c.subject FROM claim c WHERE c.predicate IN ('rastro:verified_email', 'rastro:token_owner') AND {VISIBLE_CLAIM})";
 pub(crate) const OVER_BUDGET: &str = "this read is too large to answer within its work budget";
 
 /// Empties the process-local scoped cache; a benchmark's cold samples start from here.
@@ -178,11 +185,12 @@ fn build(
     // justification.
     let selecting = format!("({VISIBLE_CLAIM} OR {INTENT_BACKED})");
     let components = components.replace("{VISIBLE_CLAIM}", &selecting);
+    let premises = PREMISES.replace("{VISIBLE_CLAIM}", VISIBLE_CLAIM);
     let candidate_sql = format!("WITH roots AS ({roots}), components AS ({components}),
     neighbors AS (
         SELECT c.id, c.subject, c.object_entity, {selecting} AS seen FROM claim c JOIN components k ON c.subject = k.subject AND c.predicate = k.predicate
     ) SELECT id FROM neighbors UNION SELECT id FROM claim WHERE predicate IN ('rastro:type','rastro:alias') AND subject IN (SELECT subject FROM neighbors WHERE seen UNION SELECT object_entity FROM neighbors WHERE seen)
-      UNION SELECT c.id FROM claim c WHERE {VISIBLE_CLAIM} AND EXISTS (SELECT 1 FROM claim c WHERE c.predicate IN ('rastro:verified_email', 'rastro:token_owner') AND {VISIBLE_CLAIM})");
+      UNION {premises}");
     let candidates = db
         .prepare(&candidate_sql)?
         .query_map(params_from_iter(&arguments), |r| r.get::<_, String>(0))?
