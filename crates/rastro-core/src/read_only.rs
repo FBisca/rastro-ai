@@ -403,6 +403,7 @@ pub(crate) fn coverage_of(
                         to: run.window.1,
                         state: CoverageState::CouldNotLook,
                         selection: "all".into(),
+                        gaps: Vec::new(),
                         reason: Some("interrupted".into()),
                         retry_at: None,
                         checked_at: now,

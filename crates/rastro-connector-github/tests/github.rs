@@ -19,6 +19,8 @@ fn comments_for(number: &str) -> Value {
 fn standard(req: &Req, _base: &str) -> Reply {
     match req.path.as_str() {
         "/user" => Reply::ok(json!({"login": "me"})),
+        "/users/me" => Reply::ok(json!({"id": 123456789012345_u64, "name": "Owner Name"})),
+        "/users/helper%5Bbot%5D" => Reply::ok(json!({"id": 42, "name": "Helper"})),
         "/search/issues" => Reply::ok(search_page(match qualifier(req) {
             "author" => vec![issue(1, "Crash on start", Some(INJECTION), false)],
             "assignee" => vec![issue(3, "Slow query", Some("it is slow"), false)],
@@ -41,6 +43,329 @@ fn standard(req: &Req, _base: &str) -> Reply {
 
 fn sync(env: &Env) -> Value {
     env.json(&["sync", "x"])["result"]["runs"][0].clone()
+}
+
+fn snapshot_removal_closes_link(empty: bool) {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let stage = Arc::new(AtomicUsize::new(0));
+    let state = stage.clone();
+    let fixture = Fixture::start(move |req, base| match req.path.as_str() {
+        "/user" => Reply::ok(
+            json!({"id": if state.load(Ordering::Relaxed) == 0 { 123456789012345_u64 } else { 222 }, "login":"me", "type":"User"}),
+        ),
+        "/user/emails" => Reply::ok(match state.load(Ordering::Relaxed) {
+            0 => json!([{"email":"shared@example.com", "verified":true}]),
+            1 => {
+                json!([{"email":"shared@example.com", "verified":true},{"email":"other@example.com", "verified":true}])
+            }
+            _ if empty => json!([]),
+            _ => json!([{"email":"other@example.com", "verified":true}]),
+        }),
+        _ => standard(req, base),
+    });
+    let env = Env::new(&fixture.base);
+    env.install_extractor();
+    env.ok(&[
+        "source",
+        "add",
+        "y",
+        "--connector",
+        "github",
+        "--repo",
+        "o/p",
+        "--scope",
+        "personal",
+    ]);
+    assert_eq!(
+        env.json(&["sync", "y"])["result"]["runs"][0]["status"],
+        "ok"
+    );
+    let created = env.json(&["identity", "person", "create", "--name", "Anchor"]);
+    let person = created["result"]["person"]["identifier"].as_str().unwrap();
+    env.ok(&["identity", "link", "github:account/123456789012345", person]);
+    stage.store(1, Ordering::Relaxed);
+    assert_eq!(sync(&env)["status"], "ok");
+    let account = "github:account/222";
+    let current = env.json(&["about", account]);
+    assert!(
+        current["result"]["claims"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["predicate"] == "rastro:held_by" && c["object"]["identifier"] == person),
+        "{current}"
+    );
+    stage.store(2, Ordering::Relaxed);
+    assert_eq!(
+        env.json(&["sync", "x", "--reread"])["result"]["runs"][0]["status"],
+        "ok"
+    );
+    let history = env.json(&["about", account, "--history"]);
+    let link = history["result"]["claims"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["predicate"] == "rastro:held_by" && c["object"]["identifier"] == person)
+        .expect("historical link");
+    assert_eq!(link["status"], "superseded", "{history}");
+    assert!(!link["known_intervals"][0]["end"].is_null(), "{history}");
+    let alias = history["result"]["claims"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["predicate"] == "rastro:alias" && c["object"]["value"] == "shared@example.com")
+        .expect("historical email alias");
+    assert_eq!(alias["status"], "superseded", "{history}");
+    assert!(!alias["known_intervals"][0]["end"].is_null(), "{history}");
+    let expected_intervals = link["known_intervals"].clone();
+    env.ok(&["claims", "rebuild"]);
+    let rebuilt = env.json(&["about", account, "--history"]);
+    let link = rebuilt["result"]["claims"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["predicate"] == "rastro:held_by" && c["object"]["identifier"] == person)
+        .expect("rebuilt historical link");
+    assert_eq!(link["status"], "superseded", "{rebuilt}");
+    assert_eq!(link["known_intervals"], expected_intervals, "{rebuilt}");
+}
+
+#[test]
+fn S18_removing_one_address_closes_its_automatic_link() {
+    snapshot_removal_closes_link(false);
+}
+
+#[test]
+fn S18_empty_snapshot_closes_its_automatic_link() {
+    snapshot_removal_closes_link(true);
+}
+
+#[test]
+fn S14_github_token_owner_links_to_me() {
+    let fixture = Fixture::start(|req, base| match req.path.as_str() {
+        "/user" => Reply::ok(json!({"id": 123456789012345_u64, "login": "me", "type": "User"})),
+        _ => standard(req, base),
+    });
+    let env = Env::new(&fixture.base);
+    env.install_extractor();
+    env.ok(&["identity", "me"]);
+    assert_eq!(sync(&env)["status"], "ok");
+    let about = env.json(&["about", "me"]);
+    let accounts = about["result"]["person"]["accounts"].as_array().unwrap();
+    let account = accounts
+        .iter()
+        .find(|a| a["identifier"] == "github:account/123456789012345")
+        .expect("viewer linked to me");
+    assert!(
+        account["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["kind"] == "token_owner"),
+        "{about}"
+    );
+}
+
+#[test]
+fn S18_empty_verified_email_snapshot_closes_the_old_observation() {
+    use std::sync::{
+        Arc,
+        atomic::{AtomicUsize, Ordering},
+    };
+    let stage = Arc::new(AtomicUsize::new(0));
+    let state = stage.clone();
+    let fixture = Fixture::start(move |req, base| match req.path.as_str() {
+        "/user" => Reply::ok(json!({"id": 123456789012345_u64, "login": "me", "type": "User"})),
+        "/user/emails" => match state.load(Ordering::Relaxed) {
+            0 => Reply::ok(json!([{"email":"owner@example.com", "verified":true}])),
+            1 => Reply::status(403, json!({"message":"forbidden"})),
+            _ => Reply::ok(json!([])),
+        },
+        _ => standard(req, base),
+    });
+    let env = Env::new(&fixture.base);
+    env.install_extractor();
+    assert_eq!(sync(&env)["status"], "ok");
+    let account = "github:account/123456789012345";
+    let claim = |value: &Value| {
+        value["result"]["claims"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["predicate"] == "rastro:verified_email")
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(claim(&env.json(&["about", account]))["status"], "observed");
+    stage.store(1, Ordering::Relaxed);
+    assert_eq!(
+        env.json(&["sync", "x", "--reread"])["result"]["runs"][0]["status"],
+        "ok"
+    );
+    assert_eq!(claim(&env.json(&["about", account]))["status"], "observed");
+    stage.store(2, Ordering::Relaxed);
+    assert_eq!(
+        env.json(&["sync", "x", "--reread"])["result"]["runs"][0]["status"],
+        "ok"
+    );
+    let historical = claim(&env.json(&["about", account, "--history"]));
+    assert_eq!(historical["status"], "superseded");
+    assert!(!historical["known_intervals"][0]["end"].is_null());
+}
+
+#[test]
+fn S12_records_viewer_verified_emails_and_author_names() {
+    let fixture = Fixture::start(|req, base| match req.path.as_str() {
+        "/user" => Reply::ok(
+            json!({"id": 123456789012345_u64, "login": "me", "type": "User", "name": "Owner Name"}),
+        ),
+        "/user/emails" => Reply::ok(json!([
+            {"email": "owner@example.com", "verified": true},
+            {"email": "unverified@example.com", "verified": false}
+        ])),
+        "/users/me" => Reply::ok(
+            json!({"id": 123456789012345_u64, "login": "me", "name": "Owner Name", "type": "User", "email": "profile@example.com"}),
+        ),
+        "/users/helper%5Bbot%5D" => {
+            Reply::ok(json!({"id": 42, "login": "helper[bot]", "name": "Helper", "type": "Bot"}))
+        }
+        _ => standard(req, base),
+    });
+    let env = Env::new(&fixture.base);
+    env.install_extractor();
+    assert_eq!(sync(&env)["status"], "ok");
+    let viewer =
+        env.rows("SELECT quote FROM evidence WHERE location = 'github:viewer' AND field = '/id'");
+    assert_eq!(viewer, vec![vec!["123456789012345".to_string()]]);
+    let emails = env.rows("SELECT quote FROM evidence WHERE field LIKE '%email%' ORDER BY quote");
+    assert!(
+        emails
+            .iter()
+            .any(|row| row[0].starts_with(r#"["owner@example.com"]"#))
+    );
+    assert!(
+        !emails
+            .iter()
+            .any(|row| row[0].contains("unverified@example.com"))
+    );
+    let names =
+        env.rows("SELECT quote FROM evidence WHERE field LIKE '%name%' AND quote = 'Owner Name'");
+    assert!(!names.is_empty());
+    let about = env.json(&["about", "github:account/123456789012345"]);
+    assert!(
+        about.to_string().contains("github:email/owner@example.com"),
+        "{about}"
+    );
+    let alias = env.json(&["about", "github:email/owner@example.com"]);
+    assert_eq!(alias["result"]["resolved"], true, "{alias}");
+    let profile = env.json(&["about", "github:email/profile@example.com"]);
+    assert_eq!(profile["result"]["resolved"], true, "{profile}");
+    assert!(
+        !about["result"]["claims"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["predicate"] == "rastro:verified_email"
+                && c["object"]["value"] == "profile@example.com")
+    );
+}
+
+#[test]
+fn S12_verified_email_with_json_escapes_is_an_alias() {
+    let fixture = Fixture::start(|req, base| match req.path.as_str() {
+        "/user" => Reply::ok(json!({"id": 123456789012345_u64, "login":"me", "type":"User"})),
+        "/user/emails" => Reply::ok(json!([{"email":"\"quoted\"@example.com", "verified":true}])),
+        _ => standard(req, base),
+    });
+    let env = Env::new(&fixture.base);
+    env.install_extractor();
+    assert_eq!(sync(&env)["status"], "ok");
+    let about = env.json(&["about", "github:email/\"quoted\"@example.com"]);
+    assert_eq!(about["result"]["resolved"], true, "{about}");
+    let alias = about["result"]["claims"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| {
+            c["predicate"] == "rastro:alias" && c["object"]["value"] == "\"quoted\"@example.com"
+        })
+        .unwrap();
+    let why = env.json(&["why", alias["id"].as_str().unwrap(), "--full"]);
+    assert!(
+        why["result"]["supports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .flat_map(|s| s["spans"].as_array().unwrap())
+            .any(|s| s["field"] == "/emails/verified" && s["quote"] == "\"quoted\"@example.com"),
+        "{why}"
+    );
+}
+
+#[test]
+fn S13_inaccessible_emails_report_coverage_without_failing_sync() {
+    let fixture = Fixture::start(|req, base| match req.path.as_str() {
+        "/user/emails" => Reply::status(403, json!({"message": "Forbidden"})),
+        _ => standard(req, base),
+    });
+    let env = Env::new(&fixture.base);
+    assert_eq!(sync(&env)["status"], "ok");
+    let coverage = env.json(&["coverage", "x"]);
+    assert_eq!(
+        coverage["result"]["coverage"][0]["windows"][0]["gaps"][0]["selection"], "user emails",
+        "{coverage}"
+    );
+    assert_eq!(
+        coverage["result"]["coverage"][0]["windows"][0]["gaps"][0]["reason"],
+        "forbidden"
+    );
+}
+
+#[test]
+fn S13_unreadable_later_email_page_keeps_sync_and_reports_gap() {
+    let fixture = Fixture::start(|req, base| match req.path.as_str() {
+        "/user/emails" if req.query.contains("page=2") => {
+            Reply::status(403, json!({"message":"Forbidden"}))
+        }
+        "/user/emails" => Reply::ok(json!([{"email":"partial@example.com", "verified":true}]))
+            .header(
+                "Link",
+                &format!("<{base}/user/emails?page=2>; rel=\"next\""),
+            ),
+        _ => standard(req, base),
+    });
+    let env = Env::new(&fixture.base);
+    assert_eq!(sync(&env)["status"], "ok");
+    assert!(
+        env.rows(
+            "SELECT quote FROM evidence WHERE location='github:viewer' AND field='/emails/verified'"
+        )
+        .is_empty()
+    );
+    let coverage = env.json(&["coverage", "x"]);
+    assert_eq!(
+        coverage["result"]["coverage"][0]["windows"][0]["gaps"][0]["reason"], "forbidden",
+        "{coverage}"
+    );
+}
+
+#[test]
+fn S13_rate_limited_email_endpoint_is_a_gap_when_the_main_read_succeeds() {
+    let fixture = Fixture::start(|req, base| match req.path.as_str() {
+        "/user/emails" => Reply::status(403, json!({"message":"rate limited"}))
+            .header("x-ratelimit-remaining", "0"),
+        _ => standard(req, base),
+    });
+    let env = Env::new(&fixture.base);
+    assert_eq!(sync(&env)["status"], "ok");
+    let coverage = env.json(&["coverage", "x"]);
+    assert_eq!(
+        coverage["result"]["coverage"][0]["windows"][0]["gaps"][0]["reason"], "rate_limited",
+        "{coverage}"
+    );
 }
 
 /// evidence/R34: only owner involved items become evidence
@@ -168,7 +493,7 @@ fn rate_limit_mid_run_keeps_completed_pages_and_is_not_found() {
 
 /// evidence/R44: instruction like content never changes the requests
 #[test]
-fn instruction_like_content_never_changes_the_requests() {
+fn S12_instruction_like_content_never_changes_the_requests() {
     let fixture = Fixture::start(standard);
     let env = Env::new(&fixture.base);
     sync(&env);
@@ -181,6 +506,9 @@ fn instruction_like_content_never_changes_the_requests() {
     for req in &requests {
         assert_eq!(req.method, "GET", "{req:?}");
         let fixed = req.path == "/user"
+            || req.path == "/user/emails"
+            || req.path == "/users/me"
+            || req.path == "/users/helper%5Bbot%5D"
             || req.path == "/search/issues"
             || (req.path.starts_with("/repos/o/p/issues/") && req.path.ends_with("/comments"));
         assert!(fixed, "unexpected request {req:?}");
@@ -782,7 +1110,7 @@ fn a_non_loopback_api_base_url_sends_no_request_and_is_couldnt_look_protocol() {
 
 /// evidence/R72: authors are structured evidence at each item and comment location
 #[test]
-fn authors_are_structured_evidence_at_each_item_and_comment_location() {
+fn S12_authors_are_structured_evidence_at_each_item_and_comment_location() {
     let fixture = Fixture::start(|req, base| {
         let mut reply = standard(req, base);
         if req.path == "/search/issues" {
@@ -808,11 +1136,21 @@ fn authors_are_structured_evidence_at_each_item_and_comment_location() {
         for (at, fields) in [
             (
                 location,
-                [("id", "123456789012345"), ("login", "me"), ("type", "User")],
+                [
+                    ("id", "123456789012345"),
+                    ("login", "me"),
+                    ("name", "Owner Name"),
+                    ("type", "User"),
+                ],
             ),
             (
                 format!("https://github.com/o/p/issues/{number}#issuecomment-{number}0"),
-                [("id", "42"), ("login", "helper[bot]"), ("type", "Bot")],
+                [
+                    ("id", "42"),
+                    ("login", "helper[bot]"),
+                    ("name", "Helper"),
+                    ("type", "Bot"),
+                ],
             ),
         ] {
             for (field, quote) in fields {

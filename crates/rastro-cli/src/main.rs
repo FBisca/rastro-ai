@@ -73,6 +73,13 @@ fn window_line(w: &CoverageWindow) -> String {
     if let Some(reason) = &w.reason {
         line += &format!(" | Reason: {}", display_safe(reason));
     }
+    for gap in &w.gaps {
+        line += &format!(
+            " | Gap: {} ({})",
+            display_safe(&gap.selection),
+            display_safe(&gap.reason)
+        );
+    }
     if let Some(at) = w.retry_at {
         line += &format!(" | Retry at: {}", stamp(at));
     }

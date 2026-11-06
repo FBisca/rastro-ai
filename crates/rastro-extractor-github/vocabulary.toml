@@ -10,7 +10,7 @@
 # Accounts (decisions/vocabulary.md §27): `code:Account` names the core's `rastro:Account` as its
 # supertype, so only it may be held by a Person. A bot, a pull request or a repository may not.
 namespace = "code"
-version = "0.2.0"
+version = "0.3.0"
 
 [[types]]
 id = "code:Account"
@@ -111,3 +111,21 @@ examples = ["octocat for github:account/583231", "dependabot[bot] for github:acc
 counter_examples = ["@octocat mentioned in a body", "a display name", "a login with no `/user/id` beside it"]
 evidence_requirement = "A structured `/user/login` observation, with `/user/id` at the same location."
 domain = ["code:Account", "code:Bot"]
+
+[[aliases]]
+kind = "name"
+definition = "The profile name of a GitHub account."
+not_to_confuse_with = "An identity or proof of a Person."
+examples = ["Ada Lovelace"]
+counter_examples = ["a name in a comment"]
+evidence_requirement = "A structured profile name and account id."
+domain = ["code:Account", "code:Bot"]
+
+[[aliases]]
+kind = "email"
+definition = "An email address observed for a GitHub account."
+not_to_confuse_with = "An identity or proof of a Person."
+examples = ["ada@example.com"]
+counter_examples = ["an email in a comment"]
+evidence_requirement = "A structured verified-email snapshot and account id."
+domain = ["code:Account"]

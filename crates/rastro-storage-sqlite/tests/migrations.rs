@@ -5,7 +5,7 @@ use rusqlite::Connection;
 
 /// evidence/R4: stored evidence rejects updates and deletes
 #[test]
-fn stored_evidence_rejects_updates_and_deletes() {
+fn S13_stored_evidence_rejects_updates_and_deletes_after_coverage_migration() {
     for legacy in [false, true] {
         let home = tempfile::tempdir().unwrap();
         let path = home.path().join("rastro.sqlite3");
@@ -49,13 +49,13 @@ fn stored_evidence_rejects_updates_and_deletes() {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 10);
+        assert_eq!(version, 12);
     }
 }
 
 /// evidence/R5: migrations apply once in timestamp order and unknown ones are refused
 #[test]
-fn migrations_apply_once_in_timestamp_order_and_unknown_ones_are_refused() {
+fn S13_migrations_apply_once_in_timestamp_order_and_unknown_ones_are_refused() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("rastro.sqlite3");
     let a = ("202611040001_a", "CREATE TABLE a (x)");
@@ -91,7 +91,7 @@ fn migrations_apply_once_in_timestamp_order_and_unknown_ones_are_refused() {
         .unwrap();
     connection.pragma_update(None, "user_version", 1).unwrap();
     SqliteStorage::open(&legacy).unwrap();
-    assert_eq!(names(&connection).len(), 10);
+    assert_eq!(names(&connection).len(), 12);
 }
 
 /// evidence/R5: legacy user version maps to the migrations it meant

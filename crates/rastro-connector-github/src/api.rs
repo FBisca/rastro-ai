@@ -8,12 +8,14 @@ use std::{process::Command, time::Duration};
 pub struct Failure {
     pub reason: &'static str,
     pub retry_at: Option<String>,
+    pub status: Option<u16>,
 }
 impl Failure {
     pub fn new(reason: &'static str) -> Self {
         Self {
             reason,
             retry_at: None,
+            status: None,
         }
     }
 }
@@ -85,7 +87,7 @@ impl Client {
                 .map(str::to_string)
         };
         if !(200..300).contains(&status) {
-            return Err(match status {
+            let mut failure = match status {
                 401 => Failure::new("auth"),
                 403 | 429 => rate_limit(&header).map_or_else(
                     || {
@@ -98,12 +100,15 @@ impl Client {
                     |retry_at| Failure {
                         reason: "rate_limited",
                         retry_at,
+                        status: None,
                     },
                 ),
                 404 => Failure::new("not_found_or_hidden"),
                 300..=399 => Failure::new("protocol"),
                 _ => Failure::new("network"),
-            });
+            };
+            failure.status = Some(status);
+            return Err(failure);
         }
         let next = header("link").and_then(|link| next_link(&link));
         let body = response

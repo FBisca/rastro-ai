@@ -15,6 +15,7 @@ const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 /// What `PRAGMA user_version` 1 and 2 meant, before migrations were tracked by name. Frozen.
 const LEGACY: [&str; 2] = ["202611041200_initial", "202611041500_evidence_insert_guard"];
 
+mod automatic;
 mod identity;
 mod knowledge;
 /// `(name, sql)`, named `YYYYMMDDHHmm_<what>` so migrations from different branches
@@ -27,7 +28,7 @@ pub use scoped::{cache_len as scoped_cache_len, clear_cache as clear_scoped_cach
 /// The migration recording when an intent's contribution ended; an open that applies it replays
 /// the stored intents once all migrations are in.
 const INTENT_END: &str = "202611081000_intent_justification_end";
-const MIGRATIONS: [(&str, &str); 10] = [
+const MIGRATIONS: [(&str, &str); 12] = [
     (
         "202611041200_initial",
         include_str!("../migrations/202611041200_initial.sql"),
@@ -67,6 +68,14 @@ const MIGRATIONS: [(&str, &str); 10] = [
     (
         INTENT_END,
         include_str!("../migrations/202611081000_intent_justification_end.sql"),
+    ),
+    (
+        "202611091000_coverage_gaps",
+        include_str!("../migrations/202611091000_coverage_gaps.sql"),
+    ),
+    (
+        "202611091100_automatic_justification",
+        include_str!("../migrations/202611091100_automatic_justification.sql"),
     ),
 ];
 
@@ -167,8 +176,15 @@ impl SqliteStorage {
             let intents: bool =
                 transaction.query_row("SELECT EXISTS (SELECT 1 FROM intent)", [], |r| r.get(0))?;
             if intents {
+                let automatic_table: bool = transaction.query_row("SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'automatic_justification')", [], |r| r.get(0))?;
+                if !automatic_table {
+                    transaction.execute_batch("CREATE TEMP TABLE automatic_justification (id TEXT PRIMARY KEY, claim_id TEXT, reason TEXT, premise_a TEXT, premise_b TEXT, started_at TEXT, ended_at TEXT)")?;
+                }
                 identity::apply(&transaction)?;
                 lifecycle::publish(&transaction)?;
+                if !automatic_table {
+                    transaction.execute_batch("DROP TABLE temp.automatic_justification")?;
+                }
             }
             transaction.commit()?;
         }
@@ -196,7 +212,8 @@ struct View<'a>(&'a Connection);
 
 /// Claims no justification holds any more: no evidence justification and no owner intent.
 pub(crate) const UNJUSTIFIED: &str = "SELECT id FROM claim c WHERE NOT EXISTS (SELECT 1 FROM justification j WHERE j.claim_id = c.id) \
-    AND NOT EXISTS (SELECT 1 FROM intent_justification i WHERE i.claim_id = c.id)";
+    AND NOT EXISTS (SELECT 1 FROM intent_justification i WHERE i.claim_id = c.id) \
+    AND NOT EXISTS (SELECT 1 FROM automatic_justification a WHERE a.claim_id = c.id)";
 
 /// The observations of a pair past an extractor version's checkpoint (`?1` source, `?2` scope,
 /// `?3` extractor, `?4` version, `?5` vocabulary version or NULL for any): what the next run
@@ -435,6 +452,17 @@ impl Storage for SqliteStorage {
         )?;
         Ok(())
     }
+    fn record_coverage_gaps(
+        &mut self,
+        run_id: i64,
+        gaps: &[rastro_core::CoverageGap],
+    ) -> Result<()> {
+        self.connection.execute(
+            "UPDATE coverage SET gaps_json = ?1 WHERE run_id = ?2",
+            params![serde_json::to_string(gaps)?, run_id],
+        )?;
+        Ok(())
+    }
     fn finish_run(&mut self, run_id: i64, end: &RunEnd) -> Result<()> {
         self.connection.execute(
             "UPDATE runs SET finished_at=?2, status=?3, reason=?4, submitted=?5, accepted=?6,
@@ -661,6 +689,10 @@ impl Storage for SqliteStorage {
                     location,
                     span.field.clone(),
                 ));
+                let related: Vec<lifecycle::AffectedGroup> = transaction.prepare(
+                    "SELECT DISTINCT c.subject, c.predicate, old.location, s.field FROM evidence new JOIN evidence old ON old.source = new.source AND old.scope = new.scope AND old.location = new.location AND old.field = new.field JOIN justification_span s ON s.evidence_id = old.id JOIN justification j ON j.id = s.justification_id JOIN claim c ON c.id = j.claim_id WHERE new.id = ?1 AND (c.predicate IN ('rastro:verified_email', 'rastro:token_owner') OR (c.predicate = 'rastro:alias' AND c.object_datatype = 'email'))"
+                )?.query_map([span.evidence_id], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<Result<_, _>>()?;
+                affected.extend(related);
                 spans_added += transaction.execute("INSERT OR IGNORE INTO justification_span
                     (justification_id, evidence_id, portable_key, field, start, end) VALUES (?1, ?2, ?3, ?4, ?5, ?6)",
                     params![id, span.evidence_id, span.portable_key, span.field, span.start as i64, span.end as i64])?;
@@ -701,6 +733,7 @@ impl Storage for SqliteStorage {
                     c.last_portable_key, c.last.1, c.vocabulary_version])?;
         }
         if !lifecycle::staging(&transaction)? {
+            automatic::apply(&transaction)?;
             lifecycle::publish(&transaction)?;
         }
         transaction.commit()?;
@@ -728,6 +761,7 @@ impl Storage for SqliteStorage {
         let (intents, out) = plan(&View(&transaction))?;
         let stored = identity::insert_all(&transaction, sees, intents)?;
         identity::apply(&transaction)?;
+        automatic::apply(&transaction)?;
         // An intent write changes the projection, so it publishes like any other projection write.
         lifecycle::publish(&transaction)?;
         transaction.commit()?;
@@ -913,7 +947,7 @@ impl Snapshot for View<'_> {
             COVERAGE_WINDOWS_SHOWN as i64
         };
         let mut statement = self.0.prepare(
-            "SELECT window_start, window_end, state, selection, reason, retry_at, checked_at
+            "SELECT window_start, window_end, state, selection, reason, retry_at, checked_at, gaps_json
              FROM coverage WHERE source=?1 AND scope=?2 ORDER BY id DESC LIMIT ?3",
         )?;
         let rows = statement.query_map(params![pair.source, pair.scope.0, limit], |row| {
@@ -923,11 +957,12 @@ impl Snapshot for View<'_> {
                 row.get::<_, Option<String>>(4)?,
                 row.get::<_, Option<String>>(5)?,
                 row.get::<_, String>(6)?,
+                row.get::<_, String>(7)?,
             ))
         })?;
         let mut windows = Vec::new();
         for row in rows {
-            let ([from, to], [state, selection], reason, retry_at, checked_at) = row?;
+            let ([from, to], [state, selection], reason, retry_at, checked_at, gaps) = row?;
             let state = match state.as_str() {
                 "found" => CoverageState::Found,
                 "empty" => CoverageState::Empty,
@@ -939,6 +974,7 @@ impl Snapshot for View<'_> {
                 to: parse_time(to)?,
                 state,
                 selection,
+                gaps: serde_json::from_str(&gaps)?,
                 reason,
                 retry_at: retry_at.map(parse_time).transpose()?,
                 checked_at: parse_time(checked_at)?,
@@ -1245,7 +1281,7 @@ mod projection_schema_tests {
 
     /// claims/R29: shadow tables match the active projection column shapes
     #[test]
-    fn shadow_tables_match_the_active_projection_column_shapes() {
+    fn S18_shadow_tables_match_the_active_projection_column_shapes() {
         let home = tempfile::tempdir().unwrap();
         let mut storage = SqliteStorage::open(&home.path().join("db")).unwrap();
         storage.begin_claims_rebuild().unwrap();
@@ -1257,7 +1293,7 @@ mod projection_schema_tests {
             .unwrap()
             .collect::<Result<Vec<_>, _>>()
             .unwrap();
-        assert_eq!(tables.len(), 8);
+        assert_eq!(tables.len(), 9);
         for table in tables {
             assert!(
                 db.query_row(

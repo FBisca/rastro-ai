@@ -28,6 +28,7 @@ struct Derivation {
     id: String,
     claim: String,
     scalar: bool,
+    snapshot: bool,
     current: bool,
     spans: Vec<Span>,
     requirements: Vec<Vec<usize>>,
@@ -75,7 +76,7 @@ impl Replay {
         let mut statement = db.prepare_cached(
             "SELECT j.id, j.claim_id, c.scalar, e.source, e.scope, e.location, e.captured_at,
              e.source_updated_at, s.evidence_id, s.field, s.start, s.end, s.portable_key,
-             j.extraction_rule, j.current, c.object_value, c.type_ancestors FROM claim c JOIN justification j ON j.claim_id = c.id
+             j.extraction_rule, j.current, c.object_value, c.type_ancestors, c.object_datatype FROM claim c JOIN justification j ON j.claim_id = c.id
              JOIN justification_span s ON s.justification_id = j.id JOIN evidence e ON e.id = s.evidence_id
              WHERE c.subject = ?1 AND c.predicate = ?2")?;
         let mut rows = statement.query(params![subject, predicate])?;
@@ -89,6 +90,11 @@ impl Replay {
                     id: id.clone(),
                     claim: r.get(1)?,
                     scalar: r.get(2)?,
+                    snapshot: matches!(
+                        predicate,
+                        rastro_core::identity::VERIFIED_EMAIL | rastro_core::identity::TOKEN_OWNER
+                    ) || (predicate == rastro_core::claims::ALIAS_PREDICATE
+                        && r.get::<_, Option<String>>(17)?.as_deref() == Some("email")),
                     current: r.get(14)?,
                     spans: vec![],
                     requirements: vec![],
@@ -242,11 +248,25 @@ impl Replay {
     fn run(&mut self, db: &Connection, selected: &BTreeSet<usize>) -> Result<()> {
         let mut delete = db.prepare_cached("DELETE FROM occurrence WHERE justification_id = ?1")?;
         let mut events = BTreeMap::<Event, Vec<(usize, usize)>>::new();
+        let mut replacements = BTreeMap::<Event, (String, BTreeSet<usize>)>::new();
         for &d in selected {
             delete.execute([&self.derivations[d].id])?;
             self.derivations[d].current = false;
             for (s, span) in self.derivations[d].spans.iter().enumerate() {
                 events.entry(span.event.clone()).or_default().push((d, s));
+                if self.derivations[d].snapshot {
+                    let rows: Vec<(String, i64, String)> = db.prepare_cached("SELECT DISTINCT e.captured_at, e.id, s.portable_key FROM evidence e JOIN justification_span s ON s.evidence_id = e.id WHERE e.source = ?1 AND e.scope = ?2 AND e.location = ?3 AND e.field = ?4")?
+                        .query_map(params![span.source, span.scope, span.location, span.support.field], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<Result<_, _>>()?;
+                    for (captured, evidence, portable) in rows {
+                        let key = (captured, evidence);
+                        events.entry(key.clone()).or_default();
+                        replacements
+                            .entry(key)
+                            .or_insert_with(|| (portable, BTreeSet::new()))
+                            .1
+                            .insert(span.slot);
+                    }
+                }
             }
         }
         let mut latest = vec![None; self.dependents.len()];
@@ -256,11 +276,18 @@ impl Replay {
         let mut close = db.prepare_cached("UPDATE occurrence SET end = ?2, end_evidence_id = ?3 WHERE justification_id = ?1 AND end IS NULL")?;
         let mut open = db.prepare_cached("INSERT INTO occurrence (id, justification_id, source, scope, location, field, captured_at, source_updated_at, portable_key, evidence_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)")?;
         for (event, observations) in events {
-            let portable = self.derivations[observations[0].0].spans[observations[0].1]
-                .support
-                .portable_key
-                .clone();
+            let portable = observations
+                .first()
+                .map(|&(d, s)| self.derivations[d].spans[s].support.portable_key.clone())
+                .or_else(|| replacements.get(&event).map(|r| r.0.clone()))
+                .unwrap_or_default();
             let mut changed = BTreeSet::<usize>::new();
+            if let Some((_, slots)) = replacements.get(&event) {
+                for &slot in slots {
+                    latest[slot] = Some(event.clone());
+                    changed.extend(&self.dependents[slot]);
+                }
+            }
             for (d, s) in observations {
                 let slot = self.derivations[d].spans[s].slot;
                 latest[slot] = Some(event.clone());
@@ -470,7 +497,9 @@ pub(crate) fn intervals(db: &Connection, id: &str) -> Result<Vec<KnownInterval>>
         SELECT o.captured_at, o.evidence_id, o.end, o.end_evidence_id, o.id FROM occurrence o
         JOIN justification j ON j.id = o.justification_id WHERE j.claim_id = ?1
         UNION ALL SELECT coalesce(ij.started_at, i.issued_at), 0, ij.ended_at, CASE WHEN ij.ended_at IS NULL THEN NULL ELSE 0 END, ij.id
-        FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id WHERE ij.claim_id = ?1)
+        FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id WHERE ij.claim_id = ?1
+        UNION ALL SELECT started_at, 0, ended_at, CASE WHEN ended_at IS NULL THEN NULL ELSE 0 END, id
+        FROM automatic_justification WHERE claim_id = ?1)
         ORDER BY captured_at, evidence_id, id",
         )?
         .query_map([id], |r| {
@@ -528,6 +557,7 @@ const TABLES: &[&str] = &[
     "occurrence",
     "claim_link",
     "intent_justification",
+    "automatic_justification",
     "extraction_checkpoint",
 ];
 pub(crate) fn staging(db: &Connection) -> Result<bool> {
@@ -547,7 +577,14 @@ pub(crate) fn publish(db: &Connection) -> Result<()> {
     db.execute("INSERT INTO main.projection_publication (extractor_versions, vocabulary_versions, evidence_high_water) VALUES (?1, ?2, ?3)",
         params![serde_json::to_string(&extractors)?, serde_json::to_string(&vocabularies)?, serde_json::to_string(&high_water)?])?;
     for table in TABLES {
-        db.execute_batch(&format!("ANALYZE main.{table}"))?;
+        let exists: bool = db.query_row(
+            "SELECT EXISTS (SELECT 1 FROM main.sqlite_master WHERE type = 'table' AND name = ?1)",
+            [table],
+            |r| r.get(0),
+        )?;
+        if exists {
+            db.execute_batch(&format!("ANALYZE main.{table}"))?;
+        }
     }
     Ok(())
 }
@@ -625,6 +662,7 @@ pub(crate) fn finish_rebuild(db: &mut Connection, publish_projection: bool) -> R
     // Intents replay after the evidence and every carried-over pair, before publication.
     if publish_projection {
         crate::identity::apply(&transaction)?;
+        crate::automatic::apply(&transaction)?;
     }
     let count: i64 = transaction.query_row("SELECT count(*) FROM temp.claim", [], |r| r.get(0))?;
     if publish_projection {

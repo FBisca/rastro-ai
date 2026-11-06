@@ -285,11 +285,19 @@ pub enum CoverageStatus {
     CouldntLook,
 }
 /// `coverage.report`. Whether it was found or empty is the core's call.
+#[derive(Clone, Debug, Deserialize, Serialize, schemars::JsonSchema)]
+pub struct CoverageGap {
+    pub selection: String,
+    pub reason: String,
+}
+
 #[derive(Clone, Debug, Deserialize, Serialize)]
 pub struct CoverageReport {
     pub status: CoverageStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub selection: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gaps: Vec<CoverageGap>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]

@@ -340,14 +340,15 @@ fn last_migration(db: &Connection) -> String {
 
 /// surfaces/R12: launch applies the pending migration, recovers the crashed run and switches on WAL
 #[test]
-fn launch_migrates_recovers_and_turns_on_wal_before_the_first_answer() {
+fn S13_launch_migrates_recovers_and_turns_on_wal_before_the_first_answer() {
     let env = Env::new();
     env.add_source("project");
     let db = env.db();
     // Undo the knowledge migration and the ones after it, so they are pending again.
     let last = last_migration(&db);
     db.execute_batch(
-        "DROP TABLE intent_justification; DROP TABLE intent;
+        "DROP TABLE automatic_justification; ALTER TABLE coverage DROP COLUMN gaps_json;
+         DROP TABLE intent_justification; DROP TABLE intent;
          DELETE FROM schema_migrations WHERE name > '202611061200_knowledge_v2';
          DROP TABLE occurrence; DROP TABLE justification_span; DROP TABLE justification;
          DROP TABLE claim_link; DROP TABLE claim; DROP TABLE entity;
@@ -1614,6 +1615,40 @@ fn claim_result(session: &mut Session, tool: &str, args: Value) -> Value {
     ok_result(&response["result"])["result"].clone()
 }
 
+#[test]
+fn S13_coverage_gaps_are_scoped_and_visible_in_mcp() {
+    let env = Env::new();
+    env.add_scoped_source("work-source", "work");
+    let steps = [
+        json!({"do": "initialize"}),
+        json!({"do": "send", "message": {"jsonrpc": "2.0", "method": "coverage.report", "params": {"status": "complete", "selection": "all", "gaps": [{"selection": "user emails", "reason": "forbidden"}]}}}),
+        json!({"do": "finish", "status": "ok", "submitted": 0}),
+    ];
+    fs::write(
+        env.home.path().join("script.jsonl"),
+        steps
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .unwrap();
+    env.ok(&["sync", "work-source"]);
+    let mut work = env.scoped(&["work"]);
+    let visible = claim_result(&mut work, "coverage", json!({}));
+    assert_eq!(
+        visible["coverage"][0]["windows"][0]["gaps"][0]["selection"], "user emails",
+        "{visible}"
+    );
+    assert_eq!(
+        visible["coverage"][0]["windows"][0]["gaps"][0]["reason"],
+        "forbidden"
+    );
+    let mut personal = env.scoped(&["personal"]);
+    let hidden = claim_result(&mut personal, "coverage", json!({}));
+    assert!(!hidden.to_string().contains("user emails"), "{hidden}");
+}
+
 /// claims/R33: unknown and hidden only entity have the same empty scoped answer
 #[test]
 fn unknown_and_hidden_only_entity_have_the_same_empty_scoped_answer() {
@@ -2271,9 +2306,9 @@ fn why_text(session: &mut Session, claim: &str) -> Value {
 /// `work`, a chain through a hidden middle Person. A seed places a fourth account and extra
 /// links. Each scoped `about` (with and without history) and each `why` on an intent-backed
 /// claim, a link shown only where both its ends are, equals a rebuild that holds only the
-/// visible evidence and the visible intents. (Automatic links don't exist yet.)
+/// visible evidence and the visible intents, including automatic links.
 #[test]
-fn S31_random_scope_sets_with_intents_equal_a_per_scope_rebuild() {
+fn S31_random_scope_sets_with_intents_and_automatic_links_equal_a_per_scope_rebuild() {
     use rastro_core::claims::entity_id;
     use rastro_core::identity::{
         EntityTarget, FORMAT_VERSION, Intent, IntentKind, IssuerContext, ME_DOMAIN, OWNER, Payload,
@@ -2517,6 +2552,40 @@ fn S31_random_scope_sets_with_intents_equal_a_per_scope_rebuild() {
                     day as i64,
                 );
             }
+            let automatic = if day == 3 {
+                Some((rastro_core::identity::TOKEN_OWNER, "true", "boolean"))
+            } else if day < 2 {
+                Some((
+                    rastro_core::identity::VERIFIED_EMAIL,
+                    "shared@example.com",
+                    "email",
+                ))
+            } else {
+                None
+            };
+            if let Some((predicate, value, datatype)) = automatic {
+                let location = format!("https://api.github.com/identity/{day}");
+                all.claim_about(
+                    scope,
+                    account,
+                    &location,
+                    predicate,
+                    (value, datatype),
+                    false,
+                    20,
+                );
+                if visible.contains(scope) {
+                    rebuilt.claim_about(
+                        scope,
+                        account,
+                        &location,
+                        predicate,
+                        (value, datatype),
+                        false,
+                        20,
+                    );
+                }
+            }
         }
         all.issue(log.iter().map(|(i, ..)| i.clone()).collect());
         rebuilt.issue(
@@ -2561,7 +2630,7 @@ fn S31_random_scope_sets_with_intents_equal_a_per_scope_rebuild() {
         // `why` on every intent-backed claim, visible or not.
         let claims: Vec<String> = all
             .db()
-            .prepare("SELECT DISTINCT claim_id FROM intent_justification ORDER BY 1")
+            .prepare("SELECT claim_id FROM intent_justification UNION SELECT claim_id FROM automatic_justification ORDER BY 1")
             .unwrap()
             .query_map([], |r| r.get(0))
             .unwrap()

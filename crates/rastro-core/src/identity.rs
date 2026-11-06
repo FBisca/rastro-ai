@@ -23,6 +23,8 @@ pub const ME_DOMAIN: &str = "person/me";
 pub const PERSON_TYPE: &str = "rastro:Person";
 pub const HELD_BY: &str = "rastro:held_by";
 pub const SAME_AS: &str = "rastro:same_as";
+pub const TOKEN_OWNER: &str = "rastro:token_owner";
+pub const VERIFIED_EMAIL: &str = "rastro:verified_email";
 /// The alias kind of a Person's name, written `rastro:name/<name>`.
 pub const NAME_KIND: &str = "name";
 /// The justification kind of an intent-backed claim.

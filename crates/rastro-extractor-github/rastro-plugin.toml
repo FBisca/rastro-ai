@@ -1,6 +1,6 @@
 id = "rastro-extractor-github"
 name = "Rastro GitHub extractor"
-version = "0.1.0"
+version = "0.2.0"
 author = "Rastro"
 # The `code` vocabulary ships in this package, next to the extractor that uses it.
 kinds = ["extractor", "vocabulary"]
@@ -34,6 +34,22 @@ deterministic = true
 
 [[extraction_rules]]
 id = "login"
+deterministic = true
+
+[[extraction_rules]]
+id = "name"
+deterministic = true
+
+[[extraction_rules]]
+id = "email"
+deterministic = true
+
+[[extraction_rules]]
+id = "verified-email"
+deterministic = true
+
+[[extraction_rules]]
+id = "token-owner"
 deterministic = true
 
 [permissions]

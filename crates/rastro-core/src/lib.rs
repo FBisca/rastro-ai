@@ -28,7 +28,7 @@ pub(crate) fn test_override(name: &str) -> Option<String> {
 }
 
 pub use evidence::{Appended, Evidence, Hit, TrustClass};
-pub use rastro_plugin_sdk::Counts;
+pub use rastro_plugin_sdk::{Counts, CoverageGap};
 pub use read_only::{ReadStorage, Reader, Refusal, Snapshot, UnfinishedRun};
 pub use search::{
     DEFAULT_SEARCH_LIMIT, EXCERPT_BYTES, MAX_SEARCH_LIMIT, Match, SearchOptions, SearchResult,
@@ -305,6 +305,8 @@ pub struct CoverageWindow {
     #[schemars(extend("enum" = ["found", "empty", "couldn't look"]))]
     pub state: CoverageState,
     pub selection: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub gaps: Vec<CoverageGap>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -357,6 +359,7 @@ pub trait Storage {
     /// search index entry) and linked. Nothing stored is ever rewritten.
     fn append_evidence(&mut self, run_id: i64, evidence: &Evidence) -> Result<Appended>;
     fn record_coverage(&mut self, record: &CoverageRecord) -> Result<()>;
+    fn record_coverage_gaps(&mut self, run_id: i64, gaps: &[CoverageGap]) -> Result<()>;
     fn finish_run(&mut self, run_id: i64, end: &RunEnd) -> Result<()>;
     fn last_complete_check(&self, source: &Source) -> Result<Option<CompleteCheck>>;
     /// Matches, one per location and field (the latest observation) unless `history` is set.

@@ -333,6 +333,26 @@ pub fn validate(
             Object::Literal { value, datatype }
         }
         (ALIAS_PREDICATE, _) => return Err("an alias is a literal".into()),
+        (
+            id @ (crate::identity::TOKEN_OWNER | crate::identity::VERIFIED_EMAIL),
+            ClaimObject::Literal { value, datatype },
+        ) => {
+            if !vocabulary
+                .ancestors(&subject.entity_type)
+                .iter()
+                .any(|t| t == crate::identity::ACCOUNT_TYPE)
+            {
+                return Err("subject outside the predicate's domain".into());
+            }
+            if (id == crate::identity::TOKEN_OWNER && (datatype != "boolean" || value != "true"))
+                || (id == crate::identity::VERIFIED_EMAIL
+                    && (datatype != "email" || value.is_empty()))
+            {
+                return Err("object outside the predicate's range".into());
+            }
+            scalar = false;
+            Object::Literal { value, datatype }
+        }
         (id, object) => {
             let predicate = vocabulary
                 .predicates

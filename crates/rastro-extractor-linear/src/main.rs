@@ -1,7 +1,7 @@
 //! The Linear extractor: deterministic rules that turn the Linear connector's structured
 //! evidence into `tracker` claims (ADR 0008; decisions/vocabulary.md §24–§26).
 //!
-//! It reads only `structured` observations of nine fields: `/id`, `/app`, `/name`, `/email`,
+//! It reads only `structured` observations of ten fields: `/id`, `/app`, `/guest`, `/name`, `/email`,
 //! `/active`, `/creator/id`, `/creator/app`, `/assignee/id` and `/assignee/app`, plus the
 //! location they were observed at. It never reads a title, a description or any other field, so
 //! no claim and no alias comes from text a person wrote in an issue.
@@ -10,8 +10,8 @@
 //! A location names a record when it is exactly `linear:user/<uuid>` or `linear:issue/<uuid>`,
 //! with `<uuid>` a lowercase hyphenated UUID, and the latest structured `/id` observation there
 //! quotes that same uuid. That location is the record's canonical identifier. Any other
-//! location yields no claim at all (the API-key user's observation at `linear:viewer` included:
-//! links are derived from it elsewhere).
+//! location yields no claim at all except `linear:viewer`, whose `/id` and `/app` identify a
+//! human account's token owner without typing an integration as an account.
 //!
 //! Types and aliases are the core's `rastro:type` and `rastro:alias` claims. Every claim of a
 //! run is submitted with the `rastro:type` claims of its own endpoints, because the core takes
@@ -54,9 +54,10 @@ use std::{
 };
 
 /// The fields any rule reads. Everything else is skipped unread.
-const FIELDS: [&str; 9] = [
+const FIELDS: [&str; 10] = [
     "/id",
     "/app",
+    "/guest",
     "/name",
     "/email",
     "/active",
@@ -248,6 +249,19 @@ fn claims_at(
         return claims;
     }
     if kind == ACCOUNT {
+        for field in ["/email", "/guest"] {
+            if let Some((observation, value)) = quote(field)
+                && ((field == "/email" && !email(value)) || (field == "/guest" && value == "true"))
+            {
+                claims.push(claim(
+                    subject(),
+                    TYPE,
+                    literal(kind, TYPE_DATATYPE),
+                    "account",
+                    &[&[id, observation][..], &flagged].concat(),
+                ));
+            }
+        }
         if let Some((item, address)) = quote("/email").filter(|(_, q)| email(q)) {
             claims.push(claim(
                 subject(),
@@ -256,6 +270,15 @@ fn claims_at(
                 "email",
                 &[id, item],
             ));
+            if let Some((guest, "false")) = quote("/guest") {
+                claims.push(claim(
+                    subject(),
+                    "rastro:verified_email",
+                    literal(address, "email"),
+                    "verified-email",
+                    &[&[id, item, guest][..], &flagged].concat(),
+                ));
+            }
         }
         if let Some((item, full)) = quote("/name").filter(|(_, q)| name(q)) {
             claims.push(claim(
@@ -326,6 +349,37 @@ fn extract(items: &[BatchItem]) -> Vec<ClaimSubmit> {
     for (seen, item) in items.iter().enumerate() {
         let field = item.span.field.as_str();
         if !read(&item) || !FIELDS.contains(&field) {
+            continue;
+        }
+        if item.location == "linear:viewer" && field == "/id" && uuid(&item.span.quote) {
+            let identifier = format!("linear:user/{}", item.span.quote);
+            let Some((app, is_app)) = apps.get("linear:viewer").and_then(|i| flag(i)) else {
+                continue;
+            };
+            let kind = if is_app { BOT } else { ACCOUNT };
+            let type_claim = claim(
+                entity(&identifier, kind),
+                TYPE,
+                literal(kind, TYPE_DATATYPE),
+                "account",
+                &[item, app],
+            );
+            if sent.insert(serde_json::to_string(&type_claim).unwrap_or_default()) {
+                claims.push(type_claim);
+            }
+            if kind == ACCOUNT {
+                for c in [claim(
+                    entity(&identifier, kind),
+                    "rastro:token_owner",
+                    literal("true", "boolean"),
+                    "token-owner",
+                    &[item, app],
+                )] {
+                    if sent.insert(serde_json::to_string(&c).unwrap_or_default()) {
+                        claims.push(c);
+                    }
+                }
+            }
             continue;
         }
         let fields = latest.entry(&item.location).or_default();
@@ -427,10 +481,16 @@ mod tests {
             (format!("linear:team/{USER}"), USER),
             (format!("github:user/{USER}"), USER),
             ("linear:user/not-a-uuid".to_string(), "not-a-uuid"),
-            ("linear:viewer".to_string(), USER),
         ] {
             assert!(extract(&user(&location, id)).is_empty(), "{location} {id}");
         }
+        let mut viewer = user("linear:viewer", USER);
+        viewer.push(observed(5, "linear:viewer", "/app", "false", "structured"));
+        assert!(
+            extract(&viewer)
+                .iter()
+                .any(|c| c.predicate == "rastro:token_owner")
+        );
     }
 
     /// Titles, descriptions, display names and untrusted fields are never read
@@ -459,8 +519,7 @@ mod tests {
             observed(4, &location, "/active", "yes", "structured"),
         ];
         let claims = extract(&items);
-        assert_eq!(claims.len(), 1, "only the type");
-        assert_eq!(claims[0].predicate, TYPE);
+        assert!(claims.iter().all(|c| c.predicate == TYPE), "only the type");
         let issue = format!("linear:issue/{ITEM}");
         let items = [
             observed(1, &issue, "/id", ITEM, "structured"),

@@ -403,6 +403,23 @@
       ],
       "type": "object"
     },
+    "CoverageGap": {
+      "additionalProperties": false,
+      "description": "`coverage.report`. Whether it was found or empty is the core's call.",
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "selection": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "selection",
+        "reason"
+      ],
+      "type": "object"
+    },
     "CoverageState": {
       "enum": [
         "never looked",
@@ -424,6 +441,12 @@
         "from": {
           "format": "date-time",
           "type": "string"
+        },
+        "gaps": {
+          "items": {
+            "$ref": "#/$defs/CoverageGap"
+          },
+          "type": "array"
         },
         "reason": {
           "type": "string"

@@ -181,7 +181,8 @@ fn build(
     let candidate_sql = format!("WITH roots AS ({roots}), components AS ({components}),
     neighbors AS (
         SELECT c.id, c.subject, c.object_entity, {selecting} AS seen FROM claim c JOIN components k ON c.subject = k.subject AND c.predicate = k.predicate
-    ) SELECT id FROM neighbors UNION SELECT id FROM claim WHERE predicate IN ('rastro:type','rastro:alias') AND subject IN (SELECT subject FROM neighbors WHERE seen UNION SELECT object_entity FROM neighbors WHERE seen)");
+    ) SELECT id FROM neighbors UNION SELECT id FROM claim WHERE predicate IN ('rastro:type','rastro:alias') AND subject IN (SELECT subject FROM neighbors WHERE seen UNION SELECT object_entity FROM neighbors WHERE seen)
+      UNION SELECT c.id FROM claim c WHERE {VISIBLE_CLAIM} AND EXISTS (SELECT 1 FROM claim c WHERE c.predicate IN ('rastro:verified_email', 'rastro:token_owner') AND {VISIBLE_CLAIM})");
     let candidates = db
         .prepare(&candidate_sql)?
         .query_map(params_from_iter(&arguments), |r| r.get::<_, String>(0))?
@@ -256,6 +257,7 @@ fn build(
         &[evidence],
     )?;
     replay(&result)?;
+    super::automatic::apply(&result)?;
     result.execute_batch("COMMIT")?;
     Ok((result, work))
 }
@@ -293,7 +295,7 @@ fn replay(db: &Connection) -> Result<()> {
     let step = |_name: &str, sql: &str| db.execute_batch(sql);
     step(
         "single",
-        "CREATE TEMP TABLE single AS SELECT c.subject AS subject, c.predicate AS predicate, c.id AS claim, j.id AS justification, s.evidence_id AS evidence_id, s.portable_key AS portable_key, s.field AS field, e.source AS source, e.scope AS scope, e.location AS location, e.captured_at AS captured_at, e.source_updated_at AS source_updated_at FROM claim c JOIN justification j ON j.claim_id = c.id JOIN justification_span s ON s.justification_id = j.id JOIN evidence e ON e.id = s.evidence_id GROUP BY c.subject, c.predicate HAVING count(*) = 1",
+        "CREATE TEMP TABLE single AS SELECT c.subject AS subject, c.predicate AS predicate, c.id AS claim, j.id AS justification, s.evidence_id AS evidence_id, s.portable_key AS portable_key, s.field AS field, e.source AS source, e.scope AS scope, e.location AS location, e.captured_at AS captured_at, e.source_updated_at AS source_updated_at FROM claim c JOIN justification j ON j.claim_id = c.id JOIN justification_span s ON s.justification_id = j.id JOIN evidence e ON e.id = s.evidence_id WHERE c.predicate NOT IN ('rastro:verified_email', 'rastro:token_owner') AND NOT (c.predicate = 'rastro:alias' AND c.object_datatype = 'email') GROUP BY c.subject, c.predicate HAVING count(*) = 1",
     )?;
     step(
         "idx",

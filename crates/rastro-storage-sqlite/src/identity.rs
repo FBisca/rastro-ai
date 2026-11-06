@@ -389,6 +389,9 @@ pub(crate) fn copy_visible(db: &Connection, target: &Connection, scopes: &[Scope
         .map(|me| resolution.persons[me].created_by.clone())
         .into_iter()
         .collect();
+    // Cannot-links apply in every scope, including ones whose endpoints are hidden. The intent
+    // log is internal to the replay; only the visible claims below are exposed to readers.
+    needed.extend(intents.iter().map(|intent| intent.id.clone()));
     for (id, claim, intent, started_at, ended_at) in &justifications {
         target.execute(
             "INSERT OR IGNORE INTO intent_justification (id, claim_id, intent_id, started_at, ended_at) VALUES (?1, ?2, ?3, ?4, ?5)",

@@ -177,6 +177,32 @@ impl Env {
     pub fn new(api: &str) -> Self {
         Self::with_source_args(api, &[])
     }
+    pub fn install_extractor(&self) {
+        static BINARY: OnceLock<PathBuf> = OnceLock::new();
+        let executable = BINARY.get_or_init(|| {
+            let connector = Path::new(env!("CARGO_BIN_EXE_rastro-connector-github"));
+            let mut build = Command::new(std::env::var("CARGO").unwrap_or_else(|_| "cargo".into()));
+            build.args(["build", "--quiet", "-p", "rastro-extractor-github"]);
+            if connector.parent().is_some_and(|d| d.ends_with("release")) {
+                build.arg("--release");
+            }
+            assert!(build.status().unwrap().success());
+            binaries::private_copy(&connector.with_file_name("rastro-extractor-github"))
+        });
+        let dir = self.home.path().join("plugins/rastro-extractor-github");
+        fs::create_dir_all(&dir).unwrap();
+        let mut manifest: toml::Table =
+            include_str!("../../../rastro-extractor-github/rastro-plugin.toml")
+                .parse()
+                .unwrap();
+        manifest.insert("command".into(), executable.to_str().unwrap().into());
+        fs::write(dir.join("rastro-plugin.toml"), manifest.to_string()).unwrap();
+        fs::write(
+            dir.join("vocabulary.toml"),
+            include_str!("../../../rastro-extractor-github/vocabulary.toml"),
+        )
+        .unwrap();
+    }
     /// A home with source `x` added with these extra `source add` arguments.
     pub fn with_source_args(api: &str, extra: &[&str]) -> Self {
         let env = Self {

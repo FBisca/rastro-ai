@@ -89,7 +89,15 @@ impl World {
     }
     pub fn reply(&self, req: &Req) -> Reply {
         match req.operation.as_str() {
-            "Viewer" => Reply::ok(json!({"data": {"viewer": {"id": self.viewer}}})),
+            "Viewer" => {
+                let app = self
+                    .users
+                    .iter()
+                    .find(|user| user["id"] == self.viewer)
+                    .and_then(|user| user["app"].as_bool())
+                    .unwrap_or(false);
+                Reply::ok(json!({"data": {"viewer": {"id": self.viewer, "app": app}}}))
+            }
             "Users" => Reply::ok(json!({"data": {"users": self.page(&self.users, req)}})),
             "Issues" => Reply::ok(json!({"data": {"issues": self.page(&self.issues, req)}})),
             _ => Reply::error(400, "GRAPHQL_VALIDATION_FAILED"),

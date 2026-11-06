@@ -63,6 +63,22 @@ impl Fixture {
                         200,
                         json!(world.comments.get(&number).cloned().unwrap_or_default()),
                     ),
+                    (path, _) if path.starts_with("/users/") => {
+                        let login = path
+                            .trim_start_matches("/users/")
+                            .replace("%5B", "[")
+                            .replace("%5D", "]");
+                        let user = world
+                            .items
+                            .iter()
+                            .chain(world.comments.values().flatten())
+                            .map(|item| &item["user"])
+                            .find(|user| user["login"] == login);
+                        match user {
+                            Some(user) => (200, json!({"id": user["id"], "name": null})),
+                            None => (404, json!({"message": "Not Found"})),
+                        }
+                    }
                     _ => (404, json!({"message": "Not Found"})),
                 };
                 let content =

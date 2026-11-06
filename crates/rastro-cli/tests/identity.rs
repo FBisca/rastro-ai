@@ -93,6 +93,16 @@ impl Env {
     /// Records one claim, read from `location` and `field` by source `project` (scope
     /// `personal`), bound to an extractor that isn't installed.
     fn record(&self, subject: &Entity, predicate: &str, object: Object, at: (&str, &str)) {
+        self.record_at(subject, predicate, object, at, time());
+    }
+    fn record_at(
+        &self,
+        subject: &Entity,
+        predicate: &str,
+        object: Object,
+        at: (&str, &str),
+        captured: DateTime<Utc>,
+    ) {
         let (location, field) = at;
         let source = Source::github("project".into(), "o/p".into(), Scope("personal".into()));
         let mut db = self.db();
@@ -114,8 +124,8 @@ impl Env {
             end: quote.len() as u64,
             quote,
             trust_class: TrustClass::Structured,
-            captured_at: time(),
-            source_updated_at: Some(time()),
+            captured_at: captured,
+            source_updated_at: Some(captured),
             original: None,
         };
         db.append_evidence(run, &e).unwrap();
@@ -224,6 +234,347 @@ fn claim_id(about: &Value, predicate: &str) -> String {
         .as_str()
         .unwrap()
         .to_string()
+}
+
+#[test]
+fn S15_verified_email_links_only_to_an_existing_person() {
+    let env = Env::new();
+    let a = env.account(101, "a");
+    let b = env.account(102, "b");
+    let email = |n: u32, value: &str| {
+        env.record(
+            &Entity::new(format!("github:account/{n}"), "code:Account".into()),
+            rastro_core::identity::VERIFIED_EMAIL,
+            Object::Literal {
+                value: value.into(),
+                datatype: "email".into(),
+            },
+            (
+                &format!("https://api.github.com/users/{n}"),
+                "/verified-email",
+            ),
+        );
+    };
+    email(101, "Ana@Example.com");
+    email(102, "ana@example.COM");
+    assert!(
+        !statements(&env.about(&b))
+            .iter()
+            .any(|s| s.0 == rastro_core::identity::HELD_BY)
+    );
+    assert_eq!(env.intents(), 0);
+    let person = env.person("Ana");
+    env.ok(&["identity", "link", &a, &person]);
+    let about = env.about(&person);
+    let accounts = about["person"]["accounts"].as_array().unwrap();
+    let linked = accounts
+        .iter()
+        .find(|a| a["identifier"] == "github:account/102")
+        .expect("matched account");
+    assert!(
+        linked["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["kind"] == "verified_email"),
+        "{about}"
+    );
+    let link = linked["reasons"][0]["claim"].as_str().unwrap();
+    let why = env.ok(&["why", link, "--full"]);
+    assert!(
+        why.to_string().contains("Ana@Example.com") && why.to_string().contains("ana@example.COM"),
+        "{why}"
+    );
+}
+
+#[test]
+fn S16_nonoverlapping_verified_emails_do_not_link() {
+    let env = Env::new();
+    let a = env.account(201, "first");
+    let b = env.account(202, "second");
+    let person = env.person("First");
+    env.ok(&["identity", "link", &a, &person]);
+    let now = Utc::now();
+    let record = |n: u32, email: &str, when| {
+        env.record_at(
+            &Entity::new(format!("github:account/{n}"), "code:Account".into()),
+            rastro_core::identity::VERIFIED_EMAIL,
+            Object::Literal {
+                value: email.into(),
+                datatype: "email".into(),
+            },
+            (
+                &format!("https://api.github.com/users/{n}"),
+                "/verified-email",
+            ),
+            when,
+        )
+    };
+    record(201, "shared@example.com", now + chrono::Duration::hours(1));
+    record(201, "changed@example.com", now + chrono::Duration::hours(2));
+    record(202, "shared@example.com", now + chrono::Duration::hours(3));
+    assert!(
+        !statements(&env.about(&b))
+            .iter()
+            .any(|s| s.0 == rastro_core::identity::HELD_BY)
+    );
+}
+
+#[test]
+fn S17_cannot_link_blocks_through_merges_until_explicitly_linked() {
+    let env = Env::new();
+    let a = env.account(301, "anchor");
+    let b = env.account(302, "match");
+    let p = env.person("Anchor");
+    let q = env.person("Merged");
+    env.ok(&["identity", "link", &a, &p]);
+    for n in [301, 302] {
+        env.record(
+            &Entity::new(format!("github:account/{n}"), "code:Account".into()),
+            rastro_core::identity::VERIFIED_EMAIL,
+            Object::Literal {
+                value: "same@example.com".into(),
+                datatype: "email".into(),
+            },
+            (
+                &format!("https://api.github.com/users/{n}"),
+                "/verified-email",
+            ),
+        );
+    }
+    let owner_link = env.ok(&["identity", "link", &b, &q]);
+    env.ok(&["identity", "undo", &intent_id(&owner_link)]);
+    env.ok(&["identity", "merge", &p, &q]);
+    let about = env.about(&p);
+    assert!(
+        !about["person"]["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["identifier"] == "github:account/302"),
+        "{about}"
+    );
+    env.ok(&["identity", "link", &b, &q]);
+    let about = env.about(&p);
+    assert!(
+        about["person"]["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["identifier"] == "github:account/302"),
+        "{about}"
+    );
+}
+
+#[test]
+fn S17_account_to_account_cannot_link_blocks_automatic_join() {
+    use rastro_core::identity::{
+        EntityTarget, FORMAT_VERSION, Intent, IntentKind, IssuerContext, OWNER, Payload,
+        SHAPE_VERSION, Targets,
+    };
+    let env = Env::new();
+    let a = env.account(501, "first");
+    env.account(502, "second");
+    let p = env.person("Person");
+    env.ok(&["identity", "link", &a, &p]);
+    let target = |n| {
+        let identifier = format!("github:account/{n}");
+        EntityTarget {
+            id: claims::entity_id(&identifier),
+            identifier,
+            role: "account".into(),
+        }
+    };
+    let mut endpoints = [target(501), target(502)];
+    endpoints.sort_by(|a, b| a.id.cmp(&b.id));
+    let mut refusal = Intent {
+        id: "i_s17_account_refusal".into(),
+        append_seq: 0,
+        format_version: FORMAT_VERSION,
+        kind: IntentKind::CannotLink,
+        owner_id: OWNER.into(),
+        issuer_context: IssuerContext {
+            principal: OWNER.into(),
+            surface: "test".into(),
+            scopes: vec![],
+        },
+        issued_at: Utc::now(),
+        domain_key: String::new(),
+        targets: Targets::Pair {
+            version: SHAPE_VERSION,
+            symmetric: true,
+            endpoints,
+        },
+        payload: Payload {
+            version: SHAPE_VERSION,
+            name: None,
+        },
+        undo_of: None,
+        supersedes: None,
+    };
+    refusal.domain_key = refusal.expected_domain().unwrap();
+    env.db()
+        .issue_intents(&[], |_| Ok((vec![refusal], ())))
+        .unwrap();
+    for n in [501, 502] {
+        env.record(
+            &Entity::new(format!("github:account/{n}"), "code:Account".into()),
+            rastro_core::identity::VERIFIED_EMAIL,
+            Object::Literal {
+                value: "same@example.com".into(),
+                datatype: "email".into(),
+            },
+            (
+                &format!("https://api.github.com/users/{n}"),
+                "/verified-email",
+            ),
+        );
+    }
+    let about = env.about(&p);
+    assert!(
+        !about["person"]["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["identifier"] == "github:account/502"),
+        "{about}"
+    );
+}
+
+#[test]
+fn S17_conflicting_automatic_links_are_order_independent_and_neither_joins() {
+    use rastro_core::identity::{
+        EntityTarget, FORMAT_VERSION, Intent, IntentKind, IssuerContext, OWNER, Payload,
+        SHAPE_VERSION, Targets,
+    };
+    fn check(order: [u32; 4]) -> Vec<String> {
+        let env = Env::new();
+        let anchor = env.account(601, "anchor");
+        env.account(602, "first");
+        env.account(603, "second");
+        let other_anchor = env.account(604, "other-anchor");
+        let person = env.person("Anchor");
+        let other_person = env.person("Other");
+        env.ok(&["identity", "link", &anchor, &person]);
+        env.ok(&["identity", "link", &other_anchor, &other_person]);
+        env.ok(&["identity", "merge", &person, &other_person]);
+        let target = |n| {
+            let identifier = format!("github:account/{n}");
+            EntityTarget {
+                id: claims::entity_id(&identifier),
+                identifier,
+                role: "account".into(),
+            }
+        };
+        let mut endpoints = [target(602), target(603)];
+        endpoints.sort_by(|a, b| a.id.cmp(&b.id));
+        let mut refusal = Intent {
+            id: "i_s17_tie".into(),
+            append_seq: 0,
+            format_version: FORMAT_VERSION,
+            kind: IntentKind::CannotLink,
+            owner_id: OWNER.into(),
+            issuer_context: IssuerContext {
+                principal: OWNER.into(),
+                surface: "test".into(),
+                scopes: vec![],
+            },
+            issued_at: Utc::now(),
+            domain_key: String::new(),
+            targets: Targets::Pair {
+                version: SHAPE_VERSION,
+                symmetric: true,
+                endpoints,
+            },
+            payload: Payload {
+                version: SHAPE_VERSION,
+                name: None,
+            },
+            undo_of: None,
+            supersedes: None,
+        };
+        refusal.domain_key = refusal.expected_domain().unwrap();
+        env.db()
+            .issue_intents(&[], |_| Ok((vec![refusal], ())))
+            .unwrap();
+        for n in order {
+            env.record(
+                &Entity::new(format!("github:account/{n}"), "code:Account".into()),
+                rastro_core::identity::VERIFIED_EMAIL,
+                Object::Literal {
+                    value: "same@example.com".into(),
+                    datatype: "email".into(),
+                },
+                (
+                    &format!("https://api.github.com/users/{n}"),
+                    "/verified-email",
+                ),
+            );
+        }
+        let before: Vec<String> = env.about(&person)["person"]["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["identifier"].as_str().unwrap().to_string())
+            .collect();
+        env.ok(&["identity", "link", "github:account/602", &person]);
+        let after: Vec<String> = env.about(&person)["person"]["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["identifier"].as_str().unwrap().to_string())
+            .collect();
+        assert_eq!(
+            after,
+            [
+                "github:account/601",
+                "github:account/602",
+                "github:account/604"
+            ]
+        );
+        before
+    }
+    let first = check([601, 602, 603, 604]);
+    let second = check([604, 603, 602, 601]);
+    assert_eq!(first, ["github:account/601", "github:account/604"]);
+    assert_eq!(second, first);
+}
+
+#[test]
+fn S35_automatic_links_refuse_entities_without_an_account_type() {
+    let env = Env::new();
+    let account = env.account(401, "holder");
+    env.ok(&["identity", "me"]);
+    env.ok(&["identity", "link", &account, "me"]);
+    let issue = Entity::new(
+        "https://github.com/o/p/pull/5".into(),
+        "code:PullRequest".into(),
+    );
+    env.record(
+        &issue,
+        claims::TYPE_PREDICATE,
+        Object::Literal {
+            value: "code:PullRequest".into(),
+            datatype: claims::TYPE_DATATYPE.into(),
+        },
+        (&issue.identifier, "/type"),
+    );
+    env.record(
+        &issue,
+        rastro_core::identity::TOKEN_OWNER,
+        Object::Literal {
+            value: "true".into(),
+            datatype: "boolean".into(),
+        },
+        (&issue.identifier, "/viewer"),
+    );
+    let about = env.about(&issue.identifier);
+    assert!(
+        !statements(&about)
+            .iter()
+            .any(|s| s.0 == rastro_core::identity::HELD_BY),
+        "{about}"
+    );
 }
 fn kinds(history: &Value) -> Vec<(String, String)> {
     history["intents"]
@@ -773,7 +1124,10 @@ fn S28_about_me_lists_the_person_its_linked_accounts_and_their_claims() {
     assert_eq!(shown, ["github:account/7", "linear:user/u-1"], "{about}");
     assert_eq!(accounts[0]["type"], "code:Account");
     assert_eq!(accounts[1]["type"], "tracker:Account");
-    assert_eq!(accounts[1]["aliases"], json!(["ana@example.org"]));
+    assert_eq!(
+        accounts[1]["aliases"],
+        json!(["ana@example.org", "linear:email/ana@example.org"])
+    );
     let reasons = |account: &Value| -> Vec<(String, String)> {
         let mut found: Vec<_> = account["reasons"]
             .as_array()

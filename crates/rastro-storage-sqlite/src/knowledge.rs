@@ -24,8 +24,18 @@ const NOT_LOOKED_UP: &str = "('hypothesis', 'retracted')";
 pub(crate) const CURRENT: &str = "('observed', 'confirmed')";
 impl View<'_> {
     fn aliases(&self, entity: &str) -> Result<Vec<String>> {
-        Ok(self.0.prepare(&format!("SELECT DISTINCT object_value FROM claim WHERE subject = ?1 AND predicate = 'rastro:alias' AND status IN {CURRENT} ORDER BY object_value"))?
-            .query_map([entity], |row| row.get(0))?.collect::<Result<_, _>>()?)
+        let rows: Vec<(String, String, String)> = self.0.prepare(&format!("SELECT DISTINCT c.object_value, c.object_datatype, e.identifier FROM claim c JOIN entity e ON e.id = c.subject WHERE c.subject = ?1 AND c.predicate = 'rastro:alias' AND c.status IN {CURRENT} ORDER BY c.object_value"))?
+            .query_map([entity], |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)))?.collect::<Result<_, _>>()?;
+        let mut aliases = BTreeSet::new();
+        for (value, kind, identifier) in rows {
+            if kind == "email"
+                && let Some((namespace, _)) = identifier.split_once(':')
+            {
+                aliases.insert(format!("{namespace}:email/{value}"));
+            }
+            aliases.insert(value);
+        }
+        Ok(aliases.into_iter().collect())
     }
     /// The entity's displayed type: the most specific type of the compatible family whose newest
     /// member is newest; a tie goes to the lowest claim id.
@@ -76,7 +86,7 @@ impl View<'_> {
         Ok(Entity::new(identifier, self.displayed_type(id)?))
     }
     fn summary(&self, id: &str) -> Result<Option<ClaimSummary>> {
-        let row = self.0.query_row("SELECT subject, predicate, object_entity, object_value, object_datatype, status, revision, (SELECT count(*) FROM justification WHERE claim_id = c.id AND current = 1) + (SELECT count(*) FROM intent_justification WHERE claim_id = c.id AND ended_at IS NULL) FROM claim c WHERE id = ?1", [id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Option<String>>(3)?, row.get::<_, Option<String>>(4)?, row.get::<_, String>(5)?, row.get::<_, String>(6)?, row.get::<_, i64>(7)?))).optional()?;
+        let row = self.0.query_row("SELECT subject, predicate, object_entity, object_value, object_datatype, status, revision, (SELECT count(*) FROM justification WHERE claim_id = c.id AND current = 1) + (SELECT count(*) FROM intent_justification WHERE claim_id = c.id AND ended_at IS NULL) + (SELECT count(*) FROM automatic_justification WHERE claim_id = c.id AND ended_at IS NULL) FROM claim c WHERE id = ?1", [id], |row| Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?, row.get::<_, Option<String>>(2)?, row.get::<_, Option<String>>(3)?, row.get::<_, Option<String>>(4)?, row.get::<_, String>(5)?, row.get::<_, String>(6)?, row.get::<_, i64>(7)?))).optional()?;
         let Some((subject, predicate, object_entity, value, datatype, status, revision, count)) =
             row
         else {
@@ -296,7 +306,7 @@ impl View<'_> {
                 entity_type,
             } = self.entity(account)?;
             // Today a link's only reason is an owner intent that still holds.
-            let reasons = self
+            let mut reasons: Vec<LinkReason> = self
                 .0
                 .prepare(
                     "SELECT c.id, ij.id, ij.intent_id FROM claim c JOIN intent_justification ij ON ij.claim_id = c.id \
@@ -319,6 +329,22 @@ impl View<'_> {
                     },
                 )?
                 .collect::<Result<_, _>>()?;
+            let auto = self.0.prepare("SELECT c.id, a.id, a.reason FROM claim c JOIN automatic_justification a ON a.claim_id = c.id WHERE c.subject = ?1 AND c.predicate = ?3 AND c.status = 'observed' AND a.ended_at IS NULL AND c.object_entity IN (SELECT value FROM json_each(?2)) ORDER BY c.id, a.id")?
+                .query_map(params![account, serde_json::to_string(&class)?, rastro_core::identity::HELD_BY], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?
+                .collect::<Result<Vec<_>, _>>()?;
+            reasons.extend(
+                auto.into_iter()
+                    .map(|(claim, justification, reason)| LinkReason {
+                        kind: if reason == "token_owner" {
+                            LinkReasonKind::TokenOwner
+                        } else {
+                            LinkReasonKind::VerifiedEmail
+                        },
+                        claim,
+                        justification,
+                        intent: None,
+                    }),
+            );
             linked.push(LinkedAccount {
                 aliases: self.aliases(&id)?,
                 id,
@@ -394,13 +420,44 @@ impl View<'_> {
                 }),
             });
         }
+        let mut statement = self.0.prepare("SELECT id, reason, ended_at IS NULL FROM automatic_justification WHERE claim_id = ?1 ORDER BY ended_at IS NULL DESC, id LIMIT ?2")?;
+        let automatic = statement
+            .query_map(params![claim.claim.id, (options.limit + 1) as i64], |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, String>(1)?,
+                    r.get::<_, bool>(2)?,
+                ))
+            })?
+            .collect::<Result<Vec<_>, _>>()?;
+        for (id, reason, current) in automatic {
+            supports.push(JustificationView {
+                justification_id: id,
+                justification_kind: "inference".into(),
+                extractor: "rastro".into(),
+                extractor_version: String::new(),
+                extraction_rule: reason,
+                vocabulary_version: String::new(),
+                current,
+                spans: vec![],
+                intent: None,
+            });
+        }
         supports.sort_by(|a, b| {
             (!a.current, &a.justification_id).cmp(&(!b.current, &b.justification_id))
         });
         let truncated = supports.len() > options.limit;
         supports.truncate(options.limit);
         for support in &mut supports {
-            support.spans = self.citations(&support.justification_id, options.full)?;
+            if support.justification_kind == "inference" {
+                let premise_ids: Vec<String> = self.0.prepare("SELECT j.id FROM automatic_justification a JOIN justification j ON j.claim_id = a.premise_a OR j.claim_id = a.premise_b WHERE a.id = ?1 ORDER BY j.id")?
+                    .query_map([&support.justification_id], |r| r.get(0))?.collect::<Result<_, _>>()?;
+                for id in premise_ids {
+                    support.spans.extend(self.citations(&id, options.full)?);
+                }
+            } else {
+                support.spans = self.citations(&support.justification_id, options.full)?;
+            }
         }
         Ok(Some(Explanation {
             claim: Box::new(claim),
