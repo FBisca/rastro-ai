@@ -954,7 +954,7 @@ fn S36a_undoing_a_newer_name_leaves_a_gap_in_the_older_one() {
 
 /// S31: a scoped read replays the scope's identity premises (verified emails, token owners and
 /// their subjects' type and alias claims), never every visible claim: an unknown entity costs
-/// only those (B3)
+/// only those
 #[test]
 fn S31_a_scoped_read_replays_only_identity_premises() {
     let home = tempfile::tempdir().unwrap();
@@ -978,7 +978,7 @@ fn S31_a_scoped_read_replays_only_identity_premises() {
 }
 
 /// S31: a scoped view of a Person replays the claims of the accounts it holds automatically, not
-/// only their identity premises (B3, two phases)
+/// only their identity premises (two phases)
 #[test]
 fn S31_a_scoped_person_view_replays_its_automatically_held_accounts() {
     let home = tempfile::tempdir().unwrap();
