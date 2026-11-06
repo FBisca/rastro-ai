@@ -1958,3 +1958,38 @@ fn S23_a_precomposed_accent_folds_like_its_plain_letter() {
     );
     assert_eq!(candidates(&env).len(), 1);
 }
+
+/// S25: a yes to a pair whose one account is held by two Persons the owner has merged links the
+/// other account to that merged Person, and the pair no longer appears
+#[test]
+fn S25_a_yes_links_to_a_holder_merged_with_another() {
+    let env = Env::new();
+    env.account(8102, "ana");
+    let github = "github:account/8102";
+    named(
+        &env,
+        github,
+        "code:Account",
+        "Ana Silva",
+        "https://api.github.com/users/8102",
+    );
+    let linear = tracker_account(&env, "u-8102", "different@example.org");
+    named(
+        &env,
+        &linear,
+        "tracker:Account",
+        "Ana Silva",
+        "https://linear.app/users/u-8102",
+    );
+    let p = env.person("First");
+    let q = env.person("Second");
+    env.ok(&["identity", "link", github, &p]);
+    env.ok(&["identity", "link", github, &q]);
+    env.ok(&["identity", "merge", &p, &q]);
+    assert_eq!(candidates(&env).len(), 1);
+    let answered = env.ok(&["identity", "answer", github, &linear, "yes"]);
+    let intents = answered["intents"].as_array().unwrap();
+    assert_eq!(intents.len(), 1, "one link, no new Person");
+    assert_eq!(intents[0]["kind"], "link");
+    assert!(candidates(&env).is_empty());
+}

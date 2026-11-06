@@ -200,7 +200,8 @@ pub fn candidate_pairs(accounts: &[AccountFacts], resolution: &Resolution) -> Ve
 /// and the intents accepted so far. A no is a cannot-link between the two accounts. A yes links
 /// both to the Person holding one of them, or, when neither is held, to a new Person named
 /// `name` (the candidate's name by default). Refused when the pair isn't a candidate now, or
-/// when more than one Person holds its accounts.
+/// when different, unmerged Persons hold its accounts. Merged Persons count as one: the one
+/// with the smallest id.
 fn plan_answer(
     a: EntityTarget,
     b: EntityTarget,
@@ -225,13 +226,14 @@ fn plan_answer(
         let refusal = intent(IntentKind::CannotLink, pair, Payload::empty())?;
         return Ok((vec![refusal], None, false));
     }
-    let holders: BTreeSet<&String> = (facts.iter().filter(|f| ids.contains(&&f.id)))
+    let holders: BTreeSet<String> = (facts.iter().filter(|f| ids.contains(&&f.id)))
         .flat_map(|f| &f.holders)
+        .filter_map(|p| resolution.merge_class(p).pop_first())
         .collect();
     ensure!(
         holders.len() <= 1,
-        "{} and {} are held by more than one Person; merge them with `rastro identity merge`, \
-         or link each account with `rastro identity link`",
+        "{} and {} are held by different, unmerged Persons; merge them with \
+         `rastro identity merge`, or link each account with `rastro identity link`",
         a.identifier,
         b.identifier
     );
