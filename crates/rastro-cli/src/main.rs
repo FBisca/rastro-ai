@@ -454,9 +454,13 @@ fn human(response: &Response) -> String {
         Response::Why(r) => why_text(r),
         Response::About(r) => about_text(r),
         Response::IdentityMe(r) | Response::IdentityPersonCreate(r) => person_text(r),
-        Response::IdentityLink(r) | Response::IdentityMerge(r) | Response::IdentityUndo(r) => {
+        Response::IdentityLink(r)
+        | Response::IdentityMerge(r)
+        | Response::IdentityUndo(r)
+        | Response::IdentityAnswer(r) => {
             intents_text(&r.intents, "Already in force; nothing recorded")
         }
+        Response::IdentityCandidates(r) => format!("{} candidate pairs", r.candidates.len()),
         Response::IdentityHistory(r) => match &r.entity {
             Some(entity) => format!(
                 "{}\n{}",

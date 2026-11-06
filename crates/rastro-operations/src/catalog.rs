@@ -320,6 +320,12 @@ operations! {
         History(IdentityHistoryRequest => IdentityHistoryResult) as IdentityHistory {
             slot: 14, name: "identity.history", surfaces: [Cli], read_only: true
         },
+        Candidates(IdentityCandidatesRequest => IdentityCandidatesResult) as IdentityCandidates {
+            slot: 15, name: "identity.candidates", surfaces: [Cli], read_only: true
+        },
+        Answer(IdentityAnswerRequest => IdentityWriteResult) as IdentityAnswer {
+            slot: 16, name: "identity.answer", surfaces: [Cli], read_only: false
+        },
     } with {
         /// Create Persons.
         Person / IdentityPersonRequest {
