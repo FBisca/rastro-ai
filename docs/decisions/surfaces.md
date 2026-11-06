@@ -84,6 +84,27 @@ Architecture: amendments of 2026-11-05 to `../adr/0008-extractor-role-and-protoc
 ## Added 2026-11-05 (roadmap slice 4)
 Architecture: `../adr/0010-identity-and-owner-intents.md`. Plan: `../plans/2026-11-05-second-source-one-identity.plan.md`.
 37. **`rastro identity` is the CLI for identity, and identity writes are CLI-only.** Writes: `rastro identity me`, `rastro identity person create --name <name>`, `rastro identity link|merge|undo`, and `rastro identity answer` (yes or no to a candidate). Reads: `rastro identity candidates` and `rastro identity history <entity>`. The MCP server stays read-only (§22): no MCP write operation for identity in this slice. This does not amend §4: agent writes still go through MCP when they come. `rastro identity me` is idempotent: a second run returns the same Person and records no new intent.
+    - *Amended 2026-11-06:* `rastro identity candidates` and `rastro identity answer <account> <other> yes|no [--name <name>]` are CLI-only and read every scope, regardless of the launch scope filter. Neither is exposed on MCP. Answers name the two accounts, not a candidate id, and are refused unless that pair is a candidate now. Account arguments accept an entity id, canonical alias or exact canonical URL. Answer effects and naming: `knowledge.md` §65–67.
+    - `rastro identity candidates --json` returns the v2 envelope below. Each pair has exactly two accounts, ordered by canonical identifier; pairs are ordered by those identifiers. `id` is the entity id, `identifier` its canonical identifier, and `held_by` lists the canonical identifiers of its current Persons. Each reason has a `reason` (`same name` or `email matches login`) and two original `values`, in account order. `name` is the default name for a Person a yes would create. An empty list is `candidates: []`.
+
+      ```json
+      {
+        "schema_version": 2,
+        "operation": "identity.candidates",
+        "result": {
+          "candidates": [{
+            "accounts": [
+              {"id": "e_11111111111111111111111111111111", "identifier": "github:login/ana", "held_by": []},
+              {"id": "e_22222222222222222222222222222222", "identifier": "linear:user/u1", "held_by": []}
+            ],
+            "reasons": [{"reason": "same name", "values": ["Ana Silva", "Ana Sílva"]}],
+            "name": "Ana Silva"
+          }]
+        }
+      }
+      ```
+
+    - **Operation schema additions (v2, additive):** `identity.candidates` is read-only, takes `{}`, and returns `{candidates: [...]}` as above. `identity.answer` is a write with required string fields `account`, `other`, and `verdict` (`yes` or `no`), plus optional nullable string `name` (default absent). It returns `{intents: [...]}`, the accepted intents in acceptance order, through the existing identity-write result and v2 envelope. Both inputs reject unknown fields. Architecture: `../adr/0007-typed-operation-catalog.md` and `../adr/0010-identity-and-owner-intents.md`.
 38. **`about` grows a Person view and `about me`.** `about me` resolves to the owner's Person. This amends §23 and §34: `me` is a fourth accepted entity form, reserved, and the error for anything else names the four forms. Any other bare word stays an operation error (§29). It lifts `knowledge.md` §24's "no `about(me)`". `about <person>` lists the Person, its linked accounts each with the reason it is linked (verified email, token owner, owner intent), and the claims of those accounts in one view, each claim citing its own account. Equivalent claims group (`knowledge.md` §35) and count once toward `limit`. `about <account>` shows the `rastro:held_by` Person. The existing work budget applies: exceeding it fails honestly instead of answering partially.
 39. **The `about` result says whether it resolved.** An additive `resolved` field: `true` when the identifier resolved, `false` when it did not. A well-formed identifier that resolves to nothing visible (unknown, or hidden-only) gives `resolved: false` and the same answer as an unknown entity (§23, `knowledge.md` §57). MCP gets the same field.
 40. **`source.add` takes source options (additive within v2).** The input gains `options` (array of `key=value` strings, default empty) and `repo` becomes optional (a shorthand for `--option repo=...`); `repo` leaves `required`. Nothing else in the operation changes. The options are validated against the connector's manifest (`plugins.md` §21).
