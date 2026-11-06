@@ -368,6 +368,20 @@ fn S13_rate_limited_email_endpoint_is_a_gap_when_the_main_read_succeeds() {
     );
 }
 
+#[test]
+fn S13_a_429_on_user_emails_is_a_coverage_gap() {
+    let fixture = Fixture::start(|req, base| match req.path.as_str() {
+        "/user/emails" => Reply::status(429, json!({"message": "slow down"})),
+        _ => standard(req, base),
+    });
+    let env = Env::new(&fixture.base);
+    assert_eq!(sync(&env)["status"], "ok");
+    let coverage = env.json(&["coverage", "x"]);
+    let gap = &coverage["result"]["coverage"][0]["windows"][0]["gaps"][0];
+    assert_eq!(gap["selection"], "user emails", "{coverage}");
+    assert_eq!(gap["reason"], "rate_limited", "{coverage}");
+}
+
 /// evidence/R34: only owner involved items become evidence
 #[test]
 fn only_owner_involved_items_become_evidence() {

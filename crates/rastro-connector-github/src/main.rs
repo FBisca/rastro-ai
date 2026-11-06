@@ -227,7 +227,7 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
                     },
                 )?;
             }
-            Err(failure) if matches!(failure.status, Some(401 | 403 | 404)) => {
+            Err(failure) if matches!(failure.status, Some(401 | 403 | 404 | 429)) => {
                 self.emails_gap = Some(failure.reason);
             }
             Err(failure) => return Err(failure),
