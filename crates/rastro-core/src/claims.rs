@@ -697,9 +697,9 @@ mod tests {
         validate(submit, &with_viewer(), &manifest(), &accounts())
     }
 
-    /// S12: a verified email is exactly the text one of its supports quotes
+    /// identity/R9: a verified email is exactly the text one of its supports quotes
     #[test]
-    fn S12_a_verified_email_is_exactly_the_text_its_support_quotes() {
+    fn a_verified_email_is_exactly_the_text_its_support_quotes() {
         let email = crate::identity::VERIFIED_EMAIL;
         assert!(
             premise(
@@ -730,9 +730,9 @@ mod tests {
         );
     }
 
-    /// S14: a token owner cites its source's viewer observation
+    /// identity/R11: a token owner cites its source's viewer observation
     #[test]
-    fn S14_a_token_owner_cites_its_sources_viewer_observation() {
+    fn a_token_owner_cites_its_sources_viewer_observation() {
         let owner = crate::identity::TOKEN_OWNER;
         assert!(premise(owner, "true", "boolean", (2, "/emails/verified", 0, 1)).is_ok());
         assert!(premise(owner, "true", "boolean", (1, "/user/login", 0, 7)).is_err());

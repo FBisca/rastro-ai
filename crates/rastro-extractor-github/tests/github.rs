@@ -455,12 +455,12 @@ fn a_rename_across_many_labelled_pull_requests_projects_like_a_rebuild() {
     );
 }
 
-/// S35: WHEN the owner links a pull request, a repository or a bot the GitHub extractor typed,
+/// identity/R32: WHEN the owner links a pull request, a repository or a bot the GitHub extractor typed,
 /// THEN the link is refused with an operation error naming the reason and nothing is stored,
 /// while the `code:Account` that wrote them links as before. The `code` vocabulary declares
 /// `code:Account`, and no other type, an account
 #[test]
-fn S35_a_pull_request_repository_or_bot_is_never_held_but_a_code_account_is() {
+fn a_pull_request_repository_or_bot_is_never_held_but_a_code_account_is() {
     let vocabulary =
         rastro_plugin_sdk::Vocabulary::parse(include_str!("../vocabulary.toml")).unwrap();
     for t in &vocabulary.types {

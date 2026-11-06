@@ -344,8 +344,9 @@ fn empty_and_relative_location_overrides() {
     }
 }
 
+/// evidence/R75: declared options are required and unknown options are refused
 #[test]
-fn S1_declared_options_are_required_and_unknown_options_are_refused() {
+fn declared_options_are_required_and_unknown_options_are_refused() {
     let home = TempDir::new().unwrap();
     let plugin = home.path().join("config/plugins/test");
     std::fs::create_dir_all(&plugin).unwrap();
@@ -380,8 +381,9 @@ fn S1_declared_options_are_required_and_unknown_options_are_refused() {
     }
 }
 
+/// evidence/R76: github repo shorthand uses the manifest pattern
 #[test]
-fn S2_github_repo_shorthand_uses_the_manifest_pattern() {
+fn github_repo_shorthand_uses_the_manifest_pattern() {
     let home = TempDir::new().unwrap();
     let plugin = home.path().join("config/plugins/github");
     std::fs::create_dir_all(&plugin).unwrap();
@@ -415,8 +417,9 @@ fn S2_github_repo_shorthand_uses_the_manifest_pattern() {
     );
 }
 
+/// evidence/R75: a declared option is saved listed and survives reload
 #[test]
-fn S1_a_declared_option_is_saved_listed_and_survives_reload() {
+fn a_declared_option_is_saved_listed_and_survives_reload() {
     let home = TempDir::new().unwrap();
     let plugin = home.path().join("config/plugins/test");
     std::fs::create_dir_all(&plugin).unwrap();
@@ -456,8 +459,9 @@ fn S1_a_declared_option_is_saved_listed_and_survives_reload() {
     }
 }
 
+/// evidence/R75: a manifest declaring no options refuses any option and an empty name
 #[test]
-fn S1_a_manifest_declaring_no_options_refuses_any_option_and_an_empty_name() {
+fn a_manifest_declaring_no_options_refuses_any_option_and_an_empty_name() {
     let home = TempDir::new().unwrap();
     let plugin = home.path().join("config/plugins/test");
     std::fs::create_dir_all(&plugin).unwrap();
@@ -492,8 +496,9 @@ fn S1_a_manifest_declaring_no_options_refuses_any_option_and_an_empty_name() {
     assert!(listed["result"]["sources"].as_array().unwrap().is_empty());
 }
 
+/// evidence/R76: the bundled github declaration checks the repo when no plugin is installed
 #[test]
-fn S2_the_bundled_github_declaration_checks_the_repo_when_no_plugin_is_installed() {
+fn the_bundled_github_declaration_checks_the_repo_when_no_plugin_is_installed() {
     let home = TempDir::new().unwrap();
     for repo in ["invalid", "../x", "o/..", "a b/c"] {
         let output = command(home.path())
@@ -521,11 +526,11 @@ fn S2_the_bundled_github_declaration_checks_the_repo_when_no_plugin_is_installed
     run(&mut command(home.path()), ADD);
 }
 
-/// S39: a connector whose manifest declares `single_source` refuses a second source with an
+/// evidence/R77: a connector whose manifest declares `single_source` refuses a second source with an
 /// error naming the existing one, in any scope, and nothing is saved; a connector that doesn't
 /// declare it takes several
 #[test]
-fn S39_a_single_source_connector_refuses_a_second_source_naming_the_first() {
+fn a_single_source_connector_refuses_a_second_source_naming_the_first() {
     let manifest = include_str!("../../rastro-test-connector/rastro-plugin.toml")
         .split("[[source_options]]")
         .next()

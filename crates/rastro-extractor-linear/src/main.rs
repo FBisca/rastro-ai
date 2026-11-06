@@ -470,9 +470,9 @@ mod tests {
         ]
     }
 
-    /// Only canonical record locations whose `/id` agrees name a record
+    /// identity/R18: only canonical record locations whose `/id` agrees name a record
     #[test]
-    fn S20_only_canonical_locations_whose_id_agrees_name_a_record() {
+    fn only_canonical_locations_whose_id_agrees_name_a_record() {
         let location = format!("linear:user/{USER}");
         assert_eq!(extract(&user(&location, USER)).len(), 4);
         for (location, id) in [
@@ -494,9 +494,9 @@ mod tests {
         );
     }
 
-    /// Titles, descriptions, display names and untrusted fields are never read
+    /// identity/R18: titles, descriptions, display names and untrusted fields are never read
     #[test]
-    fn S20_titles_descriptions_and_untrusted_fields_are_never_read() {
+    fn titles_descriptions_and_untrusted_fields_are_never_read() {
         let issue = format!("linear:issue/{ITEM}");
         let account = format!("linear:user/{USER}");
         let items = [
@@ -509,9 +509,9 @@ mod tests {
         assert!(extract(&items).is_empty());
     }
 
-    /// Malformed values yield no claim about them
+    /// identity/R18: malformed values yield no claim about them
     #[test]
-    fn S20_malformed_values_yield_no_claim_about_them() {
+    fn malformed_values_yield_no_claim_about_them() {
         let location = format!("linear:user/{USER}");
         let items = [
             observed(1, &location, "/id", USER, "structured"),
@@ -529,10 +529,10 @@ mod tests {
         assert_eq!(extract(&items).len(), 1);
     }
 
-    /// Creator and assignee are each one bundle with the issue's `/id`, and their accounts are
+    /// identity/R18: creator and assignee are each one bundle with the issue's `/id`, and their accounts are
     /// typed in the same run
     #[test]
-    fn S20_creator_and_assignee_are_bundles_with_typed_accounts() {
+    fn creator_and_assignee_are_bundles_with_typed_accounts() {
         let issue = format!("linear:issue/{ITEM}");
         let items = [
             observed(1, &issue, "/id", ITEM, "structured"),
@@ -588,11 +588,11 @@ mod tests {
             .collect()
     }
 
-    /// S38: an app user is typed `tracker:Bot`, never `tracker:Account`, whether its `/app`
+    /// identity/R36: an app user is typed `tracker:Bot`, never `tracker:Account`, whether its `/app`
     /// flag was read before or after its `/id` (a user first read before the connector read the
     /// flag included); it keeps its name, and nothing an account has
     #[test]
-    fn S38_an_app_user_is_a_bot_never_an_account() {
+    fn an_app_user_is_a_bot_never_an_account() {
         let location = format!("linear:user/{USER}");
         let app = |id: i64, value: &str| observed(id, &location, "/app", value, "structured");
         let read_later = [user(&location, USER), vec![app(5, "true")]].concat();
@@ -628,11 +628,11 @@ mod tests {
         }
     }
 
-    /// S38: an issue's creator or assignee is typed `tracker:Bot` by the issue's own `/…/app`
+    /// identity/R36: an issue's creator or assignee is typed `tracker:Bot` by the issue's own `/…/app`
     /// flag, and one actor's flag is never paired with another actor's id, even when the
     /// assignee changes from an app to a person
     #[test]
-    fn S38_an_issue_actors_app_flag_types_it_and_never_another_actor() {
+    fn an_issue_actors_app_flag_types_it_and_never_another_actor() {
         let issue = format!("linear:issue/{ITEM}");
         let at =
             |id: i64, field: &str, quote: &str| observed(id, &issue, field, quote, "structured");
@@ -674,12 +674,12 @@ mod tests {
         assert_eq!(spans, [(1, "/id"), (3, "/creator/id"), (2, "/creator/app")]);
     }
 
-    /// S38: an issue read before the connector read actors' flags gets its flag later, after
+    /// identity/R36: an issue read before the connector read actors' flags gets its flag later, after
     /// the unchanged id (which is never stored again): that flag is the id's, so an app creator
     /// is typed `tracker:Bot` and never `tracker:Account`. An unchanged flag before an earlier
     /// id still holds for a later id, and a flag after a later id is not an earlier id's
     #[test]
-    fn S38_a_flag_read_after_an_unchanged_id_types_that_id() {
+    fn a_flag_read_after_an_unchanged_id_types_that_id() {
         let issue = format!("linear:issue/{ITEM}");
         let at =
             |id: i64, field: &str, quote: &str| observed(id, &issue, field, quote, "structured");
@@ -724,10 +724,10 @@ mod tests {
         );
     }
 
-    /// S38: the `tracker` vocabulary declares `tracker:Account` an account and `tracker:Bot`
+    /// identity/R36: the `tracker` vocabulary declares `tracker:Account` an account and `tracker:Bot`
     /// not, so a link to a bot is refused
     #[test]
-    fn S38_the_tracker_vocabulary_declares_an_account_but_never_a_bot() {
+    fn the_tracker_vocabulary_declares_an_account_but_never_a_bot() {
         let vocabulary =
             rastro_plugin_sdk::Vocabulary::parse(include_str!("../vocabulary.toml")).unwrap();
         let account = |t: &str| {

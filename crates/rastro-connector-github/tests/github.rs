@@ -133,18 +133,21 @@ fn snapshot_removal_closes_link(empty: bool) {
     assert_eq!(link["known_intervals"], expected_intervals, "{rebuilt}");
 }
 
+/// identity/R16: removing one address closes its automatic link
 #[test]
-fn S18_removing_one_address_closes_its_automatic_link() {
+fn removing_one_address_closes_its_automatic_link() {
     snapshot_removal_closes_link(false);
 }
 
+/// identity/R16: empty snapshot closes its automatic link
 #[test]
-fn S18_empty_snapshot_closes_its_automatic_link() {
+fn empty_snapshot_closes_its_automatic_link() {
     snapshot_removal_closes_link(true);
 }
 
+/// identity/R11: github token owner links to me
 #[test]
-fn S14_github_token_owner_links_to_me() {
+fn github_token_owner_links_to_me() {
     let fixture = Fixture::start(|req, base| match req.path.as_str() {
         "/user" => Reply::ok(json!({"id": 123456789012345_u64, "login": "me", "type": "User"})),
         _ => standard(req, base),
@@ -169,8 +172,9 @@ fn S14_github_token_owner_links_to_me() {
     );
 }
 
+/// identity/R16: empty verified email snapshot closes the old observation
 #[test]
-fn S18_empty_verified_email_snapshot_closes_the_old_observation() {
+fn empty_verified_email_snapshot_closes_the_old_observation() {
     use std::sync::{
         Arc,
         atomic::{AtomicUsize, Ordering},
@@ -216,8 +220,9 @@ fn S18_empty_verified_email_snapshot_closes_the_old_observation() {
     assert!(!historical["known_intervals"][0]["end"].is_null());
 }
 
+/// identity/R9: records viewer verified emails and author names
 #[test]
-fn S12_records_viewer_verified_emails_and_author_names() {
+fn records_viewer_verified_emails_and_author_names() {
     let fixture = Fixture::start(|req, base| match req.path.as_str() {
         "/user" => Reply::ok(
             json!({"id": 123456789012345_u64, "login": "me", "type": "User", "name": "Owner Name"}),
@@ -278,8 +283,9 @@ fn S12_records_viewer_verified_emails_and_author_names() {
     );
 }
 
+/// identity/R9: verified email with json escapes is an alias
 #[test]
-fn S12_verified_email_with_json_escapes_is_an_alias() {
+fn verified_email_with_json_escapes_is_an_alias() {
     let fixture = Fixture::start(|req, base| match req.path.as_str() {
         "/user" => Reply::ok(json!({"id": 123456789012345_u64, "login":"me", "type":"User"})),
         "/user/emails" => Reply::ok(json!([{"email":"\"quoted\"@example.com", "verified":true}])),
@@ -310,8 +316,9 @@ fn S12_verified_email_with_json_escapes_is_an_alias() {
     );
 }
 
+/// identity/R10: inaccessible emails report coverage without failing sync
 #[test]
-fn S13_inaccessible_emails_report_coverage_without_failing_sync() {
+fn inaccessible_emails_report_coverage_without_failing_sync() {
     let fixture = Fixture::start(|req, base| match req.path.as_str() {
         "/user/emails" => Reply::status(403, json!({"message": "Forbidden"})),
         _ => standard(req, base),
@@ -329,8 +336,9 @@ fn S13_inaccessible_emails_report_coverage_without_failing_sync() {
     );
 }
 
+/// identity/R10: unreadable later email page keeps sync and reports gap
 #[test]
-fn S13_unreadable_later_email_page_keeps_sync_and_reports_gap() {
+fn unreadable_later_email_page_keeps_sync_and_reports_gap() {
     let fixture = Fixture::start(|req, base| match req.path.as_str() {
         "/user/emails" if req.query.contains("page=2") => {
             Reply::status(403, json!({"message":"Forbidden"}))
@@ -357,8 +365,9 @@ fn S13_unreadable_later_email_page_keeps_sync_and_reports_gap() {
     );
 }
 
+/// identity/R10: rate limited email endpoint is a gap when the main read succeeds
 #[test]
-fn S13_rate_limited_email_endpoint_is_a_gap_when_the_main_read_succeeds() {
+fn rate_limited_email_endpoint_is_a_gap_when_the_main_read_succeeds() {
     let fixture = Fixture::start(|req, base| match req.path.as_str() {
         "/user/emails" => Reply::status(403, json!({"message":"rate limited"}))
             .header("x-ratelimit-remaining", "0"),
@@ -373,8 +382,9 @@ fn S13_rate_limited_email_endpoint_is_a_gap_when_the_main_read_succeeds() {
     );
 }
 
+/// identity/R10: a 429 on user emails is a coverage gap
 #[test]
-fn S13_a_429_on_user_emails_is_a_coverage_gap() {
+fn a_429_on_user_emails_is_a_coverage_gap() {
     let fixture = Fixture::start(|req, base| match req.path.as_str() {
         "/user/emails" => Reply::status(429, json!({"message": "slow down"})),
         _ => standard(req, base),
@@ -387,8 +397,9 @@ fn S13_a_429_on_user_emails_is_a_coverage_gap() {
     assert_eq!(gap["reason"], "rate_limited", "{coverage}");
 }
 
+/// identity/R9: a kept viewer original holds only its id and type
 #[test]
-fn S12_a_kept_viewer_original_holds_only_its_id_and_type() {
+fn a_kept_viewer_original_holds_only_its_id_and_type() {
     let fixture = Fixture::start(|req, base| match req.path.as_str() {
         "/user" => Reply::ok(
             json!({"id": 123456789012345_u64, "login": "me", "type": "User", "name": "Owner Name", "email": "private@example.com"}),
@@ -409,8 +420,9 @@ fn S12_a_kept_viewer_original_holds_only_its_id_and_type() {
     }
 }
 
+/// identity/R9: a kept author profile original holds only its id and name
 #[test]
-fn S12_a_kept_author_profile_original_holds_only_its_id_and_name() {
+fn a_kept_author_profile_original_holds_only_its_id_and_name() {
     let fixture = Fixture::start(|req, base| match req.path.as_str() {
         "/users/me" => Reply::ok(
             json!({"id": 123456789012345_u64, "login": "me", "type": "User", "name": "Owner Name", "email": "profile@example.com", "bio": "private bio"}),
@@ -430,8 +442,9 @@ fn S12_a_kept_author_profile_original_holds_only_its_id_and_name() {
     );
 }
 
+/// identity/R9: an unreadable author profile is a gap not a failed sync
 #[test]
-fn S12_an_unreadable_author_profile_is_a_gap_not_a_failed_sync() {
+fn an_unreadable_author_profile_is_a_gap_not_a_failed_sync() {
     let fixture = Fixture::start(|req, base| match req.path.as_str() {
         "/users/me" => Reply::status(404, json!({"message": "Not Found"})),
         // The comment author is id 42; a profile with another id is a protocol gap.
@@ -462,8 +475,9 @@ fn S12_an_unreadable_author_profile_is_a_gap_not_a_failed_sync() {
     }
 }
 
+/// identity/R9: a verified email cites only its own address span
 #[test]
-fn S12_a_verified_email_cites_only_its_own_address_span() {
+fn a_verified_email_cites_only_its_own_address_span() {
     let fixture = Fixture::start(|req, base| match req.path.as_str() {
         "/user" => Reply::ok(json!({"id": 123456789012345_u64, "login": "me", "type": "User"})),
         "/user/emails" => Reply::ok(
@@ -1235,9 +1249,9 @@ fn a_non_loopback_api_base_url_sends_no_request_and_is_couldnt_look_protocol() {
     }
 }
 
-/// evidence/R72: authors are structured evidence at each item and comment location
+/// evidence/R72, identity/R9: authors are structured evidence at each item and comment location
 #[test]
-fn S12_authors_are_structured_evidence_at_each_item_and_comment_location() {
+fn authors_are_structured_evidence_at_each_item_and_comment_location() {
     let fixture = Fixture::start(|req, base| {
         let mut reply = standard(req, base);
         if req.path == "/search/issues" {

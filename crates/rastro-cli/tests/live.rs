@@ -401,17 +401,17 @@ fn half_configured_or_malformed_live_variables_fail_naming_them() {
     }
 }
 
-/// S34: on a copy of the owner's database, after the owner synced a GitHub repository and
+/// identity/R31: on a copy of the owner's database, after the owner synced a GitHub repository and
 /// Linear and ran `rastro identity me`, `about me` lists a GitHub and a Linear account, and
 /// `rastro identity candidates` answers without error.
 ///
 /// Needs `RASTRO_LIVE_DB`: a COPY of the owner's database (for example made with
 /// `sqlite3 ~/.local/share/rastro/rastro.sqlite3 ".backup /tmp/rastro-copy.sqlite3"`). The test
 /// copies it again into a temporary home, so the file it is given is never written. Run with
-/// `cargo test -p rastro-cli --test live -- --ignored S34_`.
+/// `cargo test -p rastro-cli --test live -- --ignored the_owners_copy_lists_github_and_linear_accounts_and_runs_candidates`.
 #[test]
 #[ignore = "reads a copy of the owner's database; set RASTRO_LIVE_DB"]
-fn S34_the_owners_copy_lists_github_and_linear_accounts_and_runs_candidates() {
+fn the_owners_copy_lists_github_and_linear_accounts_and_runs_candidates() {
     let Some(source) = std::env::var_os("RASTRO_LIVE_DB") else {
         return;
     };

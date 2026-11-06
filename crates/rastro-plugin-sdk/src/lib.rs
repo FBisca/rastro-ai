@@ -925,10 +925,10 @@ evidence_requirement = "r"
         );
     }
 
-    /// S35: a vocabulary declares which of its types are accounts by the core's supertype
+    /// identity/R32: a vocabulary declares which of its types are accounts by the core's supertype
     /// `rastro:Account`, the one core type it may name as a supertype
     #[test]
-    fn S35_a_vocabulary_declares_its_accounts_by_the_cores_account_supertype() {
+    fn a_vocabulary_declares_its_accounts_by_the_cores_account_supertype() {
         let text = format!(
             "namespace = \"x\"\nversion = \"1\"\npredicates = []\n\
              [[types]]\nid = \"x:Account\"\nsupertype = \"rastro:Account\"\n{WORDS}\

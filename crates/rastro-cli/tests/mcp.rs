@@ -1615,8 +1615,9 @@ fn claim_result(session: &mut Session, tool: &str, args: Value) -> Value {
     ok_result(&response["result"])["result"].clone()
 }
 
+/// identity/R10: coverage gaps are scoped and visible in mcp
 #[test]
-fn S13_coverage_gaps_are_scoped_and_visible_in_mcp() {
+fn coverage_gaps_are_scoped_and_visible_in_mcp() {
     let env = Env::new();
     env.add_scoped_source("work-source", "work");
     let steps = [
@@ -2254,10 +2255,10 @@ fn refuse_accounts(env: &Env, id: &str, a: &str, b: &str) {
     env.issue(vec![refusal]);
 }
 
-/// S30: a scoped read that can't see any of a Person's linked accounts answers for it exactly as
+/// identity/R28: a scoped read that can't see any of a Person's linked accounts answers for it exactly as
 /// for an unknown entity; `about me` in any scope shows only the visible accounts and claims
 #[test]
-fn S30_a_person_is_visible_only_where_one_of_its_linked_accounts_is() {
+fn a_person_is_visible_only_where_one_of_its_linked_accounts_is() {
     let env = Env::new();
     env.account_in("personal", ACCOUNT, "code:Account", "octocat", 0);
     env.account_in(
@@ -2306,10 +2307,10 @@ fn S30_a_person_is_visible_only_where_one_of_its_linked_accounts_is() {
     assert_eq!(linked(&all), [ACCOUNT, "linear:user/u-1"], "{all}");
 }
 
-/// S32: over MCP, `about` says `resolved: false` for a hidden-only entity and for an unknown one,
+/// surfaces/R36: over MCP, `about` says `resolved: false` for a hidden-only entity and for an unknown one,
 /// and `resolved: true` where the entity is visible
 #[test]
-fn S32_mcp_about_says_whether_the_identifier_resolved() {
+fn mcp_about_says_whether_the_identifier_resolved() {
     let env = Env::new();
     env.account_in("personal", ACCOUNT, "code:Account", "octocat", 0);
     env.account_in("work", OTHER_ACCOUNT, "code:Account", "hubot", 0);
@@ -2343,7 +2344,7 @@ fn why_text(session: &mut Session, claim: &str) -> Value {
     portable_answer(ok_result(&response["result"])["result"].clone())
 }
 
-/// S31: the scope-set oracle with owner intents, over every scope set: Persons, names (one named
+/// identity/R29: the scope-set oracle with owner intents, over every scope set: Persons, names (one named
 /// again; one renamed and the rename undone, leaving a gap), links (one undone, with its cannot-link), and a merge chain P1–P2–P3 whose accounts
 /// sit in three scopes, so every scope set meets a merge with one end hidden and, without
 /// `work`, a chain through a hidden middle Person. A seed places a fourth account and extra
@@ -2354,7 +2355,7 @@ fn why_text(session: &mut Session, claim: &str) -> Value {
 /// a cannot-link, each automatic link the full projection doesn't hold. Both link sets are
 /// written out by hand from the seeded log, never read back from the code under test.
 #[test]
-fn S31_random_scope_sets_with_intents_and_automatic_links_equal_a_per_scope_rebuild() {
+fn random_scope_sets_with_intents_and_automatic_links_equal_a_per_scope_rebuild() {
     use rastro_core::claims::entity_id;
     use rastro_core::identity::{
         EntityTarget, FORMAT_VERSION, Intent, IntentKind, IssuerContext, ME_DOMAIN, OWNER, Payload,
@@ -2791,10 +2792,10 @@ fn S31_random_scope_sets_with_intents_and_automatic_links_equal_a_per_scope_rebu
     assert!(suppressed, "no scope set needed a suppression");
 }
 
-/// S17: a cannot-link through a merge with a Person the scope can't see still vetoes the
+/// identity/R15: a cannot-link through a merge with a Person the scope can't see still vetoes the
 /// automatic link there
 #[test]
-fn S17_a_cannot_link_through_a_hidden_merge_vetoes_in_every_scope() {
+fn a_cannot_link_through_a_hidden_merge_vetoes_in_every_scope() {
     let env = Env::new();
     env.account_in("personal", "github:account/1", "code:Account", "anchor", 0);
     env.account_in("personal", "github:account/2", "code:Account", "match", 0);
@@ -2843,10 +2844,10 @@ fn S17_a_cannot_link_through_a_hidden_merge_vetoes_in_every_scope() {
     assert_eq!(linked(&seen), ["github:account/1"], "{seen}");
 }
 
-/// S17: a cannot-link with an account an owner link holds in the class, hidden from the scope,
+/// identity/R15: a cannot-link with an account an owner link holds in the class, hidden from the scope,
 /// still vetoes the automatic link there
 #[test]
-fn S17_a_cannot_link_with_a_hidden_held_account_vetoes_in_every_scope() {
+fn a_cannot_link_with_a_hidden_held_account_vetoes_in_every_scope() {
     let env = Env::new();
     for (n, scope, login) in [
         (1, "personal", "anchor"),
@@ -2900,10 +2901,10 @@ fn S17_a_cannot_link_with_a_hidden_held_account_vetoes_in_every_scope() {
     assert_eq!(linked(&seen), ["github:account/1"], "{seen}");
 }
 
-/// S17: B (visible) and D (hidden) both qualify for P and are refused to each other, so neither
+/// identity/R15: B (visible) and D (hidden) both qualify for P and are refused to each other, so neither
 /// joins; B stays unlinked in a scope that can't see D
 #[test]
-fn S17_a_hidden_conflict_partner_keeps_the_visible_account_unlinked_in_every_scope() {
+fn a_hidden_conflict_partner_keeps_the_visible_account_unlinked_in_every_scope() {
     let env = Env::new();
     for (n, scope, login) in [
         (1, "personal", "anchor"),
@@ -2953,10 +2954,10 @@ fn S17_a_hidden_conflict_partner_keeps_the_visible_account_unlinked_in_every_sco
     );
 }
 
-/// S40: B (visible) and D (hidden) are refused to each other; D qualifies for P only from a later
+/// identity/R37: B (visible) and D (hidden) are refused to each other; D qualifies for P only from a later
 /// day, so B holds P only until then, and a scope that can't see D shows B no longer
 #[test]
-fn S40_a_hidden_overlap_keeps_the_visible_account_unlinked_over_it_in_every_scope() {
+fn a_hidden_overlap_keeps_the_visible_account_unlinked_over_it_in_every_scope() {
     let env = Env::new();
     // Day 36500 lies far after the link below is issued, so D's window starts after B's.
     for (n, scope, login, day) in [
@@ -2998,10 +2999,10 @@ fn S40_a_hidden_overlap_keeps_the_visible_account_unlinked_over_it_in_every_scop
     assert_eq!(linked(&seen), ["github:account/1"], "{seen}");
 }
 
-/// S31: no scoped read (about, with history, or why) surfaces a hidden Person or an intent
+/// identity/R29: no scoped read (about, with history, or why) surfaces a hidden Person or an intent
 /// naming it, though every intent is replayed so hidden cannot-links still veto
 #[test]
-fn S31_no_scoped_read_surfaces_a_hidden_intent_or_person() {
+fn no_scoped_read_surfaces_a_hidden_intent_or_person() {
     let env = Env::new();
     env.account_in("personal", "github:account/1", "code:Account", "anchor", 0);
     env.account_in("personal", "github:account/2", "code:Account", "match", 0);
@@ -3075,10 +3076,10 @@ fn S31_no_scoped_read_surfaces_a_hidden_intent_or_person() {
     }
 }
 
-/// S37: a scoped `why` on an intent-backed claim lists only the issuer scopes the session can
+/// identity/R35: a scoped `why` on an intent-backed claim lists only the issuer scopes the session can
 /// see; a scope the session can't see is never named
 #[test]
-fn S37_a_scoped_why_never_names_an_issuer_scope_the_session_cant_see() {
+fn a_scoped_why_never_names_an_issuer_scope_the_session_cant_see() {
     let env = Env::new();
     env.add_scoped_source("mine", "personal");
     env.add_scoped_source("secret", "health-secret");

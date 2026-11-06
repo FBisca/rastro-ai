@@ -786,9 +786,9 @@ fn a_storage_failure_under_blocked_stderr_fails_the_run_with_storage_without_han
     assert_eq!(env.sql::<i64>("SELECT count(*) FROM evidence"), 0);
 }
 
-/// S1: a stored option the manifest doesn't declare is refused at sync, before the connector runs
+/// evidence/R75: a stored option the manifest doesn't declare is refused at sync, before the connector runs
 #[test]
-fn S1_a_hand_edited_option_is_refused_at_sync_before_the_connector_runs() {
+fn a_hand_edited_option_is_refused_at_sync_before_the_connector_runs() {
     let env = Env::new();
     let config = env.home.path().join("config/config.toml");
     let text = fs::read_to_string(&config).unwrap();
@@ -804,9 +804,9 @@ fn S1_a_hand_edited_option_is_refused_at_sync_before_the_connector_runs() {
     assert_eq!(env.sql::<i64>("SELECT count(*) FROM evidence"), 0);
 }
 
-/// S2: a hand-edited GitHub repo that fails the declared pattern never reaches the connector
+/// evidence/R76: a hand-edited GitHub repo that fails the declared pattern never reaches the connector
 #[test]
-fn S2_a_hand_edited_github_repo_is_refused_at_sync() {
+fn a_hand_edited_github_repo_is_refused_at_sync() {
     let env = Env::with_manifest(|m| {
         m.insert("id".into(), "github".into());
         m.remove("source_options");

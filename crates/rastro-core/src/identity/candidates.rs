@@ -337,9 +337,9 @@ mod tests {
         }
     }
 
-    /// S23: a name folds case, accents (precomposed or combining) and runs of whitespace
+    /// identity/R21: a name folds case, accents (precomposed or combining) and runs of whitespace
     #[test]
-    fn S23_a_name_folds_case_and_accents() {
+    fn a_name_folds_case_and_accents() {
         assert_eq!(fold_name("Ana SÍLVA"), "ana silva");
         assert_eq!(fold_name("  Ana \t  Silva "), "ana silva");
         assert_eq!(fold_name("Jose\u{301} Conceição"), "jose conceicao");
@@ -349,9 +349,9 @@ mod tests {
         assert_ne!(fold_name("Ana Silva"), fold_name("Ana Silveira"));
     }
 
-    /// S23: names equal after case and accent folding are a `same name` signal; other names aren't
+    /// identity/R21: names equal after case and accent folding are a `same name` signal; other names aren't
     #[test]
-    fn S23_names_equal_after_case_and_accent_folding_are_a_same_name_signal() {
+    fn names_equal_after_case_and_accent_folding_are_a_same_name_signal() {
         let github = facts("github:account/1", &["Ana Silva"], &["asilva"], &[]);
         let linear = facts("linear:user/u-1", &["ANA SÍLVA"], &[], &["ana@example.org"]);
         let same = CandidateReason {
@@ -367,10 +367,10 @@ mod tests {
         assert!(reasons(&one, &two).is_empty());
     }
 
-    /// S24: an email whose local part equals the other account's login (ASCII case-folded) is an
+    /// identity/R22: an email whose local part equals the other account's login (ASCII case-folded) is an
     /// `email matches login` signal, each value in its own account's place
     #[test]
-    fn S24_an_email_local_part_equal_to_a_login_is_a_signal() {
+    fn an_email_local_part_equal_to_a_login_is_a_signal() {
         let github = facts("github:account/1", &[], &["ASilva"], &[]);
         let linear = facts("linear:user/u-1", &[], &[], &["asilva@example.org"]);
         let signal = |values: [&str; 2]| {
@@ -391,10 +391,10 @@ mod tests {
         assert!(reasons(&github, &other).is_empty());
     }
 
-    /// S27: a pair within one namespace, or with an entity not typed only as an account (a bot),
+    /// identity/R25: a pair within one namespace, or with an entity not typed only as an account (a bot),
     /// is never a candidate; a pair across namespaces with a signal is, in identifier order
     #[test]
-    fn S27_pairs_in_one_namespace_or_with_a_bot_are_never_candidates() {
+    fn pairs_in_one_namespace_or_with_a_bot_are_never_candidates() {
         let none = Resolution::default();
         let github = facts("github:account/1", &["Ana Silva"], &["asilva"], &[]);
         let linear = facts("linear:user/u-1", &["ana silva"], &[], &[]);
@@ -412,10 +412,10 @@ mod tests {
         assert!(candidate_pairs(&[github, twin, bot], &none).is_empty());
     }
 
-    /// S25: a pair one Person holds, directly or through a merge, is no longer a candidate; with
+    /// identity/R23: a pair one Person holds, directly or through a merge, is no longer a candidate; with
     /// one account held, it still is, and names its holder
     #[test]
-    fn S25_a_pair_one_person_holds_is_not_a_candidate() {
+    fn a_pair_one_person_holds_is_not_a_candidate() {
         let mut r = Resolution::default();
         let (p, q) = (known_person(&mut r, "p"), known_person(&mut r, "q"));
         let github = facts("github:account/1", &["Ana Silva"], &[], &[]);
@@ -429,10 +429,10 @@ mod tests {
         assert!(candidate_pairs(&apart, &r).is_empty());
     }
 
-    /// S26: a cannot-link between the two accounts, or between one and the Person holding the
+    /// identity/R24: a cannot-link between the two accounts, or between one and the Person holding the
     /// other, keeps the pair out
     #[test]
-    fn S26_a_refused_pair_is_not_a_candidate() {
+    fn a_refused_pair_is_not_a_candidate() {
         let github = facts("github:account/1", &["Ana Silva"], &[], &[]);
         let linear = facts("linear:user/u-1", &["ana silva"], &[], &[]);
         let mut r = Resolution::default();
@@ -446,10 +446,10 @@ mod tests {
         assert!(candidate_pairs(&[held(&github, &p), linear], &r).is_empty());
     }
 
-    /// S26: a no records one cannot-link between the two accounts, after which the pair is no
+    /// identity/R24: a no records one cannot-link between the two accounts, after which the pair is no
     /// candidate and answering it again is refused
     #[test]
-    fn S26_a_no_records_a_cannot_link_between_the_two_accounts() {
+    fn a_no_records_a_cannot_link_between_the_two_accounts() {
         let github = facts("github:account/1", &["Ana Silva"], &[], &[]);
         let linear = facts("linear:user/u-1", &["ana silva"], &[], &[]);
         let both = [github.clone(), linear.clone()];
@@ -468,10 +468,10 @@ mod tests {
         assert!(error.contains("not a candidate pair"), "{error}");
     }
 
-    /// S25: a yes to a pair neither account of which is held creates a Person named from the
+    /// identity/R23: a yes to a pair neither account of which is held creates a Person named from the
     /// candidate and links both; with one account held, it links only the other, to that Person
     #[test]
-    fn S25_a_yes_links_both_accounts_to_one_person() {
+    fn a_yes_links_both_accounts_to_one_person() {
         use IntentKind::{CreatePerson, Link, Name};
         let github = facts("github:account/1", &["Ana Silva"], &[], &[]);
         let linear = facts("linear:user/u-1", &["ana silva"], &[], &[]);

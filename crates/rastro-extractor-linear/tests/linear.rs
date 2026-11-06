@@ -107,12 +107,12 @@ fn cite(location: &str, field: &str, quote: &str, rule: &str) -> [String; 4] {
     [location, field, quote, rule].map(String::from)
 }
 
-/// S20: WHEN a Linear source syncs against the scripted API, THEN users become
+/// identity/R18: WHEN a Linear source syncs against the scripted API, THEN users become
 /// `linear:user/<uuid>` entities typed `tracker:Account` with `email` and `name` aliases and
 /// their active state, the viewer's involved issues become `tracker:Issue` entities with
 /// creator and assignee claims, and `rastro search` finds issue text with citations
 #[test]
-fn S20_users_and_involved_issues_become_tracker_entities_and_search_cites_issue_text() {
+fn users_and_involved_issues_become_tracker_entities_and_search_cites_issue_text() {
     let fixture = Fixture::start(world());
     let env = env(&fixture.base);
     let run = env.sync(&[]);
@@ -252,12 +252,12 @@ fn S20_users_and_involved_issues_become_tracker_entities_and_search_cites_issue_
     assert_eq!(described["results"][0]["location"], json!(issue_id(DOCS)));
 }
 
-/// S21: WHEN a Linear user is deactivated, THEN its account shows it, and its existing links
+/// identity/R19: WHEN a Linear user is deactivated, THEN its account shows it, and its existing links
 /// remain, marked deactivated: `about` on the account shows `rastro:held_by` its Person, still
 /// observed, beside `tracker:active false`. A re-sync keeps every other claim of the account
 /// and the claims that point at it
 #[test]
-fn S21_a_deactivated_user_shows_it_and_keeps_its_link_and_claims_across_a_resync() {
+fn a_deactivated_user_shows_it_and_keeps_its_link_and_claims_across_a_resync() {
     let fixture = Fixture::start(world());
     let env = env(&fixture.base);
     assert_eq!(env.sync(&[])["extraction"]["state"], "current");
@@ -338,11 +338,11 @@ fn S21_a_deactivated_user_shows_it_and_keeps_its_link_and_claims_across_a_resync
     )));
 }
 
-/// S38: WHEN a Linear sync reads an app (integration) user, THEN it is typed `tracker:Bot`,
+/// identity/R36: WHEN a Linear sync reads an app (integration) user, THEN it is typed `tracker:Bot`,
 /// never `tracker:Account` (neither from its user record nor from an issue it created), and a
 /// link to it is refused with an operation error, while a workspace member still links
 #[test]
-fn S38_an_app_user_syncs_as_a_bot_and_a_link_to_it_is_refused() {
+fn an_app_user_syncs_as_a_bot_and_a_link_to_it_is_refused() {
     const APP: &str = "0b5a8c1e-0000-4000-8000-000000000009";
     let mut world = world();
     world.users.push(app_user(APP, "GitHub"));

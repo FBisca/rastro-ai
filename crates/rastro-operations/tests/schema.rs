@@ -212,12 +212,12 @@ fn expanded(value: &serde_json::Value, defs: &serde_json::Value) -> serde_json::
     }
 }
 
-/// surfaces/R1: identity changes `about` and `why` only additively: `about` gains an optional
+/// surfaces/R1, identity/R3, surfaces/R36: identity changes `about` and `why` only additively: `about` gains an optional
 /// `groups`, a `resolved` flag (S32), an optional Person view and an optional `account` on each
 /// claim (S28), and accepts `me`; a justification gains an optional `intent`; nothing else
 /// differs
 #[test]
-fn S5_S32_about_and_why_change_only_additively_for_identity() {
+fn about_and_why_change_only_additively_for_identity() {
     use serde_json::{Value, json};
     let generated: Value = serde_json::from_str(&rastro_operations::schema::generate()).unwrap();
     let ops = generated["x-operations"].as_array().unwrap();
@@ -304,9 +304,9 @@ fn S5_S32_about_and_why_change_only_additively_for_identity() {
     }
 }
 
-/// surfaces/R2: identity operations are CLI only; MCP stays read-only (surfaces §37)
+/// surfaces/R2, identity/R1: identity operations are CLI only; MCP stays read-only (surfaces §37)
 #[test]
-fn S3_identity_operations_are_cli_only() {
+fn identity_operations_are_cli_only() {
     use rastro_operations::catalog::CATALOG;
     let identity: Vec<_> = CATALOG
         .iter()
