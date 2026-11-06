@@ -258,10 +258,10 @@ fn temp_shadow_tables_match_the_migrated_projection_tables() {
     assert!(seen >= 6, "expected the projection tables, saw {seen}");
 }
 
-/// The owner-intent migration adds the insert-only intent table and leaves the projection a
+/// claims/R58: the owner-intent migration adds the insert-only intent table and leaves the projection a
 /// database already holds in place: no claim is lost to the upgrade
 #[test]
-fn S10_the_owner_intent_migration_keeps_the_existing_projection() {
+fn the_owner_intent_migration_keeps_the_existing_projection() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("rastro.sqlite3");
     let before: [(&str, &str); 8] = [
@@ -543,13 +543,13 @@ fn intent_rows(path: &std::path::Path) -> Vec<String> {
     rows
 }
 
-/// S36: opening a database that holds intents applies the intent-end migration, then replays
+/// identity/R33: opening a database that holds intents applies the intent-end migration, then replays
 /// the intents once, after every migration: a link undone before the upgrade is a superseded
 /// claim at once; the justification ids main wrote stay; an evidence claim and a claim no intent
 /// ever backed stay; the projection is published once, and a second open publishes nothing. The
 /// rows equal those a fresh database writes for the same intents
 #[test]
-fn S36_the_intent_end_migration_replays_existing_intents() {
+fn the_intent_end_migration_replays_existing_intents() {
     use rastro_core::claims::{entity_id, intent_justification_id};
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("rastro.sqlite3");
@@ -638,9 +638,9 @@ fn S36_the_intent_end_migration_replays_existing_intents() {
     assert_eq!(intent_rows(&path), intent_rows(&fresh));
 }
 
-/// S36: a database without intents upgrades without a replay: nothing is published
+/// identity/R33: a database without intents upgrades without a replay: nothing is published
 #[test]
-fn S36_the_intent_end_migration_publishes_nothing_without_intents() {
+fn the_intent_end_migration_publishes_nothing_without_intents() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("rastro.sqlite3");
     seeded_before_intent_end(&path, false);
@@ -655,10 +655,10 @@ fn S36_the_intent_end_migration_publishes_nothing_without_intents() {
     assert_eq!(count("SELECT count(*) FROM claim"), 2);
 }
 
-/// S36: the replay runs after every migration of the open, so it meets the final schema: a later
+/// identity/R33: the replay runs after every migration of the open, so it meets the final schema: a later
 /// migration that resets intent-backed projection rows doesn't undo it
 #[test]
-fn S36_the_intent_replay_runs_after_every_migration() {
+fn the_intent_replay_runs_after_every_migration() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("rastro.sqlite3");
     seeded_before_intent_end(&path, true);

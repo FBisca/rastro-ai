@@ -1,6 +1,6 @@
 # Plan: A second source, one identity
 
-Slug: `second-source-one-identity`. Living spec: `docs/specs/identity.md` (new; `docs/specs/surfaces.md` and `docs/specs/evidence.md` amended). Status: APPROVED 2026-11-05.
+Slug: `second-source-one-identity`. Living spec: `docs/specs/identity.md` (new, requirements transferred; `docs/specs/evidence.md` amended for R75–R78, `docs/specs/claims.md` for R58, `docs/specs/surfaces.md` for R36). Status: ARCHIVED 2026-11-06 (was APPROVED 2026-11-05).
 
 ## Why now
 Roadmap slice 4 closes M1. Rastro has one connector (GitHub), and on the owner's data the only cross-source entities (FBisca, preston-ai-bot) are already one entity without a merge (knowledge §24). No Person, no owner intent and no link exist in code. Without one identity per thing the assistant contradicts itself (concept §1). Slices 5–7 (commitments, the queue, corrections) need Persons and owner intents to exist first.
@@ -87,6 +87,7 @@ The kalios data has one human and no email, so a second source there would join 
 | D58 | A yes is stored as plain link intents; undoing one of those links can bring the pair back as a candidate (the undo records its own cannot-link for that account and Person) | An `answered` marker in the intent payload | Undoing a link is new information; no intent-format change | Owner Q42 (2026-11-06), from the T7 plan |
 | D59 | Deactivated Linear users and Linear guests may be candidates; bots never are | Exclude guests and deactivated users | Guests can't link automatically, but the owner may still join them | Owner Q43 (2026-11-06), from the T7 plan |
 | D60 | Candidates and answers are CLI only and read every scope; nothing on MCP for now | Scoped candidates over MCP | The CLI sees every scope (D35) | Owner Q44 (2026-11-06), from the T7 plan |
+| D61 | Narrows D13: GitHub profile emails are not read at all; candidates use names and the `email matches login` signal from verified Linear emails | Keep profile emails as unverified candidate inputs | Self-asserted and often empty; as aliases they made the owner's verified-email alias ambiguous | Owner Q46 (2026-11-06), from the final gap review |
 
 ## Scenarios
 **Source registration**
@@ -189,4 +190,4 @@ The kalios data has one human and no email, so a second source there would join 
 | T7 | Fuzzy candidates and answers (D4, D17) | S23, S24, S25, S26, S27 | T5, T6 | crates/rastro-core/src/, crates/rastro-core/Cargo.toml, Cargo.lock, crates/rastro-storage-sqlite/, crates/rastro-operations/, crates/rastro-cli/, schema/ | agent | COMPLETE (#99; converge PASS, Codex review APPROVE, CI PASS) |
 | T9 | `rastro:Account` supertype: vocabularies declare their account types; core and storage refuse a link whose account side isn't one; Linear app users as `tracker:Bot`; one Linear source, checked at add and sync (D25, D31, D33, D40–D42) | S35, S38, S39, S39a | T3, T4 | crates/rastro-core/src/, crates/rastro-storage-sqlite/, crates/rastro-plugin-sdk/, crates/rastro-extractor-github/, crates/rastro-extractor-linear/, crates/rastro-connector-linear/, crates/rastro-operations/, crates/rastro-test-extractor/, crates/rastro-cli/tests/ | agent | COMPLETE (#94; converge, review, CI passed) |
 | T10 | Automatic-link conflicts block only over the time both links qualify (D51) | S40 | T6 | crates/rastro-storage-sqlite/, crates/rastro-cli/ | agent | COMPLETE (#98; converge PASS, Codex review APPROVE, CI PASS) |
-| T8 | Owner run: `gh auth refresh -s user:email`; set `LINEAR_API_KEY`; add `svc-platform` (GitHub, `work`) and Linear (`work`) sources; `rastro identity me`; sync; review candidates; run the live test on a copy; sign off | S34 | T5, T6, T7 | crates/rastro-cli/tests/live.rs | fbisca | TO-DO |
+| T8 | Owner run: `gh auth refresh -s user:email`; set `LINEAR_API_KEY`; add `svc-platform` (GitHub, `work`) and Linear (`work`) sources; `rastro identity me`; sync; review candidates; run the live test on a copy; sign off | S34 | T5, T6, T7 | crates/rastro-cli/tests/live.rs | fbisca | COMPLETE (owner run 2026-11-06: about me lists GitHub and Linear accounts, candidates OK, S34 live test passed on a copy; test #100) |

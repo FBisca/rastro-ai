@@ -31,8 +31,9 @@ fn coverage(env: &Env) -> Vec<Vec<String>> {
     env.rows("SELECT state, reason FROM coverage")
 }
 
+/// identity/R17: key owner links to me without an owner link
 #[test]
-fn S19_key_owner_links_to_me_without_an_owner_link() {
+fn key_owner_links_to_me_without_an_owner_link() {
     let fixture = Fixture::start(world());
     let env = env_with_extractor(&fixture.base);
     env.ok(&["identity", "me", "--json"]);
@@ -54,8 +55,9 @@ fn S19_key_owner_links_to_me_without_an_owner_link() {
     );
 }
 
+/// identity/R17: a new key owner replaces the previous viewer
 #[test]
-fn S19_a_new_key_owner_replaces_the_previous_viewer() {
+fn a_new_key_owner_replaces_the_previous_viewer() {
     let fixture = Fixture::start(world());
     let env = env_with_extractor(&fixture.base);
     env.ok(&["identity", "me", "--json"]);
@@ -86,8 +88,9 @@ fn S19_a_new_key_owner_replaces_the_previous_viewer() {
     assert_eq!(old["status"], "superseded", "{history}");
 }
 
+/// identity/R32: bot viewer is not linked when user enumeration fails
 #[test]
-fn S35_bot_viewer_is_not_linked_when_user_enumeration_fails() {
+fn bot_viewer_is_not_linked_when_user_enumeration_fails() {
     const APP: &str = "0b5a8c1e-0000-4000-8000-000000000009";
     let fixture = Fixture::with_route(world(), |req, _| match req.operation.as_str() {
         "Viewer" => Some(Reply::ok(
@@ -119,8 +122,9 @@ fn S35_bot_viewer_is_not_linked_when_user_enumeration_fails() {
     );
 }
 
+/// identity/R14: guest flag is recorded as evidence
 #[test]
-fn S16a_guest_flag_is_recorded_as_evidence() {
+fn guest_flag_is_recorded_as_evidence() {
     let mut data = world();
     data.users[1]["guest"] = json!(true);
     let fixture = Fixture::start(data);
@@ -132,8 +136,9 @@ fn S16a_guest_flag_is_recorded_as_evidence() {
     assert_eq!(rows, [["true"]]);
 }
 
+/// identity/R14: a guest email does not link but a member email does
 #[test]
-fn S16a_a_guest_email_does_not_link_but_a_member_email_does() {
+fn a_guest_email_does_not_link_but_a_member_email_does() {
     let mut data = world();
     data.users[0]["guest"] = json!(false);
     data.users[1]["guest"] = json!(true);
@@ -171,8 +176,9 @@ fn S16a_a_guest_email_does_not_link_but_a_member_email_does() {
     );
 }
 
+/// identity/R16: removed member email closes automatic link
 #[test]
-fn S18_removed_member_email_closes_automatic_link() {
+fn removed_member_email_closes_automatic_link() {
     let mut data = world();
     data.users[0]["guest"] = json!(false);
     data.users[1]["guest"] = json!(false);
@@ -202,12 +208,12 @@ fn S18_removed_member_email_closes_automatic_link() {
     assert!(!link["known_intervals"][0]["end"].is_null(), "{about}");
 }
 
-/// S22: WHEN no Linear API key is available, THEN the pair fails with an auth failure shown
+/// identity/R20: WHEN no Linear API key is available, THEN the pair fails with an auth failure shown
 /// in coverage, and no request is made; WHEN a key is read from `LINEAR_API_KEY` or the
 /// keychain item `rastro-linear`, THEN it is sent to the API and never appears in the
 /// database, the config or any output
 #[test]
-fn S22_without_an_api_key_the_pair_fails_with_auth_and_a_key_is_never_stored() {
+fn without_an_api_key_the_pair_fails_with_auth_and_a_key_is_never_stored() {
     let fixture = Fixture::start(world());
     let mut env = env(&fixture.base);
     env.key = None;
@@ -247,9 +253,9 @@ fn S22_without_an_api_key_the_pair_fails_with_auth_and_a_key_is_never_stored() {
     assert!(!env.leaks(keychain_key, &outputs));
 }
 
-/// S22: a key the API refuses is an auth failure, and never appears anywhere
+/// identity/R20: a key the API refuses is an auth failure, and never appears anywhere
 #[test]
-fn S22_a_rejected_key_is_an_auth_failure_and_never_appears_anywhere() {
+fn a_rejected_key_is_an_auth_failure_and_never_appears_anywhere() {
     for reply in [
         || Reply::error(400, "AUTHENTICATION_ERROR"),
         || Reply::status(401, json!({"errors": [{"message": "no"}]})),
@@ -266,10 +272,10 @@ fn S22_a_rejected_key_is_an_auth_failure_and_never_appears_anywhere() {
     }
 }
 
-/// S20: the connector reads every workspace user (deactivated ones too), the issues involving
+/// identity/R18: the connector reads every workspace user (deactivated ones too), the issues involving
 /// the API-key user in the window, and whose key it is, with fixed queries only
 #[test]
-fn S20_the_connector_reads_users_involved_issues_and_the_key_user_with_fixed_queries() {
+fn the_connector_reads_users_involved_issues_and_the_key_user_with_fixed_queries() {
     let fixture = Fixture::start(World {
         page_size: 1,
         ..world()
@@ -380,10 +386,10 @@ fn S20_the_connector_reads_users_involved_issues_and_the_key_user_with_fixed_que
     }
 }
 
-/// S20: an issue updated outside the window, or with no creator or assignee, records only
+/// identity/R18: an issue updated outside the window, or with no creator or assignee, records only
 /// what it has
 #[test]
-fn S20_issues_outside_the_window_are_skipped_and_missing_people_record_nothing() {
+fn issues_outside_the_window_are_skipped_and_missing_people_record_nothing() {
     let late = {
         let mut late = issue(ISSUE, 8, "From the future", "later", Some(ANA), None);
         late["updatedAt"] = json!("2999-01-01T00:00:00.000Z");
@@ -412,9 +418,9 @@ fn S20_issues_outside_the_window_are_skipped_and_missing_people_record_nothing()
     );
 }
 
-/// A rate limit part-way keeps what was read and is never "found"
+/// identity/R18: a rate limit part-way keeps what was read and is never "found"
 #[test]
-fn S20_a_rate_limit_keeps_what_was_read_and_records_when_to_retry() {
+fn a_rate_limit_keeps_what_was_read_and_records_when_to_retry() {
     let reset_ms = (chrono::Utc::now().timestamp() + 600) * 1000;
     let fixture = Fixture::with_route(world(), move |req, _| {
         (req.operation == "Issues").then(|| {
@@ -438,9 +444,9 @@ fn S20_a_rate_limit_keeps_what_was_read_and_records_when_to_retry() {
     );
 }
 
-/// Failures map to typed reasons, never raw error text
+/// identity/R20: failures map to typed reasons, never raw error text
 #[test]
-fn S22_failures_map_to_typed_reasons_in_coverage() {
+fn failures_map_to_typed_reasons_in_coverage() {
     for (reply, reason) in [
         (Reply::error(400, "FORBIDDEN"), "forbidden"),
         (Reply::status(429, json!({})), "rate_limited"),
@@ -471,12 +477,12 @@ fn S22_failures_map_to_typed_reasons_in_coverage() {
     assert_eq!(coverage(&env), [["couldn't look", "protocol"]]);
 }
 
-/// S38: WHEN a sync reads an app (integration) user, THEN its `app` flag is recorded at the
+/// identity/R36: WHEN a sync reads an app (integration) user, THEN its `app` flag is recorded at the
 /// user, and an issue records its creator's and assignee's flags, each just before the id it
 /// belongs to. Linear's field is `User.app`; whether the live `users` query lists app users is
 /// unverified, as the API here is scripted
 #[test]
-fn S38_the_connector_records_each_users_and_each_issue_actors_app_flag() {
+fn the_connector_records_each_users_and_each_issue_actors_app_flag() {
     const APP: &str = "0b5a8c1e-0000-4000-8000-000000000009";
     let mut world = world();
     world.users.push(app_user(APP, "GitHub"));
@@ -521,10 +527,10 @@ fn S38_the_connector_records_each_users_and_each_issue_actors_app_flag() {
     }
 }
 
-/// S39: WHEN `rastro source add --connector linear` runs while a Linear source exists, THEN it
+/// evidence/R77: WHEN `rastro source add --connector linear` runs while a Linear source exists, THEN it
 /// is refused with an error naming the existing source, and nothing is saved
 #[test]
-fn S39_a_second_linear_source_is_refused_naming_the_existing_one() {
+fn a_second_linear_source_is_refused_naming_the_existing_one() {
     let fixture = Fixture::start(world());
     let env = env(&fixture.base);
     let config = || std::fs::read_to_string(env.home.path().join("config/config.toml")).unwrap();
@@ -553,12 +559,12 @@ fn S39_a_second_linear_source_is_refused_naming_the_existing_one() {
     assert_eq!(listed["sources"].as_array().unwrap().len(), 1, "{listed}");
 }
 
-/// S39a: WHEN the config already holds a second source for a single-source connector (written
+/// evidence/R78: WHEN the config already holds a second source for a single-source connector (written
 /// before the refusal existed, or while the connector wasn't installed), THEN at sync that pair
 /// fails as `protocol` with a message naming the other source, before the connector runs, and
 /// the first source still syncs
 #[test]
-fn S39a_a_second_single_source_connector_source_fails_at_sync() {
+fn a_second_single_source_connector_source_fails_at_sync() {
     let fixture = Fixture::start(world());
     let env = env(&fixture.base);
     let path = env.home.path().join("config/config.toml");

@@ -241,8 +241,9 @@ fn claim_id(about: &Value, predicate: &str) -> String {
         .to_string()
 }
 
+/// identity/R12: verified email links only to an existing person
 #[test]
-fn S15_verified_email_links_only_to_an_existing_person() {
+fn verified_email_links_only_to_an_existing_person() {
     let env = Env::new();
     let a = env.account(101, "a");
     let b = env.account(102, "b");
@@ -292,8 +293,9 @@ fn S15_verified_email_links_only_to_an_existing_person() {
     );
 }
 
+/// identity/R13: nonoverlapping verified emails do not link
 #[test]
-fn S16_nonoverlapping_verified_emails_do_not_link() {
+fn nonoverlapping_verified_emails_do_not_link() {
     let env = Env::new();
     let a = env.account(201, "first");
     let b = env.account(202, "second");
@@ -325,8 +327,9 @@ fn S16_nonoverlapping_verified_emails_do_not_link() {
     );
 }
 
+/// identity/R15: cannot link blocks through merges until explicitly linked
 #[test]
-fn S17_cannot_link_blocks_through_merges_until_explicitly_linked() {
+fn cannot_link_blocks_through_merges_until_explicitly_linked() {
     let env = Env::new();
     let a = env.account(301, "anchor");
     let b = env.account(302, "match");
@@ -371,8 +374,9 @@ fn S17_cannot_link_blocks_through_merges_until_explicitly_linked() {
     );
 }
 
+/// identity/R15: account to account cannot link blocks automatic join
 #[test]
-fn S17_account_to_account_cannot_link_blocks_automatic_join() {
+fn account_to_account_cannot_link_blocks_automatic_join() {
     use rastro_core::identity::{
         EntityTarget, FORMAT_VERSION, Intent, IntentKind, IssuerContext, OWNER, Payload,
         SHAPE_VERSION, Targets,
@@ -446,8 +450,9 @@ fn S17_account_to_account_cannot_link_blocks_automatic_join() {
     );
 }
 
+/// identity/R15: conflicting automatic links are order independent and neither joins
 #[test]
-fn S17_conflicting_automatic_links_are_order_independent_and_neither_joins() {
+fn conflicting_automatic_links_are_order_independent_and_neither_joins() {
     use rastro_core::identity::{
         EntityTarget, FORMAT_VERSION, Intent, IntentKind, IssuerContext, OWNER, Payload,
         SHAPE_VERSION, Targets,
@@ -545,8 +550,9 @@ fn S17_conflicting_automatic_links_are_order_independent_and_neither_joins() {
     assert_eq!(second, first);
 }
 
+/// identity/R32: automatic links refuse entities without an account type
 #[test]
-fn S35_automatic_links_refuse_entities_without_an_account_type() {
+fn automatic_links_refuse_entities_without_an_account_type() {
     let env = Env::new();
     let account = env.account(401, "holder");
     env.ok(&["identity", "me"]);
@@ -581,10 +587,10 @@ fn S35_automatic_links_refuse_entities_without_an_account_type() {
         "{about}"
     );
 }
-/// S17: a cannot-link between B and P directly vetoes the automatic link; the owner's explicit
+/// identity/R15: a cannot-link between B and P directly vetoes the automatic link; the owner's explicit
 /// link then holds it
 #[test]
-fn S17_a_direct_cannot_link_blocks_the_automatic_link_until_explicitly_linked() {
+fn a_direct_cannot_link_blocks_the_automatic_link_until_explicitly_linked() {
     let env = Env::new();
     let a = env.account(801, "anchor");
     let b = env.account(802, "match");
@@ -734,10 +740,10 @@ fn qualify_apart(
     (p, at)
 }
 
-/// S40: two accounts refused to each other that qualify for one Person over separate intervals
+/// identity/R37: two accounts refused to each other that qualify for one Person over separate intervals
 /// each hold it over its own interval
 #[test]
-fn S40_cannot_linked_accounts_that_qualify_apart_each_hold_the_person() {
+fn cannot_linked_accounts_that_qualify_apart_each_hold_the_person() {
     let env = Env::new();
     let (p, at) = qualify_apart(&env, 2, 3, 4);
     assert_eq!(
@@ -756,10 +762,10 @@ fn S40_cannot_linked_accounts_that_qualify_apart_each_hold_the_person() {
     assert_eq!(shown, ["github:account/701", "github:account/703"]);
 }
 
-/// S40: over the time two accounts refused to each other both qualify, neither holds the
+/// identity/R37: over the time two accounts refused to each other both qualify, neither holds the
 /// Person; outside it, each does
 #[test]
-fn S40_over_their_overlap_neither_cannot_linked_account_holds_the_person() {
+fn over_their_overlap_neither_cannot_linked_account_holds_the_person() {
     let env = Env::new();
     // 702 qualifies over [2h, 5h), 703 from 3h on: they overlap over [3h, 5h).
     let (_, at) = qualify_apart(&env, 2, 5, 3);
@@ -810,10 +816,10 @@ fn joined(
         .collect()
 }
 
-/// S17: a conflict whose one side no longer qualifies stops blocking the other: blocked links
+/// identity/R15: a conflict whose one side no longer qualifies stops blocking the other: blocked links
 /// are recomputed from each pass, not accumulated
 #[test]
-fn S17_a_conflict_that_no_longer_qualifies_stops_blocking() {
+fn a_conflict_that_no_longer_qualifies_stops_blocking() {
     // W(902) and V(903) share A's email e and are refused to each other: both blocked. X(904)
     // qualifies only through W's second email f, so X–Y is no conflict once W is blocked: Y joins.
     let shown = joined(
@@ -833,10 +839,10 @@ fn S17_a_conflict_that_no_longer_qualifies_stops_blocking() {
     assert_eq!(shown, ["github:account/901", "github:account/905"]);
 }
 
-/// S17: when blocking one side would let the conflict come back, both stay blocked: a cycle
+/// identity/R15: when blocking one side would let the conflict come back, both stay blocked: a cycle
 /// suppresses, it never picks
 #[test]
-fn S17_a_conflict_that_returns_once_unblocked_keeps_both_blocked() {
+fn a_conflict_that_returns_once_unblocked_keeps_both_blocked() {
     // Y(912) joins through e; X(913) only through Y's g. Unblocked, they conflict again.
     let shown = joined(
         &Env::new(),
@@ -867,10 +873,10 @@ fn kinds(history: &Value) -> Vec<(String, String)> {
         .collect()
 }
 
-/// S3: `identity me` mints the owner's Person, `about me` resolves to it, and a second run
+/// identity/R1: `identity me` mints the owner's Person, `about me` resolves to it, and a second run
 /// returns the same Person and records nothing
 #[test]
-fn S3_identity_me_mints_one_person_that_about_me_resolves() {
+fn identity_me_mints_one_person_that_about_me_resolves() {
     let env = Env::new();
     let first = env.ok(&["identity", "me"]);
     let me = first["person"]["identifier"].as_str().unwrap().to_string();
@@ -901,9 +907,9 @@ fn S3_identity_me_mints_one_person_that_about_me_resolves() {
     assert_eq!(fresh.about("me")["claims"], json!([]));
 }
 
-/// S4: two Persons created with one name are two Persons, and the name is an ambiguous alias
+/// identity/R2: two Persons created with one name are two Persons, and the name is an ambiguous alias
 #[test]
-fn S4_two_persons_with_one_name_make_the_name_ambiguous() {
+fn two_persons_with_one_name_make_the_name_ambiguous() {
     let env = Env::new();
     let ana = env.person("Ana Silva");
     let other = env.person("Ana Silva");
@@ -927,10 +933,10 @@ fn S4_two_persons_with_one_name_make_the_name_ambiguous() {
     assert_eq!(env.intents(), 4);
 }
 
-/// S5: a linked account shows `rastro:held_by` the Person, and `why` on the link shows an
+/// identity/R3: a linked account shows `rastro:held_by` the Person, and `why` on the link shows an
 /// observed claim justified by the owner intent: its id, time and issuer
 #[test]
-fn S5_a_link_shows_held_by_and_why_cites_the_owner_intent() {
+fn a_link_shows_held_by_and_why_cites_the_owner_intent() {
     let env = Env::new();
     let octocat = env.account(7, "octocat");
     let ana = env.person("Ana Silva");
@@ -976,10 +982,10 @@ fn S5_a_link_shows_held_by_and_why_cites_the_owner_intent() {
     assert_eq!(env.intents(), 3);
 }
 
-/// S6: undoing a link removes `held_by`, records a cannot-link, and the history lists the link,
+/// identity/R4: undoing a link removes `held_by`, records a cannot-link, and the history lists the link,
 /// the undo and the cannot-link in acceptance order
 #[test]
-fn S6_undoing_a_link_removes_it_and_records_a_cannot_link_in_history() {
+fn undoing_a_link_removes_it_and_records_a_cannot_link_in_history() {
     let env = Env::new();
     let octocat = env.account(7, "octocat");
     let ana = env.person("Ana Silva");
@@ -1046,10 +1052,10 @@ fn S6_undoing_a_link_removes_it_and_records_a_cannot_link_in_history() {
     );
 }
 
-/// S7: a merge shows both Persons' claims on either one, equivalent claims grouped; undoing it
+/// identity/R5: a merge shows both Persons' claims on either one, equivalent claims grouped; undoing it
 /// separates them and records a cannot-link
 #[test]
-fn S7_a_merge_groups_both_persons_claims_and_its_undo_separates_them() {
+fn a_merge_groups_both_persons_claims_and_its_undo_separates_them() {
     let env = Env::new();
     let octocat = env.account(7, "octocat");
     let hubot = env.account(8, "hubot");
@@ -1148,10 +1154,10 @@ fn S7_a_merge_groups_both_persons_claims_and_its_undo_separates_them() {
     );
 }
 
-/// S8: invalid intents are refused with an operation error naming the reason, and nothing is
+/// identity/R6: invalid intents are refused with an operation error naming the reason, and nothing is
 /// stored
 #[test]
-fn S8_invalid_intents_are_refused_and_store_nothing() {
+fn invalid_intents_are_refused_and_store_nothing() {
     let env = Env::new();
     let octocat = env.account(7, "octocat");
     let hubot = env.account(8, "hubot");
@@ -1258,11 +1264,11 @@ fn rows(env: &Env) -> (Vec<String>, Vec<String>) {
     (projection, dump("SELECT * FROM intent ORDER BY append_seq"))
 }
 
-/// S10: a rebuild, with the evidence's extractor missing so its pair is carried over, brings
+/// claims/R58: a rebuild, with the evidence's extractor missing so its pair is carried over, brings
 /// back every intent-backed Person, name, link and merge identically, and leaves the intent
 /// table as it was
 #[test]
-fn S10_a_rebuild_with_a_carried_pair_brings_intent_backed_claims_back_identically() {
+fn a_rebuild_with_a_carried_pair_brings_intent_backed_claims_back_identically() {
     let env = Env::new();
     let octocat = env.account(7, "octocat");
     let hubot = env.account(8, "hubot");
@@ -1302,10 +1308,10 @@ fn S10_a_rebuild_with_a_carried_pair_brings_intent_backed_claims_back_identicall
     assert_eq!(rows(&env), before);
 }
 
-/// S7: in a merge chain of three Persons, each merge stays its own claim: only claims that say
+/// identity/R5: in a merge chain of three Persons, each merge stays its own claim: only claims that say
 /// the same thing group, never two different merges
 #[test]
-fn S7_a_merge_chain_groups_equivalent_claims_but_never_two_merges() {
+fn a_merge_chain_groups_equivalent_claims_but_never_two_merges() {
     let env = Env::new();
     let (a, b, c) = (env.person("A"), env.person("B"), env.person("C"));
     env.ok(&["identity", "merge", &a, &b]);
@@ -1368,12 +1374,12 @@ fn intent_id(written: &Value) -> String {
     written["intents"][0]["id"].as_str().unwrap().to_string()
 }
 
-/// S28: `about me` with a linked GitHub account and a linked account of a second kind lists the
+/// identity/R26: `about me` with a linked GitHub account and a linked account of a second kind lists the
 /// Person, each linked account with its reason, and the accounts' claims, each citing its own
 /// account; equivalent claims (under a merge) group and count once toward `limit`. The second
 /// kind is a Linear-shaped account recorded through the scripted seam (Linear isn't merged yet).
 #[test]
-fn S28_about_me_lists_the_person_its_linked_accounts_and_their_claims() {
+fn about_me_lists_the_person_its_linked_accounts_and_their_claims() {
     let env = Env::new();
     let octocat = env.account(7, "octocat");
     let linear = tracker_account(&env, "u-1", "ana@example.org");
@@ -1532,10 +1538,10 @@ fn S28_about_me_lists_the_person_its_linked_accounts_and_their_claims() {
     );
 }
 
-/// S29: `about` on an account linked to a Person shows `rastro:held_by` that Person, for either
+/// identity/R27: `about` on an account linked to a Person shows `rastro:held_by` that Person, for either
 /// account kind
 #[test]
-fn S29_about_an_account_shows_the_person_holding_it() {
+fn about_an_account_shows_the_person_holding_it() {
     let env = Env::new();
     let octocat = env.account(7, "octocat");
     let linear = tracker_account(&env, "u-1", "ana@example.org");
@@ -1556,10 +1562,10 @@ fn S29_about_an_account_shows_the_person_holding_it() {
     }
 }
 
-/// S32: `about` says whether the identifier resolved: `true` for an entity, a Person and `me`,
+/// surfaces/R36: `about` says whether the identifier resolved: `true` for an entity, a Person and `me`,
 /// `false` for a well-formed identifier that names nothing
 #[test]
-fn S32_about_says_whether_the_identifier_resolved() {
+fn about_says_whether_the_identifier_resolved() {
     let env = Env::new();
     let octocat = env.account(7, "octocat");
     let ana = env.person("Ana Silva");
@@ -1581,11 +1587,11 @@ fn S32_about_says_whether_the_identifier_resolved() {
     }
 }
 
-/// S36: undoing a link or a merge keeps the undone claim as `superseded`, its interval closed at
+/// identity/R33: undoing a link or a merge keeps the undone claim as `superseded`, its interval closed at
 /// the undo; `about --history` shows it, plain `about` doesn't, and `why` cites the undone intent
 /// as no longer current
 #[test]
-fn S36_an_undone_link_or_merge_stays_as_a_superseded_claim() {
+fn an_undone_link_or_merge_stays_as_a_superseded_claim() {
     let env = Env::new();
     let octocat = env.account(7, "octocat");
     let ana = env.person("Ana");
@@ -1661,10 +1667,10 @@ fn S36_an_undone_link_or_merge_stays_as_a_superseded_claim() {
     assert_eq!(rows(&env), before);
 }
 
-/// S37: an intent records the CLI's configured scopes as its issuer's, and `identity history`
+/// identity/R35: an intent records the CLI's configured scopes as its issuer's, and `identity history`
 /// shows them
 #[test]
-fn S37_an_intent_records_the_configured_scopes_of_its_issuer() {
+fn an_intent_records_the_configured_scopes_of_its_issuer() {
     let env = Env::new();
     for (name, scope) in [("one", "work"), ("two", "personal"), ("three", "work")] {
         env.ok(&[
@@ -1725,10 +1731,10 @@ fn candidates(env: &Env) -> Vec<(String, String, Vec<String>)> {
         .collect()
 }
 
-/// S23: a GitHub account and a Linear account whose full names are equal after case and accent
+/// identity/R21: a GitHub account and a Linear account whose full names are equal after case and accent
 /// folding are listed with reason `same name`, until one Person holds both
 #[test]
-fn S23_accounts_with_one_folded_name_are_listed_as_same_name() {
+fn accounts_with_one_folded_name_are_listed_as_same_name() {
     let env = Env::new();
     env.account(41, "asilva");
     let github = "github:account/41";
@@ -1774,10 +1780,10 @@ fn S23_accounts_with_one_folded_name_are_listed_as_same_name() {
     );
 }
 
-/// S24: a Linear email whose local part equals a GitHub login is listed with reason
+/// identity/R22: a Linear email whose local part equals a GitHub login is listed with reason
 /// `email matches login`
 #[test]
-fn S24_a_linear_email_whose_local_part_is_a_github_login_is_listed() {
+fn a_linear_email_whose_local_part_is_a_github_login_is_listed() {
     let env = Env::new();
     env.account(42, "bcosta");
     let linear = tracker_account(&env, "u-42", "bcosta@example.org");
@@ -1794,10 +1800,10 @@ fn S24_a_linear_email_whose_local_part_is_a_github_login_is_listed() {
     assert!(text.contains("Name: bcosta"), "{text}");
 }
 
-/// S27: a pair within one namespace, or with a bot (a GitHub `code:Bot` or a Linear app user),
+/// identity/R25: a pair within one namespace, or with a bot (a GitHub `code:Bot` or a Linear app user),
 /// is never a candidate, even when the names or the email and login match
 #[test]
-fn S27_a_pair_in_one_namespace_or_with_a_bot_is_never_a_candidate() {
+fn a_pair_in_one_namespace_or_with_a_bot_is_never_a_candidate() {
     let env = Env::new();
     for n in [71, 72] {
         env.account(n, &format!("ana{n}"));
@@ -1847,11 +1853,11 @@ fn held_accounts(about: &Value) -> Vec<String> {
     found
 }
 
-/// S25: a yes to a pair neither account of which is held creates one Person, named from the
+/// identity/R23: a yes to a pair neither account of which is held creates one Person, named from the
 /// candidate, holding both; a yes to a pair with one account held links the other to that
 /// Person; either way the pair no longer appears, and answering it again is refused
 #[test]
-fn S25_a_yes_holds_both_accounts_by_one_person() {
+fn a_yes_holds_both_accounts_by_one_person() {
     let env = Env::new();
     env.account(51, "asilva");
     let github = "github:account/51";
@@ -1894,10 +1900,10 @@ fn S25_a_yes_holds_both_accounts_by_one_person() {
     assert_eq!(env.intents(), before);
 }
 
-/// S26: a no records a cannot-link between the two accounts, never a claim; the pair never
+/// identity/R24: a no records a cannot-link between the two accounts, never a claim; the pair never
 /// appears again, including after `claims rebuild`
 #[test]
-fn S26_a_no_records_a_cannot_link_and_the_pair_never_returns() {
+fn a_no_records_a_cannot_link_and_the_pair_never_returns() {
     let env = Env::new();
     env.account(61, "asilva");
     let github = "github:account/61";
@@ -1934,10 +1940,10 @@ fn S26_a_no_records_a_cannot_link_and_the_pair_never_returns() {
     assert!(error.contains("not a candidate pair"), "{error}");
 }
 
-/// S23: a name with a precomposed accent the old letter table missed (Romanian `Ș`) folds like
+/// identity/R21: a name with a precomposed accent the old letter table missed (Romanian `Ș`) folds like
 /// its plain spelling, so the two accounts are listed as `same name`
 #[test]
-fn S23_a_precomposed_accent_folds_like_its_plain_letter() {
+fn a_precomposed_accent_folds_like_its_plain_letter() {
     let env = Env::new();
     env.account(8101, "stefan");
     let github = "github:account/8101";
@@ -1959,10 +1965,10 @@ fn S23_a_precomposed_accent_folds_like_its_plain_letter() {
     assert_eq!(candidates(&env).len(), 1);
 }
 
-/// S25: a yes to a pair whose one account is held by two Persons the owner has merged links the
+/// identity/R23: a yes to a pair whose one account is held by two Persons the owner has merged links the
 /// other account to that merged Person, and the pair no longer appears
 #[test]
-fn S25_a_yes_links_to_a_holder_merged_with_another() {
+fn a_yes_links_to_a_holder_merged_with_another() {
     let env = Env::new();
     env.account(8102, "ana");
     let github = "github:account/8102";

@@ -165,9 +165,9 @@ pub fn loopback(base: &str) -> bool {
 mod tests {
     use super::loopback;
 
-    /// Only loopback hosts are accepted as the API override
+    /// identity/R20: only loopback hosts are accepted as the API override
     #[test]
-    fn S22_only_loopback_hosts_are_accepted_so_the_key_stays_local() {
+    fn only_loopback_hosts_are_accepted_so_the_key_stays_local() {
         for ok in [
             "http://127.0.0.1:8080",
             "http://localhost:1/x",

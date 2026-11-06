@@ -1187,8 +1187,9 @@ mod tests {
         }
     }
 
+    /// identity/R4: an undo removes only its intents contribution and a link clears a cannot link
     #[test]
-    fn S6_an_undo_removes_only_its_intents_contribution_and_a_link_clears_a_cannot_link() {
+    fn an_undo_removes_only_its_intents_contribution_and_a_link_clears_a_cannot_link() {
         let p = target("rastro:person/1", "person");
         let a = target("github:account/1", "account");
         let create = intent(
@@ -1234,8 +1235,9 @@ mod tests {
         }
     }
 
+    /// identity/R6: rows are checked on their own
     #[test]
-    fn S8_rows_are_checked_on_their_own() {
+    fn rows_are_checked_on_their_own() {
         let p = target("rastro:person/1", "person");
         let a = target("github:account/1", "account");
         assert!(
@@ -1329,10 +1331,10 @@ mod tests {
         }
     }
 
-    /// S35: only an entity whose current types are all accounts may be held; an untyped one, a
+    /// identity/R32: only an entity whose current types are all accounts may be held; an untyped one, a
     /// pull request, a repository or a bot may not, and the refusal names why
     #[test]
-    fn S35_only_an_entity_typed_as_an_account_may_be_held() {
+    fn only_an_entity_typed_as_an_account_may_be_held() {
         let typed = |types: &[(&str, &[&str], bool)]| -> Vec<SeenType> {
             types
                 .iter()
@@ -1401,8 +1403,9 @@ mod tests {
         }
     }
 
+    /// identity/R2: the newest name wins and undoing it restores the older
     #[test]
-    fn S4_the_newest_name_wins_and_undoing_it_restores_the_older() {
+    fn the_newest_name_wins_and_undoing_it_restores_the_older() {
         let p = target("rastro:person/1", "person");
         let name = |value: &str, id: &str| {
             let mut i = intent(IntentKind::Name, Targets::entity(p.clone()), None, id);

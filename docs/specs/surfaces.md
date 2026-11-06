@@ -37,3 +37,4 @@ Paths: crates/rastro-cli/src/mcp.rs, crates/rastro-cli/src/main.rs, crates/rastr
 - **R33** WHEN the random scope-set oracle runs, THEN it also queries by alias, and each scoped answer equals the per-scope rebuild. (from claims-hardening/S7)
 - **R34** WHEN one location is observed in two scopes with different logins, THEN a scoped read's alias roots, resolution and marks come only from the visible scope's justifications. (from claims-hardening/S8)
 - **R35** WHEN one location is observed in two scopes with different types, THEN a scoped read's type conflicts and displayed type come only from the visible scope's justifications. (from claims-hardening/S20)
+- **R36** WHEN `about` names a well-formed identifier that resolves to nothing visible (unknown, or hidden-only), THEN the result says `resolved: false`; WHEN it resolves, THEN `resolved: true`. MCP gets the same field; the schema change is additive. (from second-source-one-identity/S32)

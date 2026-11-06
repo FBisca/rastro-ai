@@ -226,10 +226,10 @@ fn count(path: &std::path::Path) -> i64 {
         .unwrap()
 }
 
-/// S9: an intent issued from a context whose scopes can't see its target is refused at the
+/// identity/R7: an intent issued from a context whose scopes can't see its target is refused at the
 /// storage seam, and nothing is stored
 #[test]
-fn S9_an_intent_whose_issuer_cannot_see_its_target_is_refused() {
+fn an_intent_whose_issuer_cannot_see_its_target_is_refused() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("db");
     let mut db = SqliteStorage::open(&path).unwrap();
@@ -265,11 +265,11 @@ fn S9_an_intent_whose_issuer_cannot_see_its_target_is_refused() {
     assert_eq!(count(&path), 3);
 }
 
-/// S35: a link whose account side no vocabulary declares an account (a pull request, a
+/// identity/R32: a link whose account side no vocabulary declares an account (a pull request, a
 /// repository, a bot, an untyped entity) is refused at the storage seam with an error naming the
 /// reason, and nothing is stored; an account of any vocabulary links as before
 #[test]
-fn S35_a_link_whose_account_side_isnt_typed_as_an_account_is_refused() {
+fn a_link_whose_account_side_isnt_typed_as_an_account_is_refused() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("db");
     let mut db = SqliteStorage::open(&path).unwrap();
@@ -327,10 +327,10 @@ fn S35_a_link_whose_account_side_isnt_typed_as_an_account_is_refused() {
     assert_eq!(count(&path), 3);
 }
 
-/// S35: a refusal never names a type the issuer can't see: an account another scope types a
+/// identity/R32: a refusal never names a type the issuer can't see: an account another scope types a
 /// bot is refused for a scoped issuer without naming the bot, and for an unscoped one by name
 #[test]
-fn S35_a_refusal_never_names_a_type_from_a_scope_the_issuer_cannot_see() {
+fn a_refusal_never_names_a_type_from_a_scope_the_issuer_cannot_see() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("db");
     let mut db = SqliteStorage::open(&path).unwrap();
@@ -361,9 +361,9 @@ fn S35_a_refusal_never_names_a_type_from_a_scope_the_issuer_cannot_see() {
     assert_eq!(count(&path), 1);
 }
 
-/// S11: an intent written after a scoped read was cached shows in the next scoped read
+/// identity/R8: an intent written after a scoped read was cached shows in the next scoped read
 #[test]
-fn S11_an_intent_written_after_a_cached_scoped_read_shows_in_the_next_one() {
+fn an_intent_written_after_a_cached_scoped_read_shows_in_the_next_one() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("db");
     let mut db = SqliteStorage::open(&path).unwrap();
@@ -401,10 +401,10 @@ fn S11_an_intent_written_after_a_cached_scoped_read_shows_in_the_next_one() {
     assert!(hidden.is_empty());
 }
 
-/// The intent table is insert-only: no update, no delete, no replace, and a malformed row is
+/// identity/R6: the intent table is insert-only: no update, no delete, no replace, and a malformed row is
 /// refused by the table itself
 #[test]
-fn S8_the_intent_table_is_insert_only() {
+fn the_intent_table_is_insert_only() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("db");
     let mut db = SqliteStorage::open(&path).unwrap();
@@ -450,9 +450,9 @@ fn S8_the_intent_table_is_insert_only() {
     assert_eq!(count(&path), 1);
 }
 
-/// A sync that touches nothing intent-backed keeps every intent-backed claim
+/// claims/R58: a sync that touches nothing intent-backed keeps every intent-backed claim
 #[test]
-fn S10_a_sync_keeps_the_claims_intents_back() {
+fn a_sync_keeps_the_claims_intents_back() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("db");
     let mut db = SqliteStorage::open(&path).unwrap();
@@ -474,9 +474,9 @@ fn S10_a_sync_keeps_the_claims_intents_back() {
     assert_eq!(claims(&db), 3);
 }
 
-/// `me` is visible in every scope; a Person with no linked account in none but the unscoped read
+/// identity/R7: `me` is visible in every scope; a Person with no linked account in none but the unscoped read
 #[test]
-fn S9_me_is_visible_in_every_scope_and_an_unlinked_person_in_none() {
+fn me_is_visible_in_every_scope_and_an_unlinked_person_in_none() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("db");
     let mut db = SqliteStorage::open(&path).unwrap();
@@ -524,10 +524,10 @@ fn cannot_link(id: &str, a: &EntityTarget, b: &EntityTarget, scopes: &[&str]) ->
     )
 }
 
-/// S9: an issuer that sees a Person only through its one link can undo that link: the undo and
+/// identity/R7: an issuer that sees a Person only through its one link can undo that link: the undo and
 /// its cannot-link are checked against the state the issuer saw, not one the batch changed
 #[test]
-fn S9_a_scoped_issuer_can_undo_a_persons_only_link() {
+fn a_scoped_issuer_can_undo_a_persons_only_link() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("db");
     let mut db = SqliteStorage::open(&path).unwrap();
@@ -546,11 +546,11 @@ fn S9_a_scoped_issuer_can_undo_a_persons_only_link() {
     assert_eq!(count(&path), 4);
 }
 
-/// S8: storage refuses what the ADR refuses, whoever builds the intent: a link from a Person or
+/// identity/R6: storage refuses what the ADR refuses, whoever builds the intent: a link from a Person or
 /// to an account, a merge of entities that aren't both Persons, an undo of a cannot-link, an undo
 /// or a Person's creation, a second `me`, and a second creation of one Person
 #[test]
-fn S8_storage_refuses_invalid_intents_whoever_builds_them() {
+fn storage_refuses_invalid_intents_whoever_builds_them() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("db");
     let mut db = SqliteStorage::open(&path).unwrap();
@@ -614,9 +614,9 @@ fn S8_storage_refuses_invalid_intents_whoever_builds_them() {
     }
 }
 
-/// S11: an intent write publishes the projection, as any other projection write does
+/// identity/R8: an intent write publishes the projection, as any other projection write does
 #[test]
-fn S11_an_intent_write_publishes_the_projection() {
+fn an_intent_write_publishes_the_projection() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("db");
     let mut db = SqliteStorage::open(&path).unwrap();
@@ -654,11 +654,11 @@ fn named(id: &str, person: &EntityTarget, name: &str, minutes: i64) -> Intent {
     named
 }
 
-/// S33: `about me` whose accounts' claims exceed the work budget fails with the budget error,
+/// identity/R30: `about me` whose accounts' claims exceed the work budget fails with the budget error,
 /// scoped or not, instead of answering partially; a merged Person's whole class is under the
 /// same budget
 #[test]
-fn S33_about_me_over_the_work_budget_fails_instead_of_answering_partially() {
+fn about_me_over_the_work_budget_fails_instead_of_answering_partially() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("db");
     let mut db = SqliteStorage::open(&path).unwrap();
@@ -711,11 +711,11 @@ fn S33_about_me_over_the_work_budget_fails_instead_of_answering_partially() {
     }
 }
 
-/// S36: naming a Person again keeps the older name as a superseded alias, its interval closed at
+/// identity/R33: naming a Person again keeps the older name as a superseded alias, its interval closed at
 /// the newer name's time; the older name still resolves to the Person (historical), and so does
 /// the newer (current)
 #[test]
-fn S36_an_older_name_stays_superseded_and_still_resolves() {
+fn an_older_name_stays_superseded_and_still_resolves() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("db");
     let mut db = SqliteStorage::open(&path).unwrap();
@@ -791,11 +791,11 @@ fn same_as(id: &str, a: &EntityTarget, b: &EntityTarget) -> Intent {
     merge
 }
 
-/// S33: a merge chain through a Person the scope set can't see costs nothing past it: `about P`
+/// identity/R30: a merge chain through a Person the scope set can't see costs nothing past it: `about P`
 /// in `personal`, with P–Q–R merged and Q held only through a `work` account, replays only P's
 /// own account, so the budget P alone needs is enough
 #[test]
-fn S33_a_merge_chain_through_a_hidden_person_adds_no_work_past_it() {
+fn a_merge_chain_through_a_hidden_person_adds_no_work_past_it() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("db");
     let mut db = SqliteStorage::open(&path).unwrap();
@@ -837,10 +837,10 @@ fn S33_a_merge_chain_through_a_hidden_person_adds_no_work_past_it() {
     );
 }
 
-/// S36: undoing a name a newer one had already replaced ends it at the replacement, not at the
+/// identity/R33: undoing a name a newer one had already replaced ends it at the replacement, not at the
 /// undo, so the two names never overlap
 #[test]
-fn S36_undoing_an_already_replaced_name_ends_it_at_the_replacement() {
+fn undoing_an_already_replaced_name_ends_it_at_the_replacement() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("db");
     let mut db = SqliteStorage::open(&path).unwrap();
@@ -888,10 +888,10 @@ fn S36_undoing_an_already_replaced_name_ends_it_at_the_replacement() {
     assert_eq!(intervals[0].start, time() + chrono::Duration::minutes(2));
 }
 
-/// S36a: undoing a newer name leaves a gap in the older one: name A at t1, B at t2, undo B at t3
+/// identity/R34: undoing a newer name leaves a gap in the older one: name A at t1, B at t2, undo B at t3
 /// gives A [t1, t2) and [t3, open), and B [t2, t3)
 #[test]
-fn S36a_undoing_a_newer_name_leaves_a_gap_in_the_older_one() {
+fn undoing_a_newer_name_leaves_a_gap_in_the_older_one() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("db");
     let mut db = SqliteStorage::open(&path).unwrap();
@@ -952,11 +952,11 @@ fn S36a_undoing_a_newer_name_leaves_a_gap_in_the_older_one() {
     assert_eq!(format!("{again:?}"), format!("{claims:?}"));
 }
 
-/// S31: a scoped read replays the scope's identity premises (verified emails, token owners and
+/// identity/R29: a scoped read replays the scope's identity premises (verified emails, token owners and
 /// their subjects' type and alias claims), never every visible claim: an unknown entity costs
 /// only those
 #[test]
-fn S31_a_scoped_read_replays_only_identity_premises() {
+fn a_scoped_read_replays_only_identity_premises() {
     let home = tempfile::tempdir().unwrap();
     let mut db = SqliteStorage::open(&home.path().join("db")).unwrap();
     account(&mut db, 1, "personal");
@@ -977,10 +977,10 @@ fn S31_a_scoped_read_replays_only_identity_premises() {
     assert!(answer.unwrap().is_empty());
 }
 
-/// S31: a scoped view of a Person replays the claims of the accounts it holds automatically, not
+/// identity/R29: a scoped view of a Person replays the claims of the accounts it holds automatically, not
 /// only their identity premises (two phases)
 #[test]
-fn S31_a_scoped_person_view_replays_its_automatically_held_accounts() {
+fn a_scoped_person_view_replays_its_automatically_held_accounts() {
     let home = tempfile::tempdir().unwrap();
     let mut db = SqliteStorage::open(&home.path().join("db")).unwrap();
     let anchor = account(&mut db, 1, "personal");
@@ -1090,11 +1090,11 @@ fn viewer(
         .unwrap();
 }
 
-/// S19: a Linear key that switches from its owner to an app closes the owner's token-owner link
+/// identity/R17: a Linear key that switches from its owner to an app closes the owner's token-owner link
 /// at the newer viewer read, in a scoped read as in the unscoped one, though only the app's type
 /// claim cites that newer read
 #[test]
-fn S19_a_linear_key_switching_to_an_app_closes_the_token_link_in_scope_too() {
+fn a_linear_key_switching_to_an_app_closes_the_token_link_in_scope_too() {
     let home = tempfile::tempdir().unwrap();
     let mut db = SqliteStorage::open(&home.path().join("db")).unwrap();
     let (me, minted) = me(1);
@@ -1152,10 +1152,10 @@ fn S19_a_linear_key_switching_to_an_app_closes_the_token_link_in_scope_too() {
     assert_eq!(scoped, full);
 }
 
-/// S23, S27: the candidate rules read each entity's current name, login and email aliases, the
+/// identity/R21, identity/R25: the candidate rules read each entity's current name, login and email aliases, the
 /// Persons holding it now, and whether every current type of it is an account (a bot's isn't)
 #[test]
-fn S23_storage_reads_the_facts_the_candidate_rules_need() {
+fn storage_reads_the_facts_the_candidate_rules_need() {
     let home = tempfile::tempdir().unwrap();
     let mut db = SqliteStorage::open(&home.path().join("db")).unwrap();
     let alias = claims::ALIAS_PREDICATE;
@@ -1211,8 +1211,9 @@ fn S23_storage_reads_the_facts_the_candidate_rules_need() {
     assert!(!bot.account);
 }
 
+/// identity/R37: scoped token windows keep the longer token interval
 #[test]
-fn S40_scoped_token_windows_keep_the_longer_token_interval() {
+fn scoped_token_windows_keep_the_longer_token_interval() {
     fn viewer(
         db: &mut SqliteStorage,
         id: &str,
