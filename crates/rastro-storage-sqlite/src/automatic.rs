@@ -1,10 +1,62 @@
 //! Evidence-derived identity links, rebuilt from projected claims and owner intents.
 use crate::{identity, lifecycle, stamp};
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use rastro_core::claims::{self, Object, Support, revision_with_links};
 use rastro_core::identity::{self as core, Resolution, admit_account};
 use rusqlite::{Connection, params};
 use std::collections::BTreeSet;
+
+/// A stretch of time: from its start, until its end or with no end.
+type Window = (DateTime<Utc>, Option<DateTime<Utc>>);
+
+/// An (account, Person) pair over a window.
+type Held = (String, String, DateTime<Utc>, Option<DateTime<Utc>>);
+
+/// Where two windows overlap, if they do.
+fn overlap(a: Window, b: Window) -> Option<Window> {
+    let start = a.0.max(b.0);
+    let end = match (a.1, b.1) {
+        (Some(x), Some(y)) => Some(x.min(y)),
+        (x, y) => x.or(y),
+    };
+    if end.is_some_and(|end| end <= start) {
+        None
+    } else {
+        Some((start, end))
+    }
+}
+
+/// What is left of `window` once every window of `minus` is taken out, in time order.
+fn subtract(window: Window, minus: &[Window]) -> Vec<Window> {
+    let mut left = vec![window];
+    for &(start, end) in minus {
+        left = left
+            .into_iter()
+            .flat_map(|(s, e)| {
+                let mut parts = Vec::new();
+                if start > s {
+                    parts.push((s, Some(e.map_or(start, |e| e.min(start)))));
+                }
+                if let Some(end) = end
+                    && e.is_none_or(|e| end < e)
+                {
+                    parts.push((s.max(end), e));
+                }
+                parts
+            })
+            .collect();
+    }
+    left
+}
+
+/// The windows `set` holds for `account` and `person`.
+fn windows(set: &BTreeSet<Held>, account: &str, person: &str) -> Vec<Window> {
+    set.iter()
+        .filter(|(a, p, ..)| a == account && p == person)
+        .map(|&(_, _, start, end)| (start, end))
+        .collect()
+}
 
 fn pair(a: &str, b: &str) -> (String, String) {
     if a <= b {
@@ -46,20 +98,20 @@ fn vetoed(resolution: &Resolution, account: &str, person: &str) -> bool {
 }
 
 /// Two qualifying automatic links into one merge class, cannot-linked to each other, block
-/// each other in every interval; an owner link to the class wins.
-fn conflicts(
-    resolution: &Resolution,
-    qualifying: &BTreeSet<(String, String)>,
-) -> BTreeSet<(String, String)> {
-    let candidates: Vec<&(String, String)> = qualifying.iter().collect();
+/// each other over the time both qualify, and only then; an owner link to the class wins.
+fn conflicts(resolution: &Resolution, qualifying: &BTreeSet<Held>) -> BTreeSet<Held> {
+    let candidates: Vec<&Held> = qualifying.iter().collect();
     let owners: Vec<&(String, String)> = resolution.links.keys().collect();
     let mut blocked = BTreeSet::new();
-    for (i, (a, p)) in candidates.iter().enumerate() {
+    for (i, (a, p, a_start, a_end)) in candidates.iter().enumerate() {
         let class = merge_class(resolution, p);
-        for (b, q) in &candidates[i + 1..] {
+        for (b, q, b_start, b_end) in &candidates[i + 1..] {
             if a == b || !class.contains(q) || !resolution.cannot.contains_key(&pair(a, b)) {
                 continue;
             }
+            let Some((start, end)) = overlap((*a_start, *a_end), (*b_start, *b_end)) else {
+                continue;
+            };
             let a_owner = owners
                 .iter()
                 .any(|(account, person)| account == a && class.contains(person));
@@ -69,7 +121,7 @@ fn conflicts(
             for (side, owned) in [(a, a_owner), (b, b_owner)] {
                 if !owned {
                     for person in &class {
-                        blocked.insert((side.clone(), person.clone()));
+                        blocked.insert((side.clone(), person.clone(), start, end));
                     }
                 }
             }
@@ -82,20 +134,62 @@ pub(crate) fn apply(db: &Connection) -> Result<()> {
     apply_within(db, None)
 }
 
-/// The (account, Person) pairs `db` links automatically, in any interval.
-pub(crate) fn linked_pairs(db: &Connection) -> Result<BTreeSet<(String, String)>> {
-    Ok(db
-        .prepare("SELECT DISTINCT c.subject, c.object_entity FROM claim c JOIN automatic_justification a ON a.claim_id = c.id")?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-        .collect::<Result<_, _>>()?)
+/// The (account, Person) pairs `db` links automatically, each over every window it holds.
+pub(crate) fn linked_windows(db: &Connection) -> Result<BTreeSet<Held>> {
+    let rows: Vec<(String, String, String, Option<String>)> = db
+        .prepare("SELECT c.subject, c.object_entity, a.started_at, a.ended_at FROM claim c JOIN automatic_justification a ON a.claim_id = c.id")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .collect::<Result<_, _>>()?;
+    rows.into_iter()
+        .map(|(account, person, start, end)| {
+            Ok((
+                account,
+                person,
+                crate::parse_time(start)?,
+                end.map(crate::parse_time).transpose()?,
+            ))
+        })
+        .collect()
 }
 
-/// In a scoped replay, `allowed` holds the (account, Person) pairs the full projection links
-/// automatically: hidden data may suppress a link there but never create one.
-pub(crate) fn apply_within(
-    db: &Connection,
-    allowed: Option<&BTreeSet<(String, String)>>,
-) -> Result<()> {
+/// The parts of `window` in which `account` may hold `person`: all of it, or in a scoped replay
+/// only where the full projection links them.
+fn permitted(
+    allowed: Option<&BTreeSet<Held>>,
+    account: &str,
+    person: &str,
+    window: Window,
+) -> Vec<Window> {
+    let mut parts: Vec<Window> = match allowed {
+        None => return vec![window],
+        Some(allowed) => windows(allowed, account, person)
+            .into_iter()
+            .filter_map(|held| overlap(window, held))
+            .collect(),
+    };
+    // Windows the full projection holds for one pair may overlap (an email and the token owner):
+    // union them so each permitted stretch is written once, whole.
+    parts.sort();
+    let mut merged: Vec<Window> = Vec::new();
+    for (start, end) in parts {
+        if let Some(last) = merged.last_mut()
+            && last.1.is_none_or(|last_end| start < last_end)
+        {
+            last.1 = match (last.1, end) {
+                (Some(a), Some(b)) => Some(a.max(b)),
+                _ => None,
+            };
+            continue;
+        }
+        merged.push((start, end));
+    }
+    merged
+}
+
+/// In a scoped replay, `allowed` holds the windows in which the full projection links each
+/// (account, Person) pair automatically: hidden data may suppress a link there but never create
+/// one.
+pub(crate) fn apply_within(db: &Connection, allowed: Option<&BTreeSet<Held>>) -> Result<()> {
     let resolution = Resolution::of(&identity::load(db)?);
     let mut affected: BTreeSet<String> = db
         .prepare("SELECT DISTINCT claim_id FROM automatic_justification")?
@@ -105,7 +199,7 @@ pub(crate) fn apply_within(
         .query_map([core::HELD_BY], |r| r.get::<_, String>(0))?.collect::<Result<Vec<_>, _>>()?);
     let mut blocked = BTreeSet::new();
     // Every blocked set tried so far, oldest first.
-    let mut tried: Vec<BTreeSet<(String, String)>> = Vec::new();
+    let mut tried: Vec<BTreeSet<Held>> = Vec::new();
     let mut settled = false;
     loop {
         let mut qualifying = BTreeSet::new();
@@ -124,7 +218,6 @@ pub(crate) fn apply_within(
         )?.query_map([core::TOKEN_OWNER], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<Result<_, _>>()?;
             for (premise, account, identifier) in rows {
                 if vetoed(&resolution, &account, me)
-                    || allowed.is_some_and(|a| !a.contains(&(account.clone(), me.clone())))
                     || admit_account(&identifier, &identity::types(db, &account, &[])?).is_err()
                 {
                     continue;
@@ -140,20 +233,23 @@ pub(crate) fn apply_within(
                     if interval.end.is_some_and(|end| end <= start) {
                         continue;
                     }
-                    qualifying.insert((account.clone(), me.clone()));
-                    if blocked.contains(&(account.clone(), me.clone())) {
-                        continue;
+                    let parts = permitted(allowed, &account, me, (start, interval.end));
+                    for &(start, end) in &parts {
+                        qualifying.insert((account.clone(), me.clone(), start, end));
                     }
-                    db.execute("INSERT OR IGNORE INTO claim (id, subject, predicate, object_entity, scalar, status, revision) VALUES (?1, ?2, ?3, ?4, 0, 'observed', '')", params![claim, account, core::HELD_BY, me])?;
-                    let id = format!("automatic/{claim}/token/{premise}/{}", stamp(start));
-                    db.execute("INSERT OR IGNORE INTO automatic_justification (id, claim_id, reason, premise_a, premise_b, started_at, ended_at) VALUES (?1, ?2, 'token_owner', ?3, NULL, ?4, ?5)", params![id, claim, premise, stamp(start), interval.end.map(stamp)])?;
-                    if interval.end.is_none() {
-                        db.execute(
-                            "UPDATE claim SET status = 'observed' WHERE id = ?1",
-                            [&claim],
-                        )?;
+                    let minus = windows(&blocked, &account, me);
+                    for (start, end) in parts.iter().flat_map(|&part| subtract(part, &minus)) {
+                        db.execute("INSERT OR IGNORE INTO claim (id, subject, predicate, object_entity, scalar, status, revision) VALUES (?1, ?2, ?3, ?4, 0, 'observed', '')", params![claim, account, core::HELD_BY, me])?;
+                        let id = format!("automatic/{claim}/token/{premise}/{}", stamp(start));
+                        db.execute("INSERT OR IGNORE INTO automatic_justification (id, claim_id, reason, premise_a, premise_b, started_at, ended_at) VALUES (?1, ?2, 'token_owner', ?3, NULL, ?4, ?5)", params![id, claim, premise, stamp(start), end.map(stamp)])?;
+                        if end.is_none() {
+                            db.execute(
+                                "UPDATE claim SET status = 'observed' WHERE id = ?1",
+                                [&claim],
+                            )?;
+                        }
+                        affected.insert(claim.clone());
                     }
-                    affected.insert(claim.clone());
                 }
             }
         }
@@ -174,9 +270,6 @@ pub(crate) fn apply_within(
                         if right_account == left_account
                             || !left_email.eq_ignore_ascii_case(right_email)
                             || vetoed(&resolution, right_account, &person)
-                            || allowed.is_some_and(|a| {
-                                !a.contains(&(right_account.clone(), person.clone()))
-                            })
                             || admit_account(identifier, &identity::types(db, right_account, &[])?)
                                 .is_err()
                         {
@@ -196,25 +289,36 @@ pub(crate) fn apply_within(
                                     if end.is_some_and(|end| end <= start) {
                                         continue;
                                     }
-                                    qualifying.insert((right_account.clone(), person.clone()));
-                                    if blocked.contains(&(right_account.clone(), person.clone())) {
-                                        continue;
+                                    let parts =
+                                        permitted(allowed, right_account, &person, (start, end));
+                                    for &(start, end) in &parts {
+                                        qualifying.insert((
+                                            right_account.clone(),
+                                            person.clone(),
+                                            start,
+                                            end,
+                                        ));
                                     }
-                                    db.execute("INSERT OR IGNORE INTO claim (id, subject, predicate, object_entity, scalar, status, revision) VALUES (?1, ?2, ?3, ?4, 0, 'observed', '')", params![claim, right_account, core::HELD_BY, person])?;
-                                    let id = format!(
-                                        "automatic/{claim}/email/{left_id}/{right_id}/{seed}/{}/{}",
-                                        stamp(start),
-                                        end.map(stamp).unwrap_or_default()
-                                    );
-                                    let count = db.execute("INSERT OR IGNORE INTO automatic_justification (id, claim_id, reason, premise_a, premise_b, started_at, ended_at) VALUES (?1, ?2, 'verified_email', ?3, ?4, ?5, ?6)", params![id, claim, left_id, right_id, stamp(start), end.map(stamp)])?;
-                                    if end.is_none() {
-                                        db.execute(
-                                            "UPDATE claim SET status = 'observed' WHERE id = ?1",
-                                            [&claim],
-                                        )?;
+                                    let minus = windows(&blocked, right_account, &person);
+                                    for (start, end) in
+                                        parts.iter().flat_map(|&part| subtract(part, &minus))
+                                    {
+                                        db.execute("INSERT OR IGNORE INTO claim (id, subject, predicate, object_entity, scalar, status, revision) VALUES (?1, ?2, ?3, ?4, 0, 'observed', '')", params![claim, right_account, core::HELD_BY, person])?;
+                                        let id = format!(
+                                            "automatic/{claim}/email/{left_id}/{right_id}/{seed}/{}/{}",
+                                            stamp(start),
+                                            end.map(stamp).unwrap_or_default()
+                                        );
+                                        let count = db.execute("INSERT OR IGNORE INTO automatic_justification (id, claim_id, reason, premise_a, premise_b, started_at, ended_at) VALUES (?1, ?2, 'verified_email', ?3, ?4, ?5, ?6)", params![id, claim, left_id, right_id, stamp(start), end.map(stamp)])?;
+                                        if end.is_none() {
+                                            db.execute(
+                                                "UPDATE claim SET status = 'observed' WHERE id = ?1",
+                                                [&claim],
+                                            )?;
+                                        }
+                                        added |= count != 0;
+                                        affected.insert(claim.clone());
                                     }
-                                    added |= count != 0;
-                                    affected.insert(claim.clone());
                                 }
                             }
                         }

@@ -666,17 +666,41 @@ fn refuse(env: &Env, id: &str, a: u32, b: u32) {
         .unwrap();
 }
 
-/// S17: two automatic links refused to each other block each other over every interval; one
-/// that already closed is never written either
-#[test]
-fn S17_a_blocked_conflict_writes_no_automatic_link_in_any_interval() {
-    let env = Env::new();
+/// Every automatic `held_by` window of `github:account/<n>` for each `n` in `accounts`, as
+/// (account, started_at, ended_at), sorted.
+fn automatic_windows(env: &Env, accounts: &[u32]) -> Vec<(String, String, Option<String>)> {
+    let names: Vec<String> = accounts
+        .iter()
+        .map(|n| format!("github:account/{n}"))
+        .collect();
+    let mut rows: Vec<(String, String, Option<String>)> = Connection::open(env.path())
+        .unwrap()
+        .prepare("SELECT DISTINCT e.identifier, a.started_at, a.ended_at FROM automatic_justification a JOIN claim c ON c.id = a.claim_id JOIN entity e ON e.id = c.subject")
+        .unwrap()
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    rows.retain(|(account, ..)| names.contains(account));
+    rows.sort();
+    rows
+}
+
+/// The anchor 701 holds a Person; 702 and 703, refused to each other, share its email: 702 from
+/// hour `first` until hour `moved`, 703 from hour `second` on. Returns the Person and a function
+/// giving the stored time of an hour.
+fn qualify_apart(
+    env: &Env,
+    first: i64,
+    moved: i64,
+    second: i64,
+) -> (String, impl Fn(i64) -> String) {
     let a = env.account(701, "anchor");
     env.account(702, "first");
     env.account(703, "second");
     let p = env.person("Anchor");
     env.ok(&["identity", "link", &a, &p]);
-    refuse(&env, "i_s17_history", 702, 703);
+    refuse(env, "i_s40_refusal", 702, 703);
     let now = Utc::now();
     let email = |n: u32, address: &str, hours: i64| {
         env.record_at(
@@ -693,13 +717,35 @@ fn S17_a_blocked_conflict_writes_no_automatic_link_in_any_interval() {
             now + chrono::Duration::hours(hours),
         )
     };
-    email(701, "same@example.com", 1);
-    email(702, "same@example.com", 2);
-    email(702, "moved@example.com", 3); // 702 qualified only over [2h, 3h)
-    email(703, "same@example.com", 4);
+    // Recorded in time order: a claim is never known before what is already recorded.
+    let mut events = [
+        (701, "same@example.com", 1),
+        (702, "same@example.com", first),
+        (702, "moved@example.com", moved),
+        (703, "same@example.com", second),
+    ];
+    events.sort_by_key(|&(_, _, hours)| hours);
+    for (n, address, hours) in events {
+        email(n, address, hours);
+    }
+    let at = move |hours: i64| {
+        (now + chrono::Duration::hours(hours)).to_rfc3339_opts(chrono::SecondsFormat::Millis, true)
+    };
+    (p, at)
+}
+
+/// S40: two accounts refused to each other that qualify for one Person over separate intervals
+/// each hold it over its own interval
+#[test]
+fn S40_cannot_linked_accounts_that_qualify_apart_each_hold_the_person() {
+    let env = Env::new();
+    let (p, at) = qualify_apart(&env, 2, 3, 4);
     assert_eq!(
-        env.sql::<i64>("SELECT count(*) FROM automatic_justification"),
-        0
+        automatic_windows(&env, &[702, 703]),
+        [
+            ("github:account/702".to_string(), at(2), Some(at(3))),
+            ("github:account/703".to_string(), at(4), None),
+        ]
     );
     let shown: Vec<String> = env.about(&p)["person"]["accounts"]
         .as_array()
@@ -707,7 +753,23 @@ fn S17_a_blocked_conflict_writes_no_automatic_link_in_any_interval() {
         .iter()
         .map(|a| a["identifier"].as_str().unwrap().to_string())
         .collect();
-    assert_eq!(shown, ["github:account/701"]);
+    assert_eq!(shown, ["github:account/701", "github:account/703"]);
+}
+
+/// S40: over the time two accounts refused to each other both qualify, neither holds the
+/// Person; outside it, each does
+#[test]
+fn S40_over_their_overlap_neither_cannot_linked_account_holds_the_person() {
+    let env = Env::new();
+    // 702 qualifies over [2h, 5h), 703 from 3h on: they overlap over [3h, 5h).
+    let (_, at) = qualify_apart(&env, 2, 5, 3);
+    assert_eq!(
+        automatic_windows(&env, &[702, 703]),
+        [
+            ("github:account/702".to_string(), at(2), Some(at(3))),
+            ("github:account/703".to_string(), at(5), None),
+        ]
+    );
 }
 
 fn joined(
