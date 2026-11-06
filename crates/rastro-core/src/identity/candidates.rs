@@ -129,13 +129,48 @@ pub struct Candidate {
     pub name: String,
 }
 
+impl Resolution {
+    /// The Persons merged with `person` through effective merges, itself included.
+    pub fn merge_class(&self, person: &str) -> BTreeSet<String> {
+        let mut class = BTreeSet::from([person.to_string()]);
+        loop {
+            let before = class.len();
+            for (a, b) in self.merges.keys() {
+                if class.contains(a) || class.contains(b) {
+                    class.insert(a.clone());
+                    class.insert(b.clone());
+                }
+            }
+            if class.len() == before {
+                return class;
+            }
+        }
+    }
+    /// Whether the owner has settled the pair: one Person holds both (merged Persons are one),
+    /// or a cannot-link refuses the two accounts, or one account and a Person holding the other.
+    fn settled(&self, a: &AccountFacts, b: &AccountFacts) -> bool {
+        let held = |f: &AccountFacts| -> BTreeSet<String> {
+            f.holders.iter().flat_map(|p| self.merge_class(p)).collect()
+        };
+        let (held_a, held_b) = (held(a), held(b));
+        let refused = |f: &AccountFacts, persons: &BTreeSet<String>| {
+            (persons.iter()).any(|p| self.cannot.contains_key(&sorted(&f.id, p)))
+        };
+        !held_a.is_disjoint(&held_b)
+            || self.cannot.contains_key(&sorted(&a.id, &b.id))
+            || refused(a, &held_b)
+            || refused(b, &held_a)
+    }
+}
+
 /// The namespace of a canonical identifier: what comes before its first `:`.
 fn namespace(identifier: &str) -> &str {
     identifier.split_once(':').map_or(identifier, |(ns, _)| ns)
 }
 
 /// The fuzzy candidates among `accounts`: two entities of different namespaces, each typed only
-/// as an account (never a bot), with at least one signal. Sorted by the pair's identifiers.
+/// as an account (never a bot), with at least one signal, that the owner hasn't settled.
+/// Sorted by the pair's identifiers.
 pub fn candidate_pairs(accounts: &[AccountFacts], resolution: &Resolution) -> Vec<Candidate> {
     let mut accounts: Vec<&AccountFacts> = accounts.iter().filter(|a| a.account).collect();
     accounts.sort_by(|a, b| a.identifier.cmp(&b.identifier));
@@ -150,7 +185,7 @@ pub fn candidate_pairs(accounts: &[AccountFacts], resolution: &Resolution) -> Ve
     let mut found = Vec::new();
     for (i, a) in accounts.iter().enumerate() {
         for b in &accounts[i + 1..] {
-            if namespace(&a.identifier) == namespace(&b.identifier) {
+            if namespace(&a.identifier) == namespace(&b.identifier) || resolution.settled(a, b) {
                 continue;
             }
             let reasons = reasons(a, b);
@@ -198,6 +233,29 @@ mod tests {
             logins: list(logins),
             emails: list(emails),
             holders: BTreeSet::new(),
+        }
+    }
+    /// A Person `rastro:person/<n>` that `r` knows.
+    fn known_person(r: &mut Resolution, n: &str) -> EntityTarget {
+        let identifier = format!("rastro:person/{n}");
+        let entity = EntityTarget {
+            id: claims::entity_id(&identifier),
+            identifier,
+            role: "person".into(),
+        };
+        let person = Person {
+            entity: entity.clone(),
+            created_by: format!("i_{n}"),
+            me: false,
+        };
+        r.persons.insert(entity.id.clone(), person);
+        entity
+    }
+    /// `f`, held now by `person`.
+    fn held(f: &AccountFacts, person: &EntityTarget) -> AccountFacts {
+        AccountFacts {
+            holders: BTreeSet::from([person.id.clone()]),
+            ..f.clone()
         }
     }
 
@@ -272,5 +330,39 @@ mod tests {
             ..facts("linear:user/app", &["Ana Silva"], &[], &[])
         };
         assert!(candidate_pairs(&[github, twin, bot], &none).is_empty());
+    }
+
+    /// S25: a pair one Person holds, directly or through a merge, is no longer a candidate; with
+    /// one account held, it still is, and names its holder
+    #[test]
+    fn S25_a_pair_one_person_holds_is_not_a_candidate() {
+        let mut r = Resolution::default();
+        let (p, q) = (known_person(&mut r, "p"), known_person(&mut r, "q"));
+        let github = facts("github:account/1", &["Ana Silva"], &[], &[]);
+        let linear = facts("linear:user/u-1", &["ana silva"], &[], &[]);
+        let found = candidate_pairs(&[held(&github, &p), linear.clone()], &r);
+        assert_eq!(found[0].accounts[0].held_by, ["rastro:person/p"]);
+        assert!(candidate_pairs(&[held(&github, &p), held(&linear, &p)], &r).is_empty());
+        let apart = [held(&github, &p), held(&linear, &q)];
+        assert_eq!(candidate_pairs(&apart, &r).len(), 1);
+        r.merges.insert(sorted(&p.id, &q.id), "i_merge".into());
+        assert!(candidate_pairs(&apart, &r).is_empty());
+    }
+
+    /// S26: a cannot-link between the two accounts, or between one and the Person holding the
+    /// other, keeps the pair out
+    #[test]
+    fn S26_a_refused_pair_is_not_a_candidate() {
+        let github = facts("github:account/1", &["Ana Silva"], &[], &[]);
+        let linear = facts("linear:user/u-1", &["ana silva"], &[], &[]);
+        let mut r = Resolution::default();
+        r.cannot
+            .insert(sorted(&github.id, &linear.id), "i_no".into());
+        assert!(candidate_pairs(&[github.clone(), linear.clone()], &r).is_empty());
+        let mut r = Resolution::default();
+        let p = known_person(&mut r, "p");
+        r.cannot
+            .insert(sorted(&linear.id, &p.id), "i_undone".into());
+        assert!(candidate_pairs(&[held(&github, &p), linear], &r).is_empty());
     }
 }
