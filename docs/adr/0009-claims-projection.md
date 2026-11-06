@@ -45,12 +45,12 @@ These tables live in a **generation**; readers see the active one.
 - A new extractor or vocabulary version means replay (`../decisions/vocabulary.md` §6).
 
 ## Amended 2026-11-05
-Status stays accepted. Knowledge graph deep dive (`../research/kg-deep-dive/42-proposed-decisions.md`); product meaning in `../decisions/knowledge.md` §33–§48. This replaces the T3 projection tables, which were disposable and are dropped by a later migration (`0002`).
+Status stays accepted. Knowledge graph deep dive (`../research/kg-deep-dive/42-proposed-decisions.md`); product meaning in `../decisions/knowledge.md` §33–§48. This replaces the original projection tables, which were disposable and are dropped by a later migration (`0002`).
 - **Tables (one migration, observed-only, about eight).**
   - `entity`: id and canonical identifier. No type column: a type is a `rastro:type` claim.
   - `claim`.
-  - `justification` (renames *claim support*): id = hash(claim id, extractor id, derivation key), plus kind (provenance, inference or confirmation; only provenance is used now), extractor and version.
-  - `justification_span`: the evidence spans of one derivation; all are required (AND). A justification is live only while every span is. The premise table arrives with the first inference.
+  - `justification` (renames *claim support*): id = hash(claim id, extractor id, derivation key), plus kind (provenance, inference or confirmation; provenance is used here; automatic-link inference is added below), extractor and version.
+  - `justification_span`: the evidence spans of one derivation; all are required (AND). A justification is live only while every span is. Automatic-link premises now live in `automatic_justification` (amendment below); a generic premise table remains deferred.
   - `occurrence`: per justification, id = hash(justification id, opening event key); replaces *known interval*.
   - `claim_link`.
   - `extraction_checkpoint`.
@@ -77,3 +77,10 @@ Status stays accepted. Product meaning in `../decisions/knowledge.md` §50–§5
 - **Carried output is re-derived.** It is not precious; it is replaced when the extractor returns and its pair replays. "Rebuild equals incremental" is stated for when every pair replays.
 - **Entity-wide type conflict.** `conflicts_with` between `rastro:type` claims live anywhere in a component is computed in the lifecycle rollup over the component already loaded, unless one type is an ancestor of the other. Dominance, `supersedes` links and incremental slot selection stay per (location, field), so the hub scaling bound holds. The links change, so run `claims rebuild`; a sync fixes only the components it touches. No schema migration.
 - **Scope mechanism for aliases.** A scoped alias lookup starts from the matching `rastro:alias` claims with at least one fully visible justification. No stored status takes part in root selection: hidden roots would feed the work budget, and a hidden supersession would drop a visible root. The status set, ambiguity and `current`/`historical` marks are applied inside the replay from visible justifications.
+
+## Amended 2026-11-06 (automatic links)
+Status stays accepted. Identity architecture: `0010-identity-and-owner-intents.md`; product meaning: `../decisions/knowledge.md` §60–§62.
+- **Inference premises.** `automatic_justification` stores each automatic link's id, claim id, reason (`verified_email` or `token_owner`), premise claim ids (`premise_a`, nullable `premise_b`), and `started_at`/`ended_at`. These are disposable inference justifications, rebuilt from evidence and owner intents, not a generic premise table.
+- **Snapshot replacement (D47, exception to *Slot* and *Writing*).** A newer snapshot from the same source and selection closes claims supported only by its predecessor, including when the newer verified-email list is empty. This applies only to `rastro:verified_email`, `rastro:token_owner` and email-alias claims. Other claims retain their lifecycle; a failed read records no snapshot and does not close the previous support. Snapshot evidence and exact address spans are specified in ADR 0010.
+- **Publication P1 now swaps nine shadow tables.** `entity`, `claim`, `justification`, `justification_span`, `occurrence`, `claim_link`, `extraction_checkpoint`, `intent_justification` and `automatic_justification`. `intent` and `projection_publication` remain outside the swap.
+- **Scope mechanism exception (D50).** Link creation still requires visible premises; global owner intents and automatic-link conflicts may suppress a link in a scoped read. Hidden data never creates one. ADR 0010 specifies the accepted disclosure and conflict semantics.
