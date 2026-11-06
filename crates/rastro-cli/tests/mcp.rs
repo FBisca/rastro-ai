@@ -2351,7 +2351,8 @@ fn why_text(session: &mut Session, claim: &str) -> Value {
 /// claim, a link shown only where both its ends are, equals a rebuild that holds only the
 /// visible evidence and the visible intents, including automatic links.
 /// Hidden data may suppress an automatic link but never create one: the oracle refuses, by
-/// a cannot-link, each automatic link the full projection doesn't hold.
+/// a cannot-link, each automatic link the full projection doesn't hold. Both link sets are
+/// written out by hand from the seeded log, never read back from the code under test.
 #[test]
 fn S31_random_scope_sets_with_intents_and_automatic_links_equal_a_per_scope_rebuild() {
     use rastro_core::claims::entity_id;
@@ -2574,9 +2575,12 @@ fn S31_random_scope_sets_with_intents_and_automatic_links_equal_a_per_scope_rebu
             .enumerate()
             .filter_map(|(i, s)| (mask & (1 << i) != 0).then_some(*s))
             .collect();
+        // The fifth account, in `personal`, is shown there too, so its cannot-link reaches the
+        // rebuild wherever it and P3 are visible.
         let shown = |account: &str| {
             accounts
                 .iter()
+                .chain([(fifth.identifier.clone(), "personal")].iter())
                 .any(|(a, scope)| a == account && visible.contains(scope))
         };
         // A Person is visible through an effective link to a visible account; `me` always.
@@ -2670,14 +2674,50 @@ fn S31_random_scope_sets_with_intents_and_automatic_links_equal_a_per_scope_rebu
                 .map(|(i, ..)| i.clone())
                 .collect(),
         );
-        // Refuse, in the oracle, every automatic link the full projection doesn't hold.
+        // Refuse, in the oracle, every automatic link the full projection doesn't hold. With
+        // this seed the fourth account sits in `personal`, linked to P3 and `me`, and the undone
+        // link is account 3's. So the full projection links: account 4, the token owner, to
+        // `me`; accounts 1 and 2, through their shared verified email, each to the other's
+        // Person and so back to its own (P1, P2); account 5 to nothing, its cannot-link to P3
+        // vetoing it across the merge chain.
         let held = |db: Connection| -> std::collections::BTreeSet<(String, String)> {
             db.prepare("SELECT DISTINCT s.identifier, o.identifier FROM claim c JOIN automatic_justification a ON a.claim_id = c.id JOIN entity s ON s.id = c.subject JOIN entity o ON o.id = c.object_entity")
                 .unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect()
         };
-        let global = held(all.db());
-        let refusals: Vec<Intent> = held(rebuilt.db())
-            .difference(&global)
+        let pairs = |list: &[(&str, &str)]| -> std::collections::BTreeSet<(String, String)> {
+            list.iter()
+                .map(|(account, person)| (account.to_string(), person.to_string()))
+                .collect()
+        };
+        let global = pairs(&[
+            ("github:account/1", "rastro:person/p1"),
+            ("github:account/1", "rastro:person/p2"),
+            ("github:account/2", "rastro:person/p1"),
+            ("github:account/2", "rastro:person/p2"),
+            ("github:account/4", "rastro:person/me"),
+        ]);
+        assert_eq!(
+            held(all.db()),
+            global,
+            "mask {mask}: the full projection's automatic links"
+        );
+        // A scope set with `personal` but not `work` sees neither merge, so nothing it sees vetoes
+        // account 5 for P1: the rebuild links it there, and the oracle refuses exactly that.
+        let refused = if mask & 0b011 == 0b001 {
+            pairs(&[("github:account/5", "rastro:person/p1")])
+        } else {
+            pairs(&[])
+        };
+        assert_eq!(
+            held(rebuilt.db())
+                .difference(&global)
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>(),
+            refused,
+            "mask {mask}: the automatic links only the rebuild holds"
+        );
+        let refusals: Vec<Intent> = refused
+            .iter()
             .enumerate()
             .map(|(k, (account, person))| {
                 intent(
