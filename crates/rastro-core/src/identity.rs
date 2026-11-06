@@ -23,6 +23,8 @@ pub const ME_DOMAIN: &str = "person/me";
 pub const PERSON_TYPE: &str = "rastro:Person";
 pub const HELD_BY: &str = "rastro:held_by";
 pub const SAME_AS: &str = "rastro:same_as";
+pub const TOKEN_OWNER: &str = "rastro:token_owner";
+pub const VERIFIED_EMAIL: &str = "rastro:verified_email";
 /// The alias kind of a Person's name, written `rastro:name/<name>`.
 pub const NAME_KIND: &str = "name";
 /// The justification kind of an intent-backed claim.
@@ -663,7 +665,7 @@ impl Resolution {
     /// Each stretch during which a name intent gave its Person's name, as (Person id, name,
     /// intent id, (start, end)). Read in acceptance order: a Person's name is its newest name
     /// intent not yet undone, so a newer name ends the older one's stretch, and undoing the
-    /// newer one starts a new stretch of the older at the undo, leaving a gap (plan D39).
+    /// newer one starts a new stretch of the older at the undo, leaving a gap.
     /// Undoing a name already replaced ends nothing more: its stretch ended at the replacement.
     fn name_stretches(&self) -> Vec<NameStretch> {
         let mut stretches: Vec<NameStretch> = Vec::new();

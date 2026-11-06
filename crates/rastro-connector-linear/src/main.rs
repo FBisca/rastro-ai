@@ -8,7 +8,7 @@
 //! # What it records
 //! Each field is one observation at a location that is the record's canonical identifier, so a
 //! changed title or team never moves it:
-//! - a user at `linear:user/<id>`: `/id`, `/app`, `/name`, `/displayName`, `/email`, `/active`;
+//! - a user at `linear:user/<id>`: `/id`, `/app`, `/guest`, `/name`, `/displayName`, `/email`, `/active`;
 //! - an issue at `linear:issue/<id>`: `/id`, `/identifier`, `/url`, `/title`, `/description`,
 //!   `/state/name`, `/state/type`, `/creator/app`, `/creator/id`, `/assignee/app`,
 //!   `/assignee/id`, `/team/id`, `/team/key`, `/team/name`, `/createdAt`. Title, description
@@ -18,7 +18,7 @@
 //!   pairs a new actor's id with the previous actor's flag. The field is `User.app` of Linear's
 //!   public schema (`app: Boolean!`). Whether `users(includeDisabled: true)` lists app users is
 //!   not checked against the live API: the tests run against a scripted one;
-//! - whose API key it is, at `linear:viewer`: `/id`. One slot, so a key of another user
+//! - whose API key it is, at `linear:viewer`: `/id` and `/app`. One slot, so a key of another user
 //!   replaces it.
 //!
 //! Every user is read on every sync, deactivated ones too: a user's state matters whenever it
@@ -41,9 +41,9 @@ use std::{
 
 const DEFAULT_API: &str = "https://api.linear.app";
 
-const VIEWER: &str = "query Viewer { viewer { id } }";
+const VIEWER: &str = "query Viewer { viewer { id app } }";
 const USERS: &str = "query Users($after: String) { users(first: 100, after: $after, \
-    includeDisabled: true) { nodes { id name displayName email active app updatedAt } \
+    includeDisabled: true) { nodes { id name displayName email active app guest updatedAt } \
     pageInfo { hasNextPage endCursor } } }";
 const ISSUES: &str = "query Issues($after: String, $from: DateTimeOrDuration!, \
     $to: DateTimeOrDuration!) { issues(first: 100, after: $after, orderBy: updatedAt, \
@@ -92,6 +92,7 @@ fn main() -> Result<()> {
     let outcome = sync(&mut transport, &params.run, &mut submitted);
     let failure = outcome.err();
     let report = CoverageReport {
+        gaps: Vec::new(),
         status: if failure.is_none() {
             CoverageStatus::Complete
         } else {
@@ -175,6 +176,8 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
             updated: None,
             original: viewer,
         };
+        let app = flag(viewer, "/app");
+        self.submit(&record, "/app", app.as_deref(), STRUCTURED)?;
         self.submit(&record, "/id", Some(id), STRUCTURED)?;
         self.pages(USERS, json!({}), "users", Self::read_user)?;
         self.pages(
@@ -222,12 +225,21 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
         };
         let active = flag(user, "/active");
         let app = flag(user, "/app");
+        let guest = flag(user, "/guest");
         for (field, value) in [
             ("/id", Some(id)),
             ("/app", app.as_deref()),
+            ("/guest", guest.as_deref()),
             ("/name", text(user, "/name")),
             ("/displayName", text(user, "/displayName")),
-            ("/email", text(user, "/email")),
+            (
+                "/email",
+                if user.get("email").is_some_and(Value::is_null) {
+                    Some("null")
+                } else {
+                    text(user, "/email")
+                },
+            ),
             ("/active", active.as_deref()),
         ] {
             self.submit(&record, field, value, STRUCTURED)?;

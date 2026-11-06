@@ -31,6 +31,177 @@ fn coverage(env: &Env) -> Vec<Vec<String>> {
     env.rows("SELECT state, reason FROM coverage")
 }
 
+#[test]
+fn S19_key_owner_links_to_me_without_an_owner_link() {
+    let fixture = Fixture::start(world());
+    let env = env_with_extractor(&fixture.base);
+    env.ok(&["identity", "me", "--json"]);
+    assert_eq!(env.sync(&[])["status"], "ok");
+    let about = env.json(&["about", "me"]);
+    let account = about["person"]["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["identifier"] == format!("linear:user/{VIEWER}"))
+        .expect("viewer linked to me");
+    assert!(
+        account["reasons"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["kind"] == "token_owner"),
+        "{about}"
+    );
+}
+
+#[test]
+fn S19_a_new_key_owner_replaces_the_previous_viewer() {
+    let fixture = Fixture::start(world());
+    let env = env_with_extractor(&fixture.base);
+    env.ok(&["identity", "me", "--json"]);
+    assert_eq!(env.sync(&[])["status"], "ok");
+    fixture.change(|world| world.viewer = ANA.into());
+    assert_eq!(env.sync(&["--reread"])["status"], "ok");
+    let about = env.json(&["about", "me"]);
+    let accounts = about["person"]["accounts"].as_array().unwrap();
+    assert!(
+        accounts
+            .iter()
+            .any(|a| a["identifier"] == format!("linear:user/{ANA}")),
+        "{about}"
+    );
+    assert!(
+        !accounts
+            .iter()
+            .any(|a| a["identifier"] == format!("linear:user/{VIEWER}")),
+        "{about}"
+    );
+    let history = env.json(&["about", &format!("linear:user/{VIEWER}"), "--history"]);
+    let old = history["claims"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["predicate"] == "rastro:held_by")
+        .expect("historical token link");
+    assert_eq!(old["status"], "superseded", "{history}");
+}
+
+#[test]
+fn S35_bot_viewer_is_not_linked_when_user_enumeration_fails() {
+    const APP: &str = "0b5a8c1e-0000-4000-8000-000000000009";
+    let fixture = Fixture::with_route(world(), |req, _| match req.operation.as_str() {
+        "Viewer" => Some(Reply::ok(
+            json!({"data": {"viewer": {"id": APP, "app": true}}}),
+        )),
+        "Users" => Some(Reply::error(403, "FORBIDDEN")),
+        _ => None,
+    });
+    let env = env_with_extractor(&fixture.base);
+    env.ok(&["identity", "me", "--json"]);
+    assert_eq!(env.sync(&[])["status"], "failed");
+    let viewer = env.json(&["about", &format!("linear:user/{APP}")]);
+    assert!(
+        viewer["claims"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["predicate"] == "rastro:type" && c["object"]["value"] == "tracker:Bot"),
+        "{viewer}"
+    );
+    let about = env.json(&["about", "me"]);
+    assert!(
+        !about["person"]["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["identifier"] == format!("linear:user/{APP}")),
+        "{about}"
+    );
+}
+
+#[test]
+fn S16a_guest_flag_is_recorded_as_evidence() {
+    let mut data = world();
+    data.users[1]["guest"] = json!(true);
+    let fixture = Fixture::start(data);
+    let env = env(&fixture.base);
+    assert_eq!(env.sync(&[])["status"], "ok");
+    let rows = env.rows(&format!(
+        "SELECT quote FROM evidence WHERE location = 'linear:user/{ANA}' AND field = '/guest'"
+    ));
+    assert_eq!(rows, [["true"]]);
+}
+
+#[test]
+fn S16a_a_guest_email_does_not_link_but_a_member_email_does() {
+    let mut data = world();
+    data.users[0]["guest"] = json!(false);
+    data.users[1]["guest"] = json!(true);
+    data.users[1]["email"] = json!("owner@example.com");
+    data.users[2]["guest"] = json!(false);
+    data.users[2]["email"] = json!("OWNER@example.com");
+    let fixture = Fixture::start(data);
+    let env = env_with_extractor(&fixture.base);
+    env.ok(&["identity", "me", "--json"]);
+    assert_eq!(env.sync(&[])["status"], "ok");
+    let about = env.json(&["about", "me"]);
+    let accounts = about["person"]["accounts"].as_array().unwrap();
+    assert!(
+        accounts
+            .iter()
+            .any(|a| a["identifier"] == format!("linear:user/{BOB}")),
+        "{about}"
+    );
+    assert!(
+        !accounts
+            .iter()
+            .any(|a| a["identifier"] == format!("linear:user/{ANA}")),
+        "{about}"
+    );
+    fixture.change(|world| world.users[2]["guest"] = json!(true));
+    assert_eq!(env.sync(&["--reread"])["status"], "ok");
+    let changed = env.json(&["about", "me"]);
+    assert!(
+        !changed["person"]["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["identifier"] == format!("linear:user/{BOB}")),
+        "{changed}"
+    );
+}
+
+#[test]
+fn S18_removed_member_email_closes_automatic_link() {
+    let mut data = world();
+    data.users[0]["guest"] = json!(false);
+    data.users[1]["guest"] = json!(false);
+    data.users[1]["email"] = json!("owner@example.com");
+    let fixture = Fixture::start(data);
+    let env = env_with_extractor(&fixture.base);
+    env.ok(&["identity", "me", "--json"]);
+    assert_eq!(env.sync(&[])["status"], "ok");
+    let id = format!("linear:user/{ANA}");
+    assert!(
+        env.json(&["about", &id])["claims"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["predicate"] == "rastro:held_by")
+    );
+    fixture.change(|world| world.users[1]["email"] = serde_json::Value::Null);
+    assert_eq!(env.sync(&["--reread"])["status"], "ok");
+    let about = env.json(&["about", &id, "--history"]);
+    let link = about["claims"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["predicate"] == "rastro:held_by")
+        .expect("historical link");
+    assert_eq!(link["status"], "superseded", "{about}");
+    assert!(!link["known_intervals"][0]["end"].is_null(), "{about}");
+}
+
 /// S22: WHEN no Linear API key is available, THEN the pair fails with an auth failure shown
 /// in coverage, and no request is made; WHEN a key is read from `LINEAR_API_KEY` or the
 /// keychain item `rastro-linear`, THEN it is sent to the API and never appears in the
@@ -167,7 +338,10 @@ fn S20_the_connector_reads_users_involved_issues_and_the_key_user_with_fixed_que
     // Whose key it is: one observation in a fixed slot, so a different key's user replaces it.
     assert_eq!(
         rows("linear:viewer"),
-        expect(&[["/id", VIEWER, "structured"]])
+        expect(&[
+            ["/app", "false", "structured"],
+            ["/id", VIEWER, "structured"]
+        ])
     );
     let updated = env.column(&format!(
         "SELECT source_updated_at FROM evidence WHERE location = '{issue}' AND field = '/title'"

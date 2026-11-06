@@ -347,7 +347,8 @@ fn launch_migrates_recovers_and_turns_on_wal_before_the_first_answer() {
     // Undo the knowledge migration and the ones after it, so they are pending again.
     let last = last_migration(&db);
     db.execute_batch(
-        "DROP TABLE intent_justification; DROP TABLE intent;
+        "DROP TABLE automatic_justification; ALTER TABLE coverage DROP COLUMN gaps_json;
+         DROP TABLE intent_justification; DROP TABLE intent;
          DELETE FROM schema_migrations WHERE name > '202611061200_knowledge_v2';
          DROP TABLE occurrence; DROP TABLE justification_span; DROP TABLE justification;
          DROP TABLE claim_link; DROP TABLE claim; DROP TABLE entity;
@@ -1614,6 +1615,40 @@ fn claim_result(session: &mut Session, tool: &str, args: Value) -> Value {
     ok_result(&response["result"])["result"].clone()
 }
 
+#[test]
+fn S13_coverage_gaps_are_scoped_and_visible_in_mcp() {
+    let env = Env::new();
+    env.add_scoped_source("work-source", "work");
+    let steps = [
+        json!({"do": "initialize"}),
+        json!({"do": "send", "message": {"jsonrpc": "2.0", "method": "coverage.report", "params": {"status": "complete", "selection": "all", "gaps": [{"selection": "user emails", "reason": "forbidden"}]}}}),
+        json!({"do": "finish", "status": "ok", "submitted": 0}),
+    ];
+    fs::write(
+        env.home.path().join("script.jsonl"),
+        steps
+            .iter()
+            .map(Value::to_string)
+            .collect::<Vec<_>>()
+            .join("\n"),
+    )
+    .unwrap();
+    env.ok(&["sync", "work-source"]);
+    let mut work = env.scoped(&["work"]);
+    let visible = claim_result(&mut work, "coverage", json!({}));
+    assert_eq!(
+        visible["coverage"][0]["windows"][0]["gaps"][0]["selection"], "user emails",
+        "{visible}"
+    );
+    assert_eq!(
+        visible["coverage"][0]["windows"][0]["gaps"][0]["reason"],
+        "forbidden"
+    );
+    let mut personal = env.scoped(&["personal"]);
+    let hidden = claim_result(&mut personal, "coverage", json!({}));
+    assert!(!hidden.to_string().contains("user emails"), "{hidden}");
+}
+
 /// claims/R33: unknown and hidden only entity have the same empty scoped answer
 #[test]
 fn unknown_and_hidden_only_entity_have_the_same_empty_scoped_answer() {
@@ -2176,6 +2211,49 @@ fn linked(about: &Value) -> Vec<String> {
         .collect()
 }
 
+/// The owner refuses to link two accounts: an account-to-account cannot-link, which no CLI
+/// command issues.
+fn refuse_accounts(env: &Env, id: &str, a: &str, b: &str) {
+    use rastro_core::identity::{
+        EntityTarget, FORMAT_VERSION, Intent, IntentKind, IssuerContext, OWNER, Payload,
+        SHAPE_VERSION, Targets,
+    };
+    let target = |identifier: &str| EntityTarget {
+        id: rastro_core::claims::entity_id(identifier),
+        identifier: identifier.into(),
+        role: "account".into(),
+    };
+    let mut endpoints = [target(a), target(b)];
+    endpoints.sort_by(|x, y| x.id.cmp(&y.id));
+    let mut refusal = Intent {
+        id: id.into(),
+        append_seq: 0,
+        format_version: FORMAT_VERSION,
+        kind: IntentKind::CannotLink,
+        owner_id: OWNER.into(),
+        issuer_context: IssuerContext {
+            principal: OWNER.into(),
+            surface: "test".into(),
+            scopes: vec![],
+        },
+        issued_at: chrono::Utc::now(),
+        domain_key: String::new(),
+        targets: Targets::Pair {
+            version: SHAPE_VERSION,
+            symmetric: true,
+            endpoints,
+        },
+        payload: Payload {
+            version: SHAPE_VERSION,
+            name: None,
+        },
+        undo_of: None,
+        supersedes: None,
+    };
+    refusal.domain_key = refusal.expected_domain().unwrap();
+    env.issue(vec![refusal]);
+}
+
 /// S30: a scoped read that can't see any of a Person's linked accounts answers for it exactly as
 /// for an unknown entity; `about me` in any scope shows only the visible accounts and claims
 #[test]
@@ -2271,9 +2349,12 @@ fn why_text(session: &mut Session, claim: &str) -> Value {
 /// `work`, a chain through a hidden middle Person. A seed places a fourth account and extra
 /// links. Each scoped `about` (with and without history) and each `why` on an intent-backed
 /// claim, a link shown only where both its ends are, equals a rebuild that holds only the
-/// visible evidence and the visible intents. (Automatic links don't exist yet.)
+/// visible evidence and the visible intents, including automatic links.
+/// Hidden data may suppress an automatic link but never create one: the oracle refuses, by
+/// a cannot-link, each automatic link the full projection doesn't hold. Both link sets are
+/// written out by hand from the seeded log, never read back from the code under test.
 #[test]
-fn S31_random_scope_sets_with_intents_equal_a_per_scope_rebuild() {
+fn S31_random_scope_sets_with_intents_and_automatic_links_equal_a_per_scope_rebuild() {
     use rastro_core::claims::entity_id;
     use rastro_core::identity::{
         EntityTarget, FORMAT_VERSION, Intent, IntentKind, IssuerContext, ME_DOMAIN, OWNER, Payload,
@@ -2473,17 +2554,33 @@ fn S31_random_scope_sets_with_intents_equal_a_per_scope_rebuild() {
         vec![account.clone()],
         vec![holder],
     ));
+    // A fifth account in `personal` shares the verified email and is refused for P3, the far end
+    // of the merge chain: a scope that hides part of the chain still vetoes it.
+    let fifth = target("github:account/5", "account");
+    log.push((
+        intent(
+            95,
+            IntentKind::CannotLink,
+            pair(true, &fifth, &persons[3]),
+            None,
+        ),
+        vec![fifth.identifier.clone()],
+        vec![3],
+    ));
     let undone_id = undone.id.clone();
-    let mut hard = (false, false);
+    let (mut hard, mut suppressed) = ((false, false), false);
     for mask in 1..8u8 {
         let visible: Vec<_> = scopes
             .iter()
             .enumerate()
             .filter_map(|(i, s)| (mask & (1 << i) != 0).then_some(*s))
             .collect();
+        // The fifth account, in `personal`, is shown there too, so its cannot-link reaches the
+        // rebuild wherever it and P3 are visible.
         let shown = |account: &str| {
             accounts
                 .iter()
+                .chain([(fifth.identifier.clone(), "personal")].iter())
                 .any(|(a, scope)| a == account && visible.contains(scope))
         };
         // A Person is visible through an effective link to a visible account; `me` always.
@@ -2517,6 +2614,56 @@ fn S31_random_scope_sets_with_intents_equal_a_per_scope_rebuild() {
                     day as i64,
                 );
             }
+            let automatic = if day == 3 {
+                Some((rastro_core::identity::TOKEN_OWNER, "true", "boolean"))
+            } else if day < 2 {
+                Some((
+                    rastro_core::identity::VERIFIED_EMAIL,
+                    "shared@example.com",
+                    "email",
+                ))
+            } else {
+                None
+            };
+            if let Some((predicate, value, datatype)) = automatic {
+                let location = format!("https://api.github.com/identity/{day}");
+                all.claim_about(
+                    scope,
+                    account,
+                    &location,
+                    predicate,
+                    (value, datatype),
+                    false,
+                    20,
+                );
+                if visible.contains(scope) {
+                    rebuilt.claim_about(
+                        scope,
+                        account,
+                        &location,
+                        predicate,
+                        (value, datatype),
+                        false,
+                        20,
+                    );
+                }
+            }
+        }
+        let mut envs = vec![&all];
+        if visible.contains(&"personal") {
+            envs.push(&rebuilt);
+        }
+        for env in envs {
+            env.account_in("personal", &fifth.identifier, "code:Account", "login5", 5);
+            env.claim_about(
+                "personal",
+                &fifth.identifier,
+                "https://api.github.com/identity/5",
+                rastro_core::identity::VERIFIED_EMAIL,
+                ("shared@example.com", "email"),
+                false,
+                20,
+            );
         }
         all.issue(log.iter().map(|(i, ..)| i.clone()).collect());
         rebuilt.issue(
@@ -2527,6 +2674,68 @@ fn S31_random_scope_sets_with_intents_equal_a_per_scope_rebuild() {
                 .map(|(i, ..)| i.clone())
                 .collect(),
         );
+        // Refuse, in the oracle, every automatic link the full projection doesn't hold. With
+        // this seed the fourth account sits in `personal`, linked to P3 and `me`, and the undone
+        // link is account 3's. So the full projection links: account 4, the token owner, to
+        // `me`; accounts 1 and 2, through their shared verified email, each to the other's
+        // Person and so back to its own (P1, P2); account 5 to nothing, its cannot-link to P3
+        // vetoing it across the merge chain.
+        let held = |db: Connection| -> std::collections::BTreeSet<(String, String)> {
+            db.prepare("SELECT DISTINCT s.identifier, o.identifier FROM claim c JOIN automatic_justification a ON a.claim_id = c.id JOIN entity s ON s.id = c.subject JOIN entity o ON o.id = c.object_entity")
+                .unwrap().query_map([], |r| Ok((r.get(0)?, r.get(1)?))).unwrap().map(Result::unwrap).collect()
+        };
+        let pairs = |list: &[(&str, &str)]| -> std::collections::BTreeSet<(String, String)> {
+            list.iter()
+                .map(|(account, person)| (account.to_string(), person.to_string()))
+                .collect()
+        };
+        let global = pairs(&[
+            ("github:account/1", "rastro:person/p1"),
+            ("github:account/1", "rastro:person/p2"),
+            ("github:account/2", "rastro:person/p1"),
+            ("github:account/2", "rastro:person/p2"),
+            ("github:account/4", "rastro:person/me"),
+        ]);
+        assert_eq!(
+            held(all.db()),
+            global,
+            "mask {mask}: the full projection's automatic links"
+        );
+        // A scope set with `personal` but not `work` sees neither merge, so nothing it sees vetoes
+        // account 5 for P1: the rebuild links it there, and the oracle refuses exactly that.
+        let refused = if mask & 0b011 == 0b001 {
+            pairs(&[("github:account/5", "rastro:person/p1")])
+        } else {
+            pairs(&[])
+        };
+        assert_eq!(
+            held(rebuilt.db())
+                .difference(&global)
+                .cloned()
+                .collect::<std::collections::BTreeSet<_>>(),
+            refused,
+            "mask {mask}: the automatic links only the rebuild holds"
+        );
+        let refusals: Vec<Intent> = refused
+            .iter()
+            .enumerate()
+            .map(|(k, (account, person))| {
+                intent(
+                    200 + k,
+                    IntentKind::CannotLink,
+                    pair(
+                        true,
+                        &target(account.as_str(), "account"),
+                        &target(person.as_str(), "person"),
+                    ),
+                    None,
+                )
+            })
+            .collect();
+        suppressed |= !refusals.is_empty();
+        if !refusals.is_empty() {
+            rebuilt.issue(refusals);
+        }
         let mut scoped = all.scoped(&visible);
         let mut oracle = rebuilt.scoped(&[]);
         let mut forms: Vec<String> = [
@@ -2541,6 +2750,7 @@ fn S31_random_scope_sets_with_intents_equal_a_per_scope_rebuild() {
         .to_vec();
         forms.extend(persons.iter().map(|p| p.identifier.clone()));
         forms.extend(accounts.iter().map(|(a, _)| a.clone()));
+        forms.push(fifth.identifier.clone());
         for form in &forms {
             for history in [false, true] {
                 let args = json!({"entity": form, "history": history, "limit": 50});
@@ -2561,7 +2771,7 @@ fn S31_random_scope_sets_with_intents_equal_a_per_scope_rebuild() {
         // `why` on every intent-backed claim, visible or not.
         let claims: Vec<String> = all
             .db()
-            .prepare("SELECT DISTINCT claim_id FROM intent_justification ORDER BY 1")
+            .prepare("SELECT claim_id FROM intent_justification UNION SELECT claim_id FROM automatic_justification ORDER BY 1")
             .unwrap()
             .query_map([], |r| r.get(0))
             .unwrap()
@@ -2578,6 +2788,246 @@ fn S31_random_scope_sets_with_intents_equal_a_per_scope_rebuild() {
     }
     // Non-vacuous: some scope set hides one end of P1–P2, and one hides the middle of the chain.
     assert_eq!(hard, (true, true));
+    assert!(suppressed, "no scope set needed a suppression");
+}
+
+/// S17: a cannot-link through a merge with a Person the scope can't see still vetoes the
+/// automatic link there
+#[test]
+fn S17_a_cannot_link_through_a_hidden_merge_vetoes_in_every_scope() {
+    let env = Env::new();
+    env.account_in("personal", "github:account/1", "code:Account", "anchor", 0);
+    env.account_in("personal", "github:account/2", "code:Account", "match", 0);
+    env.account_in("health", "github:account/3", "code:Account", "hidden", 0);
+    for n in [1, 2] {
+        let (account, location) = (
+            format!("github:account/{n}"),
+            format!("https://api.github.com/identity/{n}"),
+        );
+        env.claim_about(
+            "personal",
+            &account,
+            &location,
+            rastro_core::identity::VERIFIED_EMAIL,
+            ("same@example.com", "email"),
+            false,
+            1,
+        );
+    }
+    let person = |name: &str| {
+        env.json(&["identity", "person", "create", "--name", name])["person"]["identifier"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let (p, q) = (person("Anchor"), person("Hidden"));
+    env.json(&["identity", "link", "github:account/1", &p]);
+    env.json(&["identity", "link", "github:account/3", &q]);
+    // An undone link leaves a cannot-link between github:account/2 and Q.
+    let refused = env.json(&["identity", "link", "github:account/2", &q]);
+    env.json(&[
+        "identity",
+        "undo",
+        refused["intents"][0]["id"].as_str().unwrap(),
+    ]);
+    env.json(&["identity", "merge", &p, &q]);
+    let mut everything = env.scoped(&[]);
+    let all = about_text(&mut everything, &p);
+    assert_eq!(
+        linked(&all),
+        ["github:account/1", "github:account/3"],
+        "{all}"
+    );
+    let mut personal = env.scoped(&["personal"]);
+    let seen = about_text(&mut personal, &p);
+    assert_eq!(linked(&seen), ["github:account/1"], "{seen}");
+}
+
+/// S17: a cannot-link with an account an owner link holds in the class, hidden from the scope,
+/// still vetoes the automatic link there
+#[test]
+fn S17_a_cannot_link_with_a_hidden_held_account_vetoes_in_every_scope() {
+    let env = Env::new();
+    for (n, scope, login) in [
+        (1, "personal", "anchor"),
+        (2, "personal", "match"),
+        (3, "health", "hidden"),
+    ] {
+        env.account_in(
+            scope,
+            &format!("github:account/{n}"),
+            "code:Account",
+            login,
+            0,
+        );
+    }
+    for n in [1, 2] {
+        let (account, location) = (
+            format!("github:account/{n}"),
+            format!("https://api.github.com/identity/{n}"),
+        );
+        env.claim_about(
+            "personal",
+            &account,
+            &location,
+            rastro_core::identity::VERIFIED_EMAIL,
+            ("same@example.com", "email"),
+            false,
+            1,
+        );
+    }
+    let p = env.json(&["identity", "person", "create", "--name", "Anchor"])["person"]["identifier"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    env.json(&["identity", "link", "github:account/1", &p]);
+    env.json(&["identity", "link", "github:account/3", &p]); // in `health`: hidden from `personal`
+    refuse_accounts(
+        &env,
+        "i_s17_hidden_held",
+        "github:account/2",
+        "github:account/3",
+    );
+    let mut everything = env.scoped(&[]);
+    let all = about_text(&mut everything, &p);
+    assert_eq!(
+        linked(&all),
+        ["github:account/1", "github:account/3"],
+        "{all}"
+    );
+    let mut personal = env.scoped(&["personal"]);
+    let seen = about_text(&mut personal, &p);
+    assert_eq!(linked(&seen), ["github:account/1"], "{seen}");
+}
+
+/// S17: B (visible) and D (hidden) both qualify for P and are refused to each other, so neither
+/// joins; B stays unlinked in a scope that can't see D
+#[test]
+fn S17_a_hidden_conflict_partner_keeps_the_visible_account_unlinked_in_every_scope() {
+    let env = Env::new();
+    for (n, scope, login) in [
+        (1, "personal", "anchor"),
+        (2, "personal", "match"),
+        (4, "health", "partner"),
+    ] {
+        let (account, location) = (
+            format!("github:account/{n}"),
+            format!("https://api.github.com/identity/{n}"),
+        );
+        env.account_in(scope, &account, "code:Account", login, 0);
+        env.claim_about(
+            scope,
+            &account,
+            &location,
+            rastro_core::identity::VERIFIED_EMAIL,
+            ("same@example.com", "email"),
+            false,
+            1,
+        );
+    }
+    let p = env.json(&["identity", "person", "create", "--name", "Anchor"])["person"]["identifier"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    env.json(&["identity", "link", "github:account/1", &p]);
+    refuse_accounts(
+        &env,
+        "i_s17_hidden_partner",
+        "github:account/2",
+        "github:account/4",
+    );
+    let mut everything = env.scoped(&[]);
+    let all = about_text(&mut everything, &p);
+    assert_eq!(linked(&all), ["github:account/1"], "{all}");
+    let mut personal = env.scoped(&["personal"]);
+    let seen = about_text(&mut personal, &p);
+    assert_eq!(linked(&seen), ["github:account/1"], "{seen}");
+    let b = about_text(&mut personal, "github:account/2");
+    assert!(
+        !b["claims"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["predicate"] == "rastro:held_by"),
+        "{b}"
+    );
+}
+
+/// S31: no scoped read (about, with history, or why) surfaces a hidden Person or an intent
+/// naming it, though every intent is replayed so hidden cannot-links still veto
+#[test]
+fn S31_no_scoped_read_surfaces_a_hidden_intent_or_person() {
+    let env = Env::new();
+    env.account_in("personal", "github:account/1", "code:Account", "anchor", 0);
+    env.account_in("personal", "github:account/2", "code:Account", "match", 0);
+    env.account_in(
+        "health",
+        "github:account/3",
+        "code:Account",
+        "secret-login",
+        0,
+    );
+    let person = |name: &str| {
+        env.json(&["identity", "person", "create", "--name", name])["person"]["identifier"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let (p, q) = (person("Anchor"), person("Hidden Q"));
+    env.json(&["identity", "link", "github:account/1", &p]);
+    env.json(&["identity", "link", "github:account/3", &q]);
+    let refused = env.json(&["identity", "link", "github:account/2", &q]);
+    env.json(&[
+        "identity",
+        "undo",
+        refused["intents"][0]["id"].as_str().unwrap(),
+    ]);
+    env.json(&["identity", "merge", &p, &q]);
+    // Every intent naming Q: its creation, name, links, the undo, the cannot-link, the merge.
+    let hidden: Vec<String> = env
+        .db()
+        .prepare("SELECT id FROM intent WHERE targets_json LIKE ?1")
+        .unwrap()
+        .query_map([format!("%{q}%")], |r| r.get(0))
+        .unwrap()
+        .map(Result::unwrap)
+        .collect();
+    assert!(hidden.len() >= 4, "{hidden:?}");
+    let mut personal = env.scoped(&["personal"]);
+    let mut answers: Vec<serde_json::Value> = [
+        "me",
+        p.as_str(),
+        q.as_str(),
+        "rastro:name/Hidden Q",
+        "rastro:name/Anchor",
+        "github:account/2",
+        "github:account/3",
+    ]
+    .iter()
+    .map(|form| about_text(&mut personal, form))
+    .collect();
+    // `why`, in `personal`, on every claim the full view of P shows (history included).
+    let mut everything = env.scoped(&[]);
+    for claim in about_text(&mut everything, &p)["claims"]
+        .as_array()
+        .unwrap()
+    {
+        answers.push(why_text(&mut personal, claim["id"].as_str().unwrap()));
+    }
+    let mut needles = vec![
+        q.clone(),
+        rastro_core::claims::entity_id(&q),
+        "Hidden Q".into(),
+        "secret-login".into(),
+        "github:account/3".into(),
+    ];
+    needles.extend(hidden);
+    for answer in &answers {
+        let text = answer.to_string();
+        for needle in &needles {
+            assert!(!text.contains(needle.as_str()), "{needle} leaked: {text}");
+        }
+    }
 }
 
 /// S37: a scoped `why` on an intent-backed claim lists only the issuer scopes the session can

@@ -31,6 +31,35 @@ fn property_names(schema: &serde_json::Value) -> Vec<&str> {
     names
 }
 
+/// Coverage gains an optional, typed list to coverage windows everywhere they appear.
+fn remove_coverage_gaps(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(properties) = map.get_mut("properties").and_then(|v| v.as_object_mut())
+                && properties.contains_key("checked_at")
+                && properties.contains_key("selection")
+                && let Some(gaps) = properties.remove("gaps")
+            {
+                assert_eq!(property_names(&gaps["items"]), ["reason", "selection"]);
+                assert!(
+                    !map.get("required")
+                        .and_then(|v| v.as_array())
+                        .is_some_and(|r| r.contains(&serde_json::json!("gaps")))
+                );
+            }
+            for child in map.values_mut() {
+                remove_coverage_gaps(child);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                remove_coverage_gaps(item);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// surfaces/R1: about and why are additive v2, `sync.extraction` and `claims.rebuild.pairs` are recorded
 /// additions, and existing schemas are unchanged
 #[test]
@@ -70,6 +99,7 @@ fn about_and_why_are_additive_v2_and_existing_schemas_are_unchanged() {
     for old in baseline.as_array().unwrap() {
         let new = ops.iter().find(|op| op["name"] == old["name"]).unwrap();
         let mut new = expand(new, &generated["$defs"]);
+        remove_coverage_gaps(&mut new);
         // Additive v2 changes recorded in docs/decisions/surfaces.md, each with the fields it
         // may carry: anything else that differs, or any other field, is a breaking change.
         match old["name"].as_str().unwrap() {
@@ -197,6 +227,7 @@ fn S5_S32_about_and_why_change_only_additively_for_identity() {
         let name = old["name"].as_str().unwrap();
         let new = ops.iter().find(|op| op["name"] == name).unwrap();
         let mut new = expanded(new, &generated["$defs"]);
+        remove_coverage_gaps(&mut new);
         match name {
             "about" => {
                 let result = new["result"].as_object_mut().unwrap();

@@ -205,6 +205,19 @@ pub fn run<S: Storage>(
         Err(reason) => Ok(Err(reason)),
     };
     let Session { counts, coverage } = session;
+    let gaps = coverage
+        .as_ref()
+        .map(|report| {
+            report
+                .gaps
+                .iter()
+                .map(|gap| crate::CoverageGap {
+                    selection: gap.selection.clone(),
+                    reason: typed(Some(&gap.reason)),
+                })
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
     let reported = coverage.as_ref().and_then(|c| {
         (c.status == CoverageStatus::CouldntLook).then(|| typed(c.reason.as_deref()))
     });
@@ -265,6 +278,7 @@ pub fn run<S: Storage>(
         retry_at,
         checked_at: finished_at,
     })?;
+    storage.record_coverage_gaps(run_id, &gaps)?;
     storage.finish_run(
         run_id,
         &RunEnd {

@@ -1,6 +1,6 @@
 id = "github"
 name = "Rastro GitHub connector"
-version = "0.1.0"
+version = "0.2.0"
 author = "Rastro"
 kinds = ["connector"]
 protocol = 1
@@ -11,7 +11,7 @@ dependencies = []
 default_extractor = "rastro-extractor-github"
 
 [permissions]
-submit = ["issue", "pull_request", "comment"]
+submit = ["issue", "pull_request", "comment", "viewer"]
 # Both scopes, so the owner chooses per source which one the repo belongs to.
 scopes = ["personal", "work"]
 env = ["GH_TOKEN", "GITHUB_TOKEN", "GH_HOST", "GH_CONFIG_DIR", "XDG_CONFIG_HOME", "RASTRO_GITHUB_API_URL"]

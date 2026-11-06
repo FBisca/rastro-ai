@@ -1,0 +1,1 @@
+ALTER TABLE coverage ADD COLUMN gaps_json TEXT NOT NULL DEFAULT '[]';

@@ -73,7 +73,16 @@ pub(super) fn projection(
             return Ok(hit.clone());
         }
     }
-    let (connection, work) = build(db, scopes, target, budget)?;
+    let (mut connection, mut work) = build(db, scopes, &target, budget, &BTreeSet::new())?;
+    // Two phases: the first replay derives the scope's automatic links from the identity
+    // premises; the accounts it holds automatically for a Person the form names join the roots,
+    // so the second replays their claims too.
+    if let Target::Entity(entity) = &target {
+        let extra = automatic_accounts(db, &connection, entity, scopes)?;
+        if !extra.is_empty() {
+            (connection, work) = build(db, scopes, &target, budget, &extra)?;
+        }
+    }
     let built = Arc::new(Mutex::new(connection));
     if let Some(key) = key {
         let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
@@ -92,6 +101,23 @@ pub(crate) const VISIBLE_CLAIM: &str = "EXISTS (SELECT 1 FROM justification j WH
 /// The claim `c` is backed by an owner intent.
 const INTENT_BACKED: &str =
     "EXISTS (SELECT 1 FROM intent_justification ij WHERE ij.claim_id = c.id)";
+/// The identity premises a scope set (`?2`) sees, so the replay derives the scope's automatic
+/// links: every visible verified-email and token-owner claim, plus the type and alias claims of
+/// their subjects (a type claim may cite an email snapshot or guest flag, so a newer one still
+/// closes what the older supported), plus every claim citing an observation at the same
+/// (source, scope, location, field) as one of those premises' spans: a newer observation there
+/// replaces the older one even when only another subject's claim cites it (a key that now
+/// belongs to an app), as the lifecycle's snapshot replacement does. Only these, never every
+/// visible claim.
+const PREMISES: &str = "SELECT c.id FROM claim c WHERE c.predicate IN ('rastro:verified_email', 'rastro:token_owner') AND {VISIBLE_CLAIM} \
+    UNION SELECT t.id FROM claim t WHERE t.predicate IN ('rastro:type', 'rastro:alias') AND t.subject IN \
+    (SELECT c.subject FROM claim c WHERE c.predicate IN ('rastro:verified_email', 'rastro:token_owner') AND {VISIBLE_CLAIM}) \
+    UNION SELECT rj.claim_id FROM claim c JOIN justification pj ON pj.claim_id = c.id \
+    JOIN justification_span ps ON ps.justification_id = pj.id JOIN evidence pe ON pe.id = ps.evidence_id \
+    JOIN evidence re ON re.source = pe.source AND re.scope = pe.scope AND re.location = pe.location AND re.field = pe.field \
+    JOIN justification_span rs ON rs.evidence_id = re.id JOIN justification rj ON rj.id = rs.justification_id \
+    WHERE c.predicate IN ('rastro:verified_email', 'rastro:token_owner') AND {VISIBLE_CLAIM} \
+    AND pe.scope IN (SELECT value FROM json_each(?2))";
 pub(crate) const OVER_BUDGET: &str = "this read is too large to answer within its work budget";
 
 /// Empties the process-local scoped cache; a benchmark's cold samples start from here.
@@ -134,11 +160,34 @@ fn ids(db: &Connection, sql: &str, arguments: &[String]) -> Result<String> {
     Ok(serde_json::to_string(&rows)?)
 }
 
+/// The accounts the replay holds automatically for a Person the form names (in any interval),
+/// that aren't roots already.
+fn automatic_accounts(
+    db: &Connection,
+    replay: &Connection,
+    form: &str,
+    scopes: &[Scope],
+) -> Result<BTreeSet<String>> {
+    let roots = super::identity::roots(db, form, scopes)?;
+    let held: BTreeSet<String> = replay
+        .prepare("SELECT DISTINCT c.subject FROM claim c JOIN automatic_justification a ON a.claim_id = c.id WHERE c.predicate = ?1 AND c.object_entity IN (SELECT value FROM json_each(?2))")?
+        .query_map(
+            rusqlite::params![
+                rastro_core::identity::HELD_BY,
+                serde_json::to_string(&roots)?
+            ],
+            |r| r.get(0),
+        )?
+        .collect::<Result<_, _>>()?;
+    Ok(held.into_iter().filter(|a| !roots.contains(a)).collect())
+}
+
 fn build(
     db: &Connection,
     scopes: &[Scope],
-    target: Target<'_>,
+    target: &Target<'_>,
     budget: usize,
+    extra: &BTreeSet<String>,
 ) -> Result<(Connection, usize)> {
     // Replay complete subject/predicate components, including competing claims. One-hop
     // candidates are selected before replay, but status, recency and the limit are not.
@@ -161,7 +210,11 @@ fn build(
             vec![
                 entity.to_string(),
                 scopes.clone(),
-                serde_json::to_string(&super::identity::roots(db, entity, scope_set)?)?,
+                serde_json::to_string(&{
+                    let mut roots = super::identity::roots(db, entity, scope_set)?;
+                    roots.extend(extra.iter().cloned());
+                    roots
+                })?,
             ],
         ),
         // A claim's own slot only, plus its endpoints' type and alias claims below.
@@ -178,10 +231,12 @@ fn build(
     // justification.
     let selecting = format!("({VISIBLE_CLAIM} OR {INTENT_BACKED})");
     let components = components.replace("{VISIBLE_CLAIM}", &selecting);
+    let premises = PREMISES.replace("{VISIBLE_CLAIM}", VISIBLE_CLAIM);
     let candidate_sql = format!("WITH roots AS ({roots}), components AS ({components}),
     neighbors AS (
         SELECT c.id, c.subject, c.object_entity, {selecting} AS seen FROM claim c JOIN components k ON c.subject = k.subject AND c.predicate = k.predicate
-    ) SELECT id FROM neighbors UNION SELECT id FROM claim WHERE predicate IN ('rastro:type','rastro:alias') AND subject IN (SELECT subject FROM neighbors WHERE seen UNION SELECT object_entity FROM neighbors WHERE seen)");
+    ) SELECT id FROM neighbors UNION SELECT id FROM claim WHERE predicate IN ('rastro:type','rastro:alias') AND subject IN (SELECT subject FROM neighbors WHERE seen UNION SELECT object_entity FROM neighbors WHERE seen)
+      UNION {premises}");
     let candidates = db
         .prepare(&candidate_sql)?
         .query_map(params_from_iter(&arguments), |r| r.get::<_, String>(0))?
@@ -256,6 +311,9 @@ fn build(
         &[evidence],
     )?;
     replay(&result)?;
+    // Hidden data may suppress an automatic link but never create one.
+    let allowed = super::automatic::linked_pairs(db)?;
+    super::automatic::apply_within(&result, Some(&allowed))?;
     result.execute_batch("COMMIT")?;
     Ok((result, work))
 }
@@ -293,7 +351,7 @@ fn replay(db: &Connection) -> Result<()> {
     let step = |_name: &str, sql: &str| db.execute_batch(sql);
     step(
         "single",
-        "CREATE TEMP TABLE single AS SELECT c.subject AS subject, c.predicate AS predicate, c.id AS claim, j.id AS justification, s.evidence_id AS evidence_id, s.portable_key AS portable_key, s.field AS field, e.source AS source, e.scope AS scope, e.location AS location, e.captured_at AS captured_at, e.source_updated_at AS source_updated_at FROM claim c JOIN justification j ON j.claim_id = c.id JOIN justification_span s ON s.justification_id = j.id JOIN evidence e ON e.id = s.evidence_id GROUP BY c.subject, c.predicate HAVING count(*) = 1",
+        "CREATE TEMP TABLE single AS SELECT c.subject AS subject, c.predicate AS predicate, c.id AS claim, j.id AS justification, s.evidence_id AS evidence_id, s.portable_key AS portable_key, s.field AS field, e.source AS source, e.scope AS scope, e.location AS location, e.captured_at AS captured_at, e.source_updated_at AS source_updated_at FROM claim c JOIN justification j ON j.claim_id = c.id JOIN justification_span s ON s.justification_id = j.id JOIN evidence e ON e.id = s.evidence_id WHERE c.predicate NOT IN ('rastro:verified_email', 'rastro:token_owner') AND NOT (c.predicate = 'rastro:alias' AND c.object_datatype = 'email') GROUP BY c.subject, c.predicate HAVING count(*) = 1",
     )?;
     step(
         "idx",

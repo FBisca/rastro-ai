@@ -10,7 +10,7 @@
 # Accounts (decisions/vocabulary.md §27): `tracker:Account` names the core's `rastro:Account` as
 # its supertype, so only it may be held by a Person. An app user (`tracker:Bot`) may not.
 namespace = "tracker"
-version = "0.2.0"
+version = "0.3.0"
 
 [[types]]
 id = "tracker:Account"

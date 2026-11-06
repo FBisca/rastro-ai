@@ -1,6 +1,6 @@
 id = "rastro-extractor-linear"
 name = "Rastro Linear extractor"
-version = "0.2.0"
+version = "0.3.0"
 author = "Rastro"
 # The `tracker` vocabulary ships in this package, next to the extractor that uses it.
 kinds = ["extractor", "vocabulary"]
@@ -14,6 +14,14 @@ vocabulary = "vocabulary.toml"
 # that record's canonical identifier; none reads a title or a description. See src/main.rs.
 [[extraction_rules]]
 id = "account"
+deterministic = true
+
+[[extraction_rules]]
+id = "token-owner"
+deterministic = true
+
+[[extraction_rules]]
+id = "verified-email"
 deterministic = true
 
 [[extraction_rules]]

@@ -403,6 +403,23 @@
       ],
       "type": "object"
     },
+    "CoverageGap": {
+      "additionalProperties": false,
+      "description": "A part of a read that couldn't be looked at, such as an unreadable `/user/emails`: the run stays found or ok.",
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "selection": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "selection",
+        "reason"
+      ],
+      "type": "object"
+    },
     "CoverageState": {
       "enum": [
         "never looked",
@@ -424,6 +441,12 @@
         "from": {
           "format": "date-time",
           "type": "string"
+        },
+        "gaps": {
+          "items": {
+            "$ref": "#/$defs/CoverageGap"
+          },
+          "type": "array"
         },
         "reason": {
           "type": "string"

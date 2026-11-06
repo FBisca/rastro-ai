@@ -2,9 +2,8 @@
 //! evidence into `code` claims (ADR 0008; decisions/knowledge.md §23–§27, vocabulary.md
 //! §10–§13).
 //!
-//! It reads only `structured` observations of four fields: `/state`, `/user/id`, `/user/login`
-//! and `/user/type`, plus the location they were observed at. It never reads a title, a body
-//! or any other field, so no claim and no alias comes from text a person wrote.
+//! It reads structured state, account and profile fields, plus the token-owner and verified-email
+//! snapshot observations. It never reads a title or body.
 //!
 //! # The URL rule
 //! A location is a canonical `html_url` when it is exactly
@@ -52,7 +51,16 @@ use std::{
 };
 
 /// The fields any rule reads. Everything else is skipped unread.
-const FIELDS: [&str; 4] = ["/state", "/user/id", "/user/login", "/user/type"];
+const FIELDS: [&str; 8] = [
+    "/state",
+    "/user/id",
+    "/user/login",
+    "/user/type",
+    "/user/name",
+    "/id",
+    "/type",
+    "/emails/verified",
+];
 /// Core meta-predicates (see the core's `claims` module).
 const TYPE: &str = "rastro:type";
 const ALIAS: &str = "rastro:alias";
@@ -162,6 +170,9 @@ fn claim(
 
 /// The claims a location supports, given the latest observation of each field there.
 fn claims_at(location: &str, fields: &BTreeMap<&str, &BatchItem>) -> Vec<ClaimSubmit> {
+    if location == "github:viewer" {
+        return viewer_claims(fields);
+    }
     let Some(url) = parse_url(location) else {
         return vec![];
     };
@@ -243,8 +254,104 @@ fn claims_at(location: &str, fields: &BTreeMap<&str, &BatchItem>) -> Vec<ClaimSu
                 &[id, login_item],
             ));
         }
+        if let Some((name_item, name)) = quote("/user/name") {
+            claims.push(claim(
+                account(),
+                ALIAS,
+                literal(name, "name"),
+                "name",
+                &[id, name_item],
+            ));
+        }
     }
     claims
+}
+
+fn viewer_claims(fields: &BTreeMap<&str, &BatchItem>) -> Vec<ClaimSubmit> {
+    let (Some(id), Some(kind)) = (fields.get("/id"), fields.get("/type")) else {
+        return vec![];
+    };
+    if !decimal(&id.span.quote) || kind.span.quote != "User" {
+        return vec![];
+    }
+    let identifier = format!("github:account/{}", id.span.quote);
+    let account = || entity(&identifier, "code:Account");
+    let mut out = vec![
+        claim(
+            account(),
+            TYPE,
+            literal("code:Account", TYPE_DATATYPE),
+            "account-type",
+            &[id, kind],
+        ),
+        claim(
+            account(),
+            "rastro:token_owner",
+            literal("true", "boolean"),
+            "token-owner",
+            &[id, kind],
+        ),
+    ];
+    if let Some(snapshot) = fields.get("/emails/verified")
+        && let Ok(addresses) = serde_json::from_str::<Vec<String>>(
+            snapshot
+                .span
+                .quote
+                .split_once('\n')
+                .map_or(snapshot.span.quote.as_str(), |(list, _)| list),
+        )
+    {
+        // This type claim cites the snapshot so even an empty one (`[]`) is in the projection: a newer snapshot then closes every address the older one listed.
+        out.push(claim(
+            account(),
+            TYPE,
+            literal("code:Account", TYPE_DATATYPE),
+            "account-type",
+            &[id, kind, snapshot],
+        ));
+        let mut raw_offset = snapshot.span.quote.find('\n').map(|n| n + 1);
+        for address in addresses {
+            let encoded = serde_json::to_string(&address).unwrap_or_default();
+            let offset = raw_offset
+                .and_then(|offset| {
+                    (snapshot.span.quote.get(offset..offset + address.len())
+                        == Some(address.as_str()))
+                    .then_some(offset)
+                })
+                .or_else(|| {
+                    (encoded == format!("\"{address}\""))
+                        .then(|| snapshot.span.quote.find(&encoded).map(|n| n + 1))
+                        .flatten()
+                });
+            if let Some(offset) = offset {
+                let start = snapshot.span.start + offset as u64;
+                let end = start + address.len() as u64;
+                let mut alias = claim(
+                    account(),
+                    ALIAS,
+                    literal(&address, "email"),
+                    "email",
+                    &[id, snapshot],
+                );
+                alias.supports[1].start = start;
+                alias.supports[1].end = end;
+                out.push(alias);
+                // The verified email cites its own address's span too, never the whole list.
+                let mut verified = claim(
+                    account(),
+                    "rastro:verified_email",
+                    literal(&address, "email"),
+                    "verified-email",
+                    &[id, kind, snapshot],
+                );
+                verified.supports[2].start = start;
+                verified.supports[2].end = end;
+                out.push(verified);
+            }
+            raw_offset = raw_offset.map(|offset| offset + address.len());
+        }
+    }
+    out
 }
 
 /// Every claim the observations support, in replay order, each sent once.

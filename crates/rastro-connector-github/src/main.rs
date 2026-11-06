@@ -1,20 +1,21 @@
 //! The GitHub connector: issues, pull requests and comments involving the owner.
 //!
 //! It speaks the Rastro plugin protocol on stdin/stdout and calls only fixed GET endpoints
-//! of the GitHub REST API. Nothing it reads from GitHub chooses what it requests next,
-//! except `Link: rel="next"` pagination on the same host.
+//! of the GitHub REST API. Author logins select profile requests only after validation;
+//! `Link: rel="next"` pagination stays on the same host.
 mod api;
 
 use anyhow::{Context, Result, bail};
 use api::{Client, Failure};
 use chrono::{DateTime, Utc};
 use rastro_plugin_sdk::{
-    COVERAGE_REPORT, CoverageReport, CoverageStatus, EVIDENCE_SUBMIT, Envelope, InitializeParams,
-    InitializeResult, PROTOCOL_VERSION, RUN_FINISH, RunBinding, RunFinish, Transport,
+    COVERAGE_REPORT, CoverageGap, CoverageReport, CoverageStatus, EVIDENCE_SUBMIT, Envelope,
+    InitializeParams, InitializeResult, PROTOCOL_VERSION, RUN_FINISH, RunBinding, RunFinish,
+    Transport,
 };
 use serde_json::{Value, json};
 use std::{
-    collections::HashSet,
+    collections::{HashMap, HashSet},
     io::{self, BufRead, Write},
 };
 
@@ -37,10 +38,12 @@ struct Run<'a, R, W> {
     window_to: DateTime<Utc>,
     repo: String,
     seen: HashSet<u64>,
+    profiles: HashMap<u64, Value>,
     submitted: u64,
     capped: bool,
     /// The host said the source keeps originals: attach the raw item or comment.
     keep_original: bool,
+    gaps: Vec<CoverageGap>,
 }
 
 fn main() -> Result<()> {
@@ -56,9 +59,11 @@ fn main() -> Result<()> {
     )?)?;
 
     let mut submitted = 0;
-    let outcome = sync(&mut transport, &params.run, &mut submitted);
+    let mut gaps = Vec::new();
+    let outcome = sync(&mut transport, &params.run, &mut submitted, &mut gaps);
     let failure = outcome.err();
     let report = CoverageReport {
+        gaps,
         status: if failure.is_none() {
             CoverageStatus::Complete
         } else {
@@ -93,6 +98,7 @@ fn sync<R: BufRead, W: Write>(
     transport: &mut Transport<R, W>,
     binding: &RunBinding,
     submitted: &mut u64,
+    gaps: &mut Vec<CoverageGap>,
 ) -> Result<(), Failure> {
     let repo = binding
         .selector
@@ -122,12 +128,15 @@ fn sync<R: BufRead, W: Write>(
             .map_err(|_| Failure::new("protocol"))?,
         repo,
         seen: HashSet::new(),
+        profiles: HashMap::new(),
         submitted: 0,
         capped: false,
         keep_original: binding.keep_original,
+        gaps: Vec::new(),
     };
     let result = run.read_all(&binding.window.from, &binding.window.to);
     *submitted = run.submitted;
+    *gaps = std::mem::take(&mut run.gaps);
     result?;
     if run.capped {
         return Err(Failure::new("result_cap"));
@@ -136,8 +145,107 @@ fn sync<R: BufRead, W: Write>(
 }
 
 impl<R: BufRead, W: Write> Run<'_, R, W> {
+    /// An author profile couldn't be read: reported once per reason, and the run goes on.
+    fn profile_gap(&mut self, reason: &str) {
+        if !self
+            .gaps
+            .iter()
+            .any(|g| g.selection == "author profiles" && g.reason == reason)
+        {
+            self.gaps.push(CoverageGap {
+                selection: "author profiles".into(),
+                reason: reason.into(),
+            });
+        }
+    }
+
     fn read_all(&mut self, from: &str, to: &str) -> Result<(), Failure> {
         let user = self.client.get("/user", &[])?;
+        let viewer_id = user.body["id"].as_u64().map(|id| id.to_string());
+        // Kept as the original of the viewer's observations: only what identifies the token
+        // owner, never the rest of its profile.
+        let viewer = json!({"id": user.body["id"], "type": user.body["type"]});
+        self.submit(
+            "viewer",
+            "github:viewer",
+            "/id",
+            viewer_id.as_deref(),
+            "structured",
+            Origin {
+                updated: "",
+                original: &viewer,
+            },
+        )?;
+        self.submit(
+            "viewer",
+            "github:viewer",
+            "/type",
+            user.body["type"].as_str(),
+            "structured",
+            Origin {
+                updated: "",
+                original: &viewer,
+            },
+        )?;
+        let emails = (|| -> Result<Vec<String>, Failure> {
+            let mut page = self.client.get("/user/emails", &[("per_page", "100")])?;
+            let mut addresses = Vec::new();
+            loop {
+                let entries = page.body.as_array().ok_or(Failure::new("protocol"))?;
+                for entry in entries {
+                    if entry["verified"] == true {
+                        addresses.push(
+                            entry["email"]
+                                .as_str()
+                                .ok_or(Failure::new("protocol"))?
+                                .to_string(),
+                        );
+                    }
+                }
+                match page.next {
+                    Some(url) => page = self.client.get_url(&url)?,
+                    None => break,
+                }
+            }
+            addresses.sort();
+            addresses.dedup();
+            Ok(addresses)
+        })();
+        match emails {
+            Ok(addresses) => {
+                let snapshot = json!({"emails": addresses});
+                let mut value = snapshot["emails"].to_string();
+                let addresses = snapshot["emails"]
+                    .as_array()
+                    .ok_or(Failure::new("protocol"))?;
+                // The JSON list determines the snapshot; raw concatenated addresses after its
+                // newline give exact citation spans even when JSON has to escape a character.
+                if !addresses.is_empty() {
+                    value.push('\n');
+                    for address in addresses {
+                        value.push_str(address.as_str().ok_or(Failure::new("protocol"))?);
+                    }
+                }
+                self.submit(
+                    "viewer",
+                    "github:viewer",
+                    "/emails/verified",
+                    Some(&value),
+                    "structured",
+                    Origin {
+                        updated: "",
+                        original: &snapshot,
+                    },
+                )?;
+            }
+            Err(failure) if matches!(failure.status, Some(401 | 403 | 404 | 429)) => {
+                self.gaps.push(CoverageGap {
+                    selection: "user emails".into(),
+                    reason: failure.reason.into(),
+                });
+            }
+            Err(failure) => return Err(failure),
+        }
         let login = user.body["login"]
             .as_str()
             .ok_or(Failure::new("protocol"))?
@@ -308,6 +416,46 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
         ] {
             self.submit(kind, location, field, text, "structured", origin)?;
         }
+        if let (Some(id), Some(login)) = (user["id"].as_u64(), user["login"].as_str()) {
+            let base = login.strip_suffix("[bot]").unwrap_or(login);
+            if !base.is_empty() && base.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-') {
+                if !self.profiles.contains_key(&id) {
+                    let path = format!("/users/{}", login.replace('[', "%5B").replace(']', "%5D"));
+                    let profile = match self.client.get(&path, &[]) {
+                        // Only what the name observation needs is kept, even as its
+                        // original: never the rest of the profile (its email, bio, ...).
+                        Ok(page) if page.body["id"].as_u64() == Some(id) => {
+                            json!({"id": page.body["id"], "name": page.body["name"]})
+                        }
+                        Ok(_) => {
+                            self.profile_gap("protocol");
+                            Value::Null
+                        }
+                        Err(failure) if failure.status == Some(404) => {
+                            self.profile_gap(failure.reason);
+                            Value::Null
+                        }
+                        Err(failure) => return Err(failure),
+                    };
+                    self.profiles.insert(id, profile);
+                }
+                let profile = self.profiles[&id].clone();
+                if profile.is_null() {
+                    return Ok(());
+                }
+                self.submit(
+                    kind,
+                    location,
+                    "/user/name",
+                    profile["name"].as_str(),
+                    "structured",
+                    Origin {
+                        updated: "",
+                        original: &profile,
+                    },
+                )?;
+            }
+        }
         Ok(())
     }
 
@@ -328,8 +476,10 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
         let mut params = json!({
             "kind": kind, "location": location, "field": field, "start": 0,
             "end": text.len(), "quote": text, "trust_class": trust_class,
-            "source_updated_at": updated,
         });
+        if !updated.is_empty() {
+            params["source_updated_at"] = json!(updated);
+        }
         if self.keep_original {
             params["original"] = original.clone();
         }
