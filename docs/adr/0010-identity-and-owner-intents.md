@@ -17,6 +17,8 @@ The core owns the `rastro:` prefix, so the identity predicates are core (`../dec
 |---|---|---|
 | `rastro:held_by` | account → Person | The account belongs to the Person. A link, not a Merge |
 | `rastro:same_as` | Person ↔ Person | Two Persons are one. A merge, reversible (`../decisions/knowledge.md` §34) |
+| `rastro:verified_email` | account → email literal | An address the source verifies for this account |
+| `rastro:token_owner` | account → `true` | The source token belongs to this account |
 
 - Accounts never merge with each other, and an account is never merged into a Person (`../decisions/knowledge.md` §34; glossary). A shared account may be held by two Persons (`../decisions/vocabulary.md` §14).
 - `rastro:same_as` is symmetric, so its pair target is sorted; `rastro:held_by` is directed, so its pair keeps the endpoint roles.
@@ -88,26 +90,37 @@ The exact `domain_key` formats are set at build.
 
 ## Automatic links
 
-An automatic link is not an intent: it is derived from evidence on every projection build and rebuild, never from live credentials.
+An automatic link is not an intent: it is derived on every projection build and rebuild, never from live credentials. Extractors emit `rastro:verified_email` and `rastro:token_owner` claims from evidence. The core derives links only from these claims, `me` and owner intents; it does not interpret plugin evidence kinds or name plugin types. Premise intervals and scope visibility come from the claim lifecycle (D44, accepted 2026-11-05).
 
-**Verified email.** A verified email is a Linear workspace member's email, or one of the token owner's own verified GitHub emails (`/user/emails`, `verified: true`). A GitHub profile email is self-asserted and feeds only fuzzy candidates. Emails are stored as `email` alias claims in the source's namespace (`linear:email/…`, `github:email/…`).
+**Verified email.** A verified email is a Linear workspace member's email, or one of the token owner's own verified GitHub emails (`/user/emails`, `verified: true`). Guests, bots and GitHub profile emails never supply `rastro:verified_email`; a profile email is self-asserted and feeds only fuzzy candidates. Emails are also stored as `email` alias claims, displayed as `<namespace>:email/<address>`.
 
 **The comparison.** Two addresses are equal when the whole address matches after ASCII case-folding. No provider normalisation: no dot or plus rules (`../decisions/knowledge.md` §36).
 
 **The formula.**
 
 - *Email link.* Account B is held by Person P when a verified email of B equals a verified email of an account already held by P, and the two addresses are observed over an overlapping interval. The link holds while both observations hold; when the address is no longer observed on B, its interval closes and the link reads historical.
-- *Token-owner link.* Each connector reports the account its token belongs to. That account is held by `me` while the token belongs to it.
+- *Token-owner link.* An account with a live `rastro:token_owner` claim is held by `me` over the claim's interval, once `me` exists.
 - An automatic link never mints a Person. Without a link, an account is just an account.
 - Equal emails over non-overlapping intervals never link.
 
+**Snapshot evidence (D46, accepted 2026-11-05; D49, accepted 2026-11-06).** The token owner's verified addresses are one evidence record at `/emails/verified`: a JSON-list header (including `[]` when empty), followed by raw addresses with a separate span per address. Each email alias and `rastro:verified_email` claim cites its address's span in that record, quoting the exact unescaped address even when JSON escapes it. Spans never outlive their snapshot. A failed read writes no snapshot and keeps the previous one.
+
+**Snapshot replacement (D47, accepted 2026-11-06).** A newer snapshot from the same source and selection replaces the older one, closing claims supported only by the older snapshot. This exception applies only to `rastro:verified_email`, `rastro:token_owner` and email-alias claims; every other claim keeps its lifecycle. A dropped address or an empty list therefore closes its alias and any link whose premises no longer hold.
+
+**Inference storage.** Automatic links are inference justifications in the rebuildable `automatic_justification` table: id, claim id, reason (`verified_email` or `token_owner`), premise claim ids (`premise_a`, nullable `premise_b`), and `started_at`/`ended_at`. A token-owner link cites its token-owner claim; an email link cites both verified-email claims.
+
 **The veto.** A cannot-link vetoes an automatic link, and the veto holds through a `same_as` chain (transitive merges): a refusal between account B and Person P, or between B and any Person reachable from P through any number of `same_as` merges, blocks the link of B to P. Only an explicit owner link or merge clears it.
+
+**Order independence (D48 and D51, accepted 2026-11-06).** An owner link always wins and vetoes an automatic link that would join a cannot-linked account. If two automatic links qualify for one Person but their accounts are cannot-linked, neither joins during their qualifying overlap; outside that overlap each may join. The veto checks all accounts of Persons joined through `same_as`, rather than choosing by ingest or projection order.
+
+**Current implementation limit (2026-11-06).** The merged automatic-link implementation blocks conflicting automatic links in every interval. Restricting that block to the qualifying overlap is accepted but still pending; the plan records the remaining scenario S40.
 
 ## Visibility
 
 - A Person is visible in a scope that can see at least one of its linked accounts. `me` is visible in every scope.
 - A link or a merge is visible only where both ends are visible.
 - A cannot-link applies in every scope: it is a refusal, not a fact about the world, and hiding it would let an automatic link be derived again, against the owner's refusal.
+- **Hidden data may suppress, never create (D50, accepted 2026-11-06).** The veto and automatic-link conflicts use every owner intent and every conflict regardless of the reading scope. A globally blocked account stays unlinked in every scope; creating a link requires premises visible in that scope. The accepted disclosure is one bit: an account may stay unlinked without a visible reason.
 - The issuer must be able to see the target when the intent is issued; an intent from a context that cannot is refused. The CLI is authorized to see every scope, independently of its recorded issuer scopes (D35 below). The recorded issuing context is audit data, not lasting authorization: an intent issued in one scope applies in another that can see its target (`../decisions/knowledge.md` §42, §44).
 
 ## Rebuild, replay and cache
@@ -169,7 +182,7 @@ Status stays accepted. Plan: `../plans/2026-11-05-second-source-one-identity.pla
 - **`issuer_context` records real scopes (D28, extends *The owner-intent table*).** It holds the issuing surface's actual configured scopes, never `[]` standing for all. Still audit data, not authorization.
 - **A retried `person create` mints a new Person (D29, extends *Minting a Person*).** Each run of `rastro identity person create` is a new intent with a new id; a duplicate is merged. Revisit when an agent surface can issue intents.
 - **A Linear guest's email is not verified (D32, extends *Automatic links*).** Only a workspace member's email is a verified email; a guest's never makes an automatic link, though it may still feed a fuzzy candidate. Plan D32 (owner Q11).
-- **The token owner is the `viewer` item (D34, extends *Automatic links*).** Each connector records its token's owner as kind `viewer` at `<namespace>:viewer`, field `/id`, and the token-owner link is derived from it. Product meaning in `../decisions/plugins.md` §25.
+- **The token owner is the `viewer` item (D34, extends *Automatic links*).** Each connector records its token's owner as kind `viewer` at `<namespace>:viewer`, field `/id`, and an extractor emits `rastro:token_owner` from this evidence; the core derives the link from that claim (D44). Product meaning in `../decisions/plugins.md` §25.
 - **Issuer scopes are audit only (D35, clarifies D28 and *Visibility*).** The CLI is authorized to see every scope. The recorded list contains only configured sources' scopes, excluding storage-only scopes; `[]` means no configured sources or a legacy row written before D28, never all scopes. A scoped read shows only issuer scopes its reader can see.
 - **A merge does not reveal a hidden Person (D37, clarifies *Visibility*).** A Person with no visible account of its own stays hidden even when merged with a visible Person; `me` keeps its every-scope visibility. Traversal in a scope follows only merges whose two Persons are visible.
 - **The accounts list shows current links (D38).** An undone link appears as a `superseded` `held_by` claim under `--history`, naming its account, rather than as a current account.
