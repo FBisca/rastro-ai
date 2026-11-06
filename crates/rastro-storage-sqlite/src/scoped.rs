@@ -104,10 +104,20 @@ const INTENT_BACKED: &str =
 /// The identity premises a scope set (`?2`) sees, so the replay derives the scope's automatic
 /// links: every visible verified-email and token-owner claim, plus the type and alias claims of
 /// their subjects (a type claim may cite an email snapshot or guest flag, so a newer one still
-/// closes what the older supported). Only these, never every visible claim.
+/// closes what the older supported), plus every claim citing an observation at the same
+/// (source, scope, location, field) as one of those premises' spans: a newer observation there
+/// replaces the older one even when only another subject's claim cites it (a key that now
+/// belongs to an app), as the lifecycle's snapshot replacement does. Only these, never every
+/// visible claim.
 const PREMISES: &str = "SELECT c.id FROM claim c WHERE c.predicate IN ('rastro:verified_email', 'rastro:token_owner') AND {VISIBLE_CLAIM} \
     UNION SELECT t.id FROM claim t WHERE t.predicate IN ('rastro:type', 'rastro:alias') AND t.subject IN \
-    (SELECT c.subject FROM claim c WHERE c.predicate IN ('rastro:verified_email', 'rastro:token_owner') AND {VISIBLE_CLAIM})";
+    (SELECT c.subject FROM claim c WHERE c.predicate IN ('rastro:verified_email', 'rastro:token_owner') AND {VISIBLE_CLAIM}) \
+    UNION SELECT rj.claim_id FROM claim c JOIN justification pj ON pj.claim_id = c.id \
+    JOIN justification_span ps ON ps.justification_id = pj.id JOIN evidence pe ON pe.id = ps.evidence_id \
+    JOIN evidence re ON re.source = pe.source AND re.scope = pe.scope AND re.location = pe.location AND re.field = pe.field \
+    JOIN justification_span rs ON rs.evidence_id = re.id JOIN justification rj ON rj.id = rs.justification_id \
+    WHERE c.predicate IN ('rastro:verified_email', 'rastro:token_owner') AND {VISIBLE_CLAIM} \
+    AND pe.scope IN (SELECT value FROM json_each(?2))";
 pub(crate) const OVER_BUDGET: &str = "this read is too large to answer within its work budget";
 
 /// Empties the process-local scoped cache; a benchmark's cold samples start from here.

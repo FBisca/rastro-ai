@@ -1022,3 +1022,132 @@ fn S31_a_scoped_person_view_replays_its_automatically_held_accounts() {
     );
     assert!(about("code:state"), "and its other claims are replayed too");
 }
+
+/// One read of the key's owner at `linear:viewer`, field `/id`, quoting `id`, from a Linear
+/// source in `personal`, captured `hours` after time(): each (predicate, value, datatype) is one
+/// claim about `linear:user/<id>` (typed `entity_type`, with these supertypes) citing that read.
+fn viewer(
+    db: &mut SqliteStorage,
+    id: &str,
+    (entity_type, ancestors): (&str, &[&str]),
+    facts: &[(&str, &str, &str)],
+    hours: i64,
+) {
+    let source = Source::new("s-linear".into(), "linear".into(), Scope("personal".into()));
+    db.project_sources(std::slice::from_ref(&source)).unwrap();
+    let at = time() + chrono::Duration::hours(hours);
+    let run = db
+        .start_run(&source, ("fixture", "1"), at, (at, at))
+        .unwrap();
+    let e = Evidence {
+        source: source.name.clone(),
+        scope: source.scope.clone(),
+        location: "linear:viewer".into(),
+        field: "/id".into(),
+        start: 0,
+        end: id.len() as u64,
+        quote: id.into(),
+        trust_class: TrustClass::Structured,
+        captured_at: at,
+        source_updated_at: Some(at),
+        original: None,
+    };
+    db.append_evidence(run, &e).unwrap();
+    let (evidence_id, _) = db
+        .pending_evidence(("fixture", "1"), &source)
+        .unwrap()
+        .into_iter()
+        .rev()
+        .find(|(_, item)| item.location == "linear:viewer" && item.field == "/id")
+        .unwrap();
+    let observed: Vec<ObservedClaim> = facts
+        .iter()
+        .map(|&(predicate, value, datatype)| {
+            let subject = Entity::new(format!("linear:user/{id}"), entity_type.into());
+            let object = Object::Literal {
+                value: value.into(),
+                datatype: datatype.into(),
+            };
+            ObservedClaim {
+                id: claims::claim_id(&subject.id, predicate, &object),
+                subject,
+                predicate: predicate.into(),
+                object,
+                scalar: predicate == claims::TYPE_PREDICATE,
+                type_ancestors: ancestors.iter().map(|a| a.to_string()).collect(),
+                supports: BTreeSet::from([Support {
+                    portable_key: claims::portable_evidence_key(&e),
+                    evidence_id,
+                    field: "/id".into(),
+                    start: 0,
+                    end: id.len() as u64,
+                    extraction_rule: "fixture-rule".into(),
+                }]),
+            }
+        })
+        .collect();
+    db.record_claims(run, ("fixture", "1"), &observed, None)
+        .unwrap();
+}
+
+/// S19: a Linear key that switches from its owner to an app closes the owner's token-owner link
+/// at the newer viewer read, in a scoped read as in the unscoped one, though only the app's type
+/// claim cites that newer read
+#[test]
+fn S19_a_linear_key_switching_to_an_app_closes_the_token_link_in_scope_too() {
+    let home = tempfile::tempdir().unwrap();
+    let mut db = SqliteStorage::open(&home.path().join("db")).unwrap();
+    let (me, minted) = me(1);
+    issue(&mut db, vec![minted]).unwrap();
+    let owner = "00000000-0000-4000-8000-000000000001";
+    let app = "00000000-0000-4000-8000-000000000009";
+    viewer(
+        &mut db,
+        owner,
+        ("tracker:Account", &[ACCOUNT_TYPE]),
+        &[
+            (
+                claims::TYPE_PREDICATE,
+                "tracker:Account",
+                claims::TYPE_DATATYPE,
+            ),
+            (rastro_core::identity::TOKEN_OWNER, "true", "boolean"),
+        ],
+        1,
+    );
+    // The key now belongs to an app: only the app's type claim cites the newer read.
+    viewer(
+        &mut db,
+        app,
+        ("tracker:Bot", &[]),
+        &[(claims::TYPE_PREDICATE, "tracker:Bot", claims::TYPE_DATATYPE)],
+        2,
+    );
+    let options = AboutOptions {
+        history: true,
+        limit: 50,
+        since: None,
+    };
+    let held = |claims: Vec<rastro_core::knowledge::ClaimSummary>| -> Vec<String> {
+        claims
+            .iter()
+            .filter(|s| s.claim.predicate == rastro_core::identity::HELD_BY)
+            .map(|s| format!("{:?}", s.claim))
+            .collect()
+    };
+    let full = held(
+        db.about_scoped_within(&me.identifier, &options, &[], 100_000)
+            .unwrap(),
+    );
+    assert_eq!(full.len(), 1, "the owner was held by me: {full:?}");
+    assert!(
+        full[0].contains("end: Some(2026-11-01T02:00:00Z)"),
+        "and the newer read closed it: {full:?}"
+    );
+    let personal = [Scope("personal".into())];
+    let scoped = held(
+        db.about_scoped_within(&me.identifier, &options, &personal, 100_000)
+            .unwrap(),
+    );
+    assert_eq!(scoped, full);
+}
