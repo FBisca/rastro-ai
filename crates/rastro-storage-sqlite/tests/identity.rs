@@ -976,3 +976,49 @@ fn S31_a_scoped_read_replays_only_identity_premises() {
         db.about_scoped_within("github:account/99", &AboutOptions::default(), &personal, 2);
     assert!(answer.unwrap().is_empty());
 }
+
+/// S31: a scoped view of a Person replays the claims of the accounts it holds automatically, not
+/// only their identity premises (B3, two phases)
+#[test]
+fn S31_a_scoped_person_view_replays_its_automatically_held_accounts() {
+    let home = tempfile::tempdir().unwrap();
+    let mut db = SqliteStorage::open(&home.path().join("db")).unwrap();
+    let anchor = account(&mut db, 1, "personal");
+    account(&mut db, 2, "personal");
+    let p = person(1);
+    issue(
+        &mut db,
+        vec![create("i_1", &p), link("i_2", &anchor, &p, &[])],
+    )
+    .unwrap();
+    for n in [1, 2] {
+        fact(
+            &mut db,
+            &format!("github:account/{n}"),
+            rastro_core::identity::VERIFIED_EMAIL,
+            ("same@example.com", "email"),
+            "personal",
+        );
+    }
+    fact(
+        &mut db,
+        "github:account/2",
+        "code:state",
+        ("active", "string"),
+        "personal",
+    );
+    let personal = [Scope("personal".into())];
+    let claims = db
+        .about_scoped_within(&p.identifier, &AboutOptions::default(), &personal, 1000)
+        .unwrap();
+    let about = |predicate: &str| {
+        claims.iter().any(|s| {
+            s.claim.subject.identifier == "github:account/2" && s.claim.predicate == predicate
+        })
+    };
+    assert!(
+        about(rastro_core::identity::HELD_BY),
+        "account 2 joins P automatically"
+    );
+    assert!(about("code:state"), "and its other claims are replayed too");
+}

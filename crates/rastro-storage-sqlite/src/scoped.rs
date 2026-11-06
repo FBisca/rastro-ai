@@ -73,7 +73,16 @@ pub(super) fn projection(
             return Ok(hit.clone());
         }
     }
-    let (connection, work) = build(db, scopes, target, budget)?;
+    let (mut connection, mut work) = build(db, scopes, &target, budget, &BTreeSet::new())?;
+    // Two phases: the first replay derives the scope's automatic links from the identity
+    // premises; the accounts it holds automatically for a Person the form names join the roots,
+    // so the second replays their claims too.
+    if let Target::Entity(entity) = &target {
+        let extra = automatic_accounts(db, &connection, entity, scopes)?;
+        if !extra.is_empty() {
+            (connection, work) = build(db, scopes, &target, budget, &extra)?;
+        }
+    }
     let built = Arc::new(Mutex::new(connection));
     if let Some(key) = key {
         let mut cache = CACHE.lock().unwrap_or_else(|e| e.into_inner());
@@ -141,11 +150,34 @@ fn ids(db: &Connection, sql: &str, arguments: &[String]) -> Result<String> {
     Ok(serde_json::to_string(&rows)?)
 }
 
+/// The accounts the replay holds automatically for a Person the form names (in any interval),
+/// that aren't roots already.
+fn automatic_accounts(
+    db: &Connection,
+    replay: &Connection,
+    form: &str,
+    scopes: &[Scope],
+) -> Result<BTreeSet<String>> {
+    let roots = super::identity::roots(db, form, scopes)?;
+    let held: BTreeSet<String> = replay
+        .prepare("SELECT DISTINCT c.subject FROM claim c JOIN automatic_justification a ON a.claim_id = c.id WHERE c.predicate = ?1 AND c.object_entity IN (SELECT value FROM json_each(?2))")?
+        .query_map(
+            rusqlite::params![
+                rastro_core::identity::HELD_BY,
+                serde_json::to_string(&roots)?
+            ],
+            |r| r.get(0),
+        )?
+        .collect::<Result<_, _>>()?;
+    Ok(held.into_iter().filter(|a| !roots.contains(a)).collect())
+}
+
 fn build(
     db: &Connection,
     scopes: &[Scope],
-    target: Target<'_>,
+    target: &Target<'_>,
     budget: usize,
+    extra: &BTreeSet<String>,
 ) -> Result<(Connection, usize)> {
     // Replay complete subject/predicate components, including competing claims. One-hop
     // candidates are selected before replay, but status, recency and the limit are not.
@@ -168,7 +200,11 @@ fn build(
             vec![
                 entity.to_string(),
                 scopes.clone(),
-                serde_json::to_string(&super::identity::roots(db, entity, scope_set)?)?,
+                serde_json::to_string(&{
+                    let mut roots = super::identity::roots(db, entity, scope_set)?;
+                    roots.extend(extra.iter().cloned());
+                    roots
+                })?,
             ],
         ),
         // A claim's own slot only, plus its endpoints' type and alias claims below.
