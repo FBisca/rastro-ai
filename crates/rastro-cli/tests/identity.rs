@@ -1695,3 +1695,81 @@ fn S37_an_intent_records_the_configured_scopes_of_its_issuer() {
     let why = env.human(&["why", &claim_id(&env.about(person), "rastro:alias")]);
     assert!(why.contains("Scopes: personal, work"), "{why}");
 }
+
+/// A `name` alias on the account `identifier` (typed `kind`), read at `location`, field `/name`.
+fn named(env: &Env, identifier: &str, kind: &str, name: &str, location: &str) {
+    let subject = Entity::new(identifier.into(), kind.into());
+    let alias = Object::Literal {
+        value: name.into(),
+        datatype: "name".into(),
+    };
+    env.record(
+        &subject,
+        claims::ALIAS_PREDICATE,
+        alias,
+        (location, "/name"),
+    );
+}
+/// The candidate pairs `rastro identity candidates` lists, each as its two identifiers and its
+/// reasons.
+fn candidates(env: &Env) -> Vec<(String, String, Vec<String>)> {
+    let listed = env.ok(&["identity", "candidates"]);
+    let pairs = listed["candidates"].as_array().unwrap().iter();
+    pairs
+        .map(|c| {
+            let identifier = |i: usize| c["accounts"][i]["identifier"].as_str().unwrap().into();
+            let reasons = c["reasons"].as_array().unwrap().iter();
+            let reasons = reasons.map(|r| r["reason"].as_str().unwrap().into());
+            (identifier(0), identifier(1), reasons.collect())
+        })
+        .collect()
+}
+
+/// S23: a GitHub account and a Linear account whose full names are equal after case and accent
+/// folding are listed with reason `same name`, until one Person holds both
+#[test]
+fn S23_accounts_with_one_folded_name_are_listed_as_same_name() {
+    let env = Env::new();
+    env.account(41, "asilva");
+    let github = "github:account/41";
+    named(
+        &env,
+        github,
+        "code:Account",
+        "Ana Silva",
+        "https://api.github.com/users/41",
+    );
+    let linear = tracker_account(&env, "u-41", "ana.s@example.org");
+    named(
+        &env,
+        &linear,
+        "tracker:Account",
+        "ANA SÍLVA",
+        "https://linear.app/users/u-41",
+    );
+    let pair = (
+        github.to_string(),
+        linear.clone(),
+        vec!["same name".to_string()],
+    );
+    assert_eq!(candidates(&env), [pair]);
+    let text = env.human(&["identity", "candidates"]);
+    assert!(
+        text.contains("github:account/41 ~ linear:user/u-41"),
+        "{text}"
+    );
+    assert!(text.contains("same name: Ana Silva = ANA SÍLVA"), "{text}");
+    let person = env.person("Ana Silva");
+    env.ok(&["identity", "link", github, &person]);
+    assert_eq!(
+        candidates(&env).len(),
+        1,
+        "one account held is still a candidate"
+    );
+    env.ok(&["identity", "link", &linear, &person]);
+    assert!(candidates(&env).is_empty());
+    assert_eq!(
+        env.human(&["identity", "candidates"]).trim(),
+        "No candidates"
+    );
+}
