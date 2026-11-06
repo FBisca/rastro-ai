@@ -298,6 +298,10 @@ pub fn validate(
     }
     // The text an alias claim's supports must quote.
     let mut alias = None;
+    // The text a verified email's supports must quote, and the viewer observation a token
+    // owner must cite.
+    let mut email = None;
+    let mut viewer = None;
     // Every `rastro:type` claim is scalar: a newer type read from the same field replaces the
     // older, and two live types conflict unless the vocabulary relates them by `supertype`.
     // The projection can't see the vocabulary, so a type claim carries its supertypes.
@@ -349,6 +353,16 @@ pub fn validate(
                     && (datatype != "email" || value.is_empty()))
             {
                 return Err("object outside the predicate's range".into());
+            }
+            // D49: a verified email is quoted exactly, like an alias; a token owner is read from
+            // its source's viewer observation.
+            if id == crate::identity::VERIFIED_EMAIL {
+                email = Some(value.clone());
+            } else {
+                viewer = subject
+                    .identifier
+                    .split_once(':')
+                    .map(|(ns, _)| format!("{ns}:viewer"));
             }
             scalar = false;
             Object::Literal { value, datatype }
@@ -429,6 +443,24 @@ pub fn validate(
         if !supports.iter().any(quoted) {
             return Err("an alias is exactly the text one of its supports quotes".into());
         }
+    }
+    if let Some(email) = email {
+        let quoted = |s: &Support| {
+            let e = &delivered[&s.evidence_id];
+            e.quote
+                .get((s.start - e.start) as usize..(s.end - e.start) as usize)
+                == Some(email.as_str())
+        };
+        if !supports.iter().any(quoted) {
+            return Err("a verified email is exactly the text one of its supports quotes".into());
+        }
+    }
+    if let Some(viewer) = viewer
+        && !supports
+            .iter()
+            .any(|s| delivered[&s.evidence_id].location == viewer)
+    {
+        return Err("a token owner cites its source's viewer observation".into());
     }
     let subject = Entity::new(subject.identifier, subject.entity_type);
     Ok(ObservedClaim {
@@ -627,6 +659,83 @@ mod tests {
         ] {
             assert!(check(wrong).is_err());
         }
+    }
+
+    /// `x:Account` is an account: its supertype is the core's `rastro:Account`.
+    fn accounts() -> Vocabulary {
+        Vocabulary::parse(&format!(
+            "namespace = \"x\"\nversion = \"1\"\npredicates = []\n\
+             [[types]]\nid = \"x:Account\"\nsupertype = \"rastro:Account\"\n{WORDS}"
+        ))
+        .unwrap()
+    }
+    /// Evidence 1 of `delivered()`, plus evidence 2: a verified-email snapshot at `github:viewer`.
+    fn with_viewer() -> HashMap<i64, Evidence> {
+        let mut found = delivered();
+        let mut snapshot = found[&1].clone();
+        snapshot.location = "github:viewer".into();
+        snapshot.field = "/emails/verified".into();
+        snapshot.quote = "[\"a@example.com\"]\na@example.com".into();
+        snapshot.end = 31;
+        found.insert(2, snapshot);
+        found
+    }
+    fn premise(
+        predicate: &str,
+        value: &str,
+        datatype: &str,
+        (id, field, start, end): (i64, &str, u64, u64),
+    ) -> Result<ObservedClaim, String> {
+        let submit: ClaimSubmit = serde_json::from_value(serde_json::json!({
+            "subject": {"identifier": "github:account/1", "type": "x:Account"},
+            "predicate": predicate,
+            "object": {"kind": "literal", "value": value, "datatype": datatype},
+            "extraction_rule": "r",
+            "supports": [{"evidence_id": id, "field": field, "start": start, "end": end}],
+        }))
+        .unwrap();
+        validate(submit, &with_viewer(), &manifest(), &accounts())
+    }
+
+    /// S12, D49: a verified email is exactly the text one of its supports quotes
+    #[test]
+    fn S12_a_verified_email_is_exactly_the_text_its_support_quotes() {
+        let email = crate::identity::VERIFIED_EMAIL;
+        assert!(
+            premise(
+                email,
+                "a@example.com",
+                "email",
+                (2, "/emails/verified", 18, 31)
+            )
+            .is_ok()
+        );
+        assert!(
+            premise(
+                email,
+                "a@example.com",
+                "email",
+                (2, "/emails/verified", 0, 31)
+            )
+            .is_err()
+        );
+        assert!(
+            premise(
+                email,
+                "b@example.com",
+                "email",
+                (2, "/emails/verified", 18, 31)
+            )
+            .is_err()
+        );
+    }
+
+    /// S14: a token owner cites its source's viewer observation
+    #[test]
+    fn S14_a_token_owner_cites_its_sources_viewer_observation() {
+        let owner = crate::identity::TOKEN_OWNER;
+        assert!(premise(owner, "true", "boolean", (2, "/emails/verified", 0, 1)).is_ok());
+        assert!(premise(owner, "true", "boolean", (1, "/user/login", 0, 7)).is_err());
     }
 
     /// claims/R56: a subject or object identifier outside the entity forms is rejected
