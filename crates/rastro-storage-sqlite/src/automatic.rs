@@ -79,6 +79,23 @@ fn conflicts(
 }
 
 pub(crate) fn apply(db: &Connection) -> Result<()> {
+    apply_within(db, None)
+}
+
+/// The (account, Person) pairs `db` links automatically, in any interval.
+pub(crate) fn linked_pairs(db: &Connection) -> Result<BTreeSet<(String, String)>> {
+    Ok(db
+        .prepare("SELECT DISTINCT c.subject, c.object_entity FROM claim c JOIN automatic_justification a ON a.claim_id = c.id")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?)
+}
+
+/// In a scoped replay, `allowed` holds the (account, Person) pairs the full projection links
+/// automatically: hidden data may suppress a link there but never create one (D50).
+pub(crate) fn apply_within(
+    db: &Connection,
+    allowed: Option<&BTreeSet<(String, String)>>,
+) -> Result<()> {
     let resolution = Resolution::of(&identity::load(db)?);
     let mut affected: BTreeSet<String> = db
         .prepare("SELECT DISTINCT claim_id FROM automatic_justification")?
@@ -107,6 +124,7 @@ pub(crate) fn apply(db: &Connection) -> Result<()> {
         )?.query_map([core::TOKEN_OWNER], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<Result<_, _>>()?;
             for (premise, account, identifier) in rows {
                 if vetoed(&resolution, &account, me)
+                    || allowed.is_some_and(|a| !a.contains(&(account.clone(), me.clone())))
                     || admit_account(&identifier, &identity::types(db, &account, &[])?).is_err()
                 {
                     continue;
@@ -156,6 +174,9 @@ pub(crate) fn apply(db: &Connection) -> Result<()> {
                         if right_account == left_account
                             || !left_email.eq_ignore_ascii_case(right_email)
                             || vetoed(&resolution, right_account, &person)
+                            || allowed.is_some_and(|a| {
+                                !a.contains(&(right_account.clone(), person.clone()))
+                            })
                             || admit_account(identifier, &identity::types(db, right_account, &[])?)
                                 .is_err()
                         {

@@ -2801,6 +2801,59 @@ fn S17_a_cannot_link_with_a_hidden_held_account_vetoes_in_every_scope() {
     assert_eq!(linked(&seen), ["github:account/1"], "{seen}");
 }
 
+/// S17: B (visible) and D (hidden) both qualify for P and are refused to each other, so neither
+/// joins; B stays unlinked in a scope that can't see D (D48, D50)
+#[test]
+fn S17_a_hidden_conflict_partner_keeps_the_visible_account_unlinked_in_every_scope() {
+    let env = Env::new();
+    for (n, scope, login) in [
+        (1, "personal", "anchor"),
+        (2, "personal", "match"),
+        (4, "health", "partner"),
+    ] {
+        let (account, location) = (
+            format!("github:account/{n}"),
+            format!("https://api.github.com/identity/{n}"),
+        );
+        env.account_in(scope, &account, "code:Account", login, 0);
+        env.claim_about(
+            scope,
+            &account,
+            &location,
+            rastro_core::identity::VERIFIED_EMAIL,
+            ("same@example.com", "email"),
+            false,
+            1,
+        );
+    }
+    let p = env.json(&["identity", "person", "create", "--name", "Anchor"])["person"]["identifier"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    env.json(&["identity", "link", "github:account/1", &p]);
+    refuse_accounts(
+        &env,
+        "i_s17_hidden_partner",
+        "github:account/2",
+        "github:account/4",
+    );
+    let mut everything = env.scoped(&[]);
+    let all = about_text(&mut everything, &p);
+    assert_eq!(linked(&all), ["github:account/1"], "{all}");
+    let mut personal = env.scoped(&["personal"]);
+    let seen = about_text(&mut personal, &p);
+    assert_eq!(linked(&seen), ["github:account/1"], "{seen}");
+    let b = about_text(&mut personal, "github:account/2");
+    assert!(
+        !b["claims"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["predicate"] == "rastro:held_by"),
+        "{b}"
+    );
+}
+
 /// S37: a scoped `why` on an intent-backed claim lists only the issuer scopes the session can
 /// see; a scope the session can't see is never named
 #[test]
