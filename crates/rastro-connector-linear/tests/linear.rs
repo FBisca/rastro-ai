@@ -99,6 +99,15 @@ fn S35_bot_viewer_is_not_linked_when_user_enumeration_fails() {
     let env = env_with_extractor(&fixture.base);
     env.ok(&["identity", "me", "--json"]);
     assert_eq!(env.sync(&[])["status"], "failed");
+    let viewer = env.json(&["about", &format!("linear:user/{APP}")]);
+    assert!(
+        viewer["claims"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["predicate"] == "rastro:type" && c["object"]["value"] == "tracker:Bot"),
+        "{viewer}"
+    );
     let about = env.json(&["about", "me"]);
     assert!(
         !about["person"]["accounts"]

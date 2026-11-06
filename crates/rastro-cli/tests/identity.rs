@@ -145,7 +145,12 @@ impl Env {
             subject: subject.clone(),
             predicate: predicate.into(),
             object,
-            scalar: true,
+            // As the core validates them: identity premises are never scalar.
+            scalar: ![
+                rastro_core::identity::VERIFIED_EMAIL,
+                rastro_core::identity::TOKEN_OWNER,
+            ]
+            .contains(&predicate),
             type_ancestors: if account {
                 vec![rastro_core::identity::ACCOUNT_TYPE.into()]
             } else {
@@ -576,6 +581,43 @@ fn S35_automatic_links_refuse_entities_without_an_account_type() {
         "{about}"
     );
 }
+/// S17: a cannot-link between B and P directly vetoes the automatic link; the owner's explicit
+/// link then holds it
+#[test]
+fn S17_a_direct_cannot_link_blocks_the_automatic_link_until_explicitly_linked() {
+    let env = Env::new();
+    let a = env.account(801, "anchor");
+    let b = env.account(802, "match");
+    let p = env.person("Anchor");
+    env.ok(&["identity", "link", &a, &p]);
+    let refused = env.ok(&["identity", "link", &b, &p]);
+    env.ok(&["identity", "undo", &intent_id(&refused)]);
+    for n in [801, 802] {
+        env.record(
+            &Entity::new(format!("github:account/{n}"), "code:Account".into()),
+            rastro_core::identity::VERIFIED_EMAIL,
+            Object::Literal {
+                value: "same@example.com".into(),
+                datatype: "email".into(),
+            },
+            (
+                &format!("https://api.github.com/users/{n}"),
+                "/verified-email",
+            ),
+        );
+    }
+    let held = |about: &Value| {
+        about["person"]["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["identifier"] == "github:account/802")
+    };
+    assert!(!held(&env.about(&p)), "vetoed by the direct cannot-link");
+    env.ok(&["identity", "link", &b, &p]);
+    assert!(held(&env.about(&p)), "the explicit link holds it");
+}
+
 fn kinds(history: &Value) -> Vec<(String, String)> {
     history["intents"]
         .as_array()
