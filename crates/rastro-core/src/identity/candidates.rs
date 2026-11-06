@@ -207,8 +207,10 @@ pub fn candidate_pairs(accounts: &[AccountFacts], resolution: &Resolution) -> Ve
 }
 
 /// What the owner's answer to the candidate pair `a`, `b` records, given every account's facts
-/// and the intents accepted so far: a no is a cannot-link between the two accounts. Refused when
-/// the pair isn't a candidate now.
+/// and the intents accepted so far. A no is a cannot-link between the two accounts. A yes links
+/// both to the Person holding one of them, or, when neither is held, to a new Person named
+/// `name` (the candidate's name by default). Refused when the pair isn't a candidate now, or
+/// when more than one Person holds its accounts.
 fn plan_answer(
     a: EntityTarget,
     b: EntityTarget,
@@ -233,8 +235,38 @@ fn plan_answer(
         let refusal = intent(IntentKind::CannotLink, pair, Payload::empty())?;
         return Ok((vec![refusal], None, false));
     }
-    let _ = (candidate, name);
-    bail!("only a no is recorded so far")
+    let holders: BTreeSet<&String> = (facts.iter().filter(|f| ids.contains(&&f.id)))
+        .flat_map(|f| &f.holders)
+        .collect();
+    ensure!(
+        holders.len() <= 1,
+        "{} and {} are held by more than one Person; merge them with `rastro identity merge`, \
+         or link each account with `rastro identity link`",
+        a.identifier,
+        b.identifier
+    );
+    let mut intents = Vec::new();
+    let holder = match holders.first() {
+        Some(id) => person(resolution, id).ok_or_else(|| anyhow::anyhow!("unknown Person {id}"))?,
+        None => {
+            let minted = mint_person()?;
+            let named = Payload {
+                version: SHAPE_VERSION,
+                name: Some(name.unwrap_or(&candidate.name).into()),
+            };
+            let entity = Targets::entity(minted.clone());
+            let create = intent(IntentKind::CreatePerson, entity.clone(), Payload::empty())?;
+            intents.extend([create, intent(IntentKind::Name, entity, named)?]);
+            minted
+        }
+    };
+    for account in [a, b] {
+        if !(facts.iter()).any(|f| f.id == account.id && !f.holders.is_empty()) {
+            let pair = Targets::pair(false, account, holder.clone());
+            intents.push(intent(IntentKind::Link, pair, Payload::empty())?);
+        }
+    }
+    Ok((intents, Some(holder), holders.is_empty()))
 }
 
 impl<S: Storage> Rastro<S> {
@@ -440,5 +472,36 @@ mod tests {
         let again = plan_answer(target(&github), target(&linear), &both, &after, false, None);
         let error = again.unwrap_err().to_string();
         assert!(error.contains("not a candidate pair"), "{error}");
+    }
+
+    /// S25: a yes to a pair neither account of which is held creates a Person named from the
+    /// candidate and links both; with one account held, it links only the other, to that Person
+    #[test]
+    fn S25_a_yes_links_both_accounts_to_one_person() {
+        use IntentKind::{CreatePerson, Link, Name};
+        let github = facts("github:account/1", &["Ana Silva"], &[], &[]);
+        let linear = facts("linear:user/u-1", &["ana silva"], &[], &[]);
+        let both = [github.clone(), linear.clone()];
+        let none = Resolution::default();
+        let answer = plan_answer(target(&linear), target(&github), &both, &none, true, None);
+        let (intents, person, created) = answer.unwrap();
+        let kinds: Vec<_> = intents.iter().map(|i| i.kind).collect();
+        assert_eq!(kinds, [CreatePerson, Name, Link, Link]);
+        assert!(created);
+        assert_eq!(intents[1].payload.name.as_deref(), Some("Ana Silva"));
+        let person = person.unwrap();
+        for link in &intents[2..] {
+            assert_eq!(link.targets.entities()[1], &person);
+        }
+        let mut r = Resolution::default();
+        let p = known_person(&mut r, "p");
+        let one_held = [held(&github, &p), linear.clone()];
+        let answer = plan_answer(target(&github), target(&linear), &one_held, &r, true, None);
+        let (intents, person, created) = answer.unwrap();
+        assert!(!created);
+        assert_eq!(person, Some(p));
+        assert_eq!(intents.len(), 1);
+        assert_eq!(intents[0].kind, Link);
+        assert_eq!(intents[0].targets.entities()[0].id, linear.id);
     }
 }
