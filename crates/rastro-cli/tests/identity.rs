@@ -1773,3 +1773,66 @@ fn S23_accounts_with_one_folded_name_are_listed_as_same_name() {
         "No candidates"
     );
 }
+
+/// S24: a Linear email whose local part equals a GitHub login is listed with reason
+/// `email matches login`
+#[test]
+fn S24_a_linear_email_whose_local_part_is_a_github_login_is_listed() {
+    let env = Env::new();
+    env.account(42, "bcosta");
+    let linear = tracker_account(&env, "u-42", "bcosta@example.org");
+    let reason = vec!["email matches login".to_string()];
+    assert_eq!(
+        candidates(&env),
+        [("github:account/42".into(), linear, reason)]
+    );
+    let text = env.human(&["identity", "candidates"]);
+    assert!(
+        text.contains("email matches login: bcosta = bcosta@example.org"),
+        "{text}"
+    );
+    assert!(text.contains("Name: bcosta"), "{text}");
+}
+
+/// S27: a pair within one namespace, or with a bot (a GitHub `code:Bot` or a Linear app user),
+/// is never a candidate, even when the names or the email and login match
+#[test]
+fn S27_a_pair_in_one_namespace_or_with_a_bot_is_never_a_candidate() {
+    let env = Env::new();
+    for n in [71, 72] {
+        env.account(n, &format!("ana{n}"));
+        let location = format!("https://api.github.com/users/{n}");
+        named(
+            &env,
+            &format!("github:account/{n}"),
+            "code:Account",
+            "Ana Silva",
+            &location,
+        );
+    }
+    let bot = "github:account/73";
+    let location = "https://api.github.com/users/73";
+    env.typed_account(bot, "code:Bot", ("login", "blima"), location);
+    named(&env, bot, "code:Bot", "Bea Lima", location);
+    let linear = tracker_account(&env, "u-73", "blima@example.org");
+    named(
+        &env,
+        &linear,
+        "tracker:Account",
+        "Bea Lima",
+        "https://linear.app/users/u-73",
+    );
+    let app = "linear:user/app-74";
+    let location = "https://linear.app/users/app-74";
+    env.typed_account(app, "tracker:Bot", ("name", "Caio Reis"), location);
+    env.account(74, "creis");
+    let location = "https://api.github.com/users/74";
+    named(
+        &env,
+        "github:account/74",
+        "code:Account",
+        "Caio Reis",
+        location,
+    );
+    assert!(candidates(&env).is_empty(), "{:?}", candidates(&env));
+}
