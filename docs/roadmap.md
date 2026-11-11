@@ -15,13 +15,14 @@ Status: `todo` · `planning` · `doing` · `done`
 | 2 | **Agents can ask** | Point Claude Code or Codex at Rastro's MCP server and have them call `search` and `coverage`, generated from the same schema as the CLI | 1 | surfaces §2–5, §11–18; plugins §6; knowledge §21 | done (`plans/2026-11-04-agents-can-ask.plan.md`, spec `specs/surfaces.md`) |
 | 3 | **Claims and `about`** | Ask `about(entity)` and `why(claim)` and get observed claims from structured evidence, each traceable to its evidence | 2 | knowledge §5, §7 | done (`plans/2026-11-04-claims-and-about.plan.md`, spec `specs/claims.md`) |
 | 4 | **A second source, one identity** | Add a second source and see one person seen in both as one entity. Exact identifiers link on their own, fuzzy matches ask you, and you can undo a merge | 3 | knowledge §4; vocabulary §8 | done (`plans/2026-11-05-second-source-one-identity.plan.md`, spec `specs/identity.md`) |
+| 4b | **Answers I can read** | Get `about` and `why` results whose entities carry a cited label (title or name, with its URL, and state when observed), so an agent sees what is on your plate in one call. `rastro sync` shows progress and why it is reading, and warns before a renamed source is re-read in full. Switch day: the morning after it lands, you prep standup with `about me` over MCP instead of opening Linear and GitHub | 4 | knowledge §22, §69 | planning |
 
 ## M2: Commitments I can trust
 **Client use: a daily commitments review** that never shows you what's already done or tracked. It replaces the prototype's proposed tasks.
 
 | # | Slice | Outcome: from here on you can… | Builds on | Concept / decisions | Status |
 |---|---|---|---|---|---|
-| 5 | **Commitments from conversations** | See commitments (asks, promises, dates, waiting-on) from Teams meetings you choose, as hypotheses: each with its quoted span, its speaker (uncertain until you link it) and how its date was read, through a `commitments` list on CLI and MCP. A private meetings connector reads the work companion deterministically, outside this repo; a separate commitments extractor uses an agent tool adapter. A model's interpretation is recorded and replayed, never re-called at rebuild. Switch day: the morning after it lands, yesterday's meeting commitments are checked in Rastro, not by rereading notes | 4 | knowledge §6, §13, §17, §23, §46; vocabulary §1, §5; plugins §2, §10, §13 | planning |
+| 5 | **Commitments from conversations** | See commitments (asks, promises, dates, waiting-on) pulled from an unstructured source as hypotheses, each with its quoted span, through a `commitments` list on CLI and MCP. Uses an agent tool adapter and a minimal standard vocabulary; a model's interpretation is recorded and replayed, never re-called at rebuild | 4b | knowledge §6, §13, §23, §46; vocabulary §1, §5; plugins §2, §10 | todo |
 | 6 | **The commitments queue** | Work a terminal queue of proposals and questions, checked against what's known first: accept, edit, reject, answer, `missed`. Outcomes are recorded, and the renderer reports what it showed | 5 | renderers §1–2, §6; learning §2–3, §11 | todo |
 | 7 | **Correct anything** | Confirm, fix or retract any claim; a retraction carries through to derived claims and pending proposals; "as of" queries | 6 | knowledge §7, §10; renderers §5 | todo |
 
@@ -56,7 +57,7 @@ Status: `todo` · `planning` · `doing` · `done`
 - News radar, project updates in the owner's voice, "find agent work a plain rule could do": workflows after 12.
 - Windows support.
 - Commitments from GitHub and Linear comments: the slice-5 extractor bound to those sources, once their connectors read comments.
-- Slack and mail through the work companion, after meetings prove useful; Slack per approved channel, each with its own coverage.
+- Meetings, Slack and mail through the work companion, once commitments prove useful; Slack per approved channel, each with its own coverage.
 - A versioned structured read contract from the work companion (asked of its maintainers), then a generic MCP bridge with private mapping packs.
 - Agentic connectors (an agent chooses what to read), first for online research. Amends plugins §13 and needs a read broker that constrains tools, scopes and arguments; evidence stays what the broker captured, and "empty" only comes from deterministic reads.
 - Open questions in `open-questions.md` get decided inside the slice that first needs them.
