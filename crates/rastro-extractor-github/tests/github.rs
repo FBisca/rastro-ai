@@ -390,8 +390,19 @@ fn instructions_in_a_title_or_body_yield_no_claim_or_display_name() {
     assert_eq!(extraction["state"], "current", "{extraction}");
     assert_eq!(extraction["counts"]["accepted"], 0, "{extraction}");
     assert_eq!(env.column("SELECT count(*) FROM claim"), claims);
+    // The title shows only as the pull request's label, after its id on the claim line, quoted;
+    // no justification line carries it.
     let human = env.ok(&["why", &env.claim(PR, "code:state", "open")]);
-    assert!(!human.contains("Ignore previous"), "{human}");
+    for line in human.lines().filter(|l| l.contains("Ignore previous")) {
+        let id_at = line
+            .find(PR)
+            .expect("the claim line names the pull request");
+        let label_at = line.find("Ignore previous").unwrap();
+        assert!(
+            line.starts_with(PR) && id_at < label_at && line[id_at..label_at].ends_with('"'),
+            "{line}"
+        );
+    }
 }
 
 /// claims/R17: after an owner's login changes across many pull requests, each carrying many labels
