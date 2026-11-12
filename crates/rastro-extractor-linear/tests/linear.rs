@@ -386,3 +386,83 @@ fn an_app_user_syncs_as_a_bot_and_a_link_to_it_is_refused() {
             .any(|c| c.0 == "rastro:held_by")
     );
 }
+
+/// labels/S9: WHEN an issue has a current observed `tracker:state`, THEN its label holds that
+/// value, and an issue whose state is null has `label.state` null. The state is the name Linear
+/// gives it, and it follows the state's change.
+#[test]
+fn S9_a_linear_issue_label_holds_its_current_state_or_null() {
+    let mut without = issue(
+        DOCS,
+        8,
+        "Write the docs",
+        "explain setup",
+        Some(VIEWER),
+        None,
+    );
+    without["state"] = json!(null);
+    let fixture = Fixture::start(World {
+        users: vec![user(VIEWER, "Owner Person", "owner@example.com", true)],
+        issues: vec![
+            issue(CRASH, 7, "Crash on start", "explain", Some(VIEWER), None),
+            without,
+        ],
+        ..World::default()
+    });
+    let env = env(&fixture.base);
+    assert_eq!(env.sync(&[])["extraction"]["state"], "current");
+    let label_state = |entity: &str| {
+        let found = env.json(&["about", entity, "--limit", "50"]);
+        found["claims"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["subject"]["identifier"] == entity)
+            .map(|c| c["subject_label"]["state"].clone())
+            .unwrap_or_else(|| panic!("{entity}: {found}"))
+    };
+    assert_eq!(label_state(&issue_id(CRASH)), "In Progress");
+    assert_eq!(label_state(&issue_id(DOCS)), serde_json::Value::Null);
+}
+
+/// labels/S12: WHEN a Linear issue's `/state/name` is extracted and the name later changes, THEN
+/// an observed `tracker:state` claim holds the name, and after the change the old claim is
+/// superseded and the new one is current.
+#[test]
+fn S12_a_linear_issue_state_is_a_tracker_state_claim_superseded_by_a_change() {
+    let fixture = Fixture::start(world());
+    let env = env(&fixture.base);
+    assert_eq!(env.sync(&[])["extraction"]["state"], "current");
+    let crash = issue_id(CRASH);
+    let before = about(&env, &crash, false);
+    assert!(
+        before.contains(&claim("tracker:state", "In Progress", "observed")),
+        "{before:?}"
+    );
+
+    fixture.change(|world| {
+        let issue = world.issues.iter_mut().find(|i| i["id"] == CRASH).unwrap();
+        issue["state"] = json!({"name": "Done", "type": "completed"});
+        issue["updatedAt"] = json!(days_ago(0));
+    });
+    let run = env.sync(&[]);
+    assert_eq!(run["extraction"]["state"], "current", "{run}");
+    assert_eq!(run["extraction"]["counts"]["rejected"], 0, "{run}");
+
+    let after = about(&env, &crash, false);
+    assert!(
+        after.contains(&claim("tracker:state", "Done", "observed")),
+        "{after:?}"
+    );
+    assert!(
+        !after
+            .iter()
+            .any(|c| c.0 == "tracker:state" && c.1 == "In Progress"),
+        "{after:?}"
+    );
+    let history = about(&env, &crash, true);
+    assert!(
+        history.contains(&claim("tracker:state", "In Progress", "superseded")),
+        "{history:?}"
+    );
+}

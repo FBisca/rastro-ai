@@ -1,9 +1,9 @@
 //! The Linear extractor: deterministic rules that turn the Linear connector's structured
 //! evidence into `tracker` claims (ADR 0008; decisions/vocabulary.md §24–§26).
 //!
-//! It reads only `structured` observations of ten fields: `/id`, `/app`, `/guest`, `/name`, `/email`,
-//! `/active`, `/creator/id`, `/creator/app`, `/assignee/id` and `/assignee/app`, plus the
-//! location they were observed at. It never reads a title, a description or any other field, so
+//! It reads only `structured` observations of eleven fields: `/id`, `/app`, `/guest`, `/name`, `/email`,
+//! `/active`, `/state/name`, `/creator/id`, `/creator/app`, `/assignee/id` and `/assignee/app`, plus
+//! the location they were observed at. It never reads a title, a description or any other field, so
 //! no claim and no alias comes from text a person wrote in an issue.
 //!
 //! # The location rule
@@ -31,6 +31,8 @@
 //!   display name is a handle and is not read.
 //! - `active`: `/active` `true` or `false` with `/id` → `tracker:active`. Accounts only.
 //! - `issue`: an issue's `/id` → its `rastro:type` claim, `tracker:Issue`.
+//! - `state`: an issue's `/state/name` with `/id` → `tracker:state`, the name Linear gives its
+//!   workflow state. Only the latest name at the issue's location is current; a change supersedes it.
 //! - `creator` and `assignee`: `/creator/id` or `/assignee/id` naming a uuid, with the issue's
 //!   `/id` → `tracker:creator` or `tracker:assignee` `linear:user/<uuid>`, and that user's
 //!   `rastro:type` claim supported by the field: `tracker:Bot` when that id's `/creator/app` or
@@ -54,13 +56,14 @@ use std::{
 };
 
 /// The fields any rule reads. Everything else is skipped unread.
-const FIELDS: [&str; 10] = [
+const FIELDS: [&str; 11] = [
     "/id",
     "/app",
     "/guest",
     "/name",
     "/email",
     "/active",
+    "/state/name",
     "/creator/id",
     "/creator/app",
     "/assignee/id",
@@ -300,6 +303,15 @@ fn claims_at(
             ));
         }
         return claims;
+    }
+    if let Some((item, state)) = quote("/state/name").filter(|(_, q)| name(q)) {
+        claims.push(claim(
+            subject(),
+            "tracker:state",
+            literal(state, "string"),
+            "state",
+            &[id, item],
+        ));
     }
     for (field, predicate, rule) in [
         ("/creator/id", "tracker:creator", "creator"),
