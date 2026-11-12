@@ -20,9 +20,22 @@ pub struct SourceListResult {
 pub struct CoverageResult {
     pub coverage: Vec<Coverage>,
 }
+/// `warnings` is always written, but earlier envelopes without it stay valid.
+fn warnings_optional(schema: &mut schemars::Schema) {
+    if let Some(required) = schema
+        .get_mut("required")
+        .and_then(serde_json::Value::as_array_mut)
+    {
+        required.retain(|name| name != "warnings");
+    }
+}
 #[derive(Debug, JsonSchema, Serialize)]
+#[schemars(transform = warnings_optional)]
 pub struct SyncResult {
     pub runs: Vec<RunReport>,
+    /// What the sync warned of before it read, such as a renamed source reading its whole
+    /// window again. Empty when there is nothing to warn of.
+    pub warnings: Vec<String>,
 }
 /// Matches, plus the coverage of every source searched.
 #[derive(Debug, JsonSchema, Serialize)]
@@ -153,7 +166,10 @@ mod tests {
             }),
             Response::SourceList(SourceListResult { sources: vec![] }),
             Response::Coverage(CoverageResult { coverage: vec![] }),
-            Response::Sync(SyncResult { runs: vec![] }),
+            Response::Sync(SyncResult {
+                runs: vec![],
+                warnings: vec![],
+            }),
             Response::Search(SearchResponse {
                 query: String::new(),
                 results: vec![],

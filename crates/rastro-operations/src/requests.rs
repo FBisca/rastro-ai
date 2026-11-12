@@ -6,6 +6,7 @@ pub use crate::catalog::{
 use crate::{catalog::Surface, results::*};
 use anyhow::{Context, Result, ensure};
 use clap::Args;
+use rastro_core::runs::StoredTwins;
 use rastro_core::{
     DEFAULT_SEARCH_LIMIT, MAX_SEARCH_LIMIT, Rastro, Scope, SearchOptions, Source, Storage,
 };
@@ -25,7 +26,7 @@ pub trait Operation {
     const CLI_READ_PATH: bool = false;
     type Output: JsonSchema + serde::Serialize;
     fn into_request(self) -> Request;
-    fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<Self::Output>;
+    fn run<S: Storage + StoredTwins>(self, rastro: &mut Rastro<S>) -> Result<Self::Output>;
     fn run_read<S: rastro_core::ReadStorage>(
         self,
         _reader: &mut rastro_core::Reader<S>,
@@ -209,7 +210,10 @@ impl SearchRequest {
 }
 
 impl SourceAddRequest {
-    pub(crate) fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<SourceAddResult> {
+    pub(crate) fn run<S: Storage + StoredTwins>(
+        self,
+        rastro: &mut Rastro<S>,
+    ) -> Result<SourceAddResult> {
         let mut selector = std::collections::BTreeMap::new();
         for option in self.options {
             let (key, value) = option
@@ -241,43 +245,60 @@ impl SourceAddRequest {
     }
 }
 impl SourceListRequest {
-    pub(crate) fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<SourceListResult> {
+    pub(crate) fn run<S: Storage + StoredTwins>(
+        self,
+        rastro: &mut Rastro<S>,
+    ) -> Result<SourceListResult> {
         Ok(SourceListResult {
             sources: rastro.sources().to_vec(),
         })
     }
 }
 impl CoverageRequest {
-    pub(crate) fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<CoverageResult> {
+    pub(crate) fn run<S: Storage + StoredTwins>(
+        self,
+        rastro: &mut Rastro<S>,
+    ) -> Result<CoverageResult> {
         Ok(CoverageResult {
             coverage: rastro.coverage(self.name.as_deref(), self.all_windows)?,
         })
     }
 }
 impl SyncRequest {
-    pub(crate) fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<SyncResult> {
+    pub(crate) fn run<S: Storage + StoredTwins>(
+        self,
+        rastro: &mut Rastro<S>,
+    ) -> Result<SyncResult> {
         self.run_observed(rastro, &mut rastro_core::runs::Silent)
     }
     /// Runs the sync, telling `observer` what each source does as it does it.
-    pub fn run_observed<S: Storage>(
+    pub fn run_observed<S: Storage + StoredTwins>(
         self,
         rastro: &mut Rastro<S>,
         observer: &mut dyn rastro_core::runs::Observer,
     ) -> Result<SyncResult> {
+        let synced = rastro.sync_observed(self.name.as_deref(), self.reread, observer)?;
         Ok(SyncResult {
-            runs: rastro.sync_observed(self.name.as_deref(), self.reread, observer)?,
+            runs: synced.runs,
+            warnings: synced.warnings,
         })
     }
 }
 impl IndexRebuildRequest {
-    pub(crate) fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<IndexRebuildResult> {
+    pub(crate) fn run<S: Storage + StoredTwins>(
+        self,
+        rastro: &mut Rastro<S>,
+    ) -> Result<IndexRebuildResult> {
         Ok(IndexRebuildResult {
             indexed: rastro.rebuild_index()?,
         })
     }
 }
 impl SearchRequest {
-    pub(crate) fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<SearchResponse> {
+    pub(crate) fn run<S: Storage + StoredTwins>(
+        self,
+        rastro: &mut Rastro<S>,
+    ) -> Result<SearchResponse> {
         let found = rastro.search(&self.text, &self.options())?;
         Ok(SearchResponse {
             query: self.text,
@@ -288,7 +309,7 @@ impl SearchRequest {
     }
 }
 impl WhyRequest {
-    pub(crate) fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<WhyResult> {
+    pub(crate) fn run<S: Storage + StoredTwins>(self, rastro: &mut Rastro<S>) -> Result<WhyResult> {
         rastro.explain(&self.claim, &self.options())
     }
 }
@@ -298,7 +319,10 @@ impl WhyRequest {
 #[serde(deny_unknown_fields)]
 pub struct ClaimsRebuildRequest {}
 impl ClaimsRebuildRequest {
-    pub(crate) fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<ClaimsRebuildResult> {
+    pub(crate) fn run<S: Storage + StoredTwins>(
+        self,
+        rastro: &mut Rastro<S>,
+    ) -> Result<ClaimsRebuildResult> {
         let rebuilt = rastro.rebuild_claims()?;
         Ok(ClaimsRebuildResult {
             claims: rebuilt.claims,
@@ -327,7 +351,10 @@ pub struct AboutRequest {
     pub history: bool,
 }
 impl AboutRequest {
-    pub(crate) fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<AboutResult> {
+    pub(crate) fn run<S: Storage + StoredTwins>(
+        self,
+        rastro: &mut Rastro<S>,
+    ) -> Result<AboutResult> {
         rastro.about(&self.entity, &self.options())
     }
 }
@@ -356,7 +383,10 @@ impl WhyRequest {
 #[serde(deny_unknown_fields)]
 pub struct IdentityMeRequest {}
 impl IdentityMeRequest {
-    pub(crate) fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<IdentityPersonResult> {
+    pub(crate) fn run<S: Storage + StoredTwins>(
+        self,
+        rastro: &mut Rastro<S>,
+    ) -> Result<IdentityPersonResult> {
         IdentityPersonResult::of(rastro.identity_me()?)
     }
 }
@@ -370,7 +400,10 @@ pub struct IdentityPersonCreateRequest {
     pub name: String,
 }
 impl IdentityPersonCreateRequest {
-    pub(crate) fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<IdentityPersonResult> {
+    pub(crate) fn run<S: Storage + StoredTwins>(
+        self,
+        rastro: &mut Rastro<S>,
+    ) -> Result<IdentityPersonResult> {
         IdentityPersonResult::of(rastro.create_person(&self.name)?)
     }
 }
@@ -385,7 +418,10 @@ pub struct IdentityLinkRequest {
     pub person: String,
 }
 impl IdentityLinkRequest {
-    pub(crate) fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<IdentityWriteResult> {
+    pub(crate) fn run<S: Storage + StoredTwins>(
+        self,
+        rastro: &mut Rastro<S>,
+    ) -> Result<IdentityWriteResult> {
         Ok(IdentityWriteResult::of(
             rastro.link(&self.account, &self.person)?,
         ))
@@ -402,7 +438,10 @@ pub struct IdentityMergeRequest {
     pub other: String,
 }
 impl IdentityMergeRequest {
-    pub(crate) fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<IdentityWriteResult> {
+    pub(crate) fn run<S: Storage + StoredTwins>(
+        self,
+        rastro: &mut Rastro<S>,
+    ) -> Result<IdentityWriteResult> {
         Ok(IdentityWriteResult::of(
             rastro.merge(&self.person, &self.other)?,
         ))
@@ -417,7 +456,10 @@ pub struct IdentityUndoRequest {
     pub intent: String,
 }
 impl IdentityUndoRequest {
-    pub(crate) fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<IdentityWriteResult> {
+    pub(crate) fn run<S: Storage + StoredTwins>(
+        self,
+        rastro: &mut Rastro<S>,
+    ) -> Result<IdentityWriteResult> {
         Ok(IdentityWriteResult::of(rastro.undo(&self.intent)?))
     }
 }
@@ -430,7 +472,10 @@ pub struct IdentityHistoryRequest {
     pub entity: String,
 }
 impl IdentityHistoryRequest {
-    pub(crate) fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<IdentityHistoryResult> {
+    pub(crate) fn run<S: Storage + StoredTwins>(
+        self,
+        rastro: &mut Rastro<S>,
+    ) -> Result<IdentityHistoryResult> {
         rastro.identity_history(&self.entity)
     }
 }
@@ -476,7 +521,10 @@ pub struct IdentityAnswerRequest {
     pub name: Option<String>,
 }
 impl IdentityAnswerRequest {
-    pub(crate) fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<IdentityWriteResult> {
+    pub(crate) fn run<S: Storage + StoredTwins>(
+        self,
+        rastro: &mut Rastro<S>,
+    ) -> Result<IdentityWriteResult> {
         let yes = matches!(self.verdict, Verdict::Yes);
         let issued = rastro.answer(&self.account, &self.other, yes, self.name.as_deref())?;
         Ok(IdentityWriteResult::of(issued))
