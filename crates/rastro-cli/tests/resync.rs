@@ -472,6 +472,24 @@ fn S15_a_slow_read_shows_running_counts_at_most_one_per_two_seconds() {
     );
 }
 
+/// sync-progress/S15: a read that goes quiet past 2 s still shows a count
+#[test]
+fn S15_a_read_that_goes_quiet_still_shows_a_running_count() {
+    let env = Env::new();
+    add_windowed(&env, "project");
+    env.script(&[
+        json!({"do": "initialize"}),
+        json!({"do": "sleep", "ms": 2800}),
+        complete(),
+        json!({"do": "finish", "status": "ok", "submitted": 0}),
+    ]);
+    let err = env.stderr(&["sync", "project"]);
+    let count = at(&err, "with a running count", |l| {
+        l.contains("project") && l.contains("items")
+    });
+    assert!(err.lines().nth(count).unwrap().contains("0 items"), "{err}");
+}
+
 /// sync-progress/S16: the result line has counts, and a rate-limited one has its retry time
 #[test]
 fn S16_stderr_result_line_gives_counts_and_the_rate_limit_retry_time() {

@@ -569,6 +569,9 @@ fn kill_group(leader: u32) {
     let _ = leader;
 }
 
+/// How often a quiet connector is reported on while its read runs.
+const TICK: Duration = Duration::from_millis(500);
+
 /// The two ends of the conversation: lines out under a deadline, and bounded, timed lines in.
 struct Wire {
     jobs: std::sync::mpsc::Sender<io::Job>,
@@ -607,7 +610,25 @@ impl Wire {
         message
     }
     fn recv(&mut self) -> std::result::Result<Envelope, &'static str> {
-        match self.events.recv_timeout(self.deadline) {
+        self.recv_ticking(|| {})
+    }
+    /// `recv`, calling `on_tick` every `TICK` the connector stays quiet, so a read that
+    /// submits nothing for a while can still be reported. The silence limit is unchanged.
+    fn recv_ticking(
+        &mut self,
+        mut on_tick: impl FnMut(),
+    ) -> std::result::Result<Envelope, &'static str> {
+        let silent_until = Instant::now() + self.deadline;
+        loop {
+            let left = silent_until.saturating_duration_since(Instant::now());
+            match self.recv_within(left.min(TICK)) {
+                Err("timeout") if Instant::now() < silent_until => on_tick(),
+                other => return other,
+            }
+        }
+    }
+    fn recv_within(&mut self, wait: Duration) -> std::result::Result<Envelope, &'static str> {
+        match self.events.recv_timeout(wait) {
             Ok(io::Event::Line(line)) => match serde_json::from_str::<Envelope>(&line) {
                 Ok(envelope) if envelope.is_well_formed() => Ok(envelope),
                 _ => Err("protocol"),
@@ -664,7 +685,12 @@ fn converse<S: Storage>(
     }
     step!(handshake(wire, plugin, init)?);
     loop {
-        let message = step!(wire.recv());
+        let message = step!(wire.recv_ticking(|| {
+            // Nothing arrived for a while: the count may still be due.
+            session
+                .observer
+                .read_items(&binding.source, session.counts.submitted)
+        }));
         match message.method.as_deref() {
             Some(EVIDENCE_SUBMIT) => {
                 session.counts.submitted += 1;
