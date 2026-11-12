@@ -1,6 +1,6 @@
 # Plan: Answers I can read
 
-Slug: `answers-i-can-read`. Living spec: `docs/specs/claims.md` (labels, `tracker:state`); `docs/specs/evidence.md` (sync progress, rename warning). Status: AWAITING APPROVAL.
+Slug: `answers-i-can-read`. Living spec: `docs/specs/claims.md` (labels, `tracker:state`); `docs/specs/evidence.md` (sync progress, rename warning). Status: APPROVED 2026-11-12.
 
 ## Why now
 Slices 1–4 shipped in three days, but the owner can't use them yet:
