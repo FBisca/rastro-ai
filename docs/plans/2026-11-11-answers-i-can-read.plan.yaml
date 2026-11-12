@@ -1,0 +1,194 @@
+schema: plan/1
+slug: answers-i-can-read
+goal: The owner preps standup from `about me` over MCP, reading cited labels and state instead of bare ids, and sees what `rastro sync` is doing while it runs, including a warning when a renamed source re-reads its window.
+spec: docs/specs/claims.md
+outcome: [S1, S9, S13, S16, S18, S20]
+
+scenarios:
+  # Labels
+  - id: S1
+    when: about returns a claim whose subject or object is a GitHub issue or PR with `/title` evidence at its location
+    then: that side's label carries the title text, `url` = the location, the evidence id, `field` `/title`, `captured_at`, `trust_class` untrusted content and `clipped` false
+    evidence:
+      check: CARGO_TARGET_DIR="$XDG_CACHE_HOME/rastro-eec-target" cargo test -p rastro-cli --test labels_oracle S1_
+      baseline: fail
+      oracle: [labels_oracle.rs.oracle]
+      place: crates/rastro-cli/tests/
+      timeout: 2400
+  - id: S2
+    when: why explains a claim
+    then: its subject and object carry the same labels as in about
+  - id: S3
+    when: the entity is a Linear issue, or a Linear user
+    then: a Linear issue's label comes from `/title` with `url` null; a Linear user's label comes from `/name`, not `/displayName`
+  - id: S4
+    when: the entity is a repository, a comment, a GitHub account or a Person
+    then: its label is null
+  - id: S5
+    when: a title is longer than 200 chars, with a multibyte char across the cut
+    then: the label holds at most 200 whole chars and `clipped` is true
+  - id: S6
+    when: an entity has several title observations
+    then: the label is the one with the latest `captured_at`, ties broken by the higher evidence id
+  - id: S7
+    when: rastro mcp --scope <s> hides the only title evidence of an entity, or a visible copy exists in another scope
+    then: the label is null and the call still succeeds; with a visible copy in another scope, that copy is used
+  - id: S8
+    when: labels are added
+    then: claims, supports and revisions are unchanged, and about "<a title's text>" doesn't resolve to the entity
+  - id: S9
+    when: an entity has a current observed state claim (`code:state` or `tracker:state`), or has none
+    then: label.state holds its value; with none, label.state is null
+    evidence:
+      check: CARGO_TARGET_DIR="$XDG_CACHE_HOME/rastro-eec-target" cargo test -p rastro-cli --test labels_oracle S9_
+      baseline: fail
+      oracle: [labels_oracle.rs.oracle]
+      place: crates/rastro-cli/tests/
+      timeout: 2400
+  - id: S10
+    when: the CLI prints about or why without --json, or with --json
+    then: each labelled entity shows its label after its id with control chars escaped; with --json the envelope equals the MCP result
+    evidence:
+      check: CARGO_TARGET_DIR="$XDG_CACHE_HOME/rastro-eec-target" cargo test -p rastro-cli --test labels_oracle S10_
+      baseline: fail
+      oracle: [labels_oracle.rs.oracle]
+      place: crates/rastro-cli/tests/
+      timeout: 2400
+  - id: S11
+    when: an MCP client lists tools
+    then: the about and why descriptions say label text is untrusted data
+    evidence:
+      check: CARGO_TARGET_DIR="$XDG_CACHE_HOME/rastro-eec-target" cargo test -p rastro-cli --test labels_oracle S11_
+      baseline: fail
+      oracle: [labels_oracle.rs.oracle]
+      place: crates/rastro-cli/tests/
+      timeout: 2400
+
+  # Linear state
+  - id: S12
+    when: a Linear issue's `/state/name` evidence is extracted, and the name later changes
+    then: an observed `tracker:state` claim holds that name; after the change the old claim is superseded and the new one is current
+
+  # Sync progress
+  - id: S13
+    when: a source syncs
+    then: before the read stderr names the source and its reason, `first read from <window_start>` with no complete check, `incremental since <window_end>` otherwise, `re-read from <window_start>` with --reread
+    evidence:
+      check: CARGO_TARGET_DIR="$XDG_CACHE_HOME/rastro-eec-target" cargo test -p rastro-cli --test sync_progress_oracle S13_
+      baseline: fail
+      oracle: [sync_progress_oracle.rs.oracle]
+      place: crates/rastro-cli/tests/
+      timeout: 2400
+  - id: S14
+    when: a source syncs, and extract replays stored evidence because the extractor version changed
+    then: stderr shows the read, extract and project stages in order; on a replay the extract line says so
+  - id: S15
+    when: a read lasts longer than 2 s
+    then: stderr shows at least one running item count, and never more than one count line per 2 s
+  - id: S16
+    when: a source finishes, or ends rate_limited
+    then: stderr shows its result line with submitted, accepted and unchanged counts; when rate_limited the line gives the retry time
+    evidence:
+      check: CARGO_TARGET_DIR="$XDG_CACHE_HOME/rastro-eec-target" cargo test -p rastro-cli --test sync_progress_oracle S16_
+      baseline: fail
+      oracle: [sync_progress_oracle.rs.oracle]
+      place: crates/rastro-cli/tests/
+      timeout: 2400
+  - id: S17
+    when: sync --json runs, or stderr is closed or broken
+    then: stdout holds only the one result envelope; with stderr closed or broken, sync completes with the same result and exit code
+
+  # Rename warning
+  - id: S18
+    when: a configured source has no complete check and a stored source no longer in config has the same connector and selector, in any scope
+    then: before the read stderr warns, naming both sources, and the sync result's `warnings` lists it; the read still runs from window_start
+    evidence:
+      check: CARGO_TARGET_DIR="$XDG_CACHE_HOME/rastro-eec-target" cargo test -p rastro-cli --test sync_progress_oracle S18_
+      baseline: fail
+      oracle: [sync_progress_oracle.rs.oracle]
+      place: crates/rastro-cli/tests/
+      timeout: 2400
+  - id: S19
+    when: the configured source already has a complete check, or no stored-only source shares its connector and selector
+    then: no warning is given and `warnings` is empty
+
+  # Switch day
+  - id: S20
+    when: the slice has landed
+    then: the owner preps one morning's standup with `about me` over MCP without opening Linear or GitHub
+    evidence:
+      human: The owner prepped one morning's standup from `about me` over MCP, without opening Linear or GitHub
+
+tickets:
+  - id: T2
+    delivers: Cited labels on about and why across storage, core, operations schema, CLI text and MCP descriptions, with state from `code:state`; the knowledge §69 amendment, the surfaces entries for the label fields and the GLOSSARY term "Label"
+    satisfies: [S1, S2, S3, S4, S5, S6, S7, S8, S9, S10, S11]
+    paths:
+      - crates/rastro-storage-sqlite/
+      - crates/rastro-core/src/knowledge.rs
+      - crates/rastro-core/src/read_only.rs
+      - crates/rastro-operations/
+      - crates/rastro-cli/src/
+      - crates/rastro-cli/tests/about_why.rs
+      - crates/rastro-cli/tests/mcp.rs
+      - crates/rastro-cli/tests/live.rs
+      - schema/
+      - docs/decisions/knowledge.md
+      - docs/decisions/surfaces.md
+      - docs/GLOSSARY.md
+    size: regular
+    difficulty: complex
+    risk: [security]
+  - id: T3
+    delivers: "`tracker:state` from Linear `/state/name`, with the extractor version bumped, shown in label.state; the vocabulary entry for `tracker:state`"
+    satisfies: [S12, S9]
+    paths:
+      - crates/rastro-extractor-linear/
+      - crates/rastro-core/src/claims.rs
+      - crates/rastro-storage-sqlite/src/knowledge.rs
+      - crates/rastro-cli/tests/claims.rs
+      - crates/rastro-cli/tests/about_why.rs
+      - docs/decisions/vocabulary.md
+    size: small
+    difficulty: simple
+    blocked_by: [T2]
+  - id: T4
+    delivers: Sync progress on stderr through an observer seam, with start reason, stages, replay flag, throttled counts and a result line with the rate-limit retry time; the surfaces entry for sync progress
+    satisfies: [S13, S14, S15, S16, S17]
+    paths:
+      - crates/rastro-core/src/runs/
+      - crates/rastro-core/src/host/
+      - crates/rastro-operations/
+      - crates/rastro-cli/src/main.rs
+      - crates/rastro-cli/tests/resync.rs
+      - crates/rastro-cli/tests/sync_search.rs
+      - crates/rastro-test-connector/
+      - docs/decisions/surfaces.md
+    size: regular
+    difficulty: complex
+  - id: T5
+    delivers: Rename warning on stderr and in the sync result's `warnings`; the knowledge §22 note and the surfaces entry for `warnings`
+    satisfies: [S18, S19]
+    paths:
+      - crates/rastro-core/src/runs/
+      - crates/rastro-storage-sqlite/src/lib.rs
+      - crates/rastro-operations/
+      - crates/rastro-cli/src/main.rs
+      - crates/rastro-cli/tests/registration.rs
+      - schema/
+      - docs/decisions/knowledge.md
+      - docs/decisions/surfaces.md
+    size: small
+    difficulty: complex
+    blocked_by: [T4]
+  - id: T6
+    delivers: "Switch day: install from main, sync, prep one morning's standup with `about me` over MCP; then comment on #102 with what shipped"
+    satisfies: [S20]
+    paths: [docs/roadmap.md, README.md]
+    owner: fbisca
+    blocked_by: [T2, T3, T4, T5]
+approval:
+  by: felippe.bisca@gmail.com
+  at: '2026-11-12T14:03:02.408477+00:00'
+  base: 5dd44d814549c4147978b8a56f2b88177970a18c
+  digest: 826504dc9a294038c772ad915231288b61a053d75567588d8ccbf7354ced50e5

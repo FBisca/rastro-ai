@@ -60,3 +60,49 @@ Paths: crates/rastro-extractor-github/, crates/rastro-test-extractor/, crates/ra
 - **R56** WHEN an extractor submits a claim whose subject or object identifier is outside the accepted forms, THEN it's rejected and counted. (from claims-hardening/S24)
 - **R57** WHEN a vocabulary declares an alias kind containing `/`, `:` or whitespace, THEN loading it is refused; WHEN a submitted alias claim's value is empty, whitespace-only, or has whitespace at either end, THEN it's rejected and counted; WHEN it has inner whitespace (`Felippe Bisca`), THEN it's accepted and `about` resolves it. (from claims-hardening/S25)
 - **R58** WHEN `claims rebuild` runs, including with an extractor missing so a pair is carried over, THEN every intent-backed Person, name, link and merge reappears identically, and the intent table is unchanged (rows and order). (from second-source-one-identity/S10)
+
+- **R59** WHEN about returns a claim whose subject or object is a GitHub issue or PR with `/title` evidence at its location, THEN that side's label carries the title text, `url` = the location, the evidence id, `field` `/title`, `captured_at`, `trust_class` untrusted content and `clipped` false (from answers-i-can-read/S1)
+- **R60** WHEN why explains a claim, THEN its subject and object carry the same labels as in about (from answers-i-can-read/S2)
+- **R61** WHEN the entity is a Linear issue, or a Linear user, THEN a Linear issue's label comes from `/title` with `url` null; a Linear user's label comes from `/name`, not `/displayName` (from answers-i-can-read/S3)
+- **R62** WHEN the entity is a repository, a comment, a GitHub account or a Person, THEN its label is null (from answers-i-can-read/S4)
+- **R63** WHEN a title is longer than 200 chars, with a multibyte char across the cut, THEN the label holds at most 200 whole chars and `clipped` is true (from answers-i-can-read/S5)
+- **R64** WHEN an entity has several title observations, THEN the label is the one with the latest `captured_at`, ties broken by the higher evidence id (from answers-i-can-read/S6)
+- **R65** WHEN rastro mcp --scope <s> hides the only title evidence of an entity, or a visible copy exists in another scope, THEN the label is null and the call still succeeds; with a visible copy in another scope, that copy is used (from answers-i-can-read/S7)
+- **R66** WHEN labels are added, THEN claims, supports and revisions are unchanged, and about "<a title's text>" doesn't resolve to the entity (from answers-i-can-read/S8)
+- **R67** WHEN an entity has a current observed state claim (`code:state` or `tracker:state`), or has none, THEN label.state holds its value; with none, label.state is null (from answers-i-can-read/S9)
+- **R68** WHEN the CLI prints about or why without --json, or with --json, THEN each labelled entity shows its label after its id with control chars escaped; with --json the envelope equals the MCP result (from answers-i-can-read/S10)
+- **R69** WHEN an MCP client lists tools, THEN the about and why descriptions say label text is untrusted data (from answers-i-can-read/S11)
+- **R70** WHEN a Linear issue's `/state/name` evidence is extracted, and the name later changes, THEN an observed `tracker:state` claim holds that name; after the change the old claim is superseded and the new one is current (from answers-i-can-read/S12)
+- **R71** WHEN a source syncs, THEN before the read stderr names the source and its reason, `first read from <window_start>` with no complete check, `incremental since <window_end>` otherwise, `re-read from <window_start>` with --reread (from answers-i-can-read/S13)
+- **R72** WHEN a source syncs, and extract replays stored evidence because the extractor version changed, THEN stderr shows the read, extract and project stages in order; on a replay the extract line says so (from answers-i-can-read/S14)
+- **R73** WHEN a read lasts longer than 2 s, THEN stderr shows at least one running item count, and never more than one count line per 2 s (from answers-i-can-read/S15)
+- **R74** WHEN a source finishes, or ends rate_limited, THEN stderr shows its result line with submitted, accepted and unchanged counts; when rate_limited the line gives the retry time (from answers-i-can-read/S16)
+- **R75** WHEN sync --json runs, or stderr is closed or broken, THEN stdout holds only the one result envelope; with stderr closed or broken, sync completes with the same result and exit code (from answers-i-can-read/S17)
+- **R76** WHEN a configured source has no complete check and a stored source no longer in config has the same connector and selector, in any scope, THEN before the read stderr warns, naming both sources, and the sync result's `warnings` lists it; the read still runs from window_start (from answers-i-can-read/S18)
+- **R77** WHEN the configured source already has a complete check, or no stored-only source shares its connector and selector, THEN no warning is given and `warnings` is empty (from answers-i-can-read/S19)
+- **R78** WHEN the slice has landed, THEN the owner preps one morning's standup with `about me` over MCP without opening Linear or GitHub (from answers-i-can-read/S20)
+
+## Coverage
+
+| Requirement | Scenario | Tests |
+|---|---|---|
+| R59 | S1 | `crates/rastro-cli/tests/about_why.rs::S1_a_github_issue_or_pr_side_carries_its_cited_title_label`<br>`crates/rastro-cli/tests/labels_oracle.rs::S1_a_github_pr_side_carries_its_cited_title_label` |
+| R60 | S2 | `crates/rastro-cli/tests/about_why.rs::S2_why_carries_the_same_labels_as_about` |
+| R61 | S3 | `crates/rastro-cli/tests/about_why.rs::S3_a_linear_issue_and_a_linear_user_are_labelled_from_title_and_name` |
+| R62 | S4 | `crates/rastro-cli/tests/about_why.rs::S4_repository_comment_account_and_person_sides_have_a_null_label`<br>`crates/rastro-cli/tests/labels_oracle.rs::S4_repository_comment_and_account_sides_have_a_null_label` |
+| R63 | S5 | `crates/rastro-cli/tests/about_why.rs::S5_a_title_over_200_chars_is_cut_on_a_char_boundary_and_flagged` |
+| R64 | S6 | `crates/rastro-cli/tests/about_why.rs::S6_the_latest_observation_wins_and_a_tie_goes_to_the_higher_evidence_id` |
+| R65 | S7 | `crates/rastro-cli/tests/mcp.rs::S7_a_scope_hiding_the_only_title_gives_a_null_label_and_a_visible_copy_is_used` |
+| R66 | S8 | `crates/rastro-cli/tests/about_why.rs::S8_labels_change_no_claim_support_or_revision_and_a_title_is_not_an_alias` |
+| R67 | S9 | `crates/rastro-cli/tests/about_why.rs::S9_label_state_holds_the_current_observed_state_or_null`<br>`crates/rastro-extractor-linear/tests/linear.rs::S9_a_linear_issue_label_holds_its_current_state_or_null`<br>`crates/rastro-cli/tests/labels_oracle.rs::S9_label_state_holds_the_current_code_or_tracker_state` |
+| R68 | S10 | `crates/rastro-cli/tests/about_why.rs::S10_cli_text_shows_the_escaped_label_after_the_id_for_about_and_why`<br>`crates/rastro-cli/tests/mcp.rs::S10_the_cli_envelope_with_labels_equals_the_mcp_result`<br>`crates/rastro-cli/tests/labels_oracle.rs::S10_cli_text_shows_the_escaped_label_after_the_id_and_json_equals_mcp` |
+| R69 | S11 | `crates/rastro-cli/tests/mcp.rs::S11_the_about_and_why_descriptions_say_label_text_is_untrusted_data`<br>`crates/rastro-cli/tests/labels_oracle.rs::S11_mcp_about_and_why_descriptions_mark_label_text_untrusted` |
+| R70 | S12 | `crates/rastro-extractor-linear/tests/linear.rs::S12_a_linear_issue_state_is_a_tracker_state_claim_superseded_by_a_change` |
+| R71 | S13 | `crates/rastro-cli/tests/resync.rs::S13_stderr_names_the_source_and_its_read_reason_before_the_read`<br>`crates/rastro-cli/tests/sync_progress_oracle.rs::S13_stderr_names_the_source_and_its_read_reason_before_the_read` |
+| R72 | S14 | `crates/rastro-cli/tests/resync.rs::S14_stderr_shows_read_extract_and_project_in_order_and_a_replay_says_so` |
+| R73 | S15 | `crates/rastro-cli/tests/resync.rs::S15_a_slow_read_shows_running_counts_at_most_one_per_two_seconds`<br>`crates/rastro-core/src/runs/progress.rs::S15_a_throttle_lets_one_count_through_per_interval`<br>`crates/rastro-cli/tests/resync.rs::S15_a_read_that_goes_quiet_still_shows_a_running_count` |
+| R74 | S16 | `crates/rastro-cli/tests/resync.rs::S16_stderr_result_line_gives_counts_and_the_rate_limit_retry_time`<br>`crates/rastro-cli/tests/sync_progress_oracle.rs::S16_stderr_result_line_gives_counts_and_the_rate_limit_retry_time` |
+| R75 | S17 | `crates/rastro-cli/tests/resync.rs::S17_a_broken_or_closed_stderr_changes_neither_the_result_nor_the_exit_code`<br>`crates/rastro-cli/tests/sync_progress_oracle.rs::S17_sync_json_stdout_is_one_envelope_and_a_broken_stderr_changes_nothing` |
+| R76 | S18 | `crates/rastro-cli/tests/registration.rs::S18_a_renamed_source_is_warned_about_on_stderr_and_in_warnings`<br>`crates/rastro-cli/tests/sync_progress_oracle.rs::S18_a_renamed_source_is_warned_about_before_its_full_read` |
+| R77 | S19 | `crates/rastro-cli/tests/registration.rs::S19_no_warning_with_a_complete_check_or_without_a_twin` |
+| R78 | S20 | human: the owner prepped one morning's standup from `about me` over MCP, without opening Linear or GitHub |
