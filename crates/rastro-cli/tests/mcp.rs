@@ -347,7 +347,8 @@ fn launch_migrates_recovers_and_turns_on_wal_before_the_first_answer() {
     // Undo the knowledge migration and the ones after it, so they are pending again.
     let last = last_migration(&db);
     db.execute_batch(
-        "DROP TABLE automatic_justification; ALTER TABLE coverage DROP COLUMN gaps_json;
+        "DROP INDEX evidence_by_location;
+         DROP TABLE automatic_justification; ALTER TABLE coverage DROP COLUMN gaps_json;
          DROP TABLE intent_justification; DROP TABLE intent;
          DELETE FROM schema_migrations WHERE name > '202611061200_knowledge_v2';
          DROP TABLE occurrence; DROP TABLE justification_span; DROP TABLE justification;
@@ -3114,4 +3115,164 @@ fn a_scoped_why_never_names_an_issuer_scope_the_session_cant_see() {
     );
     assert!(!why.to_string().contains("health-secret"), "{why}");
     assert!(!why.to_string().contains("personal"), "{why}");
+}
+
+// ---- Labels over MCP ----
+
+const LABELLED: &str = "https://github.com/o/p/pull/7";
+impl Env {
+    /// One observation of `field` at `location`, read in `scope` on `day`; no claim cites it.
+    fn observe_in(&self, scope: &str, location: &str, field: &str, quote: &str, day: i64) {
+        use rastro_core::{Evidence, Scope, Source, Storage, TrustClass};
+        let source = Source::github(format!("claims-{scope}"), "o/p".into(), Scope(scope.into()));
+        let captured = "2026-11-01T00:00:00Z"
+            .parse::<chrono::DateTime<chrono::Utc>>()
+            .unwrap()
+            + chrono::Duration::days(day);
+        let mut db = rastro_storage_sqlite::SqliteStorage::open(&self.database()).unwrap();
+        db.project_sources(std::slice::from_ref(&source)).unwrap();
+        let run = db
+            .start_run(&source, ("fixture", "1"), captured, (captured, captured))
+            .unwrap();
+        db.append_evidence(
+            run,
+            &Evidence {
+                source: source.name.clone(),
+                scope: source.scope.clone(),
+                location: location.into(),
+                field: field.into(),
+                start: 0,
+                end: quote.len() as u64,
+                quote: quote.into(),
+                trust_class: TrustClass::UntrustedContent,
+                captured_at: captured,
+                source_updated_at: Some(captured),
+                original: None,
+            },
+        )
+        .unwrap();
+        db.finish_run(
+            run,
+            &rastro_core::RunEnd {
+                finished_at: captured,
+                status: "ok".into(),
+                reason: None,
+                counts: Default::default(),
+            },
+        )
+        .unwrap();
+    }
+    /// A typed pull request with an open state, read in `scope`.
+    fn labelled_pr(&self, scope: &str) -> String {
+        self.claim_at(
+            scope,
+            LABELLED,
+            "rastro:type",
+            ("code:PullRequest", "rastro:type"),
+            true,
+            0,
+        );
+        self.claim_at(scope, LABELLED, "code:state", ("open", "string"), true, 0)
+    }
+}
+fn subject_label(session: &mut Session, claim: &str) -> Value {
+    let about = claim_result(session, "about", json!({"entity": LABELLED, "limit": 50}));
+    let rows = about["claims"].as_array().unwrap();
+    rows.iter()
+        .find(|r| r["id"] == claim)
+        .unwrap_or_else(|| panic!("{claim} missing: {about}"))["subject_label"]
+        .clone()
+}
+
+/// labels/S7: a launch scope that hides the only title leaves a null label and a successful call;
+/// a visible copy in another scope is used
+#[test]
+fn S7_a_scope_hiding_the_only_title_gives_a_null_label_and_a_visible_copy_is_used() {
+    let env = Env::new();
+    let state = env.labelled_pr("personal");
+    env.observe_in("work", LABELLED, "/title", "Work title", 1);
+    // Non-vacuous: with every scope visible the title is the label.
+    let mut everything = env.scoped(&[]);
+    assert_eq!(subject_label(&mut everything, &state)["text"], "Work title");
+    // Hidden only: null, and about and why still succeed.
+    let mut personal = env.scoped(&["personal"]);
+    assert_eq!(subject_label(&mut personal, &state), Value::Null);
+    let why = claim_result(&mut personal, "why", json!({"claim": state}));
+    assert_eq!(why["claim"]["subject_label"], Value::Null, "{why}");
+    assert!(!why.to_string().contains("Work title"));
+    // A visible copy in another scope: that copy, and not the hidden one.
+    env.observe_in("personal", LABELLED, "/title", "Personal title", 0);
+    // The same claims, read in both scopes, so each scope can see them.
+    assert_eq!(env.labelled_pr("work"), state);
+    let mut personal = env.scoped(&["personal"]);
+    let label = subject_label(&mut personal, &state);
+    assert_eq!(label["text"], "Personal title", "{label}");
+    let why = claim_result(&mut personal, "why", json!({"claim": state}));
+    assert_eq!(why["claim"]["subject_label"], label);
+    assert!(!why.to_string().contains("Work title"));
+    let mut work = env.scoped(&["work"]);
+    assert_eq!(subject_label(&mut work, &state)["text"], "Work title");
+    // Both scopes visible: the newest observation.
+    let mut both = env.scoped(&["personal", "work"]);
+    assert_eq!(subject_label(&mut both, &state)["text"], "Work title");
+    // The state is the current one among what the scope sees: a newer work state stays hidden
+    // from `personal`.
+    assert_eq!(label["state"], "open");
+    let closed = env.claim_at(
+        "work",
+        LABELLED,
+        "code:state",
+        ("closed", "string"),
+        true,
+        2,
+    );
+    let mut personal = env.scoped(&["personal"]);
+    assert_eq!(subject_label(&mut personal, &state)["state"], "open");
+    let mut everything = env.scoped(&[]);
+    assert_eq!(subject_label(&mut everything, &closed)["state"], "closed");
+    let mut work = env.scoped(&["work"]);
+    assert_eq!(subject_label(&mut work, &closed)["state"], "closed");
+}
+
+/// labels/S10: with --json the CLI envelope equals the MCP result, labels included
+#[test]
+fn S10_the_cli_envelope_with_labels_equals_the_mcp_result() {
+    let env = Env::new();
+    let state = env.labelled_pr("personal");
+    env.observe_in("personal", LABELLED, "/title", "Same everywhere", 0);
+    let mut session = env.start();
+    session.initialize();
+    for (name, value, args) in [
+        ("about", LABELLED, json!({"entity": LABELLED})),
+        ("why", state.as_str(), json!({"claim": state})),
+    ] {
+        let output = env.command(&[name, value, "--json"]).output().unwrap();
+        assert!(output.status.success(), "{output:?}");
+        let cli: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let mcp = session.call(name, args);
+        assert_eq!(ok_result(&mcp["result"]), &cli);
+        assert!(
+            cli.to_string().contains("Same everywhere"),
+            "no label in {cli}"
+        );
+    }
+}
+
+/// labels/S11: the about and why descriptions say label text is untrusted data
+#[test]
+fn S11_the_about_and_why_descriptions_say_label_text_is_untrusted_data() {
+    let env = Env::new();
+    let mut session = env.start();
+    session.initialize();
+    let tools = session.list_tools();
+    for name in ["about", "why"] {
+        let description = tool(&tools, name)["description"]
+            .as_str()
+            .unwrap()
+            .to_lowercase();
+        assert!(
+            description.contains("label") && description.contains("untrusted data"),
+            "{name}: {description}"
+        );
+    }
 }

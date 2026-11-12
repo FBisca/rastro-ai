@@ -92,19 +92,9 @@ impl Env {
             source_updated_at: Some(captured),
             original: None,
         };
-        db.append_evidence(run, &e).unwrap();
-        let evidence_id = db
-            .pending_evidence(("fixture", "1"), &source)
-            .unwrap()
-            .into_iter()
-            .find(|(_, item)| {
-                item.location == e.location
-                    && item.field == e.field
-                    && item.quote == e.quote
-                    && item.captured_at == captured
-            })
-            .unwrap()
-            .0;
+        let evidence_id = match db.append_evidence(run, &e).unwrap() {
+            rastro_core::Appended::New(id) | rastro_core::Appended::Unchanged(id) => id,
+        };
         let subject = Entity::new(identifier.into(), "code:PullRequest".into());
         let id = claims::claim_id(&subject.id, predicate, &object);
         db.record_claims(
@@ -115,7 +105,13 @@ impl Env {
                 subject,
                 predicate: predicate.into(),
                 object,
-                scalar: predicate == "code:state" || predicate == "rastro:alias",
+                scalar: [
+                    "code:state",
+                    "tracker:state",
+                    "rastro:alias",
+                    claims::TYPE_PREDICATE,
+                ]
+                .contains(&predicate),
                 type_ancestors: Vec::new(),
                 supports: BTreeSet::from([Support {
                     portable_key: claims::portable_evidence_key(&e),
@@ -867,5 +863,488 @@ fn real_identifiers_are_accepted() {
             .unwrap()
             .len(),
         1
+    );
+}
+
+// ---- Labels: a cited title or name next to each entity of an answer ----
+
+const PR: &str = "https://github.com/o/p/pull/1";
+const ISSUE: &str = "https://github.com/o/p/issues/2";
+const REPO: &str = "https://github.com/o/p";
+const COMMENT: &str = "https://github.com/o/p/pull/1#issuecomment-5";
+const ACCOUNT: &str = "github:account/42";
+const LINEAR_ISSUE: &str = "linear:issue/0b5a8c1e-0000-4000-8000-0000000000a1";
+const LINEAR_USER: &str = "linear:user/0b5a8c1e-0000-4000-8000-000000000001";
+
+fn entity(identifier: &str, entity_type: &str) -> Object {
+    let e = Entity::new(identifier.into(), entity_type.into());
+    Object::Entity {
+        id: e.id,
+        identifier: e.identifier,
+        entity_type: e.entity_type,
+    }
+}
+impl Env {
+    /// Appends one observation of `field` at `location` (no claim cites it); its evidence id.
+    fn observe(
+        &self,
+        location: &str,
+        field: &str,
+        quote: &str,
+        trust_class: TrustClass,
+        captured: DateTime<Utc>,
+    ) -> i64 {
+        self.observe_from("project", location, field, quote, trust_class, captured)
+    }
+    /// The same, read by the source `name` (an evidence's `captured_at` never goes below the
+    /// newest of its own source and scope, so the order of two captures needs two sources).
+    fn observe_from(
+        &self,
+        name: &str,
+        location: &str,
+        field: &str,
+        quote: &str,
+        trust_class: TrustClass,
+        captured: DateTime<Utc>,
+    ) -> i64 {
+        let source = Source::github(name.into(), "o/p".into(), Scope("work".into()));
+        let mut db = self.db();
+        db.project_sources(&[
+            Source::github("project".into(), "o/p".into(), Scope("work".into())),
+            source.clone(),
+        ])
+        .unwrap();
+        let run = db
+            .start_run(&source, ("fixture", "1"), captured, (captured, captured))
+            .unwrap();
+        match db
+            .append_evidence(
+                run,
+                &Evidence {
+                    source: source.name.clone(),
+                    scope: source.scope.clone(),
+                    location: location.into(),
+                    field: field.into(),
+                    start: 0,
+                    end: quote.len() as u64,
+                    quote: quote.into(),
+                    trust_class,
+                    captured_at: captured,
+                    source_updated_at: Some(captured),
+                    original: None,
+                },
+            )
+            .unwrap()
+        {
+            rastro_core::Appended::New(id) | rastro_core::Appended::Unchanged(id) => id,
+        }
+    }
+    fn title(&self, location: &str, text: &str, captured: DateTime<Utc>) -> i64 {
+        self.observe(
+            location,
+            "/title",
+            text,
+            TrustClass::UntrustedContent,
+            captured,
+        )
+    }
+    /// Types `identifier` with a `rastro:type` claim, as an extractor does.
+    fn typed(&self, identifier: &str, entity_type: &str) {
+        let object = Object::Literal {
+            value: entity_type.into(),
+            datatype: claims::TYPE_DATATYPE.into(),
+        };
+        self.claim_for(identifier, claims::TYPE_PREDICATE, object, time());
+    }
+    fn about(&self, entity: &str) -> Vec<Value> {
+        self.ok(&["about", entity, "--limit", "50"])["claims"]
+            .as_array()
+            .unwrap_or_else(|| panic!("no claims about {entity}"))
+            .clone()
+    }
+    fn text(&self, args: &[&str]) -> String {
+        let output = Command::new(support::rastro())
+            .env("RASTRO_HOME", self.home.path())
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        String::from_utf8(output.stdout).unwrap()
+    }
+}
+fn row<'a>(rows: &'a [Value], id: &str) -> &'a Value {
+    rows.iter()
+        .find(|r| r["id"] == id)
+        .unwrap_or_else(|| panic!("claim {id} missing from {rows:?}"))
+}
+/// A side's label: the key must be present (null or an object), not merely absent.
+fn label<'a>(row: &'a Value, side: &str) -> &'a Value {
+    row.get(format!("{side}_label"))
+        .unwrap_or_else(|| panic!("claim row has no `{side}_label` field: {row}"))
+}
+
+/// A PR with a title, two states, a repository, an author and a comment, plus an issue with a
+/// title and no state. The repository, the comment and the account carry title- or name-shaped
+/// evidence at their own locations, which must still give no label.
+struct World {
+    title_id: i64,
+    issue_title_id: i64,
+    state: String,
+    in_repo: String,
+    author: String,
+    comment_author: String,
+    issue_author: String,
+}
+fn world(env: &Env) -> World {
+    for (identifier, entity_type) in [
+        (PR, "code:PullRequest"),
+        (ISSUE, "code:Issue"),
+        (REPO, "code:Repository"),
+        (COMMENT, "code:Comment"),
+        (ACCOUNT, "code:Account"),
+    ] {
+        env.typed(identifier, entity_type);
+    }
+    let title_id = env.title(PR, "Fix the login flow", time());
+    let issue_title_id = env.title(ISSUE, "Docs are stale", time());
+    env.title(REPO, "Repository title", time());
+    env.title(COMMENT, "Comment title", time());
+    env.observe(
+        ACCOUNT,
+        "/name",
+        "Ana Silva",
+        TrustClass::Structured,
+        time(),
+    );
+    env.claim_for(PR, "code:state", literal("open"), time());
+    // The current state is the later observation; the earlier one is superseded.
+    let state = env.claim_for(PR, "code:state", literal("closed"), later(1));
+    let account = entity(ACCOUNT, "code:Account");
+    let in_repo = env.claim_for(
+        PR,
+        "code:in_repository",
+        entity(REPO, "code:Repository"),
+        time(),
+    );
+    let author = env.claim_for(PR, "code:author", account.clone(), time());
+    let comment_author = env.claim_for(COMMENT, "code:author", account.clone(), time());
+    let issue_author = env.claim_for(ISSUE, "code:author", account, time());
+    World {
+        title_id,
+        issue_title_id,
+        state,
+        in_repo,
+        author,
+        comment_author,
+        issue_author,
+    }
+}
+
+/// labels/S1: a GitHub issue or PR side carries its `/title` label with every cited field
+#[test]
+fn S1_a_github_issue_or_pr_side_carries_its_cited_title_label() {
+    let env = Env::new();
+    let w = world(&env);
+    let rows = env.about(PR);
+    for id in [&w.state, &w.in_repo, &w.author] {
+        let row = row(&rows, id);
+        let label = label(row, "subject");
+        assert!(label.is_object(), "subject_label is not an object: {row}");
+        assert_eq!(label["text"], "Fix the login flow", "{row}");
+        assert_eq!(label["url"], PR, "{row}");
+        assert_eq!(label["evidence_id"], json!(w.title_id), "{row}");
+        assert_eq!(label["field"], "/title", "{row}");
+        assert_eq!(
+            label["captured_at"]
+                .as_str()
+                .unwrap()
+                .parse::<DateTime<Utc>>()
+                .unwrap(),
+            time()
+        );
+        assert_eq!(label["trust_class"], "untrusted content", "{row}");
+        assert_eq!(label["clipped"], false, "{row}");
+    }
+    // The object side of an incoming claim is labelled too.
+    let incoming = env.about(ACCOUNT);
+    let side = label(row(&incoming, &w.issue_author), "subject");
+    assert_eq!(side["text"], "Docs are stale", "{side}");
+    assert_eq!(side["evidence_id"], json!(w.issue_title_id));
+    assert_eq!(side["url"], ISSUE);
+    // A literal object has no label.
+    assert_eq!(*label(row(&rows, &w.state), "object"), Value::Null);
+}
+
+/// labels/S2: why gives its subject and object the labels about gives
+#[test]
+fn S2_why_carries_the_same_labels_as_about() {
+    let env = Env::new();
+    let w = world(&env);
+    let rows = env.about(PR);
+    let in_repo = row(&rows, &w.in_repo);
+    let author = row(&rows, &w.author);
+    for claim in [&w.state, &w.in_repo, &w.author] {
+        let why = env.ok(&["why", claim]);
+        let about = row(&rows, claim);
+        assert_eq!(label(&why["claim"], "subject"), label(about, "subject"));
+        assert_eq!(label(&why["claim"], "object"), label(about, "object"));
+        assert!(label(&why["claim"], "subject").is_object(), "{why}");
+    }
+    assert_eq!(*label(in_repo, "object"), Value::Null);
+    assert_eq!(*label(author, "object"), Value::Null);
+    // An issue as the object of a claim is labelled in why too.
+    let account_rows = env.about(ACCOUNT);
+    let why = env.ok(&["why", &w.issue_author]);
+    assert_eq!(
+        label(&why["claim"], "subject"),
+        label(row(&account_rows, &w.issue_author), "subject")
+    );
+    assert_eq!(label(&why["claim"], "subject")["text"], "Docs are stale");
+}
+
+/// labels/S3: a Linear issue's label is its `/title` with no url; a Linear user's is its `/name`
+#[test]
+fn S3_a_linear_issue_and_a_linear_user_are_labelled_from_title_and_name() {
+    let env = Env::new();
+    env.typed(LINEAR_ISSUE, "tracker:Issue");
+    env.typed(LINEAR_USER, "tracker:Account");
+    let title_id = env.title(LINEAR_ISSUE, "Ship the labels", time());
+    let name_id = env.observe(
+        LINEAR_USER,
+        "/name",
+        "Ana Silva",
+        TrustClass::Structured,
+        time(),
+    );
+    env.observe(
+        LINEAR_USER,
+        "/displayName",
+        "ana",
+        TrustClass::Structured,
+        time(),
+    );
+    let creator = env.claim_for(
+        LINEAR_ISSUE,
+        "tracker:creator",
+        entity(LINEAR_USER, "tracker:Account"),
+        time(),
+    );
+    let rows = env.about(LINEAR_ISSUE);
+    let row = row(&rows, &creator);
+    let issue = label(row, "subject");
+    assert_eq!(issue["text"], "Ship the labels", "{row}");
+    assert_eq!(issue["field"], "/title");
+    assert_eq!(issue["evidence_id"], json!(title_id));
+    assert_eq!(issue["url"], Value::Null, "{issue}");
+    assert_eq!(issue["trust_class"], "untrusted content");
+    let user = label(row, "object");
+    assert_eq!(user["text"], "Ana Silva", "{row}");
+    assert_eq!(user["field"], "/name");
+    assert_eq!(user["evidence_id"], json!(name_id));
+    assert_eq!(user["url"], Value::Null);
+    assert_eq!(user["trust_class"], "structured");
+}
+
+/// labels/S4: a repository, a comment, a GitHub account and a Person have a null label
+#[test]
+fn S4_repository_comment_account_and_person_sides_have_a_null_label() {
+    let env = Env::new();
+    let w = world(&env);
+    let rows = env.about(PR);
+    assert_eq!(*label(row(&rows, &w.in_repo), "object"), Value::Null);
+    assert_eq!(*label(row(&rows, &w.author), "object"), Value::Null);
+    let incoming = env.about(ACCOUNT);
+    let comment = row(&incoming, &w.comment_author);
+    assert_eq!(*label(comment, "subject"), Value::Null, "{comment}");
+    assert_eq!(*label(comment, "object"), Value::Null, "{comment}");
+    // Not a blanket null: the issue side of the same answer is labelled.
+    assert!(label(row(&incoming, &w.issue_author), "subject").is_object());
+    // A Person, even with title- and name-shaped evidence at its location.
+    let person = env.ok(&["identity", "person", "create", "--name", "Ana"])["person"].clone();
+    let identifier = person["identifier"].as_str().unwrap();
+    env.title(identifier, "A title", time());
+    env.observe(identifier, "/name", "Ana", TrustClass::Structured, time());
+    let own = env.about(identifier);
+    assert!(!own.is_empty());
+    for claim in &own {
+        assert_eq!(*label(claim, "subject"), Value::Null, "{claim}");
+        assert_eq!(*label(claim, "object"), Value::Null, "{claim}");
+    }
+}
+
+/// labels/S5: a long title is cut to 200 whole chars across a multibyte char, and flagged
+#[test]
+fn S5_a_title_over_200_chars_is_cut_on_a_char_boundary_and_flagged() {
+    let env = Env::new();
+    env.typed(PR, "code:PullRequest");
+    // 199 one-byte chars, then 3-byte chars: byte 200 falls inside the first of them.
+    let title = format!("{}{}", "a".repeat(199), "€".repeat(50));
+    env.title(PR, &title, time());
+    env.claim_for(PR, "code:state", literal("open"), time());
+    let rows = env.about(PR);
+    let label = label(&rows[0], "subject");
+    let text = label["text"].as_str().unwrap();
+    assert_eq!(text.chars().count(), 200, "{label}");
+    assert_eq!(text, title.chars().take(200).collect::<String>());
+    assert_eq!(label["clipped"], true);
+    // Exactly 200 chars is not clipped.
+    let exact = "é".repeat(200);
+    env.title(ISSUE, &exact, time());
+    env.typed(ISSUE, "code:Issue");
+    env.claim_for(ISSUE, "code:state", literal("open"), time());
+    let rows = env.about(ISSUE);
+    let label = self::label(&rows[0], "subject");
+    assert_eq!(label["text"], exact.as_str());
+    assert_eq!(label["clipped"], false);
+}
+
+/// labels/S6: the latest `captured_at` wins; a tie goes to the higher evidence id
+#[test]
+fn S6_the_latest_observation_wins_and_a_tie_goes_to_the_higher_evidence_id() {
+    let env = Env::new();
+    env.typed(PR, "code:PullRequest");
+    env.claim_for(PR, "code:state", literal("open"), time());
+    let title = |source: &str, text: &str, captured| {
+        env.observe_from(
+            source,
+            PR,
+            "/title",
+            text,
+            TrustClass::UntrustedContent,
+            captured,
+        )
+    };
+    let newest = title("project", "Newest by time", later(1));
+    // Stored after, but captured earlier: it must not win.
+    title("second", "Older but stored last", time());
+    let rows = env.about(PR);
+    let found = label(&rows[0], "subject");
+    assert_eq!(found["text"], "Newest by time");
+    assert_eq!(found["evidence_id"], json!(newest));
+    // Two observations captured at the same instant: the higher evidence id.
+    let tie = later(5);
+    title("project", "Tie, first", tie);
+    let second = title("second", "Tie, second", tie);
+    let rows = env.about(PR);
+    let found = label(&rows[0], "subject");
+    assert_eq!(found["text"], "Tie, second");
+    assert_eq!(found["evidence_id"], json!(second));
+    // And within one source, a later capture is the higher id and the later time.
+    let third = title("project", "Tie, third", tie);
+    let rows = env.about(PR);
+    assert_eq!(label(&rows[0], "subject")["evidence_id"], json!(third));
+}
+
+/// labels/S8: adding labels leaves claims, supports and revisions as they were, and a title's
+/// text is not an alias of the entity
+#[test]
+fn S8_labels_change_no_claim_support_or_revision_and_a_title_is_not_an_alias() {
+    let env = Env::new();
+    env.typed(PR, "code:PullRequest");
+    let state = env.claim_for(PR, "code:state", literal("open"), time());
+    let strip = |rows: Vec<Value>| -> Vec<Value> {
+        rows.into_iter()
+            .map(|mut r| {
+                let r_object = r.as_object_mut().unwrap();
+                r_object.remove("subject_label");
+                r_object.remove("object_label");
+                r
+            })
+            .collect()
+    };
+    let before = strip(env.about(PR));
+    // The claim's own answer: its supports and revision, without the labels.
+    let why = |env: &Env| {
+        let mut why = env.ok(&["why", &state, "--full"]);
+        let claim = why["claim"].as_object_mut().unwrap();
+        claim.remove("subject_label");
+        claim.remove("object_label");
+        json!([why["claim"], why["supports"], why["truncated"]])
+    };
+    let before_why = why(&env);
+    // A title shaped like a canonical alias.
+    env.title(PR, "github:title/Fix", time());
+    let after_rows = env.about(PR);
+    assert!(label(&after_rows[0], "subject").is_object());
+    assert_eq!(strip(after_rows), before);
+    assert_eq!(why(&env), before_why);
+    assert_eq!(
+        env.ok(&["why", &state])["claim"]["subject_label"]["text"],
+        "github:title/Fix"
+    );
+    let resolved = env.ok(&["about", "github:title/Fix"]);
+    assert_eq!(resolved["resolved"], false, "{resolved}");
+    assert_eq!(resolved["claims"], json!([]));
+}
+
+/// labels/S9: `label.state` holds the current observed state, `code:state` or `tracker:state`,
+/// and is null with none
+#[test]
+fn S9_label_state_holds_the_current_observed_state_or_null() {
+    let env = Env::new();
+    let w = world(&env);
+    env.typed(LINEAR_ISSUE, "tracker:Issue");
+    env.title(LINEAR_ISSUE, "Ship the labels", time());
+    env.claim_for(LINEAR_ISSUE, "tracker:state", literal("Todo"), time());
+    env.claim_for(
+        LINEAR_ISSUE,
+        "tracker:state",
+        literal("In Progress"),
+        later(1),
+    );
+    let rows = env.about(PR);
+    let pr = label(row(&rows, &w.state), "subject");
+    assert_eq!(
+        pr["state"], "closed",
+        "the current state, not the superseded one: {pr}"
+    );
+    let incoming = env.about(ACCOUNT);
+    let issue = label(row(&incoming, &w.issue_author), "subject");
+    assert!(issue.is_object());
+    assert_eq!(issue.get("state"), Some(&Value::Null), "{issue}");
+    let linear = env.about(LINEAR_ISSUE);
+    let current = linear
+        .iter()
+        .find(|r| r["predicate"] == "tracker:state" && r["status"] == "observed")
+        .unwrap();
+    assert_eq!(label(current, "subject")["state"], "In Progress");
+}
+
+/// labels/S10: the CLI text shows the label after the id with control chars escaped
+#[test]
+fn S10_cli_text_shows_the_escaped_label_after_the_id_for_about_and_why() {
+    let env = Env::new();
+    env.title(PR, "Login \u{1b}[31mfails\nbadly", time());
+    env.typed(PR, "code:PullRequest");
+    let state = env.claim_for(PR, "code:state", literal("open"), time());
+    let alias = env.claim_for(PR, "rastro:alias", alias("pr", "o/p/1"), time());
+    for text in [env.text(&["about", PR]), env.text(&["why", &state])] {
+        assert!(
+            !text.contains('\u{1b}'),
+            "a raw escape reached the terminal: {text:?}"
+        );
+        let line = text
+            .lines()
+            .find(|l| l.contains(&state))
+            .unwrap_or_else(|| panic!("no line for claim {state}: {text}"));
+        let id_at = line.find(PR).unwrap_or_else(|| panic!("no id: {line}"));
+        let label_at = line
+            .find("Login ")
+            .unwrap_or_else(|| panic!("no label text on the claim line: {line}"));
+        assert!(label_at > id_at, "the label is not after the id: {line}");
+        for part in ["fails", "badly", "\\u{1b}", "[open]"] {
+            assert!(line.contains(part), "missing {part:?} on the line: {line}");
+        }
+    }
+    // The alias list stays between the id and the label.
+    let text = env.text(&["about", PR]);
+    let line = text.lines().find(|l| l.contains(&alias)).unwrap();
+    assert!(
+        line.find("o/p/1").unwrap() < line.find("Login ").unwrap(),
+        "{line}"
     );
 }

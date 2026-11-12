@@ -3,7 +3,7 @@ use super::*;
 use anyhow::ensure;
 use rastro_core::knowledge::{
     AboutClaim, AboutClaims, AboutOptions, Citation, ClaimSummary, Explanation, JustificationView,
-    LinkReason, LinkReasonKind, LinkedAccount, PersonView, WhyOptions,
+    Label, LinkReason, LinkReasonKind, LinkedAccount, PersonView, WhyOptions,
 };
 use std::collections::BTreeSet;
 
@@ -134,8 +134,77 @@ impl View<'_> {
             },
             subject_aliases,
             object_aliases,
+            subject_label: None,
+            object_label: None,
             support_count: count as usize,
         }))
+    }
+    /// The entity's label: its title or name, cited, with its current state (knowledge §69). The
+    /// text is the latest observation at the entity's own location that `scopes` can see (empty:
+    /// every scope), by `captured_at` and then evidence id; hidden evidence never makes one.
+    pub(super) fn label(&self, entity: &Entity, scopes: &[Scope]) -> Result<Option<Label>> {
+        let Some(field) = rastro_core::knowledge::label_field(&entity.entity_type) else {
+            return Ok(None);
+        };
+        let found = self
+            .0
+            .query_row(
+                "SELECT id, quote, captured_at, trust_class FROM evidence \
+                 WHERE location = ?1 AND field = ?2 \
+                 AND (?3 IS NULL OR scope IN (SELECT value FROM json_each(?3))) \
+                 ORDER BY captured_at DESC, id DESC LIMIT 1",
+                params![entity.identifier, field, scope_parameter(scopes)?],
+                |row| {
+                    Ok((
+                        row.get::<_, i64>(0)?,
+                        row.get::<_, String>(1)?,
+                        row.get::<_, String>(2)?,
+                        row.get::<_, String>(3)?,
+                    ))
+                },
+            )
+            .optional()?;
+        let Some((evidence_id, quote, captured, trust)) = found else {
+            return Ok(None);
+        };
+        let (text, clipped) = rastro_core::knowledge::clip_label(&quote);
+        let url = (entity.identifier.starts_with("https://")
+            || entity.identifier.starts_with("http://"))
+        .then(|| entity.identifier.clone());
+        Ok(Some(Label {
+            text,
+            url,
+            evidence_id,
+            field: field.into(),
+            captured_at: parse_time(captured)?,
+            trust_class: trust_class(&trust)?,
+            clipped,
+            state: self.state(&entity.id, scopes)?,
+        }))
+    }
+    /// The value of the entity's current observed `code:state` or `tracker:state` claim. A scoped
+    /// read considers only the claims it can see in full, and takes the one whose newest visible
+    /// observation is the latest: stored status is full-scope, and a hidden observation must not
+    /// decide what a scope sees.
+    fn state(&self, entity: &str, scopes: &[Scope]) -> Result<Option<String>> {
+        const STATES: &str = "c.subject = ?1 AND c.predicate IN ('code:state', 'tracker:state') AND c.object_value IS NOT NULL";
+        Ok(match scope_parameter(scopes)? {
+            None => self.0.query_row(
+                &format!("SELECT c.object_value FROM claim c WHERE {STATES} AND c.status = 'observed' ORDER BY c.known_since DESC, c.id LIMIT 1"),
+                [entity],
+                |row| row.get(0),
+            ),
+            Some(scopes) => self.0.query_row(
+                &format!("SELECT c.object_value FROM claim c WHERE {STATES} AND {} \
+                    ORDER BY (SELECT max(e.captured_at) FROM justification j \
+                        JOIN justification_span s ON s.justification_id = j.id \
+                        JOIN evidence e ON e.id = s.evidence_id WHERE j.claim_id = c.id) DESC, c.id LIMIT 1",
+                    scoped::VISIBLE_CLAIM),
+                params![entity, scopes],
+                |row| row.get(0),
+            ),
+        }
+        .optional()?)
     }
     /// The entity id a form names: `me`, an exact id or identifier, else a canonical alias.
     pub(super) fn resolve(&self, entity: &str) -> Result<Option<String>> {

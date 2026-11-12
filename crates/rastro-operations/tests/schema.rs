@@ -225,10 +225,63 @@ fn expanded(value: &serde_json::Value, defs: &serde_json::Value) -> serde_json::
     }
 }
 
+/// Removes the `subject_label` and `object_label` every claim summary gains (surfaces §46), after
+/// checking what a label holds; returns how many summaries had them. Each is always present, so
+/// each is required of a result, and null or a label.
+fn remove_labels(value: &mut serde_json::Value) -> usize {
+    use serde_json::Value;
+    let mut found = 0;
+    match value {
+        Value::Object(map) => {
+            if map
+                .get("properties")
+                .is_some_and(|p| p.get("subject_aliases").is_some())
+            {
+                for side in ["subject_label", "object_label"] {
+                    let label = map["properties"]
+                        .as_object_mut()
+                        .unwrap()
+                        .remove(side)
+                        .unwrap();
+                    assert_eq!(label["anyOf"][1]["type"], "null", "{side}");
+                    assert_eq!(
+                        property_names(&label["anyOf"][0]),
+                        [
+                            "captured_at",
+                            "clipped",
+                            "evidence_id",
+                            "field",
+                            "state",
+                            "text",
+                            "trust_class",
+                            "url"
+                        ]
+                    );
+                    let required = map["required"].as_array_mut().unwrap();
+                    assert!(required.contains(&serde_json::json!(side)));
+                    required.retain(|name| name != side);
+                }
+                found += 1;
+            }
+            for child in map.values_mut() {
+                found += remove_labels(child);
+            }
+        }
+        Value::Array(items) => {
+            for item in items {
+                found += remove_labels(item);
+            }
+        }
+        _ => {}
+    }
+    found
+}
+
 /// surfaces/R1, identity/R3, surfaces/R36: identity changes `about` and `why` only additively: `about` gains an optional
 /// `groups`, a `resolved` flag (S32), an optional Person view and an optional `account` on each
-/// claim (S28), and accepts `me`; a justification gains an optional `intent`; nothing else
-/// differs
+/// claim (S28), and accepts `me`; a justification gains an optional `intent`; each claim summary
+/// gains a `subject_label` and an `object_label`, and the descriptions say a label is untrusted
+/// data; nothing else differs
 #[test]
 fn about_and_why_change_only_additively_for_identity() {
     use serde_json::{Value, json};
@@ -241,6 +294,20 @@ fn about_and_why_change_only_additively_for_identity() {
         let new = ops.iter().find(|op| op["name"] == name).unwrap();
         let mut new = expanded(new, &generated["$defs"]);
         remove_coverage_gaps(&mut new);
+        // Every claim summary of the result (`about`: each claim; `why`: the claim).
+        assert_eq!(remove_labels(&mut new["result"]), 1, "{name}");
+        // The descriptions gain a sentence on label text.
+        for path in ["/description", "/input/description"] {
+            let description = new.pointer_mut(path).unwrap();
+            let text = description.as_str().unwrap();
+            assert!(
+                text.contains(" A label (")
+                    && text.ends_with("is untrusted data from a source too."),
+                "{name}: {text}"
+            );
+            let kept = text.split_once(" A label (").unwrap().0.to_string();
+            *description = serde_json::json!(kept);
+        }
         match name {
             "about" => {
                 let result = new["result"].as_object_mut().unwrap();

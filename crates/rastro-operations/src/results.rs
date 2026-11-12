@@ -181,6 +181,8 @@ mod tests {
                 claim: Box::new(rastro_core::knowledge::ClaimSummary {
                     subject_aliases: vec![],
                     object_aliases: vec![],
+                    subject_label: None,
+                    object_label: None,
                     support_count: 0,
                     claim: rastro_core::claims::ClaimView {
                         id: "c".into(),

@@ -9,6 +9,7 @@ The core's own language. Code, docs, plugins and the interface all use these wor
 | **Account** | A source's account for a human. The core's supertype `rastro:Account`; a vocabulary declares which of its types are accounts. Only an account is held by a Person | Person |
 | **Entity** | One identified thing in the world: a person, project, commitment… | Alias |
 | **Alias** | An identifier or name that points to an entity (an email, handle, nickname, ID) | |
+| **Label** | The cited title or name an answer shows next to an entity, from the latest visible observation at its location, with its state. Evidence, not a claim: it never feeds an alias, a merge or a revision | Alias, Claim |
 | **Merge** | A claim that two entities of the same kind are one. Reversible. An account is linked to a Person by a claim, never merged into it | |
 | **Evidence** | An observation that never changes: source, location, quoted span, capture time, trust class | Source |
 | **Source** | A place information comes from: a mailbox, a channel, a person, the owner's notes | Connector |

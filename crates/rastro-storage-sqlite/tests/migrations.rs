@@ -49,7 +49,7 @@ fn stored_evidence_rejects_updates_and_deletes() {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 12);
+        assert_eq!(version, 13);
     }
 }
 
@@ -91,7 +91,7 @@ fn migrations_apply_once_in_timestamp_order_and_unknown_ones_are_refused() {
         .unwrap();
     connection.pragma_update(None, "user_version", 1).unwrap();
     SqliteStorage::open(&legacy).unwrap();
-    assert_eq!(names(&connection).len(), 12);
+    assert_eq!(names(&connection).len(), 13);
 }
 
 /// evidence/R5: legacy user version maps to the migrations it meant
@@ -682,4 +682,33 @@ fn the_intent_replay_runs_after_every_migration() {
         .map(Result::unwrap)
         .collect();
     assert_eq!(statuses, ["observed", "superseded"]);
+}
+
+/// labels/S1: a label is read by location and field across sources and scopes, through an index
+/// rather than a scan of every observation
+#[test]
+fn a_label_lookup_by_location_and_field_uses_an_index() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("rastro.sqlite3");
+    drop(SqliteStorage::open(&path).unwrap());
+    let connection = Connection::open(&path).unwrap();
+    let plan: Vec<String> = connection
+        .prepare(
+            "EXPLAIN QUERY PLAN SELECT id, quote, captured_at, trust_class FROM evidence \
+             WHERE location = ?1 AND field = ?2 \
+             AND (?3 IS NULL OR scope IN (SELECT value FROM json_each(?3))) \
+             ORDER BY captured_at DESC, id DESC LIMIT 1",
+        )
+        .unwrap()
+        .query_map(["https://github.com/o/p/pull/1", "/title", "null"], |row| {
+            row.get(3)
+        })
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert!(
+        plan.iter()
+            .any(|step| step.contains("SEARCH evidence USING INDEX evidence_by_location")),
+        "{plan:?}"
+    );
 }
