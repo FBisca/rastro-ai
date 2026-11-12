@@ -108,6 +108,17 @@ pub trait Snapshot {
         self.about_scoped(entity, options, &[])
     }
 
+    /// The labels (knowledge §69) of the entities that have one, keyed by entity id, from the
+    /// observations and claims visible to `scopes` (empty: every scope). An entity whose label
+    /// is hidden, or that has none, is absent.
+    fn labels(
+        &self,
+        _entities: &[crate::claims::Entity],
+        _scopes: &[Scope],
+    ) -> Result<std::collections::BTreeMap<String, crate::knowledge::Label>> {
+        Ok(Default::default())
+    }
+
     /// The accepted owner intents, in acceptance order.
     fn intents(&self) -> Result<Vec<crate::identity::Intent>> {
         anyhow::bail!("storage does not support owner intents")

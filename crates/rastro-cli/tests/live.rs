@@ -445,3 +445,45 @@ fn the_owners_copy_lists_github_and_linear_accounts_and_runs_candidates() {
         "candidates failed: {listed}"
     );
 }
+
+/// labels/S1, S3: on a copy of the owner's database, `about me` labels pull requests and Linear
+/// issues with a cited title, and the read stays fast with the label lookups in it.
+///
+/// Needs `RASTRO_LIVE_DB`, as above; it prints how long `about <entity>` took (`RASTRO_LIVE_ENTITY`,
+/// default `me`). Run with
+/// `cargo test -p rastro-cli --test live -- --ignored --nocapture the_owners_copy_labels_what_about_me_returns`.
+#[test]
+#[ignore = "reads a copy of the owner's database; set RASTRO_LIVE_DB"]
+fn the_owners_copy_labels_what_about_me_returns() {
+    let Some(source) = std::env::var_os("RASTRO_LIVE_DB") else {
+        return;
+    };
+    let home = tempfile::tempdir().unwrap();
+    let data = home.path().join("data");
+    fs::create_dir_all(&data).unwrap();
+    fs::copy(&source, data.join("rastro.sqlite3")).unwrap();
+    let plugins = home.path().join("plugins");
+    fs::create_dir_all(&plugins).unwrap();
+    // A writing open applies the pending migrations, as `rastro mcp` and `rastro sync` do.
+    drop(rastro_storage_sqlite::SqliteStorage::open(&data.join("rastro.sqlite3")).unwrap());
+    let entity = std::env::var("RASTRO_LIVE_ENTITY").unwrap_or_else(|_| "me".into());
+    let started = std::time::Instant::now();
+    let about = rastro(home.path(), &plugins, &["about", &entity, "--limit", "50"]);
+    println!("about {entity}, every scope: {:?}", started.elapsed());
+    let claims = about["result"]["claims"].as_array().unwrap();
+    let labelled = claims
+        .iter()
+        .flat_map(|c| [&c["subject_label"], &c["object_label"]])
+        .filter(|label| label.is_object())
+        .count();
+    println!("{} claims, {labelled} labelled sides", claims.len());
+    assert!(labelled > 0, "no label on any side of `about me`: {about}");
+    for label in claims
+        .iter()
+        .flat_map(|c| [&c["subject_label"], &c["object_label"]])
+        .filter(|label| label.is_object())
+    {
+        assert!(label["text"].as_str().unwrap().chars().count() <= 200);
+        assert!(label["trust_class"].is_string());
+    }
+}

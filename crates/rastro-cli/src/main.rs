@@ -141,23 +141,36 @@ fn extraction_line(pair: &rastro_core::runs::ExtractionPair) -> String {
 }
 fn claim_line(summary: &rastro_core::knowledge::ClaimSummary) -> String {
     let c = &summary.claim;
-    let aliases = |identifier: &str, names: &[String]| {
-        let mut shown = display_safe(identifier);
-        if !names.is_empty() {
-            shown += &format!(
-                " ({})",
-                names
-                    .iter()
-                    .map(|s| display_safe(s))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-        }
-        shown
-    };
+    // An entity as its identifier, its aliases, then its label: the cited title or name, and its
+    // state. All of it is source text, so every part is escaped.
+    let entity =
+        |identifier: &str, names: &[String], label: &Option<rastro_core::knowledge::Label>| {
+            let mut shown = display_safe(identifier);
+            if !names.is_empty() {
+                shown += &format!(
+                    " ({})",
+                    names
+                        .iter()
+                        .map(|s| display_safe(s))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            if let Some(label) = label {
+                shown += &format!(
+                    " \"{}{}\"",
+                    display_safe(&label.text),
+                    if label.clipped { "…" } else { "" }
+                );
+                if let Some(state) = &label.state {
+                    shown += &format!(" [{}]", display_safe(state));
+                }
+            }
+            shown
+        };
     let object = match &c.object {
         rastro_core::claims::Object::Entity { identifier, .. } => {
-            aliases(identifier, &summary.object_aliases)
+            entity(identifier, &summary.object_aliases, &summary.object_label)
         }
         rastro_core::claims::Object::Literal { value, .. } => {
             format!("\"{}\"", display_safe(value))
@@ -165,7 +178,11 @@ fn claim_line(summary: &rastro_core::knowledge::ClaimSummary) -> String {
     };
     format!(
         "{} {} {} | Status: {} | Claim: {} | Revision: {} | Supports: {}",
-        aliases(&c.subject.identifier, &summary.subject_aliases),
+        entity(
+            &c.subject.identifier,
+            &summary.subject_aliases,
+            &summary.subject_label
+        ),
         display_safe(&c.predicate),
         object,
         c.status,

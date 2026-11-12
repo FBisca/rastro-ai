@@ -28,7 +28,7 @@ pub use scoped::{cache_len as scoped_cache_len, clear_cache as clear_scoped_cach
 /// The migration recording when an intent's contribution ended; an open that applies it replays
 /// the stored intents once all migrations are in.
 const INTENT_END: &str = "202611081000_intent_justification_end";
-const MIGRATIONS: [(&str, &str); 12] = [
+const MIGRATIONS: [(&str, &str); 13] = [
     (
         "202611041200_initial",
         include_str!("../migrations/202611041200_initial.sql"),
@@ -76,6 +76,10 @@ const MIGRATIONS: [(&str, &str); 12] = [
     (
         "202611091100_automatic_justification",
         include_str!("../migrations/202611091100_automatic_justification.sql"),
+    ),
+    (
+        "202611121000_evidence_by_location",
+        include_str!("../migrations/202611121000_evidence_by_location.sql"),
     ),
 ];
 
@@ -913,6 +917,19 @@ impl Snapshot for View<'_> {
         self.explanation(claim, options)
     }
 
+    fn labels(
+        &self,
+        entities: &[Entity],
+        scopes: &[Scope],
+    ) -> Result<std::collections::BTreeMap<String, rastro_core::knowledge::Label>> {
+        let mut labels = std::collections::BTreeMap::new();
+        for entity in entities {
+            if let Some(label) = self.label(entity, scopes)? {
+                labels.insert(entity.id.clone(), label);
+            }
+        }
+        Ok(labels)
+    }
     fn intents(&self) -> Result<Vec<rastro_core::identity::Intent>> {
         identity::load(self.0)
     }
