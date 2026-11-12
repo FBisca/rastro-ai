@@ -10,7 +10,7 @@
 # Accounts (decisions/vocabulary.md §27): `tracker:Account` names the core's `rastro:Account` as
 # its supertype, so only it may be held by a Person. An app user (`tracker:Bot`) may not.
 namespace = "tracker"
-version = "0.3.0"
+version = "0.4.0"
 
 [[types]]
 id = "tracker:Account"
@@ -78,6 +78,20 @@ cardinality = "one"
 freshness = "source"
 authority = "newer_comparable_observation"
 sensitivity = "Personal: it says who is expected to do what. Visible only in the source's scope."
+
+[[predicates]]
+id = "tracker:state"
+definition = "The name Linear gives an issue's workflow state (for example `In Progress` or `Done`), exactly as its `state` field says. One value per subject and observation context."
+not_to_confuse_with = "The state type (started, completed, canceled); a GitHub `code:state`; a status written in the issue's title or description."
+examples = ["linear:issue/7d3e9a10-4b2c-4f8e-a1d5-6e2b0c9f8a34 tracker:state \"In Progress\""]
+counter_examples = ["\"Done\" written in an issue description", "the team's column name guessed from the board"]
+evidence_requirement = "Structured `/id` and `/state/name` observations at the issue's location; `/state/name` is a non-empty name with no surrounding whitespace or control character."
+domain = ["tracker:Issue"]
+range = ["string"]
+cardinality = "one"
+freshness = "source"
+authority = "newer_comparable_observation"
+sensitivity = "Work: it says where an issue stands. Visible in the source's scope."
 
 [[aliases]]
 kind = "email"

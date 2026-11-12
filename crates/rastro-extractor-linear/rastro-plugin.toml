@@ -1,6 +1,6 @@
 id = "rastro-extractor-linear"
 name = "Rastro Linear extractor"
-version = "0.3.0"
+version = "0.4.0"
 author = "Rastro"
 # The `tracker` vocabulary ships in this package, next to the extractor that uses it.
 kinds = ["extractor", "vocabulary"]
@@ -46,6 +46,10 @@ deterministic = true
 
 [[extraction_rules]]
 id = "assignee"
+deterministic = true
+
+[[extraction_rules]]
+id = "state"
 deterministic = true
 
 [permissions]
