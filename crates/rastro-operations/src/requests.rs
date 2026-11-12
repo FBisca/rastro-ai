@@ -256,8 +256,16 @@ impl CoverageRequest {
 }
 impl SyncRequest {
     pub(crate) fn run<S: Storage>(self, rastro: &mut Rastro<S>) -> Result<SyncResult> {
+        self.run_observed(rastro, &mut rastro_core::runs::Silent)
+    }
+    /// Runs the sync, telling `observer` what each source does as it does it.
+    pub fn run_observed<S: Storage>(
+        self,
+        rastro: &mut Rastro<S>,
+        observer: &mut dyn rastro_core::runs::Observer,
+    ) -> Result<SyncResult> {
         Ok(SyncResult {
-            runs: rastro.sync_with_reread(self.name.as_deref(), self.reread)?,
+            runs: rastro.sync_observed(self.name.as_deref(), self.reread, observer)?,
         })
     }
 }

@@ -518,7 +518,9 @@ fn execute(request: Request) -> Result<Outcome> {
     }
     let storage = SqliteStorage::open(&locations.database())?;
     let mut rastro = Rastro::open(locations, storage)?;
-    let response = request.run(&mut rastro)?;
+    // Progress goes to stderr whatever the output format, never to stdout.
+    let response =
+        request.run_observed(&mut rastro, &mut rastro_core::runs::StderrProgress::new())?;
     let text = human(&response);
     Ok((response, text))
 }
@@ -565,6 +567,12 @@ fn parse() -> (Cli, &'static str) {
         }
     }
 }
+/// A line on stderr. A stderr that is closed or broken loses it; `eprintln!` would panic on a
+/// broken one, and the run's exit code would no longer say how it went.
+fn stderr_line(text: &str) {
+    use std::io::Write;
+    let _ = writeln!(std::io::stderr(), "{text}");
+}
 fn main() {
     let (cli, operation) = parse();
     let request = match cli.command {
@@ -572,7 +580,7 @@ fn main() {
         Command::Mcp { scopes } => match mcp::run(scopes) {
             Ok(()) => return,
             Err(error) => {
-                eprintln!("error: {}", mcp::bounded(&format!("{error:#}")));
+                stderr_line(&format!("error: {}", mcp::bounded(&format!("{error:#}"))));
                 std::process::exit(1);
             }
         },
@@ -592,7 +600,7 @@ fn main() {
             if cli.json {
                 println!("{}", envelope::failure(operation, format!("{error:#}")));
             } else {
-                eprintln!("error: {error:#}");
+                stderr_line(&format!("error: {error:#}"));
             }
             std::process::exit(1);
         }
