@@ -1348,3 +1348,42 @@ fn S10_cli_text_shows_the_escaped_label_after_the_id_for_about_and_why() {
         "{line}"
     );
 }
+
+/// claims: `about --state` keeps only claims with a side whose label state matches, without
+/// case, and filters before `limit`
+#[test]
+fn about_state_keeps_claims_whose_side_has_that_state_before_the_limit() {
+    let env = Env::new();
+    let w = world(&env);
+    env.claim_for(ISSUE, "code:state", literal("open"), time());
+    let ids = |result: &Value| -> Vec<String> {
+        result["claims"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["id"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let open = env.ok(&["about", ACCOUNT, "--state", "OPEN"]);
+    assert_eq!(ids(&open), vec![w.issue_author.clone()], "{open}");
+    let either = env.ok(&["about", ACCOUNT, "--state", "open", "--state", "Closed"]);
+    let mut both = ids(&either);
+    both.sort();
+    let mut expected = vec![w.issue_author.clone(), w.author.clone()];
+    expected.sort();
+    assert_eq!(both, expected, "{either}");
+    // One claim matches, and it fits the limit of one: nothing else was dropped for it.
+    let closed = env.ok(&["about", ACCOUNT, "--state", "closed", "--limit", "1"]);
+    assert_eq!(ids(&closed), vec![w.author.clone()], "{closed}");
+    assert_eq!(closed["truncated"], false, "{closed}");
+    let none = env.ok(&["about", ACCOUNT, "--state", "merged"]);
+    assert!(ids(&none).is_empty(), "{none}");
+    // Without the filter every claim stays.
+    assert!(
+        env.ok(&["about", ACCOUNT])["claims"]
+            .as_array()
+            .unwrap()
+            .len()
+            >= 3
+    );
+}

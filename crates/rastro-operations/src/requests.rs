@@ -349,6 +349,10 @@ pub struct AboutRequest {
     #[arg(long)]
     #[serde(default)]
     pub history: bool,
+    /// Only claims with a subject or object whose label state is one of these, compared without case (e.g. `open`, `In Progress`). Applied before `limit`. Empty: every claim.
+    #[arg(long = "state")]
+    #[serde(default)]
+    pub state: Vec<String>,
 }
 impl AboutRequest {
     pub(crate) fn run<S: Storage + StoredTwins>(
@@ -365,6 +369,7 @@ impl AboutRequest {
             since: self.since,
             limit: self.limit.0,
             history: self.history,
+            state: self.state.clone(),
         }
     }
 }
