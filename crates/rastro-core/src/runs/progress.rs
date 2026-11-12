@@ -36,6 +36,8 @@ pub enum Stage {
 /// Hears a sync as it goes. Every method has a default that ignores the event, and none can
 /// fail a run: an observer that can't tell, or won't, changes nothing.
 pub trait Observer {
+    /// Something the owner should know before a source is read.
+    fn warning(&mut self, _text: &str) {}
     /// A source is about to be read.
     fn started(&mut self, _source: &str, _why: &StartReason) {}
     fn stage(&mut self, _source: &str, _stage: &Stage) {}
@@ -92,6 +94,9 @@ impl Default for StderrProgress {
     }
 }
 impl Observer for StderrProgress {
+    fn warning(&mut self, text: &str) {
+        host::progress_line(&format!("warning: {}", display_safe(text)));
+    }
     fn started(&mut self, source: &str, why: &StartReason) {
         let why = match why {
             StartReason::FirstRead(from) => format!("first read from {}", stamp(*from)),

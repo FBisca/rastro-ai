@@ -1579,6 +1579,13 @@
                     "$ref": "#/$defs/RunReport"
                   },
                   "type": "array"
+                },
+                "warnings": {
+                  "description": "What the sync warned of before it read, such as a renamed source reading its whole\nwindow again. Empty when there is nothing to warn of.",
+                  "items": {
+                    "type": "string"
+                  },
+                  "type": "array"
                 }
               },
               "required": [
@@ -2242,6 +2249,13 @@
           "runs": {
             "items": {
               "$ref": "#/$defs/RunReport"
+            },
+            "type": "array"
+          },
+          "warnings": {
+            "description": "What the sync warned of before it read, such as a renamed source reading its whole\nwindow again. Empty when there is nothing to warn of.",
+            "items": {
+              "type": "string"
             },
             "type": "array"
           }

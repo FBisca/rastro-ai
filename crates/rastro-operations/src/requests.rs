@@ -264,8 +264,10 @@ impl SyncRequest {
         rastro: &mut Rastro<S>,
         observer: &mut dyn rastro_core::runs::Observer,
     ) -> Result<SyncResult> {
+        let synced = rastro.sync_observed(self.name.as_deref(), self.reread, observer)?;
         Ok(SyncResult {
-            runs: rastro.sync_observed(self.name.as_deref(), self.reread, observer)?,
+            runs: synced.runs,
+            warnings: synced.warnings,
         })
     }
 }

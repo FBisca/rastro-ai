@@ -483,6 +483,20 @@ impl Storage for SqliteStorage {
     fn last_complete_check(&self, source: &Source) -> Result<Option<CompleteCheck>> {
         View(&self.connection).last_complete_check(&source.name, &source.scope)
     }
+    fn stored_twins(&self, source: &Source, configured: &[String]) -> Result<Vec<String>> {
+        let selector = serde_json::to_string(&source.selector)?;
+        let names = self
+            .connection
+            .prepare(
+                "SELECT name FROM sources WHERE connector = ?1 AND selector = ?2 ORDER BY name",
+            )?
+            .query_map(params![source.connector, selector], |row| row.get(0))?
+            .collect::<Result<Vec<String>, _>>()?;
+        Ok(names
+            .into_iter()
+            .filter(|name| !configured.contains(name))
+            .collect())
+    }
     fn interrupt_unfinished_runs(&mut self, at: DateTime<Utc>) -> Result<usize> {
         let transaction = self.connection.transaction()?;
         let at = stamp(at);

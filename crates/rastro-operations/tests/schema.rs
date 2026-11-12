@@ -104,6 +104,19 @@ fn about_and_why_are_additive_v2_and_existing_schemas_are_unchanged() {
         // may carry: anything else that differs, or any other field, is a breaking change.
         match old["name"].as_str().unwrap() {
             "sync" => {
+                let warnings = new["result"]["properties"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("warnings")
+                    .unwrap();
+                assert_eq!(warnings["type"], "array");
+                assert_eq!(warnings["items"], json!({"type": "string"}));
+                assert!(
+                    !new["result"]["required"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&json!("warnings"))
+                );
                 let run = &mut new["result"]["properties"]["runs"]["items"];
                 let extraction = run["properties"]
                     .as_object_mut()

@@ -34,6 +34,13 @@ pub struct RunReport {
     pub extraction: Option<ExtractionReport>,
 }
 
+/// A finished sync: each source's run, and what the owner was warned of.
+#[derive(Debug)]
+pub struct Synced {
+    pub runs: Vec<RunReport>,
+    pub warnings: Vec<String>,
+}
+
 /// How an extractor run ended.
 #[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -148,7 +155,7 @@ impl<S: Storage> Rastro<S> {
     /// Runs connectors from the registered window start when `reread` is true.
     /// Re-reading uses the same append, unchanged and coverage rules as any sync.
     pub fn sync_with_reread(&mut self, name: Option<&str>, reread: bool) -> Result<Vec<RunReport>> {
-        self.sync_observed(name, reread, &mut Silent)
+        Ok(self.sync_observed(name, reread, &mut Silent)?.runs)
     }
 
     /// `sync_with_reread`, telling `observer` what each source does as it does it. The
@@ -158,7 +165,7 @@ impl<S: Storage> Rastro<S> {
         name: Option<&str>,
         reread: bool,
         observer: &mut dyn Observer,
-    ) -> Result<Vec<RunReport>> {
+    ) -> Result<Synced> {
         let sources: Vec<Source> = self
             .config
             .sources
@@ -179,6 +186,8 @@ impl<S: Storage> Rastro<S> {
         // attempt stays the latest.
         self.storage.interrupt_unfinished_runs(Utc::now())?;
         let mut reports = Vec::new();
+        let mut warnings = Vec::new();
+        let configured: Vec<String> = self.config.sources.iter().map(|s| s.name.clone()).collect();
         for source in &sources {
             let plugin = host::discover(&self.locations, &source.connector, "connector").and_then(
                 |plugin| {
@@ -208,13 +217,30 @@ impl<S: Storage> Rastro<S> {
                     Ok(plugin)
                 },
             );
+            let checked = self.storage.last_complete_check(source)?;
+            // A renamed source has no check of its own: it reads its whole window again.
+            if checked.is_none() {
+                let twins = self.storage.stored_twins(source, &configured)?;
+                if !twins.is_empty() {
+                    let warning = format!(
+                        "source {} has the connector and selector of {}, which is no longer in \
+                         the config: it reads its whole window again, and what {} read stays \
+                         stored under its own name",
+                        source.name,
+                        twins.join(", "),
+                        twins.join(", ")
+                    );
+                    observer.warning(&warning);
+                    warnings.push(warning);
+                }
+            }
             let (from, why) = if reread {
                 (
                     source.window_start,
                     StartReason::Reread(source.window_start),
                 )
             } else {
-                match self.storage.last_complete_check(source)? {
+                match checked {
                     Some(check) => (check.window_end, StartReason::Incremental(check.window_end)),
                     None => (
                         source.window_start,
@@ -251,7 +277,10 @@ impl<S: Storage> Rastro<S> {
             reports.push(report);
         }
         drop(lock);
-        Ok(reports)
+        Ok(Synced {
+            runs: reports,
+            warnings,
+        })
     }
 
     /// Replays evidence through its bound extractors into a private generation and publishes

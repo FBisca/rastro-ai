@@ -572,3 +572,146 @@ fn a_single_source_connector_refuses_a_second_source_naming_the_first() {
         }
     }
 }
+
+/// A scripted test connector that submits one body and reports complete coverage, installed
+/// under a development plugin path.
+struct Synced {
+    home: TempDir,
+}
+impl Synced {
+    fn new() -> Self {
+        let env = Self {
+            home: TempDir::new().unwrap(),
+        };
+        let plugin = env.home.path().join("dev-plugins/test");
+        std::fs::create_dir_all(&plugin).unwrap();
+        let mut manifest: toml::Table =
+            include_str!("../../rastro-test-connector/rastro-plugin.toml")
+                .parse()
+                .unwrap();
+        manifest.insert(
+            "command".into(),
+            support::test_connector().to_str().unwrap().into(),
+        );
+        manifest["permissions"]["scopes"] =
+            toml::Value::Array(["personal", "work"].into_iter().map(Into::into).collect());
+        std::fs::write(plugin.join("rastro-plugin.toml"), manifest.to_string()).unwrap();
+        let steps = [
+            serde_json::json!({"do": "initialize"}),
+            serde_json::json!({"do": "send", "message": {"jsonrpc": "2.0",
+                "method": "evidence.submit", "params": {"kind": "issue",
+                "location": "https://x/1", "field": "/body", "start": 0, "end": 4,
+                "quote": "body", "trust_class": "untrusted content",
+                "source_updated_at": "2026-11-01T00:00:00Z"}}}),
+            serde_json::json!({"do": "send", "message": {"jsonrpc": "2.0",
+                "method": "coverage.report",
+                "params": {"status": "complete", "selection": "all"}}}),
+            serde_json::json!({"do": "finish", "status": "ok", "submitted": 1}),
+        ];
+        let lines: Vec<_> = steps.iter().map(Value::to_string).collect();
+        std::fs::write(env.home.path().join("script.jsonl"), lines.join("\n")).unwrap();
+        env
+    }
+    fn rastro(&self, args: &[&str]) -> std::process::Output {
+        let output = command(self.home.path())
+            .env("RASTRO_PLUGIN_PATH", self.home.path().join("dev-plugins"))
+            .env("RASTRO_TEST_SCRIPT", self.home.path().join("script.jsonl"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            output.status.success(),
+            "{args:?}: {}{}",
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&output.stderr)
+        );
+        output
+    }
+    fn add(&self, name: &str, repo: &str, scope: &str) {
+        self.rastro(&[
+            "source",
+            "add",
+            name,
+            "--connector",
+            "test",
+            "--repo",
+            repo,
+            "--scope",
+            scope,
+            "--window-start",
+            "2026-01-01T00:00:00.000Z",
+        ]);
+    }
+    /// Renames `old` to `new` in the config, moving it to the `work` scope.
+    fn rename(&self, old: &str, new: &str) {
+        let path = self.home.path().join("config/config.toml");
+        let config = std::fs::read_to_string(&path).unwrap();
+        let edited = config
+            .replace(&format!("name = \"{old}\""), &format!("name = \"{new}\""))
+            .replace("scope = \"personal\"", "scope = \"work\"");
+        assert_ne!(config, edited);
+        std::fs::write(path, edited).unwrap();
+    }
+    /// The stderr and the result's `warnings` of `sync <name>`.
+    fn sync(&self, name: &str) -> (String, Vec<String>) {
+        let output = self.rastro(&["sync", name, "--json"]);
+        let value: Value = serde_json::from_slice(&output.stdout).unwrap();
+        let warnings = value["result"]["warnings"]
+            .as_array()
+            .unwrap_or_else(|| panic!("no `warnings` array: {value}"))
+            .iter()
+            .map(|w| w.as_str().unwrap().to_string())
+            .collect();
+        (
+            String::from_utf8_lossy(&output.stderr).into_owned(),
+            warnings,
+        )
+    }
+}
+
+/// rename-warning/S18: a source with no complete check and a stored source gone from config
+/// with the same connector and selector, in another scope, is warned about, naming both; the
+/// read still runs from window_start
+#[test]
+fn S18_a_renamed_source_is_warned_about_on_stderr_and_in_warnings() {
+    let env = Synced::new();
+    env.add("alpha-src", "o/p", "personal");
+    env.sync("alpha-src");
+    env.rename("alpha-src", "beta-src");
+    let (stderr, warnings) = env.sync("beta-src");
+    let both = |text: &str| text.contains("alpha-src") && text.contains("beta-src");
+    assert!(stderr.lines().any(both), "{stderr}");
+    assert_eq!(warnings.len(), 1, "{warnings:?}");
+    assert!(both(&warnings[0]), "{warnings:?}");
+    assert!(
+        stderr.contains("first read from 2026-01-01T00:00:00.000Z"),
+        "{stderr}"
+    );
+}
+
+/// rename-warning/S19: a source with a complete check, or with no stored-only source sharing
+/// its connector and selector, gets no warning
+#[test]
+fn S19_no_warning_with_a_complete_check_or_without_a_twin() {
+    let env = Synced::new();
+    env.add("alpha-src", "o/p", "personal");
+    env.sync("alpha-src");
+    env.rename("alpha-src", "beta-src");
+    env.sync("beta-src");
+    // beta-src now has a complete check: the stored alpha-src no longer matters.
+    let (stderr, warnings) = env.sync("beta-src");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(!stderr.contains("alpha-src"), "{stderr}");
+
+    // A stored-only source with another selector is no twin.
+    let env = Synced::new();
+    env.add("alpha-src", "o/p", "personal");
+    env.sync("alpha-src");
+    env.rename("alpha-src", "beta-src");
+    let path = env.home.path().join("config/config.toml");
+    let config = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(&path, config.replace("o/p", "o/other")).unwrap();
+    let (stderr, warnings) = env.sync("beta-src");
+    assert!(warnings.is_empty(), "{warnings:?}");
+    assert!(!stderr.contains("alpha-src"), "{stderr}");
+}
