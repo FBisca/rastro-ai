@@ -1,7 +1,7 @@
 //! The plugin host: finds a connector, spawns it, and ingests what it submits (ADR 0003).
 //! Sequential and happy-path first; hardening against crashes and silence builds on `drive`.
 use crate::evidence::{Grant, validate};
-use crate::runs::RunReport;
+use crate::runs::{Observer, RunReport, Stage};
 use crate::{Appended, Counts, CoverageRecord, CoverageState, Locations, RunEnd, Source, Storage};
 use anyhow::{Result, bail};
 use chrono::{DateTime, SecondsFormat, Utc};
@@ -26,6 +26,26 @@ mod io;
 pub use extract::extract;
 pub(crate) use extract::vocabulary;
 
+/// Queues one progress line for stderr. The printer drops it when its queue is full and
+/// ignores a stderr that fails, so this never blocks and never fails.
+pub(crate) fn progress_line(line: &str) {
+    io::Printer::global().push(line.to_string());
+}
+
+/// Waits briefly for the progress lines queued so far to be printed, so a process that ends
+/// right after its last line still shows it.
+pub(crate) fn flush_progress() {
+    io::Printer::global().flush(FLUSH_PROGRESS);
+}
+const FLUSH_PROGRESS: Duration = Duration::from_secs(1);
+
+/// A diagnostic for the owner on stderr, in order with the progress lines and the connector's
+/// own, and as safe: a stderr that is closed or broken loses it and nothing else.
+pub(crate) fn notice(line: &str) {
+    progress_line(line);
+    flush_progress();
+}
+
 pub struct Plugin {
     pub manifest: Manifest,
     pub dir: PathBuf,
@@ -42,7 +62,7 @@ pub fn discover(
 ) -> std::result::Result<Plugin, &'static str> {
     let (manifest, dir) = find(locations, id).ok_or("not_installed")?;
     check(manifest, dir, kind).map_err(|error| {
-        eprintln!("plugin {id} fails its check: {error:#}");
+        notice(&format!("plugin {id} fails its check: {error:#}"));
         "protocol"
     })
 }
@@ -106,7 +126,10 @@ pub(crate) fn find(locations: &Locations, id: &str) -> Option<(Manifest, PathBuf
             match Manifest::parse(&text) {
                 Ok(manifest) if manifest.id == id => return Some((manifest, dir)),
                 Ok(_) => {}
-                Err(error) => eprintln!("skipping {}", parse_diagnostic(&dir, &text, &error)),
+                Err(error) => notice(&format!(
+                    "skipping {}",
+                    parse_diagnostic(&dir, &text, &error)
+                )),
             }
         }
     }
@@ -153,10 +176,11 @@ fn stamp(time: DateTime<Utc>) -> String {
 }
 
 /// What the conversation produced besides storage writes.
-#[derive(Default)]
-struct Session {
+struct Session<'a> {
     counts: Counts,
     coverage: Option<CoverageReport>,
+    /// Told how the read goes; it can't change it.
+    observer: &'a mut dyn Observer,
 }
 
 /// Runs one connector over `[from, to)` and records the run and its coverage.
@@ -166,6 +190,7 @@ pub fn run<S: Storage>(
     plugin: std::result::Result<&Plugin, &'static str>,
     from: DateTime<Utc>,
     to: DateTime<Utc>,
+    observer: &mut dyn Observer,
 ) -> Result<RunReport> {
     let (plugin_id, plugin_version) = match plugin {
         Ok(p) => (p.manifest.id.clone(), p.manifest.version.clone()),
@@ -190,7 +215,12 @@ pub fn run<S: Storage>(
         window: window.clone(),
         keep_original: source.keep_original,
     };
-    let mut session = Session::default();
+    let mut session = Session {
+        counts: Counts::default(),
+        coverage: None,
+        observer,
+    };
+    session.observer.stage(&source.name, &Stage::Read);
     let outcome = match plugin {
         Ok(plugin) => match Grant::new(
             &plugin.manifest,
@@ -204,7 +234,9 @@ pub fn run<S: Storage>(
         },
         Err(reason) => Ok(Err(reason)),
     };
-    let Session { counts, coverage } = session;
+    let Session {
+        counts, coverage, ..
+    } = session;
     let gaps = coverage
         .as_ref()
         .map(|report| {
@@ -301,6 +333,7 @@ pub fn run<S: Storage>(
         window,
         counts,
         coverage: state,
+        retry_at,
         extraction: None,
     })
 }
@@ -635,6 +668,9 @@ fn converse<S: Storage>(
         match message.method.as_deref() {
             Some(EVIDENCE_SUBMIT) => {
                 session.counts.submitted += 1;
+                session
+                    .observer
+                    .read_items(&binding.source, session.counts.submitted);
                 let checked = message
                     .params()
                     .map_err(|error| format!("{error:#}"))

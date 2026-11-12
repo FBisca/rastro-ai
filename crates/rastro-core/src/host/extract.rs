@@ -1,7 +1,7 @@
 //! Running a source's bound extractor over its pending evidence (ADR 0008).
 use super::{Connector, Limits, Plugin, Wire, allowed_environment, discover, handshake, resolve};
 use crate::claims::{self, Checkpoint, ObservedClaim};
-use crate::runs::{ExtractionReport, ExtractionState};
+use crate::runs::{ExtractionReport, ExtractionState, Observer, Stage};
 use crate::{Counts, Evidence, Locations, RunEnd, Source, Storage};
 use anyhow::{Context, Result, ensure};
 use chrono::{SecondsFormat, Utc};
@@ -30,17 +30,22 @@ type Outcome = std::result::Result<(), &'static str>;
 /// Runs `extractor` over the source's evidence past its checkpoint and logs the run. Accepted
 /// claims and the new checkpoint are stored together when the extractor finishes cleanly;
 /// otherwise nothing is, and the next sync starts from the same checkpoint.
+///
+/// `observer` hears the extract and project stages. `new` is how many observations the read
+/// just before this added: pending evidence beyond it was stored earlier, so it is a replay.
 pub fn extract<S: Storage>(
     storage: &mut S,
     locations: &Locations,
     source: &Source,
     extractor: &str,
+    observer: &mut dyn Observer,
+    new: u64,
 ) -> Result<ExtractionReport> {
     let found =
         discover(locations, extractor, "extractor").and_then(|plugin| match vocabulary(&plugin) {
             Ok(vocabulary) => Ok((plugin, vocabulary)),
             Err(error) => {
-                eprintln!("plugin {extractor} fails its check: {error:#}");
+                super::notice(&format!("plugin {extractor} fails its check: {error:#}"));
                 Err("protocol")
             }
         });
@@ -65,6 +70,15 @@ pub fn extract<S: Storage>(
                 source,
             )?;
             evidence = pending.len();
+            observer.stage(
+                &source.name,
+                &Stage::Extract {
+                    extractor: extractor.into(),
+                    version: version.clone(),
+                    evidence,
+                    replay: evidence as u64 > new,
+                },
+            );
             match context(storage, source, &pending)? {
                 Err(reason) => Err(reason),
                 Ok(context) => {
@@ -76,7 +90,7 @@ pub fn extract<S: Storage>(
                         context,
                         pending,
                     };
-                    drive(storage, &run, &mut counts)
+                    drive(storage, &run, &mut counts, observer)
                 }
             }
         }
@@ -215,7 +229,12 @@ impl Run<'_> {
 
 /// Spawns the extractor and talks to it until `run.finish`. A storage error fails the run as
 /// `storage`.
-fn drive<S: Storage>(storage: &mut S, run: &Run, counts: &mut Counts) -> Outcome {
+fn drive<S: Storage>(
+    storage: &mut S,
+    run: &Run,
+    counts: &mut Counts,
+    observer: &mut dyn Observer,
+) -> Outcome {
     let manifest = &run.plugin.manifest;
     let mut command = Command::new(resolve(&run.plugin.dir, &manifest.command));
     command.env_clear().envs(allowed_environment(manifest));
@@ -224,11 +243,19 @@ fn drive<S: Storage>(storage: &mut S, run: &Run, counts: &mut Counts) -> Outcome
         return Err("protocol");
     };
     let wire = &mut process.wire;
-    let outcome = converse(storage, wire, &process.relay, &process.limits, run, counts)
-        .unwrap_or_else(|error| {
-            process.relay.line(&format!("storage error: {error:#}"));
-            Err("storage")
-        });
+    let outcome = converse(
+        storage,
+        wire,
+        &process.relay,
+        &process.limits,
+        run,
+        counts,
+        observer,
+    )
+    .unwrap_or_else(|error| {
+        process.relay.line(&format!("storage error: {error:#}"));
+        Err("storage")
+    });
     process.teardown(outcome.is_ok());
     outcome
 }
@@ -240,6 +267,7 @@ fn converse<S: Storage>(
     limits: &Limits,
     run: &Run,
     counts: &mut Counts,
+    observer: &mut dyn Observer,
 ) -> Result<Outcome> {
     let manifest = &run.plugin.manifest;
     let end = Instant::now() + limits.extraction_time;
@@ -325,6 +353,12 @@ fn converse<S: Storage>(
                     // `rastro:type` claim in it, never from what an earlier run stored.
                     let (claims, ungrounded) = claims::ground(std::mem::take(&mut accepted));
                     counts.rejected += ungrounded;
+                    observer.stage(
+                        &run.source.name,
+                        &Stage::Project {
+                            claims: claims.len(),
+                        },
+                    );
                     let stored = storage.record_claims(
                         run.run_id,
                         (&manifest.id, &manifest.version),

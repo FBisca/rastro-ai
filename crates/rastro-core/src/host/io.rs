@@ -154,7 +154,7 @@ impl Printer {
         });
         printer
     }
-    fn push(&self, line: String) -> bool {
+    pub fn push(&self, line: String) -> bool {
         let sent = self.queue.try_send(Message::Line(line)).is_ok();
         if sent {
             self.queued.fetch_add(1, Ordering::SeqCst);

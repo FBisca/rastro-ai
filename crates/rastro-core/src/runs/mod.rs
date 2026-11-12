@@ -2,7 +2,9 @@
 use crate::search::{SearchOptions, assemble_search, search_query};
 use crate::{Counts, CoverageState, Rastro, Source, Storage, files, host};
 use anyhow::Result;
+mod progress;
 use chrono::{DateTime, Utc};
+pub use progress::{COUNT_EVERY, Observer, Silent, Stage, StartReason, StderrProgress, Throttle};
 use rastro_plugin_sdk::Window;
 use schemars::JsonSchema;
 use serde::Serialize;
@@ -23,6 +25,10 @@ pub struct RunReport {
     pub window: Window,
     pub counts: Counts,
     pub coverage: CoverageState,
+    /// When the connector said to try again, if it ended `rate_limited`. It is in the
+    /// coverage the run recorded; the report carries it for the sync's progress.
+    #[serde(skip)]
+    pub retry_at: Option<DateTime<Utc>>,
     /// The run of the extractor the source is bound to, after ingestion.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extraction: Option<ExtractionReport>,
@@ -142,6 +148,17 @@ impl<S: Storage> Rastro<S> {
     /// Runs connectors from the registered window start when `reread` is true.
     /// Re-reading uses the same append, unchanged and coverage rules as any sync.
     pub fn sync_with_reread(&mut self, name: Option<&str>, reread: bool) -> Result<Vec<RunReport>> {
+        self.sync_observed(name, reread, &mut Silent)
+    }
+
+    /// `sync_with_reread`, telling `observer` what each source does as it does it. The
+    /// observer can't change a run: it is told, and nothing it does fails or delays one.
+    pub fn sync_observed(
+        &mut self,
+        name: Option<&str>,
+        reread: bool,
+        observer: &mut dyn Observer,
+    ) -> Result<Vec<RunReport>> {
         let sources: Vec<Source> = self
             .config
             .sources
@@ -168,7 +185,7 @@ impl<S: Storage> Rastro<S> {
                     // A stored source is checked like a new one, before the connector runs.
                     host::check_source_options(&self.locations, source, Some(&plugin.manifest))
                         .map_err(|error| {
-                            eprintln!("source {}: {error:#}", source.name);
+                            host::notice(&format!("source {}: {error:#}", source.name));
                             "protocol"
                         })?;
                     // A single-source connector reads only the first of its sources in the
@@ -182,40 +199,55 @@ impl<S: Storage> Rastro<S> {
                             .find(|s| s.connector == source.connector)
                         && first.name != source.name
                     {
-                        eprintln!(
+                        host::notice(&format!(
                             "source {}: connector {} takes a single source, and source {} already uses it",
                             source.name, source.connector, first.name
-                        );
+                        ));
                         return Err("protocol");
                     }
                     Ok(plugin)
                 },
             );
-            let from = if reread {
-                source.window_start
+            let (from, why) = if reread {
+                (
+                    source.window_start,
+                    StartReason::Reread(source.window_start),
+                )
             } else {
                 match self.storage.last_complete_check(source)? {
-                    Some(check) => check.window_end,
-                    None => source.window_start,
+                    Some(check) => (check.window_end, StartReason::Incremental(check.window_end)),
+                    None => (
+                        source.window_start,
+                        StartReason::FirstRead(source.window_start),
+                    ),
                 }
             };
+            observer.started(&source.name, &why);
             let mut report = host::run(
                 &mut self.storage,
                 source,
                 plugin.as_ref().map_err(|reason| *reason),
                 from,
                 Utc::now(),
+                observer,
             )?;
             // The connector binds its sources to an extractor; only that one ever reads them.
             if let Ok(plugin) = &plugin {
                 let bound = plugin.manifest.default_extractor.as_deref();
                 self.storage.bind_extractor(&source.name, bound)?;
                 if let Some(extractor) = bound {
-                    let extraction =
-                        host::extract(&mut self.storage, &self.locations, source, extractor)?;
+                    let extraction = host::extract(
+                        &mut self.storage,
+                        &self.locations,
+                        source,
+                        extractor,
+                        observer,
+                        report.counts.accepted,
+                    )?;
                     report.extraction = Some(extraction);
                 }
             }
+            observer.finished(&report);
             reports.push(report);
         }
         drop(lock);
@@ -235,7 +267,14 @@ impl<S: Storage> Rastro<S> {
         let mut pairs = Vec::new();
         let replay = (|| -> Result<()> {
             for (source, extractor) in &sources {
-                let report = host::extract(&mut self.storage, &self.locations, source, extractor)?;
+                let report = host::extract(
+                    &mut self.storage,
+                    &self.locations,
+                    source,
+                    extractor,
+                    &mut Silent,
+                    0,
+                )?;
                 if !report.started && report.state != ExtractionState::Current {
                     self.storage.carry_over_pair(source, extractor)?;
                 } else {
