@@ -211,7 +211,7 @@ macro_rules! operations {
                 let $value = self;
                 $constructor
             }
-            fn run<S: rastro_core::Storage>(self, rastro: &mut rastro_core::Rastro<S>) -> anyhow::Result<Self::Output> {
+            fn run<S: rastro_core::Storage + rastro_core::runs::StoredTwins>(self, rastro: &mut rastro_core::Rastro<S>) -> anyhow::Result<Self::Output> {
                 $input::run(self, rastro)
             }
             $(fn run_read<S: rastro_core::ReadStorage>(self, reader: &mut rastro_core::Reader<S>) -> anyhow::Result<Self::Output> {
@@ -224,12 +224,12 @@ macro_rules! operations {
                 match self { $( $pattern => { let _ = $value; $input::NAME }, )* }
             }
             /// Runs the operation against an open store.
-            pub fn run<S: rastro_core::Storage>(self, rastro: &mut rastro_core::Rastro<S>) -> anyhow::Result<Response> {
+            pub fn run<S: rastro_core::Storage + rastro_core::runs::StoredTwins>(self, rastro: &mut rastro_core::Rastro<S>) -> anyhow::Result<Response> {
                 match self { $( $pattern => Operation::run($value, rastro).map(Response::$response), )* }
             }
             /// Runs the operation, telling `observer` what a sync does as it does it; any other
             /// operation runs as `run` does.
-            pub fn run_observed<S: rastro_core::Storage>(self, rastro: &mut rastro_core::Rastro<S>, observer: &mut dyn rastro_core::runs::Observer) -> anyhow::Result<Response> {
+            pub fn run_observed<S: rastro_core::Storage + rastro_core::runs::StoredTwins>(self, rastro: &mut rastro_core::Rastro<S>, observer: &mut dyn rastro_core::runs::Observer) -> anyhow::Result<Response> {
                 match self {
                     Request::Sync(request) => request.run_observed(rastro, observer).map(Response::Sync),
                     other => other.run(rastro),

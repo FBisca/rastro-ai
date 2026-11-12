@@ -362,9 +362,6 @@ pub trait Storage {
     fn record_coverage_gaps(&mut self, run_id: i64, gaps: &[CoverageGap]) -> Result<()>;
     fn finish_run(&mut self, run_id: i64, end: &RunEnd) -> Result<()>;
     fn last_complete_check(&self, source: &Source) -> Result<Option<CompleteCheck>>;
-    /// Names of stored sources, in any scope, with `source`'s connector and selector, that are
-    /// not among the `configured` names: what a source was before it was renamed.
-    fn stored_twins(&self, source: &Source, configured: &[String]) -> Result<Vec<String>>;
     /// Matches, one per location and field (the latest observation) unless `history` is set.
     fn search(&self, query: &str, limit: usize, history: bool) -> Result<Vec<Hit>>;
     /// Drops and rebuilds the full-text index from the stored evidence; returns how many

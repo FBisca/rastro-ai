@@ -9,6 +9,13 @@ use rastro_plugin_sdk::Window;
 use schemars::JsonSchema;
 use serde::Serialize;
 
+/// What a store knows of sources it holds that the config no longer lists.
+pub trait StoredTwins {
+    /// Names of stored sources, in any scope, with `source`'s connector and selector, that are
+    /// not among the `configured` names: what a source was before it was renamed.
+    fn stored_twins(&self, source: &Source, configured: &[String]) -> Result<Vec<String>>;
+}
+
 #[derive(Debug, JsonSchema, Serialize)]
 pub struct RunReport {
     pub run_id: i64,
@@ -146,7 +153,7 @@ pub struct Rebuilt {
     pub pairs: Vec<RebuildPair>,
 }
 
-impl<S: Storage> Rastro<S> {
+impl<S: Storage + StoredTwins> Rastro<S> {
     /// Runs the connector of one source, or of every source, one after another.
     pub fn sync(&mut self, name: Option<&str>) -> Result<Vec<RunReport>> {
         self.sync_with_reread(name, false)
@@ -282,7 +289,9 @@ impl<S: Storage> Rastro<S> {
             warnings,
         })
     }
+}
 
+impl<S: Storage> Rastro<S> {
     /// Replays evidence through its bound extractors into a private generation and publishes
     /// only after every extractor that starts succeeds. A pair whose extractor never starts
     /// (not installed, failing its check, scope forbidden) keeps its stored output, carried
