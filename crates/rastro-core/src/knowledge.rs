@@ -11,6 +11,9 @@ pub struct AboutOptions {
     pub since: Option<DateTime<Utc>>,
     pub limit: usize,
     pub history: bool,
+    /// Only claims with a side whose label state is one of these, compared without case. Empty:
+    /// every claim.
+    pub state: Vec<String>,
 }
 impl Default for AboutOptions {
     fn default() -> Self {
@@ -18,6 +21,7 @@ impl Default for AboutOptions {
             since: None,
             limit: 20,
             history: false,
+            state: Vec::new(),
         }
     }
 }
@@ -212,6 +216,32 @@ fn label_summaries(
     }
     Ok(())
 }
+/// Keeps the claims with a side whose label state is one of `states`, compared without case,
+/// before grouping and `limit`. Empty `states` keeps every claim.
+fn keep_states(
+    view: &dyn Snapshot,
+    scopes: &[Scope],
+    read: &mut AboutClaims,
+    states: &[String],
+) -> Result<()> {
+    if states.is_empty() {
+        return Ok(());
+    }
+    label_summaries(
+        view,
+        scopes,
+        read.claims.iter_mut().map(|c| &mut c.summary).collect(),
+    )?;
+    let wanted = |label: &Option<Label>| {
+        label
+            .as_ref()
+            .and_then(|l| l.state.as_deref())
+            .is_some_and(|state| states.iter().any(|s| s.eq_ignore_ascii_case(state)))
+    };
+    read.claims
+        .retain(|c| wanted(&c.summary.subject_label) || wanted(&c.summary.object_label));
+    Ok(())
+}
 fn label_about(view: &dyn Snapshot, scopes: &[Scope], about: &mut About) -> Result<()> {
     label_summaries(
         view,
@@ -342,7 +372,11 @@ impl<S: ReadStorage> Reader<S> {
             &self.scopes,
             |view, unfinished, live| {
                 let claims = match view {
-                    Some(view) => view.about_view(entity, options, &self.scopes)?,
+                    Some(view) => {
+                        let mut claims = view.about_view(entity, options, &self.scopes)?;
+                        keep_states(view, &self.scopes, &mut claims, &options.state)?;
+                        claims
+                    }
                     None => AboutClaims::default(),
                 };
                 let coverage = read_only::coverage_of(
@@ -388,12 +422,9 @@ impl<S: Storage> Rastro<S> {
                 true,
                 &[],
             )?;
-            let mut about = answer(
-                view.about_view(entity, options, &[])?,
-                options.limit,
-                coverage,
-                extraction,
-            );
+            let mut claims = view.about_view(entity, options, &[])?;
+            keep_states(view, &[], &mut claims, &options.state)?;
+            let mut about = answer(claims, options.limit, coverage, extraction);
             label_about(view, &[], &mut about)?;
             Ok(about)
         })

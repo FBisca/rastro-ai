@@ -353,7 +353,18 @@ fn about_and_why_change_only_additively_for_identity() {
                 assert!(required.contains(&json!("resolved")));
                 assert!(!required.contains(&json!("person")));
                 required.retain(|name| name != "resolved");
-                // The one input change is the description naming `me`.
+                // The input gains an optional `state` filter (surfaces §47).
+                let inputs = new["input"]["properties"].as_object_mut().unwrap();
+                let state = inputs.remove("state").unwrap();
+                assert_eq!(state["type"], "array");
+                assert_eq!(state["default"], json!([]));
+                assert!(
+                    !new["input"]["required"]
+                        .as_array()
+                        .unwrap()
+                        .contains(&json!("state"))
+                );
+                // The other input change is the description naming `me`.
                 let entity = &mut new["input"]["properties"]["entity"]["description"];
                 assert!(
                     entity

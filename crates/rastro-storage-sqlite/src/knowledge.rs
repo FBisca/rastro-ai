@@ -319,7 +319,17 @@ impl View<'_> {
             )?;
             let ids = statement
                 .query_map(
-                    params![entity, options.history, since, (options.limit + 1) as i64],
+                    params![
+                        entity,
+                        options.history,
+                        since,
+                        // A state filter applies after the read, so it reads every claim.
+                        if options.state.is_empty() {
+                            (options.limit + 1) as i64
+                        } else {
+                            -1
+                        }
+                    ],
                     |row| row.get::<_, String>(0),
                 )?
                 .collect::<Result<Vec<_>, _>>()?;
