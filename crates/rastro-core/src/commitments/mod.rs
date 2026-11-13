@@ -336,7 +336,84 @@ impl crate::meeting::StoredMeeting {
     }
 }
 
+/// What checking one source's record again came to.
+#[derive(Clone, Debug, JsonSchema, Serialize)]
+pub struct Rechecked {
+    pub kind: SourceKind,
+    pub name: String,
+    /// `succeeded` when the record still validates; `failed` when it no longer does.
+    pub state: RunState,
+    /// Why the record no longer validates, when it does not.
+    pub cause: Option<Cause>,
+    pub reason: Option<String>,
+    /// The run that recorded the check.
+    pub run: String,
+    /// True when the results are older than the source's latest import: a failed check never
+    /// replaces them, and a successful one is no fresher than the import it checked.
+    pub stale: bool,
+}
+
+/// What `replay_commitments` returns.
+#[derive(Clone, Debug, JsonSchema, Serialize)]
+pub struct Replayed {
+    /// The sources whose record was checked again, in the list's order.
+    pub sources: Vec<Rechecked>,
+    /// The sources that keep no record to check (nothing succeeded yet, or it was forgotten).
+    pub skipped: Vec<String>,
+}
+
 impl<S: Storage> Rastro<S> {
+    /// Checks again what each source recorded of its interpretation (the candidates it kept, the
+    /// spans they cite and the speaker mappings), with no model call: it takes neither the
+    /// adapter nor the content, so it works with the adapter gone and the file deleted. This is
+    /// also how the hypotheses are re-derived after a rebuild: a rebuild never asks a model again.
+    /// A record that no longer validates fails its check, keeps the last good results and marks
+    /// them stale; the sweep goes on with the next source.
+    ///
+    /// `source` narrows it to one source, which must exist and keep a record. Without it every
+    /// source is swept and the ones with no record are skipped.
+    pub fn replay_commitments(&mut self, source: Option<&str>) -> Result<Replayed> {
+        let listed = self.storage.snapshot(|view| view.commitment_sources(&[]))?;
+        let named = |s: &&Source| source.is_none_or(|name| s.name == name);
+        let targets: Vec<(SourceKind, String)> = listed
+            .iter()
+            .filter(named)
+            .map(|s| (s.kind, s.name.clone()))
+            .collect();
+        if let Some(name) = source {
+            anyhow::ensure!(!targets.is_empty(), "unknown source: {name}");
+        }
+        let mut replayed = Replayed {
+            sources: Vec::new(),
+            skipped: Vec::new(),
+        };
+        for (kind, name) in targets {
+            let checked = match kind {
+                SourceKind::Meeting => {
+                    let recorded = self
+                        .storage
+                        .snapshot(|view| view.meeting_recording(&name))?
+                        .is_some();
+                    if !recorded && source.is_none() {
+                        replayed.skipped.push(name);
+                        continue;
+                    }
+                    self.replay_meeting(&name)?
+                }
+            };
+            replayed.sources.push(Rechecked {
+                kind,
+                name,
+                state: checked.extraction.state,
+                cause: checked.extraction.cause,
+                reason: checked.extraction.reason,
+                run: checked.extraction.run.to_string(),
+                stale: checked.stale,
+            });
+        }
+        Ok(replayed)
+    }
+
     /// The same read as [`Reader::commitments`], on a writing open, over every scope.
     pub fn commitments(&mut self, source: Option<&str>, term: Option<&str>) -> Result<Commitments> {
         let sources = self.storage.snapshot(|view| view.commitment_sources(&[]))?;
