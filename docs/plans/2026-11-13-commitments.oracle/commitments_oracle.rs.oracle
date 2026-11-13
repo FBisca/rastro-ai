@@ -4,7 +4,7 @@
 //! Labels are read as JSON values, so the checks need no new Rust types.
 #![allow(non_snake_case)]
 mod support;
-use serde_json::{Value, json};
+use serde_json::{json, Value};
 use std::{
     fs,
     io::{BufRead, BufReader, Write},
@@ -107,7 +107,8 @@ impl Env {
             )
         });
         let schema: Value =
-            serde_json::from_str(include_str!("../../../schema/operations-v2.schema.json")).unwrap();
+            serde_json::from_str(include_str!("../../../schema/operations-v2.schema.json"))
+                .unwrap();
         jsonschema::validator_for(&schema)
             .unwrap()
             .validate(&value)
@@ -267,7 +268,12 @@ fn S1_the_list_shows_every_hypothesis_with_its_source_and_state() {
     env.candidates(&good());
     env.import_ok(
         "weekly-1",
-        &["--owner-speaker", "Alice", "--speaker", "Bob=rastro:name/Bob"],
+        &[
+            "--owner-speaker",
+            "Alice",
+            "--speaker",
+            "Bob=rastro:name/Bob",
+        ],
     );
 
     let list = env.list(&[]);
@@ -298,18 +304,33 @@ fn S1_the_list_shows_every_hypothesis_with_its_source_and_state() {
         "{promise}"
     );
     assert_eq!(promise["responsible"]["state"], "mapped", "{promise}");
-    assert_eq!(promise["responsible"]["identity"]["identifier"], me, "{promise}");
-    assert_eq!(promise["recipient"]["identity"]["identifier"], bob, "{promise}");
+    assert_eq!(
+        promise["responsible"]["identity"]["identifier"], me,
+        "{promise}"
+    );
+    assert_eq!(
+        promise["recipient"]["identity"]["identifier"], bob,
+        "{promise}"
+    );
     assert_eq!(promise["quote"]["turn"], 1, "{promise}");
     assert_eq!(promise["quote"]["speaker"], "Alice", "{promise}");
     assert!(promise["quote"]["start"].is_number(), "{promise}");
     assert!(promise["quote"]["end"].is_number(), "{promise}");
 
     // The other direction: Bob owes the owner, so the owner waits on him.
-    let waiting = hypothesis(source, "I'll review it next week for you if the numbers are final.");
+    let waiting = hypothesis(
+        source,
+        "I'll review it next week for you if the numbers are final.",
+    );
     assert_eq!(waiting["kind"], "waiting_on", "{waiting}");
-    assert_eq!(waiting["responsible"]["identity"]["identifier"], bob, "{waiting}");
-    assert_eq!(waiting["recipient"]["identity"]["identifier"], me, "{waiting}");
+    assert_eq!(
+        waiting["responsible"]["identity"]["identifier"], bob,
+        "{waiting}"
+    );
+    assert_eq!(
+        waiting["recipient"]["identity"]["identifier"], me,
+        "{waiting}"
+    );
 
     // An ask: no stated date, so none is read.
     let ask = hypothesis(source, "Bob, can you share the roadmap?");
@@ -333,11 +354,21 @@ fn S2_the_list_holds_every_source_and_the_filters_narrow_it() {
     env.candidates(&good());
     env.import_ok(
         "weekly-1",
-        &["--owner-speaker", "Alice", "--speaker", "Bob=rastro:name/Bob"],
+        &[
+            "--owner-speaker",
+            "Alice",
+            "--speaker",
+            "Bob=rastro:name/Bob",
+        ],
     );
     env.import_ok(
         "weekly-2",
-        &["--owner-speaker", "Alice", "--speaker", "Bob=rastro:name/Bob"],
+        &[
+            "--owner-speaker",
+            "Alice",
+            "--speaker",
+            "Bob=rastro:name/Bob",
+        ],
     );
 
     let all = env.list(&[]);
@@ -434,7 +465,12 @@ fn S5_every_hypothesis_carries_the_standard_terms_it_expresses() {
     env.candidates(&good());
     env.import_ok(
         "weekly-1",
-        &["--owner-speaker", "Alice", "--speaker", "Bob=rastro:name/Bob"],
+        &[
+            "--owner-speaker",
+            "Alice",
+            "--speaker",
+            "Bob=rastro:name/Bob",
+        ],
     );
 
     let list = env.list(&[]);
@@ -453,7 +489,10 @@ fn S5_every_hypothesis_carries_the_standard_terms_it_expresses() {
     assert_eq!(terms(ask), vec!["std:owed_to", "std:owes"], "{ask}");
 
     // A waiting-on waits, and is owed to.
-    let waiting = hypothesis(source, "I'll review it next week for you if the numbers are final.");
+    let waiting = hypothesis(
+        source,
+        "I'll review it next week for you if the numbers are final.",
+    );
     assert_eq!(
         terms(waiting),
         vec!["std:due", "std:owed_to", "std:waiting_on"],
@@ -502,10 +541,7 @@ fn S5_every_hypothesis_carries_the_standard_terms_it_expresses() {
             "counter_examples",
             "evidence_requirement",
         ] {
-            assert!(
-                entry.get(field).is_some(),
-                "{id} misses {field}: {entry:?}"
-            );
+            assert!(entry.get(field).is_some(), "{id} misses {field}: {entry:?}");
         }
     }
 }
@@ -525,7 +561,10 @@ fn S8_the_interpretation_is_recorded_replayed_without_a_model_and_never_exported
     let replayed = env.ok(&["meeting", "replay", "weekly-1"]);
     assert_eq!(replayed["hypotheses"], imported["hypotheses"]);
     assert_eq!(replayed["stale"], false, "{replayed}");
-    assert_eq!(replayed["extraction"]["replay_of"], imported["extraction"]["run"]);
+    assert_eq!(
+        replayed["extraction"]["replay_of"],
+        imported["extraction"]["run"]
+    );
 
     // A record that no longer validates fails the replay and leaves the results stale.
     let database = rusqlite::Connection::open(env.path("data/rastro.sqlite3")).unwrap();
