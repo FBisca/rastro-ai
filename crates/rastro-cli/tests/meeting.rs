@@ -1,8 +1,8 @@
 #![allow(non_snake_case)]
-//! Meeting commitments end to end: `rastro meeting import` runs the configured extractor over a
-//! speaker-labelled transcript, and `rastro meeting commitments` (and the MCP tool of the same
-//! name) show the cited hypotheses it proposed. The extractor here is a shell script that records
-//! the request it is sent and prints a canned response.
+//! Meeting commitments end to end: `rastro meeting import` calls the configured agent tool adapter
+//! over a speaker-labelled transcript, and `rastro meeting commitments` (and the MCP tool of the
+//! same name) show the cited hypotheses it proposed. The adapter here is a shell script that
+//! speaks the plugin protocol, records the request it is sent and prints a canned response.
 mod support;
 use serde_json::{Value, json};
 use std::{
@@ -21,6 +21,46 @@ Alice: Bob, can you share the roadmap?\n\
 Bob: Sure, I'll share the roadmap with you after the board meeting.\n\
 Alice: I'll update the plan.\n";
 
+const MANIFEST: &str = r#"id = "test-adapter"
+name = "Rastro test agent tool adapter"
+version = "0.1.0"
+author = "Rastro"
+kinds = ["agent-tool-adapter"]
+protocol = 1
+command = "adapter"
+agent_tool = { capabilities = ["judge_text"] }
+
+[permissions]
+submit = []
+scopes = []
+env = []
+actions = []
+"#;
+
+/// Answers the plugin protocol: saves each judgment request to `request.json` and answers with
+/// `response.json` as the result. `NOISE` is a command run first, such as one writing to stderr.
+fn adapter_script(noise: &str) -> String {
+    format!(
+        r#"#!/bin/sh
+{noise}
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+  case "$line" in
+    *'"method":"initialize"'*)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocol":"1.0","manifest_id":"test-adapter"}}}}\n' "$id"
+      ;;
+    *'"method":"judgment.request"'*)
+      printf '%s\n' "$line" > "$RASTRO_HOME/request.json"
+      printf '{{"jsonrpc":"2.0","id":%s,"result":' "$id"
+      cat "$RASTRO_HOME/response.json"
+      printf '}}\n'
+      ;;
+  esac
+done
+"#
+    )
+}
+
 fn candidate(
     turn: u32,
     responsible: Option<&str>,
@@ -29,7 +69,7 @@ fn candidate(
     date: Option<&str>,
     quote: &str,
 ) -> Value {
-    json!({"turn": turn, "responsible": responsible, "recipient": recipient,
+    json!({"turn": turn, "kind": "promise", "responsible": responsible, "recipient": recipient,
         "promise": promise, "stated_date": date, "quote": quote})
 }
 /// The three owner-involved promises of `TRANSCRIPT`, in both directions.
@@ -79,21 +119,28 @@ impl Env {
     fn path(&self, name: &str) -> PathBuf {
         self.home.path().join(name)
     }
-    /// Configures the extractor: a script that saves its request and prints `response.json`.
+    /// Installs the adapter: a plugin whose script saves its request and prints `response.json`.
     fn configure(&self) {
-        let script = self.path("extractor.sh");
-        fs::write(
-            &script,
-            "#!/bin/sh\ncat > \"$RASTRO_HOME/request.json\"\ncat \"$RASTRO_HOME/response.json\"\n",
-        )
-        .unwrap();
-        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
-        fs::create_dir_all(self.path("config")).unwrap();
+        fs::create_dir_all(self.path("config/plugins/test-adapter")).unwrap();
         fs::write(
             self.path("config/config.toml"),
-            format!("[meeting_extractor]\ncommand = {:?}\n", script),
+            "[commitment_adapter]\nplugin = \"test-adapter\"\n",
         )
         .unwrap();
+        fs::write(
+            self.path("config/plugins/test-adapter/rastro-plugin.toml"),
+            MANIFEST,
+        )
+        .unwrap();
+        self.script(&adapter_script(""));
+    }
+    fn script_path(&self) -> PathBuf {
+        self.path("config/plugins/test-adapter/adapter")
+    }
+    fn script(&self, text: &str) {
+        let script = self.script_path();
+        fs::write(&script, text).unwrap();
+        fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
     }
     fn extractor(&self, candidates: &[Value]) {
         fs::write(
@@ -161,8 +208,11 @@ impl Env {
     fn read(&self) -> Value {
         self.ok(&["meeting", "commitments", "weekly-1"])
     }
+    /// The params of the judgment request the adapter was sent.
     fn request(&self) -> Value {
-        serde_json::from_slice(&fs::read(self.path("request.json")).unwrap()).unwrap()
+        let message: Value =
+            serde_json::from_slice(&fs::read(self.path("request.json")).unwrap()).unwrap();
+        message["params"].clone()
     }
     fn mcp(&self, scopes: &[&str], tool: &str, arguments: Value) -> Value {
         let mut command = self.command(&["mcp"]);
@@ -596,26 +646,19 @@ fn S9_mapped_speakers_use_the_existing_identity_and_unmapped_ones_stay_unknown()
     );
 }
 
-/// An extractor that writes far more than the kept 2 KiB to stderr is not killed by a closed
-/// pipe: its valid response is used, and a failing one's reason stays bounded.
+/// An adapter that writes far more to stderr is not killed by a closed pipe: its valid
+/// response is used, and a failing one's reason stays bounded.
 #[test]
 fn S1_an_extractor_that_is_chatty_on_stderr_still_succeeds() {
     let env = Env::new();
-    let script = env.path("extractor.sh");
-    fs::write(
-        &script,
-        "#!/bin/sh\ncat > \"$RASTRO_HOME/request.json\"\nhead -c 10240 /dev/zero | tr '\\0' 'x' >&2\ncat \"$RASTRO_HOME/response.json\"\n",
-    )
-    .unwrap();
+    env.script(&adapter_script(
+        "head -c 10240 /dev/zero | tr '\\0' 'x' >&2",
+    ));
     let result = env.import_ok(&["--owner-speaker", "Alice"]);
     assert_eq!(result["extraction"]["state"], "succeeded");
     assert_eq!(result["hypotheses"].as_array().unwrap().len(), 3);
 
-    fs::write(
-        &script,
-        "#!/bin/sh\ncat > /dev/null\nhead -c 10240 /dev/zero | tr '\\0' 'x' >&2\nexit 3\n",
-    )
-    .unwrap();
+    env.script("#!/bin/sh\nhead -c 10240 /dev/zero | tr '\\0' 'x' >&2\nexit 3\n");
     let (ok, failed) = env.import(&["--owner-speaker", "Alice"]);
     assert!(!ok);
     assert_eq!(failed["extraction"]["cause"], "extractor_failed");
@@ -770,7 +813,7 @@ fn S6_replay_needs_no_model_call_and_forgetting_removes_what_was_retained() {
     assert!(holds(&stored_bytes(&env), "I'll update the Q4 plan."));
 
     // The extractor is gone, and nothing may be sent to it.
-    fs::remove_file(env.path("extractor.sh")).unwrap();
+    fs::remove_file(env.script_path()).unwrap();
     fs::remove_file(env.path("request.json")).unwrap();
     let replayed = env.ok(&["meeting", "replay", "weekly-1"]);
     assert!(!env.path("request.json").exists());

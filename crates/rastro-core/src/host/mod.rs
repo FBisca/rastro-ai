@@ -23,8 +23,10 @@ use std::{
 
 mod extract;
 mod io;
+mod judge;
 pub use extract::extract;
 pub(crate) use extract::vocabulary;
+pub use judge::{JudgmentFailure, MAX_RESPONSE_BYTES, judge};
 
 /// Queues one progress line for stderr. The printer drops it when its queue is full and
 /// ignores a stderr that fails, so this never blocks and never fails.

@@ -1,0 +1,18 @@
+id = "rastro-adapter-claude-code"
+name = "Rastro Claude Code adapter"
+version = "0.1.0"
+author = "Rastro"
+# It lets Claude Code do the judgment. The declaration names capabilities, never a tool.
+kinds = ["agent-tool-adapter"]
+protocol = 1
+command = "rastro-adapter-claude-code"
+triggers = []
+dependencies = []
+agent_tool = { capabilities = ["judge_text"] }
+
+[permissions]
+submit = []
+scopes = []
+# Claude Code signs in through the owner's home directory; these only reach it when set.
+env = ["RASTRO_CLAUDE_COMMAND", "RASTRO_CLAUDE_MODEL", "ANTHROPIC_API_KEY", "CLAUDE_CONFIG_DIR"]
+actions = []

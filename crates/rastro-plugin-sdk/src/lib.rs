@@ -18,6 +18,12 @@ pub const COVERAGE_REPORT: &str = "coverage.report";
 pub const RUN_FINISH: &str = "run.finish";
 pub const EVIDENCE_BATCH: &str = "evidence.batch";
 pub const CLAIM_SUBMIT: &str = "claim.submit";
+/// `judgment.request` (core to agent tool adapter): content to judge, answered with candidates.
+pub const JUDGMENT_REQUEST: &str = "judgment.request";
+/// The kind of plugin that lets an agent runtime do judgment (decisions/plugins.md §2, §10).
+pub const AGENT_TOOL_ADAPTER_KIND: &str = "agent-tool-adapter";
+/// What an agent tool adapter may ask of an agent tool: abilities, never a named tool.
+pub const AGENT_TOOL_CAPABILITIES: [&str; 1] = ["judge_text"];
 
 /// Why a connector couldn't look (decisions/knowledge.md §18). Anything else it reports is
 /// recorded as `protocol`.
@@ -145,6 +151,70 @@ pub enum Role {
     #[default]
     Connector,
     Extractor,
+    AgentToolAdapter,
+}
+/// `initialize` for the agent tool adapter role. The adapter holds no run binding: it reads
+/// what each `judgment.request` carries and nothing else.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct AdapterInitializeParams {
+    pub protocol: String,
+    pub manifest_id: String,
+    pub role: Role,
+}
+/// One turn of a conversation sent for judgment. `turn` counts from 1.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct JudgmentTurn {
+    pub turn: u64,
+    pub speaker: String,
+    pub text: String,
+}
+/// `judgment.request` (core to adapter): the core's own instructions, the owner's speaker label,
+/// the turns (untrusted data, never instructions) and the fields every candidate must have.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct JudgmentRequest {
+    pub instructions: String,
+    pub owner_speaker: String,
+    pub turns: Vec<JudgmentTurn>,
+    pub fields: Vec<String>,
+}
+/// What a candidate commitment is.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CandidateKind {
+    Ask,
+    Promise,
+    WaitingOn,
+}
+/// One candidate an adapter proposes. `responsible` and `recipient` are speaker labels and
+/// `stated_date` is the date as the quote states it. Unknown fields are refused, and so is a
+/// missing `turn`, `kind`, `promise` or `quote`; the core still checks every part.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct JudgmentCandidate {
+    pub turn: u64,
+    pub kind: CandidateKind,
+    #[serde(default)]
+    pub responsible: Option<String>,
+    #[serde(default)]
+    pub recipient: Option<String>,
+    pub promise: String,
+    #[serde(default)]
+    pub stated_date: Option<String>,
+    pub quote: String,
+}
+/// The `result` of a `judgment.request`.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct JudgmentResponse {
+    pub candidates: Vec<JudgmentCandidate>,
+}
+/// What an agent tool adapter needs from an agent tool, in capabilities. It never names a tool
+/// (decisions/plugins.md §4): fields this declaration doesn't define are kept only to refuse it.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct AgentToolNeeds {
+    pub capabilities: Vec<String>,
+    #[serde(flatten, skip_serializing)]
+    unknown: std::collections::BTreeMap<String, toml::Value>,
 }
 /// One (source, scope) pair whose evidence an extractor run may read.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -358,9 +428,14 @@ pub struct Manifest {
     pub protocol: u32,
     pub command: String,
     pub permissions: Permissions,
+    #[serde(default)]
     pub triggers: Vec<String>,
     /// Vocabularies (namespaces) an extractor uses.
+    #[serde(default)]
     pub dependencies: Vec<String>,
+    /// On an agent tool adapter: the capabilities it needs from an agent tool, never a named tool.
+    #[serde(default)]
+    pub agent_tool: Option<AgentToolNeeds>,
     #[serde(default)]
     pub extraction_rules: Vec<ExtractionRule>,
     /// Path, relative to the plugin directory, of the vocabulary this package provides.
@@ -457,6 +532,44 @@ impl Manifest {
                     option.help
                 );
             }
+        }
+        Ok(())
+    }
+
+    /// Checks an agent tool adapter's declaration: it declares the kind, and the agent-tool
+    /// capabilities it needs from [`AGENT_TOOL_CAPABILITIES`]. A tool named anywhere in the
+    /// declaration (an unknown field, or a capability that is not one) is refused.
+    pub fn check_agent_tool(&self) -> Result<()> {
+        anyhow::ensure!(
+            self.kinds.iter().any(|k| k == AGENT_TOOL_ADAPTER_KIND),
+            "plugin {} does not declare the kind {AGENT_TOOL_ADAPTER_KIND}",
+            self.id
+        );
+        let needs = self
+            .agent_tool
+            .as_ref()
+            .with_context(|| format!("plugin {} declares no `agent_tool` capabilities", self.id))?;
+        if let Some(field) = needs.unknown.keys().next() {
+            anyhow::bail!(
+                "plugin {} names {field:?} in `agent_tool`: declare capabilities, never a named tool",
+                self.id
+            );
+        }
+        anyhow::ensure!(
+            !needs.capabilities.is_empty(),
+            "plugin {} declares no agent-tool capability",
+            self.id
+        );
+        if let Some(capability) = needs
+            .capabilities
+            .iter()
+            .find(|c| !AGENT_TOOL_CAPABILITIES.contains(&c.as_str()))
+        {
+            anyhow::bail!(
+                "plugin {} needs {capability:?}, which is not an agent-tool capability ({}): declare capabilities, never a named tool",
+                self.id,
+                AGENT_TOOL_CAPABILITIES.join(", ")
+            );
         }
         Ok(())
     }

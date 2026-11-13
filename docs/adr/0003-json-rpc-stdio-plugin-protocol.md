@@ -25,3 +25,5 @@ Amended 2026-11-04: a crashed run is marked `interrupted` at the next writing op
 - **Bare NDJSON with no RPC envelope:** simpler, but it has no request/response pairing for the handshake and the finish.
 
 Amended 2026-11-04 by ADR 0008: `initialize` may name an extractor role (absent means connector). An extractor receives `evidence.batch` from the core (the last one marked) and sends `claim.submit`; `run.finish` carries claim counts. Protocol stays 1.x, additive. Status stays accepted.
+
+Amended 2026-11-13 by ADR 0012: `initialize` may name the role `agent_tool_adapter`, which holds no run binding; the core sends one `judgment.request` and reads one response. Protocol stays 1.x, additive. Status stays accepted.

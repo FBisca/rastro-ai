@@ -54,8 +54,9 @@ The core's own language. Code, docs, plugins and the interface all use these wor
 | **Interruption level** | How much an item may break the owner's focus: 0 silent, 1 ambient, 2 nudge, 3 notify, 4 interrupt | Level |
 | **Operation** | A named read or write the core offers, defined once in the catalog and exposed on one or more surfaces. "MCP tool" is only the protocol's name for an exposed operation | Agent tool |
 | **Agent tool** | Any runtime that does judgment: Claude Code, Codex, a local model… | Operation, MCP tool |
+| **Agent tool adapter** | A plugin of kind `agent-tool-adapter` that lets an agent tool do judgment over content the core sends it, and answers with candidates the core validates. Its manifest declares the capabilities it needs, never a named tool | Agent tool: the runtime itself; Extractor |
 | **Meeting** | One imported speaker-labelled transcript, named by an identifier the owner chooses, in one scope. Its text is untrusted content | Source: a meeting is not synced |
-| **Commitment hypothesis** | A promise involving the owner that an extractor proposed from a meeting, with its exact quote. Kept outside the claims projection; never says whether the commitment is open, done or tracked | Claim with status `hypothesis` |
+| **Commitment hypothesis** | A promise involving the owner that an agent tool adapter proposed from a meeting, with its exact quote. Kept outside the claims projection; never says whether the commitment is open, done or tracked | Claim with status `hypothesis` |
 | **Recorded output** | The candidates a meeting extraction kept, as the extractor proposed them, recorded so a replay checks them again with no model call. Only the latest good run keeps them; never exported | Claim: it is what the extractor proposed, not a claim |
 | **Supporting span** | A transcript turn a commitment hypothesis cites, kept with its text so replay can check its quote; the turns beside it keep only their speaker. Forgotten with the meeting | Evidence: kept for replay, not in the evidence store |
 | **Quarantine** | A plugin that reads untrusted content can't hold action permissions | |
