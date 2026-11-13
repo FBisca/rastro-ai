@@ -1,0 +1,78 @@
+schema: plan/1
+slug: meeting-commitments
+goal: Let the owner inspect cited hypotheses about commitments involving them from a supplied meeting transcript.
+spec: docs/specs/meetings.md
+outcome: [S1, S2, S3, S4, S5, S6, S7, S8, S9]
+scenarios:
+  - id: S1
+    when: A user imports a speaker-labelled transcript for one meeting with an identifier, capture time, explicit owner mapping and configured extractor.
+    then: CLI and agent-facing reads show owner-involved commitment hypotheses in both directions with responsible person, recipient, promise, stated date and exact supporting quote, marking unclear fields unknown.
+    evidence:
+      human: Run the documented CLI and agent-facing flow on a reviewed real meeting; compare every result and omission against the expected list and inspect both surfaces.
+  - id: S2
+    when: The owner is unmapped, the extractor is unconfigured, or a source read fails.
+    then: Extraction does not claim success and the user sees the cause and incomplete coverage.
+    evidence:
+      human: Exercise each failure through the public interface and confirm the reported cause and incomplete coverage.
+  - id: S3
+    when: A proposed candidate has no owner involvement supported by the transcript, or has an unverifiable or noncontiguous quote.
+    then: An unsupported owner relationship is excluded and an invalid quote fails the entire run without replacing last-good results.
+    evidence:
+      human: Exercise each case through the public interface and inspect the failure and retained results.
+  - id: S4
+    when: A transcript contains relative dates, conditional promises, ambiguous speakers, repeated promises, or embedded instructions.
+    then: Dates remain as stated, conditions remain in promises, unresolved people remain unknown, uncertain repeats remain separate, and transcript instructions do not control extraction.
+    evidence:
+      human: Inspect public results for each case against the source and verify the extractor treats instructions as data.
+  - id: S5
+    when: A meeting is re-imported with changed text and extraction fails or succeeds.
+    then: Last-good results remain marked stale on failure and are replaced by the successful new execution on success, without duplicating the meeting.
+    evidence:
+      human: Re-import changed text, force a failure and then a success, and inspect identity, staleness and results.
+  - id: S6
+    when: Recorded output is replayed or the meeting is forgotten.
+    then: Replay requires no model call and forgetting removes retained spans and recorded output for the meeting.
+    evidence:
+      human: Replay with the extractor unavailable, then forget the meeting and inspect retained data and subsequent reads.
+  - id: S7
+    when: A meeting is imported without full-transcript retention opt-in.
+    then: Supporting spans and recorded output are retained for replay, while the full transcript is not retained, and exports omit recorded model output.
+    evidence:
+      human: Inspect persisted data and an export after default import, then verify opt-in retains the transcript.
+  - id: S8
+    when: Results are read for a meeting.
+    then: The surface labels them hypotheses and reports extraction and coverage state without asserting completion or tracking status.
+    evidence:
+      human: Inspect CLI and agent-facing results for successful, stale, failed and incomplete cases.
+  - id: S9
+    when: A speaker label is explicitly mapped or left unmapped.
+    then: The mapped existing identity is used and an unmapped person remains unknown without name-based identity inference.
+    evidence:
+      human: Compare results for mapped, unmapped and same-name speakers against their explicit mappings.
+tickets:
+  - id: T1
+    delivers: Import a meeting and expose cited owner-involved commitment hypotheses on CLI and agent-facing reads.
+    satisfies: [S1, S2, S3, S4, S8, S9]
+    paths: [crates/, docs/specs/, docs/decisions/, docs/adr/, docs/GLOSSARY.md, docs/open-questions.md, schema/operations-v2.schema.json]
+    size: regular
+    difficulty: complex
+    risk: [security, external, state, migration]
+  - id: T2
+    delivers: Re-extract, replay, retain and forget meeting results with honest stale state.
+    satisfies: [S5, S6, S7]
+    blocked_by: [T1]
+    paths: [crates/, docs/specs/, docs/decisions/, docs/adr/, docs/open-questions.md, schema/operations-v2.schema.json]
+    size: regular
+    difficulty: complex
+    risk: [retry-idempotency, state, migration, security]
+  - id: T3
+    delivers: Review extraction against one real meeting and record discrepancies.
+    satisfies: [S1]
+    blocked_by: [T2]
+    paths: [docs/specs/]
+    owner: Felippe
+approval:
+  by: felippe.bisca@gmail.com
+  at: '2026-11-13T15:56:15.063811+00:00'
+  base: 08d3bc46d2fac2b2b05b6e72a879de2fe843c714
+  digest: 469930acb9f0264c4bac23f9288f06d125e1b6ade79fda95eb6a4bc4a112a482
