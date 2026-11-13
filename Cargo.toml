@@ -1,5 +1,5 @@
 [workspace]
-members = ["crates/rastro-plugin-sdk", "crates/rastro-test-connector", "crates/rastro-test-extractor", "crates/rastro-extractor-github", "crates/rastro-core", "crates/rastro-storage-sqlite", "crates/rastro-cli", "crates/rastro-connector-github", "crates/rastro-operations", "crates/rastro-connector-linear", "crates/rastro-extractor-linear", "crates/rastro-adapter-claude-code"]
+members = ["crates/rastro-plugin-sdk", "crates/rastro-test-connector", "crates/rastro-test-extractor", "crates/rastro-extractor-github", "crates/rastro-core", "crates/rastro-storage-sqlite", "crates/rastro-cli", "crates/rastro-connector-github", "crates/rastro-operations", "crates/rastro-connector-linear", "crates/rastro-extractor-linear"]
 resolver = "3"
 
 [workspace.package]

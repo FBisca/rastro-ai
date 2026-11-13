@@ -1119,16 +1119,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
-name = "rastro-adapter-claude-code"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "rastro-plugin-sdk",
- "serde_json",
- "tempfile",
-]
-
-[[package]]
 name = "rastro-cli"
 version = "0.1.0"
 dependencies = [

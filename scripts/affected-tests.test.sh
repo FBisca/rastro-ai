@@ -21,7 +21,7 @@ expect "rastro-cli" crates/rastro-cli/src/main.rs
 # A core crate selects itself and every transitive dependent.
 expect "rastro-cli rastro-core rastro-operations rastro-storage-sqlite" crates/rastro-core/src/lib.rs
 # A crate several others build on, reached through a directory path.
-expect "rastro-adapter-claude-code rastro-cli rastro-connector-github rastro-connector-linear rastro-core rastro-extractor-github rastro-extractor-linear rastro-operations rastro-plugin-sdk rastro-storage-sqlite rastro-test-connector rastro-test-extractor" crates/rastro-plugin-sdk/
+expect "rastro-cli rastro-connector-github rastro-connector-linear rastro-core rastro-extractor-github rastro-extractor-linear rastro-operations rastro-plugin-sdk rastro-storage-sqlite rastro-test-connector rastro-test-extractor" crates/rastro-plugin-sdk/
 # Two paths union their sets.
 expect "rastro-cli rastro-connector-linear" crates/rastro-cli/src/a.rs crates/rastro-connector-linear
 # Global files select the whole workspace.
