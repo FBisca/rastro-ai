@@ -1004,3 +1004,117 @@ fn S5_replay_after_a_failed_reimport_keeps_the_results_stale() {
     assert_eq!(second["stale"], false);
     assert_eq!(env.ok(&["meeting", "replay", "weekly-1"])["stale"], false);
 }
+
+/// An import of `meeting` in `scope`, which must succeed.
+fn import_as(env: &Env, meeting: &str, scope: &str) {
+    let transcript = env.path("transcript.txt");
+    let (ok, value) = env.run(&[
+        "meeting",
+        "import",
+        transcript.to_str().unwrap(),
+        "--meeting",
+        meeting,
+        "--scope",
+        scope,
+        "--captured-at",
+        "2026-11-10T10:00:00Z",
+        "--owner-speaker",
+        "Alice",
+    ]);
+    assert!(ok, "{value}");
+}
+
+/// commitments/S3: a term filter keeps a source whose last run failed, with its gap and the
+/// matching hypotheses of its last good run; a healthy source with no match is not listed.
+#[test]
+fn S3_a_commitments_term_filter_keeps_a_source_whose_run_failed() {
+    let env = Env::new();
+    let mut waiting = good();
+    waiting[1]["kind"] = json!("waiting_on");
+    env.extractor(&waiting);
+    env.import_ok(&["--owner-speaker", "Alice"]);
+    fs::write(env.path("response.json"), "not json").unwrap();
+    let (ok, _) = env.import(&["--owner-speaker", "Alice"]);
+    assert!(!ok);
+
+    let list = env.ok(&["commitments", "--term", "std:waiting_on"]);
+    let sources = list["sources"].as_array().unwrap();
+    assert_eq!(sources.len(), 1, "{list}");
+    let source = &sources[0];
+    assert_eq!(source["extraction"]["state"], "failed", "{source}");
+    assert_eq!(source["coverage"]["state"], "couldn't look", "{source}");
+    assert_eq!(source["stale"], true, "{source}");
+    let hypotheses = source["hypotheses"].as_array().unwrap();
+    assert_eq!(hypotheses.len(), 1, "{source}");
+    assert_eq!(hypotheses[0]["kind"], "waiting_on", "{source}");
+
+    env.extractor(&[]);
+    import_as(&env, "quiet-1", "work");
+    let list = env.ok(&["commitments", "--term", "std:waiting_on"]);
+    assert_eq!(list["sources"].as_array().unwrap().len(), 1, "{list}");
+}
+
+/// commitments/S4: each scope's sources reach only a server that holds that scope.
+#[test]
+fn S4_the_commitments_list_shows_each_scope_only_to_a_server_that_holds_it() {
+    let env = Env::new();
+    import_as(&env, "work-1", "work");
+    import_as(&env, "home-1", "personal");
+    assert_eq!(
+        env.ok(&["commitments"])["sources"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    for (scope, name) in [("work", "work-1"), ("personal", "home-1")] {
+        let shown = env.mcp(&[scope], "commitments", json!({}));
+        let sources = shown["structuredContent"]["result"]["sources"]
+            .as_array()
+            .unwrap();
+        assert_eq!(sources.len(), 1, "{shown}");
+        assert_eq!(sources[0]["name"], name, "{shown}");
+    }
+}
+
+/// commitments/S1: a hypothesis keeps the kind the adapter proposed, through a replay; one with
+/// no recorded kind reads as a promise.
+#[test]
+fn S1_a_commitments_hypothesis_keeps_its_kind_and_defaults_to_a_promise() {
+    let env = Env::new();
+    let mut kinds = good();
+    kinds[0]["kind"] = json!("ask");
+    kinds[1]["kind"] = json!("waiting_on");
+    env.extractor(&kinds);
+    env.import_ok(&["--owner-speaker", "Alice"]);
+    let kind_of = |list: &Value| -> Vec<String> {
+        list["sources"][0]["hypotheses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["kind"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(
+        kind_of(&env.ok(&["commitments"])),
+        ["ask", "waiting_on", "promise"]
+    );
+    env.ok(&["meeting", "replay", "weekly-1"]);
+    assert_eq!(
+        kind_of(&env.ok(&["commitments"])),
+        ["ask", "waiting_on", "promise"]
+    );
+
+    // Output recorded before adapters proposed kinds has none.
+    let database = rusqlite::Connection::open(env.path("data/rastro.sqlite3")).unwrap();
+    database
+        .execute(
+            "UPDATE meeting_output SET candidates = replace(candidates, '\"kind\":', '\"old\":')",
+            [],
+        )
+        .unwrap();
+    assert_eq!(
+        kind_of(&env.ok(&["commitments"])),
+        ["promise", "promise", "promise"]
+    );
+}

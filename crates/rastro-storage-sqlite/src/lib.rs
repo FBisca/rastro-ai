@@ -30,7 +30,7 @@ pub use scoped::{cache_len as scoped_cache_len, clear_cache as clear_scoped_cach
 /// The migration recording when an intent's contribution ended; an open that applies it replays
 /// the stored intents once all migrations are in.
 const INTENT_END: &str = "202611081000_intent_justification_end";
-const MIGRATIONS: [(&str, &str); 16] = [
+const MIGRATIONS: [(&str, &str); 15] = [
     (
         "202611041200_initial",
         include_str!("../migrations/202611041200_initial.sql"),
@@ -90,10 +90,6 @@ const MIGRATIONS: [(&str, &str); 16] = [
     (
         "202611131100_meeting_retention",
         include_str!("../migrations/202611131100_meeting_retention.sql"),
-    ),
-    (
-        "202611131200_meeting_hypothesis_kind",
-        include_str!("../migrations/202611131200_meeting_hypothesis_kind.sql"),
     ),
 ];
 

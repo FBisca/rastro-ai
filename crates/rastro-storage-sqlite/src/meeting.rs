@@ -98,13 +98,18 @@ pub(crate) fn load(view: &View, meeting: &str, scopes: &[Scope]) -> Result<Optio
             .prepare(
                 "SELECT responsible_label, responsible_entity, responsible_identifier,
                         recipient_label, recipient_entity, recipient_identifier,
-                        promise, stated_date, turn, speaker, quote, quote_start, quote_end, kind
-                 FROM meeting_hypothesis WHERE run_id = ?1 ORDER BY ordinal",
+                        promise, stated_date, turn, speaker, quote, quote_start, quote_end,
+                        (SELECT json_extract(o.candidates, '$[' || h.ordinal || '].kind')
+                         FROM meeting_output o WHERE o.run_id = h.run_id)
+                 FROM meeting_hypothesis h WHERE h.run_id = ?1 ORDER BY h.ordinal",
             )?
             .query_map([good], |r| {
                 Ok(Hypothesis {
                     status: "hypothesis".into(),
-                    kind: Kind::parse(&r.get::<_, String>(13)?).unwrap_or(Kind::Promise),
+                    kind: r
+                        .get::<_, Option<String>>(13)?
+                        .and_then(|kind| Kind::parse(&kind))
+                        .unwrap_or(Kind::Promise),
                     responsible: party(r.get(0)?, r.get(1)?, r.get(2)?),
                     recipient: party(r.get(3)?, r.get(4)?, r.get(5)?),
                     promise: r.get(6)?,
@@ -382,8 +387,7 @@ pub(crate) fn record(connection: &mut Connection, run: &RunRecord) -> Result<i64
                 "INSERT INTO meeting_hypothesis (run_id, ordinal, responsible_label,
                  responsible_entity, responsible_identifier, recipient_label, recipient_entity,
                  recipient_identifier, promise, stated_date, turn, speaker, quote, quote_start,
-                 quote_end, kind)
-                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
+                 quote_end) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
                 params![
                     run_id,
                     ordinal as i64,
@@ -399,8 +403,7 @@ pub(crate) fn record(connection: &mut Connection, run: &RunRecord) -> Result<i64
                     h.quote.speaker,
                     h.quote.text,
                     h.quote.start as i64,
-                    h.quote.end as i64,
-                    h.kind.as_str()
+                    h.quote.end as i64
                 ],
             )?;
         }
