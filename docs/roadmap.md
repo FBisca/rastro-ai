@@ -19,7 +19,7 @@ Status: `todo` · `planning` · `doing` · `done`
 
 | # | Slice | Outcome: from here on you can… | Builds on | Concept / decisions | Status |
 |---|---|---|---|---|---|
-| 5 | **Commitments from conversations** | See commitments (asks, promises, dates, waiting-on) pulled from unstructured sources as hypotheses, each with its quoted span. Uses an agent tool adapter and a minimal standard vocabulary | 4 | knowledge §6, §13; vocabulary §1, §5; plugins §2, §10 | doing (`plans/2026-11-13-meeting-commitments.plan.yaml`, spec `specs/meetings.md`) |
+| 5 | **Commitments from conversations** | See commitments (asks, promises, dates, waiting-on) pulled from unstructured sources as hypotheses, each with its quoted span. Uses an agent tool adapter and a minimal standard vocabulary | 4 | knowledge §6, §13; vocabulary §1, §5; plugins §2, §10 | todo |
 | 6 | **The commitments queue** | Work a terminal queue of proposals and questions, checked against what's known first: accept, edit, reject, answer, `missed`. Outcomes are recorded, and the renderer reports what it showed | 5 | renderers §1–2, §6; learning §2–3, §11 | todo |
 | 7 | **Correct anything** | Confirm, fix or retract any claim; a retraction carries through to derived claims and pending proposals; "as of" queries | 6 | knowledge §7, §10; renderers §5 | todo |
 
