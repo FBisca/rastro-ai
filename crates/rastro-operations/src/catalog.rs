@@ -384,6 +384,11 @@ impl OperationSpec {
     pub fn decode(&self, arguments: Value) -> serde_json::Result<Request> {
         (self.decode)(arguments)
     }
+    /// The name an MCP client sees: the operation name with dots turned into underscores, because
+    /// tool-calling APIs only accept letters, digits, `_` and `-`.
+    pub fn mcp_name(&self) -> String {
+        self.name.replace('.', "_")
+    }
     pub fn exposed_on(&self, surface: Surface) -> bool {
         self.surfaces.contains(&surface)
     }

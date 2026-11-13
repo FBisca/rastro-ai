@@ -279,13 +279,13 @@ fn listed_tools_equal_the_catalog_entries() {
     for name in ["search", "coverage", "about", "why"] {
         let spec = catalog::find(name).unwrap();
         let listed = tool(&tools, name);
-        assert_eq!(listed["name"], spec.name);
+        assert_eq!(listed["name"], spec.mcp_name());
         assert_eq!(listed["description"], spec.description());
         assert_eq!(listed["inputSchema"], spec.input_schema());
     }
 }
 
-/// surfaces/R4: exactly search, coverage, about and why, read-only; any other tool is a JSON-RPC error and runs nothing
+/// surfaces/R4: exactly search, coverage, about, why and meeting_commitments, read-only; any other tool is a JSON-RPC error and runs nothing
 #[test]
 fn exactly_five_read_only_tools_and_writes_are_protocol_errors() {
     let env = seeded();
@@ -298,7 +298,7 @@ fn exactly_five_read_only_tools_and_writes_are_protocol_errors() {
     names.sort();
     assert_eq!(
         names,
-        ["about", "coverage", "meeting.commitments", "search", "why"]
+        ["about", "coverage", "meeting_commitments", "search", "why"]
     );
     for t in &tools {
         assert_eq!(t["annotations"]["readOnlyHint"], true, "{t}");

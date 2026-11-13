@@ -243,6 +243,11 @@
           "const": "invalid_quote",
           "description": "A proposed quote is not an exact contiguous piece of the turn it names.",
           "type": "string"
+        },
+        {
+          "const": "storage_failed",
+          "description": "Storage failed while the people were being resolved.",
+          "type": "string"
         }
       ]
     },
@@ -3591,6 +3596,7 @@
         "title": "MeetingCommitmentsRequest",
         "type": "object"
       },
+      "mcp_tool": "meeting_commitments",
       "name": "meeting.commitments",
       "result": {
         "additionalProperties": false,

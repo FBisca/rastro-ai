@@ -29,6 +29,8 @@ const INSTRUCTIONS: &str = "Find promises in `turns` that involve the owner (`ow
 pub const MAX_TRANSCRIPT_BYTES: u64 = 4 * 1024 * 1024;
 /// The most output the core reads from an extractor.
 const MAX_OUTPUT_BYTES: u64 = 4 * 1024 * 1024;
+/// How much of an extractor's stderr is kept as the reason for a failure.
+const STDERR_KEPT_BYTES: usize = 2048;
 /// How long an extractor may run unless its configuration says otherwise.
 pub const DEFAULT_TIMEOUT_SECONDS: u64 = 120;
 
@@ -75,6 +77,8 @@ pub enum Cause {
     ExtractorOutputInvalid,
     /// A proposed quote is not an exact contiguous piece of the turn it names.
     InvalidQuote,
+    /// Storage failed while the people were being resolved.
+    StorageFailed,
 }
 impl Cause {
     pub fn as_str(self) -> &'static str {
@@ -88,6 +92,7 @@ impl Cause {
             Self::ExtractorFailed => "extractor_failed",
             Self::ExtractorOutputInvalid => "extractor_output_invalid",
             Self::InvalidQuote => "invalid_quote",
+            Self::StorageFailed => "storage_failed",
         }
     }
     pub fn parse(text: &str) -> Option<Self> {
@@ -101,6 +106,7 @@ impl Cause {
             Self::ExtractorFailed,
             Self::ExtractorOutputInvalid,
             Self::InvalidQuote,
+            Self::StorageFailed,
         ]
         .into_iter()
         .find(|c| c.as_str() == text)
@@ -452,11 +458,20 @@ fn run_extractor(config: &MeetingExtractor, request: &[u8]) -> Result<Vec<Candid
         let _ = stdout.read_to_end(&mut out);
         out
     });
-    let mut stderr = child.stderr.take().expect("piped").take(2048);
+    // Drain stderr to EOF so a chatty extractor is never killed by a closed pipe;
+    // only the first bytes are kept as the reason.
+    let mut stderr = child.stderr.take().expect("piped");
     let errors = std::thread::spawn(move || {
-        let mut out = Vec::new();
-        let _ = stderr.read_to_end(&mut out);
-        out
+        let mut kept = Vec::new();
+        let mut chunk = [0u8; 4096];
+        while let Ok(read) = stderr.read(&mut chunk) {
+            if read == 0 {
+                break;
+            }
+            let room = STDERR_KEPT_BYTES.saturating_sub(kept.len());
+            kept.extend_from_slice(&chunk[..read.min(room)]);
+        }
+        kept
     });
     let started = Instant::now();
     let status = loop {
@@ -539,6 +554,32 @@ impl People {
     }
 }
 
+/// Whether `text` names `label`: a whole-word, case-insensitive match.
+fn names(text: &str, label: &str) -> bool {
+    let (text, label) = (text.to_lowercase(), label.trim().to_lowercase());
+    if label.is_empty() {
+        return false;
+    }
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    text.match_indices(&label).any(|(start, found)| {
+        !text[..start].chars().next_back().is_some_and(word)
+            && !text[start + found.len()..].chars().next().is_some_and(word)
+    })
+}
+
+/// Whether `text` speaks to its listener in the second person.
+fn addresses_listener(text: &str) -> bool {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric() && c != '\'' && c != '\u{2019}')
+        .any(|word| {
+            let word = word.replace('\u{2019}', "'");
+            matches!(
+                word.as_str(),
+                "you" | "your" | "yours" | "yourself" | "you'll" | "you're" | "you've" | "you'd"
+            )
+        })
+}
+
 /// Checks the candidates against the transcript. A quote that is not an exact piece of the turn
 /// it names fails the run; a candidate whose owner involvement the transcript does not support
 /// is left out and counted.
@@ -587,17 +628,25 @@ fn validate(
         }
         let (responsible, recipient) = (side(&candidate.responsible), side(&candidate.recipient));
         let owner = people.owner.as_str();
-        // The owner is the responsible person or the recipient, and the quoted turn is the
-        // owner's or the other party's: a third speaker's words cannot support the owner's part.
-        let other = if responsible == Some(owner) {
-            recipient
-        } else if recipient == Some(owner) {
-            responsible
-        } else {
-            excluded += 1;
-            continue;
+        // The transcript, not the extractor's labels, has to support the owner's side.
+        let position = candidate.turn - 1;
+        let owner_turn = |at: Option<usize>| {
+            at.and_then(|at| turns.get(at))
+                .is_some_and(|t| t.speaker == owner)
         };
-        if turn.speaker != owner && Some(turn.speaker.as_str()) != other {
+        let in_owner_turn = turn.speaker == owner;
+        let names_owner = names(&candidate.quote, owner);
+        let supported = if responsible == Some(owner) {
+            in_owner_turn || names_owner
+        } else if recipient == Some(owner) {
+            in_owner_turn
+                || names_owner
+                || (addresses_listener(&candidate.quote)
+                    && (owner_turn(position.checked_sub(1)) || owner_turn(Some(position + 1))))
+        } else {
+            false
+        };
+        if !supported {
             excluded += 1;
             continue;
         }
@@ -692,7 +741,7 @@ fn resolve_people(
     let present = |label: &str| turns.iter().any(|t| t.speaker == label);
     let resolution = match view.intents() {
         Ok(intents) => crate::identity::Resolution::of(&intents),
-        Err(error) => return fail(Cause::OwnerUnmapped, format!("{error:#}")),
+        Err(error) => return fail(Cause::StorageFailed, format!("{error:#}")),
     };
     let owner_identity =
         match crate::identity::resolve(view, &resolution, crate::identity::ME, "person") {
@@ -773,6 +822,17 @@ impl<S: Storage> Rastro<S> {
         for (label, _) in &request.speakers {
             ensure!(seen.insert(label), "speaker {label} is mapped twice");
         }
+        // A meeting that lives in another scope is refused before anything is read or sent out.
+        if let Some(existing) = self
+            .storage
+            .snapshot(|view| view.meeting(&request.meeting, &[]))?
+        {
+            ensure!(
+                existing.meeting.scope == request.scope.0,
+                "meeting {} already exists in another scope; import it in that scope",
+                request.meeting
+            );
+        }
         let started_at = crate::coverage::now()?;
         let mut turns_total = 0;
         let mut extractor = None;
@@ -787,7 +847,7 @@ impl<S: Storage> Rastro<S> {
                 .storage
                 .snapshot(|view| Ok(resolve_people(view, request, &turns)))
                 .map_err(|error| Failure {
-                    cause: Cause::OwnerUnmapped,
+                    cause: Cause::StorageFailed,
                     reason: format!("{error:#}"),
                 })??;
             let Some(config) = self.config.meeting_extractor.clone() else {

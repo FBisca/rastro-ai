@@ -237,20 +237,20 @@ fn S1_cli_and_agent_reads_show_owner_involved_hypotheses_in_both_directions() {
     // The agent-facing read is the same envelope; a server scoped elsewhere does not see it.
     let mcp = env.mcp(
         &["work"],
-        "meeting.commitments",
+        "meeting_commitments",
         json!({"meeting": "weekly-1"}),
     );
     let (_, cli) = env.run(&["meeting", "commitments", "weekly-1"]);
     assert_eq!(mcp["structuredContent"], cli);
     let hidden = env.mcp(
         &["personal"],
-        "meeting.commitments",
+        "meeting_commitments",
         json!({"meeting": "weekly-1"}),
     );
     assert_eq!(hidden["isError"], true);
     let unknown = env.mcp(
         &["personal"],
-        "meeting.commitments",
+        "meeting_commitments",
         json!({"meeting": "nope"}),
     );
     assert_eq!(unknown["isError"], true);
@@ -332,6 +332,38 @@ fn S3_unsupported_candidates_are_excluded_and_an_invalid_quote_fails_the_run() {
     assert_eq!(result["hypotheses"].as_array().unwrap().len(), 3);
     assert_eq!(result["extraction"]["excluded"], 1);
     assert_eq!(result["extraction"]["state"], "succeeded");
+
+    // The extractor naming the owner does not make another pair's promise the owner's: Carol's
+    // promise to Dave is left out even with the owner as recipient, because nothing in the
+    // transcript ties it to the owner.
+    let mut proposed = good();
+    proposed.push(candidate(
+        3,
+        Some("Carol"),
+        Some("Alice"),
+        "email Dave the notes",
+        Some("tomorrow"),
+        "I will email Dave the notes tomorrow",
+    ));
+    env.extractor(&proposed);
+    let result = env.import_ok(&["--owner-speaker", "Alice"]);
+    assert_eq!(result["hypotheses"].as_array().unwrap().len(), 3);
+    assert_eq!(result["extraction"]["excluded"], 1);
+    // The owner as responsible needs the quote in the owner's turn or naming the owner.
+    let mut proposed = good();
+    proposed.push(candidate(
+        3,
+        Some("Alice"),
+        Some("Dave"),
+        "email Dave the notes",
+        None,
+        "I will email Dave the notes tomorrow",
+    ));
+    env.extractor(&proposed);
+    let result = env.import_ok(&["--owner-speaker", "Alice"]);
+    assert_eq!(result["extraction"]["excluded"], 1);
+    env.extractor(&good());
+    env.import_ok(&["--owner-speaker", "Alice"]);
 
     // Each invalid quote fails the entire run, however many other candidates are fine.
     let last_good = env.read();
@@ -513,6 +545,15 @@ fn S9_mapped_speakers_use_the_existing_identity_and_unmapped_ones_stay_unknown()
     let env = Env::new();
     let bob = identifier(&env.ok(&["identity", "person", "create", "--name", "Bob"]));
     let _carol = identifier(&env.ok(&["identity", "person", "create", "--name", "Carol"]));
+    // Carol's promise to the owner: her turn names the owner.
+    fs::write(
+        env.path("transcript.txt"),
+        TRANSCRIPT.replace(
+            "I will email Dave the notes tomorrow.",
+            "Alice, I will email you the notes tomorrow.",
+        ),
+    )
+    .unwrap();
     let mut proposed = good();
     proposed.push(candidate(
         3,
@@ -520,7 +561,7 @@ fn S9_mapped_speakers_use_the_existing_identity_and_unmapped_ones_stay_unknown()
         Some("Alice"),
         "email the notes",
         Some("tomorrow"),
-        "I will email Dave the notes tomorrow",
+        "Alice, I will email you the notes tomorrow",
     ));
     env.extractor(&proposed);
     let result = env.import_ok(&[
@@ -553,4 +594,59 @@ fn S9_mapped_speakers_use_the_existing_identity_and_unmapped_ones_stay_unknown()
             .unwrap()
             .contains("Bob")
     );
+}
+
+/// An extractor that writes far more than the kept 2 KiB to stderr is not killed by a closed
+/// pipe: its valid response is used, and a failing one's reason stays bounded.
+#[test]
+fn S1_an_extractor_that_is_chatty_on_stderr_still_succeeds() {
+    let env = Env::new();
+    let script = env.path("extractor.sh");
+    fs::write(
+        &script,
+        "#!/bin/sh\ncat > \"$RASTRO_HOME/request.json\"\nhead -c 10240 /dev/zero | tr '\\0' 'x' >&2\ncat \"$RASTRO_HOME/response.json\"\n",
+    )
+    .unwrap();
+    let result = env.import_ok(&["--owner-speaker", "Alice"]);
+    assert_eq!(result["extraction"]["state"], "succeeded");
+    assert_eq!(result["hypotheses"].as_array().unwrap().len(), 3);
+
+    fs::write(
+        &script,
+        "#!/bin/sh\ncat > /dev/null\nhead -c 10240 /dev/zero | tr '\\0' 'x' >&2\nexit 3\n",
+    )
+    .unwrap();
+    let (ok, failed) = env.import(&["--owner-speaker", "Alice"]);
+    assert!(!ok);
+    assert_eq!(failed["extraction"]["cause"], "extractor_failed");
+    let reason = failed["extraction"]["reason"].as_str().unwrap();
+    assert!(reason.len() < 2048 + 100, "{}", reason.len());
+}
+
+/// A meeting that lives in another scope is refused before the extractor runs, so its
+/// transcript is never sent out.
+#[test]
+fn S2_an_import_into_another_scope_is_refused_before_the_extractor_runs() {
+    let env = Env::new();
+    env.import_ok(&["--owner-speaker", "Alice"]);
+    fs::remove_file(env.path("request.json")).unwrap();
+    let out = env
+        .command(&[
+            "meeting",
+            "import",
+            env.path("transcript.txt").to_str().unwrap(),
+            "--meeting",
+            "weekly-1",
+            "--scope",
+            "personal",
+            "--captured-at",
+            "2026-11-10T10:00:00Z",
+            "--owner-speaker",
+            "Alice",
+        ])
+        .output()
+        .unwrap();
+    assert!(!out.status.success());
+    assert!(String::from_utf8_lossy(&out.stderr).contains("another scope"));
+    assert!(!env.path("request.json").exists());
 }
