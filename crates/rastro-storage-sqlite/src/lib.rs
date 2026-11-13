@@ -972,6 +972,11 @@ impl Snapshot for View<'_> {
     fn identity_accounts(&self) -> Result<Vec<rastro_core::identity::AccountFacts>> {
         identity::accounts(self.0)
     }
+    fn is_bot(&self, id: &str) -> Result<bool> {
+        Ok(identity::types(self.0, id, &[])?
+            .iter()
+            .any(|t| rastro_core::commitments::is_bot_type(&t.value)))
+    }
     fn resolve_entity(&self, form: &str) -> Result<Option<(String, String)>> {
         let Some(id) = self.resolve(form)? else {
             return Ok(None);
