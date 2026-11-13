@@ -198,9 +198,9 @@ tickets:
     blocked_by: [T1, T2, T3, T4, T5]
 approval:
   by: felippe.bisca@gmail.com
-  at: '2026-11-13T18:38:46.095377+00:00'
+  at: '2026-11-13T18:46:51.351844+00:00'
   base: 60a47cff5a96d668f8cfc0a186cde8a95d7a0548
-  digest: 3a592f84dc58448dce161d40276d480e1973018ec4adf296b7e61ecfedea6fef
+  digest: 19c28567b159f2bd29dafeae49ad89875a9840a053facd04186969aa3e6456e1
 amendments:
 - prev_digest: bc8fc9c575ddd14ccd8724980a20bf07656ad06e9e4ad32a80ee92220f8ad47e
   digest: 3425213d9028a9c2999fd9a811d71f20f306e828ff2bf7e420e0db3b89ecb757
@@ -219,3 +219,11 @@ amendments:
   tickets:
   - T3
   - T1
+- prev_digest: 3a592f84dc58448dce161d40276d480e1973018ec4adf296b7e61ecfedea6fef
+  digest: 19c28567b159f2bd29dafeae49ad89875a9840a053facd04186969aa3e6456e1
+  at: '2026-11-13T18:46:51.351844+00:00'
+  by: felippe.bisca@gmail.com (t2b2)
+  reason: The oracle's waiting-on fixture did not support the owner's side, so the
+    core left the candidate out, correctly; the fixture now addresses the owner beside
+    her turn.
+  tickets: []

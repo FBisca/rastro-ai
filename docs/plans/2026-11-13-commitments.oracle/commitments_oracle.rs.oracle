@@ -15,7 +15,7 @@ use std::{
 use tempfile::TempDir;
 
 const TRANSCRIPT: &str = "Alice: I'll send Bob the budget by Friday.\n\
-Bob: Thanks. I'll review it next week if the numbers are final.\n\
+Bob: Thanks. I'll review it next week for you if the numbers are final.\n\
 Alice: Bob, can you share the roadmap?\n";
 
 const MANIFEST: &str = r#"id = "test-adapter"
@@ -223,7 +223,7 @@ fn good() -> Vec<Value> {
             Some("Alice"),
             "review the numbers",
             Some("next week"),
-            "I'll review it next week if the numbers are final.",
+            "I'll review it next week for you if the numbers are final.",
         ),
         candidate(
             3,
@@ -309,7 +309,7 @@ fn S1_the_list_shows_every_hypothesis_with_its_source_and_state() {
     assert!(promise["quote"]["end"].is_number(), "{promise}");
 
     // The other direction: Bob owes the owner, so the owner waits on him.
-    let waiting = hypothesis(source, "I'll review it next week if the numbers are final.");
+    let waiting = hypothesis(source, "I'll review it next week for you if the numbers are final.");
     assert_eq!(waiting["kind"], "waiting_on", "{waiting}");
     assert_eq!(waiting["responsible"]["identity"]["identifier"], bob, "{waiting}");
     assert_eq!(waiting["recipient"]["identity"]["identifier"], me, "{waiting}");
@@ -456,7 +456,7 @@ fn S5_every_hypothesis_carries_the_standard_terms_it_expresses() {
     assert_eq!(terms(ask), vec!["std:owed_to", "std:owes"], "{ask}");
 
     // A waiting-on waits, and is owed to.
-    let waiting = hypothesis(source, "I'll review it next week if the numbers are final.");
+    let waiting = hypothesis(source, "I'll review it next week for you if the numbers are final.");
     assert_eq!(
         terms(waiting),
         vec!["std:due", "std:owed_to", "std:waiting_on"],
