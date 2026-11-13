@@ -1,0 +1,72 @@
+# The standard vocabulary `std`: what Rastro may say about commitments, whatever the source.
+#
+# Every type and predicate says what it means, what it isn't, examples and counter-examples, and
+# the evidence it needs. Predicates also give their domain and range, cardinality, freshness,
+# authority and sensitivity. A commitment hypothesis (decisions/knowledge.md §70) carries the
+# terms it expresses; it is not a claim, so nothing here makes one observed.
+namespace = "std"
+version = "0.1.0"
+
+[[types]]
+id = "std:Commitment"
+definition = "Something a party owes another: an ask, a promise or a waiting-on, as a conversation states it."
+not_to_confuse_with = "A task or an issue (a commitment is between parties and may have no tracker entry); a Person; a claim that the commitment is open, done or tracked."
+examples = ["\"I'll send Bob the budget by Friday\" said by Alice", "\"Bob, can you share the roadmap?\" asked by Alice"]
+counter_examples = ["\"we should look at the budget\" (no party owes anything)", "a status line saying a task is done"]
+evidence_requirement = "An exact quote from the conversation that states what is owed, with the turn and speaker."
+
+[[predicates]]
+id = "std:owes"
+definition = "The party responsible for a commitment, as the conversation says it. Expressed by a hypothesis that has a responsible party and is not a waiting-on."
+not_to_confuse_with = "Who the commitment is owed to (std:owed_to); who is waiting (std:waiting_on); who the owner is."
+examples = ["Alice std:owes \"send Bob the budget\""]
+counter_examples = ["a speaker who only repeats someone else's promise", "a waiting-on, which expresses std:waiting_on"]
+evidence_requirement = "An exact quote in which the party says they will, or is asked to, do the thing."
+domain = ["std:Commitment"]
+range = ["string", "rastro:Person"]
+cardinality = "one"
+freshness = "source"
+authority = "owner_confirmation"
+sensitivity = "Personal: it says who promised what. Visible only in the source's scope."
+
+[[predicates]]
+id = "std:owed_to"
+definition = "The party a commitment is owed to, as the conversation says it."
+not_to_confuse_with = "Who is responsible (std:owes); a person merely mentioned in the quote."
+examples = ["\"send Bob the budget\" std:owed_to Bob"]
+counter_examples = ["a person copied in on the message", "the room a promise is addressed to when no one is named"]
+evidence_requirement = "An exact quote that names or addresses the recipient."
+domain = ["std:Commitment"]
+range = ["string", "rastro:Person"]
+cardinality = "one"
+freshness = "source"
+authority = "owner_confirmation"
+sensitivity = "Personal: it says who is owed what. Visible only in the source's scope."
+
+[[predicates]]
+id = "std:due"
+definition = "The date a commitment is due, exactly as the conversation states it (\"by Friday\"). Never resolved to a calendar date."
+not_to_confuse_with = "When the conversation took place; a date the quote does not state; a deadline from a tracker."
+examples = ["\"send Bob the budget\" std:due \"by Friday\""]
+counter_examples = ["a date the adapter inferred from the context", "the capture time of the meeting"]
+evidence_requirement = "A date text that is a piece of the exact quote."
+domain = ["std:Commitment"]
+range = ["string"]
+cardinality = "one"
+freshness = "source"
+authority = "owner_confirmation"
+sensitivity = "As sensitive as the commitment it belongs to."
+
+[[predicates]]
+id = "std:waiting_on"
+definition = "That the owner is waiting on another party's action, as the conversation says it."
+not_to_confuse_with = "A promise the owner made (std:owes); a blocked work item in a tracker; a request that was never answered."
+examples = ["Bob: \"I'll review it next week for you\" is a waiting-on for the owner"]
+counter_examples = ["\"I'm waiting for lunch\" (no commitment by another party)", "the owner's own promise"]
+evidence_requirement = "An exact quote in which another party commits to an action the owner depends on."
+domain = ["std:Commitment"]
+range = ["string", "rastro:Person"]
+cardinality = "one"
+freshness = "source"
+authority = "owner_confirmation"
+sensitivity = "Personal: it says who the owner depends on. Visible only in the source's scope."
