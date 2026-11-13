@@ -150,6 +150,11 @@ pub trait Snapshot {
     fn meeting_export(&self, _meeting: &str) -> Result<Option<crate::meeting::MeetingExport>> {
         anyhow::bail!("storage does not support meetings")
     }
+    /// Every source of commitment hypotheses in `scopes` (empty: every scope), each with its
+    /// latest run, its last good results and whether they are stale.
+    fn commitment_sources(&self, _scopes: &[Scope]) -> Result<Vec<crate::commitments::Source>> {
+        anyhow::bail!("storage does not support commitments")
+    }
     /// What storage recorded for the source, before the freshness rule is applied.
     fn coverage(&self, pair: &Pair, all_windows: bool) -> Result<Coverage>;
     /// Allowed (source, scope) pairs storage holds anything for, with stored freshness rules.

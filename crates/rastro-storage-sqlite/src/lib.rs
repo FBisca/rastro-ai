@@ -16,6 +16,7 @@ const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const LEGACY: [&str; 2] = ["202611041200_initial", "202611041500_evidence_insert_guard"];
 
 mod automatic;
+mod commitments;
 mod identity;
 mod knowledge;
 /// `(name, sql)`, named `YYYYMMDDHHmm_<what>` so migrations from different branches
@@ -904,6 +905,12 @@ impl Snapshot for View<'_> {
         scopes: &[Scope],
     ) -> Result<Option<rastro_core::meeting::StoredMeeting>> {
         meeting::load(self, meeting, scopes)
+    }
+    fn commitment_sources(
+        &self,
+        scopes: &[Scope],
+    ) -> Result<Vec<rastro_core::commitments::Source>> {
+        commitments::sources(self, scopes)
     }
     fn meeting_recording(&self, meeting: &str) -> Result<Option<rastro_core::meeting::Recording>> {
         meeting::recording(self, meeting)

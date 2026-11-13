@@ -1,4 +1,5 @@
 pub mod claims;
+pub mod commitments;
 pub mod coverage;
 pub mod entity_form;
 pub mod evidence;

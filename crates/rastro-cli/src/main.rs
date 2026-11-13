@@ -555,6 +555,107 @@ fn meeting_text(m: &rastro_core::meeting::MeetingCommitments) -> String {
     }
     lines.join("\n")
 }
+fn commitment_party_text(party: &rastro_core::commitments::Party) -> String {
+    let label = party.label.as_deref().map(display_safe);
+    match (&party.identity, label) {
+        (Some(identity), Some(label)) => {
+            format!("{} ({label})", display_safe(&identity.identifier))
+        }
+        (Some(identity), None) => display_safe(&identity.identifier),
+        (None, Some(label)) => format!("unknown ({label})"),
+        (None, None) => "unknown".into(),
+    }
+}
+/// The commitments list: every source with how its extraction and coverage stand, then its
+/// hypotheses, or what it found instead.
+fn commitments_text(list: &rastro_core::commitments::Commitments) -> String {
+    use rastro_core::meeting::RunState;
+    let mut lines = vec![list.notice.clone()];
+    if list.sources.is_empty() {
+        lines.push("No sources".into());
+    }
+    for source in &list.sources {
+        lines.push(format!(
+            "Source: {} | Kind: {} | Scope: {}",
+            display_safe(&source.name),
+            serde_json::to_value(source.kind)
+                .ok()
+                .and_then(|v| v.as_str().map(String::from))
+                .unwrap_or_default(),
+            display_safe(&source.scope)
+        ));
+        let e = &source.extraction;
+        let mut line = format!(
+            "  Extraction: {} | Run: {} | Finished: {}",
+            e.state.as_str(),
+            e.run,
+            stamp(e.finished_at)
+        );
+        if let Some(adapter) = &e.adapter {
+            line += &format!(" | Adapter: {}", display_safe(adapter));
+        }
+        if let Some(run) = &e.replay_of {
+            line += &format!(" | Replay of run {run}, no model call");
+        }
+        line += &format!(" | Excluded: {}", e.excluded);
+        if let Some(cause) = e.cause {
+            line += &format!(" | Cause: {}", cause.as_str());
+        }
+        if let Some(reason) = &e.reason {
+            line += &format!(" | Reason: {}", display_safe(reason));
+        }
+        lines.push(line);
+        let c = &source.coverage;
+        let mut line = format!(
+            "  Coverage: {} | Turns read: {} of {}",
+            c.state.as_str(),
+            c.turns_read,
+            c.turns_total
+        );
+        if let Some(reason) = &c.reason {
+            line += &format!(" | Reason: {}", display_safe(reason));
+        }
+        lines.push(line);
+        if source.stale
+            && let Some(from) = &source.results_from
+        {
+            lines.push(format!(
+                "  STALE: the hypotheses below come from run {} (imported {}), not the latest",
+                from.run,
+                stamp(from.imported_at)
+            ));
+        }
+        match (source.hypotheses.is_empty(), e.state) {
+            (true, RunState::Succeeded) => lines.push("  Found nothing".into()),
+            (true, RunState::Failed) => lines.push("  Couldn't look: no hypotheses".into()),
+            (false, _) => {}
+        }
+        for h in &source.hypotheses {
+            let date = match &h.stated_date.text {
+                Some(text) => display_safe(text),
+                None => "unknown".into(),
+            };
+            lines.push(format!(
+                "  Hypothesis: {} | {} -> {} | Promise: {} | Date: {} | Terms: {}",
+                h.kind.as_str(),
+                commitment_party_text(&h.responsible),
+                commitment_party_text(&h.recipient),
+                display_safe(&h.promise),
+                date,
+                h.terms.join(", ")
+            ));
+            lines.push(format!(
+                "    \"{}\" | Turn: {} | Speaker: {} | Span: [{}, {})",
+                display_escaped(&h.quote.text),
+                h.quote.turn,
+                display_safe(&h.quote.speaker),
+                h.quote.start,
+                h.quote.end
+            ));
+        }
+    }
+    lines.join("\n")
+}
 /// The result of an operation, its human form, and whether it succeeded.
 type Outcome = (Response, String);
 
@@ -596,6 +697,7 @@ fn human(response: &Response) -> String {
         Response::Search(r) => search_text(&r.query, r),
         Response::Why(r) => why_text(r),
         Response::About(r) => about_text(r),
+        Response::Commitments(r) => commitments_text(r),
         Response::MeetingImport(r)
         | Response::MeetingCommitments(r)
         | Response::MeetingReplay(r) => meeting_text(r),

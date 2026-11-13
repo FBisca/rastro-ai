@@ -3,7 +3,7 @@ use crate::{View, parse_time, stamp};
 use anyhow::{Result, bail};
 use rastro_core::Scope;
 use rastro_core::meeting::{
-    Cause, EXPORT_FORMAT, EXPORT_NOTICE, ExportedSpeaker, Hypothesis, Identity, Known,
+    Cause, EXPORT_FORMAT, EXPORT_NOTICE, ExportedSpeaker, Hypothesis, Identity, Kind, Known,
     MeetingExport, MeetingRef, Party, PartyState, Quote, Recording, Removed, RunRecord, RunRow,
     RunState, Span, StatedDate, StoredMeeting, TranscriptKeep,
 };
@@ -98,12 +98,18 @@ pub(crate) fn load(view: &View, meeting: &str, scopes: &[Scope]) -> Result<Optio
             .prepare(
                 "SELECT responsible_label, responsible_entity, responsible_identifier,
                         recipient_label, recipient_entity, recipient_identifier,
-                        promise, stated_date, turn, speaker, quote, quote_start, quote_end
-                 FROM meeting_hypothesis WHERE run_id = ?1 ORDER BY ordinal",
+                        promise, stated_date, turn, speaker, quote, quote_start, quote_end,
+                        (SELECT json_extract(o.candidates, '$[' || h.ordinal || '].kind')
+                         FROM meeting_output o WHERE o.run_id = h.run_id)
+                 FROM meeting_hypothesis h WHERE h.run_id = ?1 ORDER BY h.ordinal",
             )?
             .query_map([good], |r| {
                 Ok(Hypothesis {
                     status: "hypothesis".into(),
+                    kind: r
+                        .get::<_, Option<String>>(13)?
+                        .and_then(|kind| Kind::parse(&kind))
+                        .unwrap_or(Kind::Promise),
                     responsible: party(r.get(0)?, r.get(1)?, r.get(2)?),
                     recipient: party(r.get(3)?, r.get(4)?, r.get(5)?),
                     promise: r.get(6)?,

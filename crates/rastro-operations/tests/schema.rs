@@ -199,7 +199,7 @@ fn catalog_declares_claim_cli_read_paths_without_changing_existing_routes() {
     for spec in &CATALOG {
         assert_eq!(
             spec.read_path,
-            ["about", "why", "meeting.commitments"].contains(&spec.name)
+            ["about", "why", "commitments", "meeting.commitments"].contains(&spec.name)
         );
         if spec.read_path {
             assert!(spec.read_only);

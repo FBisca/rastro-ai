@@ -311,6 +311,9 @@ operations! {
     Why(WhyRequest => WhyResult) {
         slot: 6, name: "why", surfaces: [Cli, Mcp], read_only: true, reader: run_read, cli_read_path: true
     }
+    Commitments(CommitmentsRequest => CommitmentsResult) {
+        slot: 22, name: "commitments", surfaces: [Cli, Mcp], read_only: true, reader: run_read, cli_read_path: true
+    }
     /// Import a meeting transcript, read its commitment hypotheses, replay, forget or export it.
     Meeting / MeetingRequest {
         Import(MeetingImportRequest => MeetingResult) as MeetingImport {

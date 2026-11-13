@@ -285,9 +285,9 @@ fn listed_tools_equal_the_catalog_entries() {
     }
 }
 
-/// surfaces/R4: exactly search, coverage, about, why and meeting_commitments, read-only; any other tool is a JSON-RPC error and runs nothing
+/// surfaces/R4: exactly search, coverage, about, why, commitments and meeting_commitments, read-only; any other tool is a JSON-RPC error and runs nothing
 #[test]
-fn exactly_five_read_only_tools_and_writes_are_protocol_errors() {
+fn exactly_six_read_only_tools_and_writes_are_protocol_errors() {
     let env = seeded();
     let config = env.home.path().join("config/config.toml");
     let config_before = fs::read(&config).unwrap();
@@ -298,7 +298,14 @@ fn exactly_five_read_only_tools_and_writes_are_protocol_errors() {
     names.sort();
     assert_eq!(
         names,
-        ["about", "coverage", "meeting_commitments", "search", "why"]
+        [
+            "about",
+            "commitments",
+            "coverage",
+            "meeting_commitments",
+            "search",
+            "why"
+        ]
     );
     for t in &tools {
         assert_eq!(t["annotations"]["readOnlyHint"], true, "{t}");
@@ -554,7 +561,7 @@ fn an_unsupported_revision_is_answered_with_the_pinned_revision() {
         let init = session.initialize_as(asked, "scripted-client");
         assert_eq!(init["result"]["protocolVersion"], PINNED, "asked {asked}");
         // Codex's default request (2025-06-18) proceeds: it lists tools and calls one.
-        assert_eq!(session.list_tools().len(), 5, "asked {asked}");
+        assert_eq!(session.list_tools().len(), 6, "asked {asked}");
         let call = session.call("coverage", json!({}));
         ok_result(&call["result"]);
     }
@@ -607,7 +614,7 @@ fn server_discover_first_does_not_end_the_session_and_initialize_then_works() {
     }
     let init = session.initialize();
     assert_eq!(init["result"]["protocolVersion"], PINNED);
-    assert_eq!(session.list_tools().len(), 5);
+    assert_eq!(session.list_tools().len(), 6);
 }
 
 /// surfaces/R25: two clients with different clientInfo get identical results; no name is stored
