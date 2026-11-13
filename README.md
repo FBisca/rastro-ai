@@ -98,7 +98,7 @@ flowchart LR
 
 ## Let an agent read evidence and claims (MCP)
 
-`rastro mcp` serves exactly five read-only tools over stdio: `search`, `coverage`, `about`, `why` and `meeting_commitments`. `about` returns claims one hop from an entity id, canonical alias or exact URL; `why` traces a claim to its justifications and evidence; `meeting_commitments` returns one meeting's cited commitment hypotheses with their extraction and coverage state. The same requests on the CLI with `--json` return the same envelopes. `sync` and `claims rebuild` stay CLI-only.
+`rastro mcp` serves exactly six read-only tools over stdio: `search`, `coverage`, `about`, `why`, `commitments` and `meeting_commitments`. `about` returns claims one hop from an entity id, canonical alias or exact URL; `why` traces a claim to its justifications and evidence; `commitments` returns every source's cited commitment hypotheses — each with its kind, parties, stated date, exact quote and vocabulary terms — with each source's extraction and coverage state; `meeting_commitments` returns one meeting's hypotheses. The same requests on the CLI with `--json` return the same envelopes. `sync` and `claims rebuild` stay CLI-only.
 
 1. From an up-to-date `main` checkout, install: `cargo install --locked --path crates/rastro-cli`. Without `--locked`, Cargo re-resolves dependencies; an old branch may lack `rastro mcp`. Ensure `~/.cargo/bin` is on `PATH`, or give the client the absolute path (usually `~/.cargo/bin/rastro`); GUI clients may not inherit your shell `PATH`.
 2. Register and sync the sources to ask about: `rastro source add …`, then `rastro sync`. Without evidence the tools answer "never looked".
