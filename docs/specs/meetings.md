@@ -1,6 +1,6 @@
 # Meetings
 
-Commitment hypotheses about the owner, proposed by a configured extractor from one speaker-labelled meeting transcript and checked against it. A hypothesis is not a confirmed commitment, and nothing here says whether one is open, done or tracked. Product meaning: `../decisions/meetings.md`. Architecture: `../adr/0011-meeting-commitment-hypotheses.md`.
+Commitment hypotheses about the owner, proposed by a configured extractor from one speaker-labelled meeting transcript and checked against it. A hypothesis is not a confirmed commitment, and nothing here says whether one is open, done or tracked. Each hypothesis carries its kind (`ask`, `promise` or `waiting_on`). The cross-source read of every meeting's hypotheses is the `commitments` list (`commitments.md`); `meeting.commitments` stays until the next schema version. Product meaning: `../decisions/meetings.md`. Architecture: `../adr/0011-meeting-commitment-hypotheses.md`.
 
 ## Reviewed meetings
 

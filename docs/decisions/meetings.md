@@ -24,3 +24,7 @@ Provider integrations, a review queue, a correction UI, and any claim that a com
 
 ## Added 2026-11-13 (agent tool adapter)
 14. **The one who proposes is an agent tool adapter, and the core checks everything it says.** Importing calls the configured adapter with the content, the core's own instructions and the fields it expects. Each candidate carries its kind (`ask`, `promise` or `waiting_on`). The core keeps a candidate only if its quote is an exact contiguous piece of the turn it names, the transcript supports the owner's involvement, and a stated date is a piece of the quote (decisions 2–4 are unchanged). An adapter whose response breaks the expected shape (an unknown field, a missing field, a kind that is not one, anything but the one response) fails the run, and the last good results stay, stale (decision 5). Architecture: `../adr/0012-agent-tool-adapter.md`.
+
+## Added 2026-11-13 (the commitments list)
+15. **A meeting's hypotheses are read through the `commitments` list, beside `meeting.commitments`.** The list shows every meeting that has hypotheses, with its extraction, coverage and stale state, so the owner no longer asks for one meeting at a time (`surfaces.md` §51). Each hypothesis keeps its kind from the adapter; one recorded before adapters proposed kinds reads as a `promise`. In the list a run that looked reads coverage `found` even when it found nothing, so `found` with no hypotheses is "found nothing"; `meeting.commitments` keeps its `empty`. `meeting.commitments` stays until the next schema version.
+

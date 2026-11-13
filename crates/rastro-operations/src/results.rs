@@ -56,6 +56,8 @@ pub struct ClaimsRebuildResult {
     /// Every (source, scope) pair the rebuild visited.
     pub pairs: Vec<rastro_core::runs::RebuildPair>,
 }
+/// Every source's commitment hypotheses, each source with its extraction and coverage state.
+pub type CommitmentsResult = rastro_core::commitments::Commitments;
 /// A meeting's commitment hypotheses with extraction and coverage state.
 pub type MeetingResult = rastro_core::meeting::MeetingCommitments;
 /// What forgetting a meeting removed.
@@ -287,6 +289,10 @@ mod tests {
                 owner_speaker: None,
                 speakers: vec![],
                 transcript: None,
+            }),
+            Response::Commitments(rastro_core::commitments::Commitments {
+                notice: rastro_core::commitments::NOTICE.into(),
+                sources: vec![],
             }),
         ];
         let arguments = |name: &str| match name {

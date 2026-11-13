@@ -3,7 +3,7 @@ use crate::{View, parse_time, stamp};
 use anyhow::{Result, bail};
 use rastro_core::Scope;
 use rastro_core::meeting::{
-    Cause, EXPORT_FORMAT, EXPORT_NOTICE, ExportedSpeaker, Hypothesis, Identity, Known,
+    Cause, EXPORT_FORMAT, EXPORT_NOTICE, ExportedSpeaker, Hypothesis, Identity, Kind, Known,
     MeetingExport, MeetingRef, Party, PartyState, Quote, Recording, Removed, RunRecord, RunRow,
     RunState, Span, StatedDate, StoredMeeting, TranscriptKeep,
 };
@@ -98,12 +98,13 @@ pub(crate) fn load(view: &View, meeting: &str, scopes: &[Scope]) -> Result<Optio
             .prepare(
                 "SELECT responsible_label, responsible_entity, responsible_identifier,
                         recipient_label, recipient_entity, recipient_identifier,
-                        promise, stated_date, turn, speaker, quote, quote_start, quote_end
+                        promise, stated_date, turn, speaker, quote, quote_start, quote_end, kind
                  FROM meeting_hypothesis WHERE run_id = ?1 ORDER BY ordinal",
             )?
             .query_map([good], |r| {
                 Ok(Hypothesis {
                     status: "hypothesis".into(),
+                    kind: Kind::parse(&r.get::<_, String>(13)?).unwrap_or(Kind::Promise),
                     responsible: party(r.get(0)?, r.get(1)?, r.get(2)?),
                     recipient: party(r.get(3)?, r.get(4)?, r.get(5)?),
                     promise: r.get(6)?,
@@ -381,7 +382,8 @@ pub(crate) fn record(connection: &mut Connection, run: &RunRecord) -> Result<i64
                 "INSERT INTO meeting_hypothesis (run_id, ordinal, responsible_label,
                  responsible_entity, responsible_identifier, recipient_label, recipient_entity,
                  recipient_identifier, promise, stated_date, turn, speaker, quote, quote_start,
-                 quote_end) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+                 quote_end, kind)
+                 VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16)",
                 params![
                     run_id,
                     ordinal as i64,
@@ -397,7 +399,8 @@ pub(crate) fn record(connection: &mut Connection, run: &RunRecord) -> Result<i64
                     h.quote.speaker,
                     h.quote.text,
                     h.quote.start as i64,
-                    h.quote.end as i64
+                    h.quote.end as i64,
+                    h.kind.as_str()
                 ],
             )?;
         }

@@ -11,6 +11,7 @@
 //! recorded model output), the turns they cite (the supporting spans) and the speaker mappings.
 //! Replay checks that record again with no model call. The transcript is kept only on opt-in, and
 //! forgetting a meeting deletes all of it.
+pub use crate::commitments::{Identity, Kind, Known, PartyState, Quote, StatedDate};
 use crate::{
     CoverageState, Rastro, ReadStorage, Reader, Scope, Snapshot, Storage,
     host::{self, JudgmentFailure},
@@ -131,21 +132,6 @@ impl RunState {
     }
 }
 
-/// An entity a speaker was explicitly mapped to.
-#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-pub struct Identity {
-    pub id: String,
-    pub identifier: String,
-}
-/// Whether a party is a known identity.
-#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum PartyState {
-    /// The owner explicitly mapped the label to an existing entity.
-    Mapped,
-    /// No explicit mapping: who this is stays unknown.
-    Unknown,
-}
 /// A person in a hypothesis. Identity comes only from an explicit mapping, never from a name.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct Party {
@@ -156,36 +142,13 @@ pub struct Party {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub identity: Option<Identity>,
 }
-#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum Known {
-    Stated,
-    Unknown,
-}
-/// A date exactly as the speaker said it ("next Friday"), or unknown. Never resolved.
-#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-pub struct StatedDate {
-    pub state: Known,
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub text: Option<String>,
-}
-/// The exact text a hypothesis rests on, and where it sits.
-#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
-pub struct Quote {
-    pub text: String,
-    /// The turn it is in, counted from 1.
-    pub turn: usize,
-    /// The label of that turn's speaker.
-    pub speaker: String,
-    /// Byte range of the quote within the turn's text.
-    pub start: usize,
-    pub end: usize,
-}
 /// One proposed commitment involving the owner.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct Hypothesis {
     /// Always `hypothesis`.
     pub status: String,
+    /// What it is. Output recorded before adapters proposed kinds reads as a promise.
+    pub kind: Kind,
     pub responsible: Party,
     pub recipient: Party,
     pub promise: String,
@@ -707,6 +670,7 @@ fn validate(
         };
         kept.push(Hypothesis {
             status: "hypothesis".into(),
+            kind: candidate.kind.map_or(Kind::Promise, Kind::from),
             responsible: people.party(responsible),
             recipient: people.party(recipient),
             promise: candidate.promise,

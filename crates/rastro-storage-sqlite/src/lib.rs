@@ -16,6 +16,7 @@ const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 const LEGACY: [&str; 2] = ["202611041200_initial", "202611041500_evidence_insert_guard"];
 
 mod automatic;
+mod commitments;
 mod identity;
 mod knowledge;
 /// `(name, sql)`, named `YYYYMMDDHHmm_<what>` so migrations from different branches
@@ -29,7 +30,7 @@ pub use scoped::{cache_len as scoped_cache_len, clear_cache as clear_scoped_cach
 /// The migration recording when an intent's contribution ended; an open that applies it replays
 /// the stored intents once all migrations are in.
 const INTENT_END: &str = "202611081000_intent_justification_end";
-const MIGRATIONS: [(&str, &str); 15] = [
+const MIGRATIONS: [(&str, &str); 16] = [
     (
         "202611041200_initial",
         include_str!("../migrations/202611041200_initial.sql"),
@@ -89,6 +90,10 @@ const MIGRATIONS: [(&str, &str); 15] = [
     (
         "202611131100_meeting_retention",
         include_str!("../migrations/202611131100_meeting_retention.sql"),
+    ),
+    (
+        "202611131200_meeting_hypothesis_kind",
+        include_str!("../migrations/202611131200_meeting_hypothesis_kind.sql"),
     ),
 ];
 
@@ -904,6 +909,12 @@ impl Snapshot for View<'_> {
         scopes: &[Scope],
     ) -> Result<Option<rastro_core::meeting::StoredMeeting>> {
         meeting::load(self, meeting, scopes)
+    }
+    fn commitment_sources(
+        &self,
+        scopes: &[Scope],
+    ) -> Result<Vec<rastro_core::commitments::Source>> {
+        commitments::sources(self, scopes)
     }
     fn meeting_recording(&self, meeting: &str) -> Result<Option<rastro_core::meeting::Recording>> {
         meeting::recording(self, meeting)

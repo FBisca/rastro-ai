@@ -151,3 +151,7 @@ Architecture: `../adr/0010-identity-and-owner-intents.md`. Plan: `../plans/2026-
     - **A label is evidence, not a claim.** It never serves alias lookup or identity resolution, never merges, never counts toward a claim's supports, never enters a revision and is never a basis for an Act. §23 still holds for claims: none comes from a title or body.
     - **Amended 2026-11-12 (owner, plan `answers-i-can-read` D2).** No repository label: no repository has name evidence, and deriving a name from its URL would be a parse. No Person label borrowed from a linked account: it would be a derivation close to identity, and a label must be evidence at the entity's own location. A Linear issue's label has no URL, because its location is `linear:issue/<uuid>`. Its identifier (`ENG-123`) is not part of the label.
     - Why: `about me` returned bare issue identifiers, so an agent couldn't tell what was on the owner's plate without one call per entity. Owner, 2026-11-06.
+
+## Added 2026-11-13 (commitment hypotheses)
+70. **Commitment hypotheses stay outside the claims projection (2026-11-13).** The `commitments` list reads them from what each source keeps, not from claims, so the projection stays observed-only (§23, §48): accepting a hypothesis as a claim is a later decision. A hypothesis is never evidence for an `about` or `why` answer, and a rebuild of the projection neither reads nor changes it. Spec: `../specs/commitments.md`.
+

@@ -30,6 +30,15 @@ impl AboutRequest {
     }
 }
 
+impl CommitmentsRequest {
+    pub(crate) fn run_read<S: ReadStorage>(
+        self,
+        reader: &mut Reader<S>,
+    ) -> Result<CommitmentsResult> {
+        reader.commitments(self.source.as_deref(), self.term.as_deref())
+    }
+}
+
 impl MeetingCommitmentsRequest {
     pub(crate) fn run_read<S: ReadStorage>(self, reader: &mut Reader<S>) -> Result<MeetingResult> {
         reader.meeting_commitments(&self.meeting)
