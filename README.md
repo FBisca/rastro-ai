@@ -29,6 +29,7 @@ A Rust workspace in `crates/`:
 | `rastro-cli` | The `rastro` command, including the MCP server |
 | `rastro-connector-github`, `rastro-extractor-github` | The GitHub connector and its extractor |
 | `rastro-connector-linear`, `rastro-extractor-linear` | The Linear connector and its extractor |
+| `rastro-adapter-claude-code` | The reference agent tool adapter: lets Claude Code do the judgment |
 | `rastro-test-connector`, `rastro-test-extractor` | Plugins driven by a script, used in tests |
 
 - North star: `docs/concept.md`
@@ -91,8 +92,7 @@ flowchart LR
   classDef todo fill:#f1f3f5,stroke:#868e96,color:#495057
   class s1,s2,s3,s4 done
   class s4b done
-  class s5 doing
-  class s6,s7,s8,s9,s10,s11,s12,s13,s14,s15,s16 todo
+  class s5,s6,s7,s8,s9,s10,s11,s12,s13,s14,s15,s16 todo
 ```
 
 ## Let an agent read evidence and claims (MCP)

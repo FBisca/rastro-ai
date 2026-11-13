@@ -1,17 +1,13 @@
 [package]
 name = "rastro-adapter-claude-code"
-version = "0.1.0"
-edition = "2024"
+version.workspace = true
+edition.workspace = true
 publish = false
 
-# Its own workspace: the ticket's paths don't include the root manifest, so the crate is not
-# yet a member of the root workspace. Folding it in is a one-line change to the root manifest.
-[workspace]
-
 [dependencies]
-anyhow = "1"
+anyhow.workspace = true
 rastro-plugin-sdk = { path = "../rastro-plugin-sdk" }
-serde_json = "1"
+serde_json.workspace = true
 
 [dev-dependencies]
 tempfile = "3"
