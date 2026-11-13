@@ -73,3 +73,11 @@ Plan: `../plans/2026-11-05-second-source-one-identity.plan.md`.
 
 27. **GitHub records verified-email snapshots and author names (2026-11-06).** Alongside the viewer (§25), the connector records the token owner's verified addresses at `/emails/verified`, including an empty snapshot, and author profile names, with retained originals trimmed to `{id, name}`. Snapshot evidence and exact address spans: `../adr/0010-identity-and-owner-intents.md`. Plan D46 and D49.
 28. **Connectors don't query stored data (2026-11-11).** A connector gets only the structured known state the core puts in its run binding; it never reads Rastro's store. A workflow asking the core for a targeted read ("directed reads") is parked until a slice needs it.
+
+## Added 2026-11-13 (agent tool adapter)
+Architecture: `../adr/0012-agent-tool-adapter.md`.
+29. **The agent tool adapter is live (clarifies §2, §4, §10).** A plugin of kind `agent-tool-adapter` lets an agent runtime do judgment over text the core sends it. Its manifest declares the kind and `agent_tool = { capabilities = [...] }`, the capabilities it needs from an agent tool; the one today is `judge_text`. It never names a tool: the owner picks the runtime by installing its adapter.
+30. **A manifest that names a tool, or doesn't declare the kind, is refused before anything runs.** So is one with no capability, a capability the core doesn't know, or an action permission (§6: it reads untrusted text). The run fails with the reason; the adapter is never started.
+31. **The core asks, the adapter proposes, the core checks.** The core sends its own instructions, the content and the fields it expects, and keeps only the candidates that pass its own checks (`meetings.md` §4). A response that breaks the expected shape fails the run and leaves the last good results as they were, stale.
+32. **The owner binds one by plugin id** in `config.toml` (`[commitment_adapter]`). Binding it is the authorization to send transcripts to it, and nothing else is sent to it. It starts with a cleared environment plus the basics, what its manifest lists, and the location of Rastro's home.
+33. **The reference adapter drives Claude Code,** with every tool, setting, MCP server and slash command off. It is installed by hand until slice 15; another runtime is another adapter the owner writes or asks for.

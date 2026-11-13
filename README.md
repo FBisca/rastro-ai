@@ -29,6 +29,7 @@ A Rust workspace in `crates/`:
 | `rastro-cli` | The `rastro` command, including the MCP server |
 | `rastro-connector-github`, `rastro-extractor-github` | The GitHub connector and its extractor |
 | `rastro-connector-linear`, `rastro-extractor-linear` | The Linear connector and its extractor |
+| `rastro-adapter-claude-code` | The reference agent tool adapter: lets Claude Code do the judgment |
 | `rastro-test-connector`, `rastro-test-extractor` | Plugins driven by a script, used in tests |
 
 - North star: `docs/concept.md`

@@ -24,3 +24,5 @@ The manifest is a request, not an authorization. Registering a source creates a 
 - `permissions.env` lists the environment variables a plugin needs (for example `GH_TOKEN`). The core starts every plugin with a cleared environment: `PATH`, `HOME`, `TMPDIR`, `LANG`, `LC_*`, plus those listed. A source whose scope isn't in `permissions.scopes` is refused before spawning (added 2026-11-04).
 
 Amended 2026-11-04 by ADR 0008: a manifest may also carry `extraction_rules`, `vocabulary` and, on a connector, `default_extractor`, and `kinds` may include `extractor` and `vocabulary`. They are optional; absent means empty, so existing manifests stay valid unchanged. Status stays accepted.
+
+Amended 2026-11-13 by ADR 0012: `triggers` and `dependencies` may be absent (empty), and a plugin of kind `agent-tool-adapter` carries `agent_tool`, the capabilities it needs from an agent tool, never a named tool. Status stays accepted.

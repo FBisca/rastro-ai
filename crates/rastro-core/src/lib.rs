@@ -175,9 +175,10 @@ impl Locations {
 pub struct Config {
     #[serde(default)]
     pub sources: Vec<Source>,
-    /// The extractor `meeting import` sends transcripts to; none until the owner configures one.
+    /// The agent tool adapter `meeting import` sends transcripts to; none until the owner
+    /// configures one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub meeting_extractor: Option<meeting::MeetingExtractor>,
+    pub commitment_adapter: Option<meeting::CommitmentAdapter>,
 }
 impl Config {
     pub fn load(locations: &Locations) -> Result<Self> {
