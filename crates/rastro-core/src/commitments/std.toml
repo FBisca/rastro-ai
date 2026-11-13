@@ -1,0 +1,68 @@
+# The standard vocabulary: the commitment a conversation proposes and the four predicates a
+# hypothesis expresses (decisions/vocabulary.md §5). The core bundles it.
+namespace = "std"
+version = "0.1.0"
+
+[[types]]
+id = "std:Commitment"
+definition = "A commitment one person makes to another: an action owed by a responsible party to a recipient, whether asked for, promised, or waited on."
+not_to_confuse_with = "A task: the owner's own to-do, with nobody else owed."
+examples = ["\"I'll send Bob the budget by Friday.\""]
+counter_examples = ["\"I should really tidy my desk.\""]
+evidence_requirement = "A quote from a conversation the owner took part in, that asks, promises or waits on an action."
+
+[[predicates]]
+id = "std:owes"
+domain = ["std:Commitment"]
+range = ["string"]
+cardinality = "one"
+definition = "The responsible party of a commitment: the name of the person who owes the action, as the source states it; a Person is linked only by a claim."
+not_to_confuse_with = "The recipient, who is owed the action (std:owed_to)."
+examples = ["Alice, in \"I'll send Bob the budget.\""]
+counter_examples = ["Bob, in \"I'll send Bob the budget.\""]
+evidence_requirement = "A quote in which the party is named as the one who will act."
+freshness = "source"
+authority = "newer_comparable_observation"
+sensitivity = "Shares the sensitivity of the conversation it comes from."
+
+[[predicates]]
+id = "std:owed_to"
+domain = ["std:Commitment"]
+range = ["string"]
+cardinality = "one"
+definition = "The recipient of a commitment: the name of the person the action is owed to, as the source states it; a Person is linked only by a claim."
+not_to_confuse_with = "The responsible party (std:owes)."
+examples = ["Bob, in \"I'll send Bob the budget.\""]
+counter_examples = ["Alice, in \"I'll send Bob the budget.\""]
+evidence_requirement = "A quote that names the person the action is for."
+freshness = "source"
+authority = "newer_comparable_observation"
+sensitivity = "Shares the sensitivity of the conversation it comes from."
+
+[[predicates]]
+id = "std:due"
+domain = ["std:Commitment"]
+range = ["string"]
+cardinality = "one"
+definition = "The date a commitment states, exactly as the speaker said it, never resolved."
+not_to_confuse_with = "A deadline the system computed; this keeps the words of the quote."
+examples = ["\"by Friday\""]
+counter_examples = ["a commitment with no date in its quote"]
+evidence_requirement = "A quote that states a date for the action."
+freshness = "source"
+authority = "newer_comparable_observation"
+sensitivity = "Shares the sensitivity of the conversation it comes from."
+
+[[predicates]]
+id = "std:waiting_on"
+domain = ["std:Commitment"]
+range = ["string"]
+cardinality = "one"
+definition = "A waiting-on: the commitment of a named person whose action the owner is waiting for; the name is as the source states it."
+not_to_confuse_with = "A promise the owner makes (std:owes)."
+examples = ["\"I'll review it next week once Bob sends the numbers.\""]
+counter_examples = ["\"I'll review it next week.\""]
+evidence_requirement = "A quote in which the owner says they wait for a named person's action."
+freshness = "source"
+authority = "newer_comparable_observation"
+sensitivity = "Shares the sensitivity of the conversation it comes from."
