@@ -8,6 +8,8 @@
 //! The list reads through [`Snapshot::commitment_sources`]: storage turns what it keeps for each
 //! kind of source into [`Source`] entries, and the core filters them. A scope that hides a source
 //! hides its entry, and the read still succeeds.
+pub mod vocabulary;
+
 use crate::{
     CoverageState, Rastro, ReadStorage, Reader, Storage,
     meeting::{Cause, RunState},
