@@ -16,6 +16,25 @@ The commitments list: the commitment hypotheses of every source that has any, in
 
 A hypothesis keeps the kind its run's recorded output holds; one whose recorded output has none (recorded before adapters proposed kinds) reads as a `promise`.
 
+## Switch day
+
+### RBAC Q4 kickoff — 2026-10-23
+
+The owner imported the real meeting transcript (302 speaker-labelled turns from the Teams export:
+Felippe Bisca, Nathan Beale, Giuseppe Pirrelli, Carlo Elefanti) with the reference Claude Code
+adapter, then read the list over MCP.
+
+The run succeeded: coverage found 302 of 302 turns, two candidates were excluded, and thirteen
+hypotheses came back, each with its kind, its promise, the exact quote it rests on and the
+standard vocabulary terms it expresses. The first import failed with `invalid_quote`: a model's
+quote is not always copied character for character, and the core refuses a run whose quote is not
+an exact piece of the turn. The instructions now say so, and the run went through.
+
+What the owner reads over MCP is a list of what the meeting proposed — "Felippe is waiting on
+Giuseppe to finish the final migration", "Keep Felippe updated on the migration progress" — each
+with the words it rests on and the turn they are in, and nothing about whether any of them is open,
+done or tracked.
+
 ## Requirements
 
 - **R1** WHEN the owner asks for commitments and a source has hypotheses, THEN the list shows every hypothesis with its source (kind, name, scope), its kind, the promise text, the stated date or null, the responsible and the recipient (the label, and the entity only when the owner mapped it explicitly, else null), the exact quote with its turn, speaker and byte range, the status `hypothesis` and the standard vocabulary terms it expresses; and for each source its extraction state, its coverage state and whether its results are stale. (from commitments/S1)
