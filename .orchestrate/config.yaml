@@ -1,0 +1,6 @@
+# The check tiers: a worker runs the cheap two, verify and CI run the whole suite once.
+checks:
+  fast: cargo check --workspace --all-targets
+  affected: scripts/affected-tests.sh {paths}
+  full:
+    run: cargo test --workspace
