@@ -917,3 +917,47 @@ fn S6_a_replay_that_no_longer_validates_fails_and_marks_the_results_stale() {
     assert_eq!(failed["stale"], true);
     assert_eq!(failed["hypotheses"], imported["hypotheses"]);
 }
+
+/// S5: replaying the old record after a changed text failed to extract does not make the old
+/// results current: they stay stale, and still name the run they come from.
+#[test]
+fn S5_replay_after_a_failed_reimport_keeps_the_results_stale() {
+    let env = Env::new();
+    let first = env.import_ok(&["--owner-speaker", "Alice"]);
+    fs::write(
+        env.path("transcript.txt"),
+        TRANSCRIPT.replace("by Friday", "by Monday"),
+    )
+    .unwrap();
+    fs::write(env.path("response.json"), "not json").unwrap();
+    let (ok, failed) = env.import(&["--owner-speaker", "Alice"]);
+    assert!(!ok);
+    assert_eq!(failed["stale"], true);
+
+    let replayed = env.ok(&["meeting", "replay", "weekly-1"]);
+    assert_eq!(replayed["stale"], true);
+    assert_eq!(replayed["results_from"]["run"], first["extraction"]["run"]);
+    assert_eq!(replayed["hypotheses"], first["hypotheses"]);
+    let read = env.read();
+    assert_eq!(read["stale"], true);
+    assert_eq!(read["results_from"]["run"], first["extraction"]["run"]);
+    // Replaying again, from the replay, changes nothing about that.
+    let again = env.ok(&["meeting", "replay", "weekly-1"]);
+    assert_eq!(again["stale"], true);
+    assert_eq!(again["results_from"]["run"], first["extraction"]["run"]);
+
+    // A successful import of the changed text makes the results current again.
+    let mut changed = good();
+    changed[0] = candidate(
+        1,
+        Some("Alice"),
+        Some("Bob"),
+        "send Bob the budget",
+        Some("by Monday"),
+        "I'll send Bob the budget by Monday",
+    );
+    env.extractor(&changed);
+    let second = env.import_ok(&["--owner-speaker", "Alice"]);
+    assert_eq!(second["stale"], false);
+    assert_eq!(env.ok(&["meeting", "replay", "weekly-1"])["stale"], false);
+}

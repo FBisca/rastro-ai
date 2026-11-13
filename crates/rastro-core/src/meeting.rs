@@ -315,6 +315,12 @@ pub struct StoredMeeting {
     pub good: Option<RunRow>,
     pub hypotheses: Vec<Hypothesis>,
     pub transcript_retained: bool,
+    /// The import run the good results trace back to, following `replay_of`: a replay checks an
+    /// older import's record, so it is no fresher than that import.
+    pub origin: Option<RunRow>,
+    /// Whether the results are older than the latest import run, whether that run failed or
+    /// the latest run is a replay of an older record.
+    pub stale: bool,
 }
 /// One supporting span: a turn a recorded candidate cites, with its text, or a turn beside it,
 /// kept for its speaker only (its text is empty).
@@ -413,16 +419,24 @@ impl StoredMeeting {
                 excluded: latest.excluded,
             },
             coverage,
-            stale: self.good.as_ref().is_some_and(|good| good.id != latest.id),
+            stale: self.stale,
             transcript_retained: self.transcript_retained,
             results_from: self
-                .good
-                .as_ref()
-                .filter(|good| good.id != latest.id)
-                .map(|good| ResultsFrom {
-                    run: good.id,
-                    finished_at: good.finished_at,
-                }),
+                .stale
+                .then(|| {
+                    let good = self.good.as_ref()?;
+                    // A replay that is the latest run is not where stale results come from.
+                    let from = if good.id == latest.id {
+                        self.origin.as_ref().unwrap_or(good)
+                    } else {
+                        good
+                    };
+                    Some(ResultsFrom {
+                        run: from.id,
+                        finished_at: from.finished_at,
+                    })
+                })
+                .flatten(),
             hypotheses: self.hypotheses,
         }
     }

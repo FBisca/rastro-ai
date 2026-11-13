@@ -128,6 +128,30 @@ pub(crate) fn load(view: &View, meeting: &str, scopes: &[Scope]) -> Result<Optio
             })?
             .collect::<Result<_, _>>()?,
     };
+    // A replay checks an older record, so the good results are as old as the import they trace
+    // back to; they are stale when a later import ran, or when the latest run is not the good one.
+    let origin: Option<i64> = match good {
+        None => None,
+        Some(good) => c.query_row(
+            "WITH RECURSIVE chain (id, replay_of) AS (
+                 SELECT id, replay_of FROM meeting_run WHERE id = ?1
+                 UNION ALL
+                 SELECT r.id, r.replay_of FROM meeting_run r JOIN chain ON r.id = chain.replay_of)
+             SELECT id FROM chain WHERE replay_of IS NULL",
+            [good],
+            |r| r.get(0),
+        )?,
+    };
+    let latest_import: Option<i64> = c.query_row(
+        "SELECT max(id) FROM meeting_run WHERE meeting_id = ?1 AND replay_of IS NULL",
+        [meeting],
+        |r| r.get(0),
+    )?;
+    let stale = match (good, origin, latest_import) {
+        (Some(good), Some(origin), Some(import)) => good != latest || import > origin,
+        (Some(good), _, _) => good != latest,
+        _ => false,
+    };
     Ok(Some(StoredMeeting {
         meeting: MeetingRef {
             id: meeting.into(),
@@ -136,6 +160,8 @@ pub(crate) fn load(view: &View, meeting: &str, scopes: &[Scope]) -> Result<Optio
         },
         latest: run_row(c, latest)?,
         good: good.map(|id| run_row(c, id)).transpose()?,
+        origin: origin.map(|id| run_row(c, id)).transpose()?,
+        stale,
         hypotheses,
         transcript_retained: c.query_row(
             "SELECT EXISTS (SELECT 1 FROM meeting_transcript WHERE meeting_id = ?1)",
