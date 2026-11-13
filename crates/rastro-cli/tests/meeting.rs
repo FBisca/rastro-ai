@@ -650,3 +650,270 @@ fn S2_an_import_into_another_scope_is_refused_before_the_extractor_runs() {
     assert!(String::from_utf8_lossy(&out.stderr).contains("another scope"));
     assert!(!env.path("request.json").exists());
 }
+
+fn database(env: &Env) -> rusqlite::Connection {
+    rusqlite::Connection::open(env.path("data/rastro.sqlite3")).unwrap()
+}
+fn count_where(env: &Env, table: &str, filter: &str) -> i64 {
+    database(env)
+        .query_row(
+            &format!("SELECT count(*) FROM {table} WHERE {filter}"),
+            [],
+            |r| r.get(0),
+        )
+        .unwrap()
+}
+fn rows(env: &Env, table: &str) -> i64 {
+    count_where(env, table, "1")
+}
+/// Everything the database keeps on disk, its write-ahead log included.
+fn stored_bytes(env: &Env) -> Vec<u8> {
+    let mut bytes = Vec::new();
+    for name in ["rastro.sqlite3", "rastro.sqlite3-wal"] {
+        bytes.extend(fs::read(env.path("data").join(name)).unwrap_or_default());
+    }
+    bytes
+}
+fn holds(bytes: &[u8], text: &str) -> bool {
+    bytes
+        .windows(text.len())
+        .any(|window| window == text.as_bytes())
+}
+
+/// S5: a changed transcript that fails to extract keeps the last good results, marked stale; one
+/// that succeeds replaces them; the meeting is never duplicated.
+#[test]
+fn S5_reimport_with_changed_text_marks_last_good_stale_on_failure_and_replaces_on_success() {
+    let env = Env::new();
+    let first = env.import_ok(&["--owner-speaker", "Alice"]);
+    assert_eq!(first["stale"], false);
+    assert!(first.get("results_from").is_none());
+
+    // Changed text, and the extractor's answer is unusable: the old results stay, said to be stale.
+    fs::write(
+        env.path("transcript.txt"),
+        TRANSCRIPT.replace("by Friday", "by Monday"),
+    )
+    .unwrap();
+    fs::write(env.path("response.json"), "not json").unwrap();
+    let (ok, failed) = env.import(&["--owner-speaker", "Alice"]);
+    assert!(!ok);
+    assert_eq!(failed["extraction"]["state"], "failed");
+    assert_eq!(failed["stale"], true);
+    assert_eq!(failed["hypotheses"], first["hypotheses"]);
+    assert_eq!(failed["results_from"]["run"], first["extraction"]["run"]);
+    // A read says the same, and the stale results are not retried or dropped by reading.
+    let read = env.read();
+    assert_eq!(read["stale"], true);
+    assert_eq!(read["hypotheses"], first["hypotheses"]);
+    assert_eq!(rows(&env, "meeting"), 1);
+
+    // The changed text extracts: the new execution replaces the stale results.
+    let mut changed = good();
+    changed[0] = candidate(
+        1,
+        Some("Alice"),
+        Some("Bob"),
+        "send Bob the budget",
+        Some("by Monday"),
+        "I'll send Bob the budget by Monday",
+    );
+    env.extractor(&changed);
+    let second = env.import_ok(&["--owner-speaker", "Alice"]);
+    assert_eq!(second["stale"], false);
+    assert!(second.get("results_from").is_none());
+    assert_eq!(second["hypotheses"][0]["stated_date"]["text"], "by Monday");
+    assert_eq!(second["hypotheses"].as_array().unwrap().len(), 3);
+    assert_eq!(env.read()["hypotheses"], second["hypotheses"]);
+    assert_eq!(rows(&env, "meeting"), 1);
+    assert_eq!(rows(&env, "meeting_hypothesis"), 3);
+    assert_eq!(rows(&env, "meeting_output"), 1);
+}
+
+/// S6: replay re-derives the results from the recorded output with no model call, and forgetting
+/// removes the meeting's retained spans, recorded output and results.
+#[test]
+fn S6_replay_needs_no_model_call_and_forgetting_removes_what_was_retained() {
+    let env = Env::new();
+    env.ok(&["identity", "person", "create", "--name", "Bob"]);
+    // A second meeting must be left alone by forgetting the first.
+    let (ok, other) = env.run(&[
+        "meeting",
+        "import",
+        env.path("transcript.txt").to_str().unwrap(),
+        "--meeting",
+        "other",
+        "--scope",
+        "work",
+        "--captured-at",
+        "2026-11-11T10:00:00Z",
+        "--owner-speaker",
+        "Alice",
+    ]);
+    assert!(ok, "{other}");
+    // The first meeting has a promise of its own, which the second does not share.
+    fs::write(
+        env.path("transcript.txt"),
+        TRANSCRIPT.replace("I'll update the plan.", "I'll update the Q4 plan."),
+    )
+    .unwrap();
+    let mut proposed = good();
+    proposed[2]["quote"] = json!("I'll update the Q4 plan.");
+    env.extractor(&proposed);
+    let imported = env.import_ok(&[
+        "--owner-speaker",
+        "Alice",
+        "--speaker",
+        "Bob=rastro:name/Bob",
+    ]);
+    assert_eq!(imported["hypotheses"][0]["recipient"]["state"], "mapped");
+    assert!(holds(&stored_bytes(&env), "I'll update the Q4 plan."));
+
+    // The extractor is gone, and nothing may be sent to it.
+    fs::remove_file(env.path("extractor.sh")).unwrap();
+    fs::remove_file(env.path("request.json")).unwrap();
+    let replayed = env.ok(&["meeting", "replay", "weekly-1"]);
+    assert!(!env.path("request.json").exists());
+    assert_eq!(replayed["extraction"]["state"], "succeeded");
+    assert_eq!(
+        replayed["extraction"]["replay_of"],
+        imported["extraction"]["run"]
+    );
+    assert_eq!(replayed["stale"], false);
+    assert_eq!(replayed["hypotheses"], imported["hypotheses"]);
+    assert_eq!(env.read()["hypotheses"], imported["hypotheses"]);
+    // Replaying again works from the replay, and keeps no second copy of the results.
+    assert_eq!(
+        env.ok(&["meeting", "replay", "weekly-1"])["hypotheses"],
+        imported["hypotheses"]
+    );
+    assert_eq!(rows(&env, "meeting_hypothesis"), 6);
+
+    let forgotten = env.ok(&["meeting", "forget", "weekly-1"]);
+    assert_eq!(forgotten["meeting"], "weekly-1");
+    assert_eq!(forgotten["removed"]["hypotheses"], 3);
+    assert!(forgotten["removed"]["spans"].as_i64().unwrap() > 0);
+    assert_eq!(forgotten["removed"]["recorded_output"], 1);
+    let of_runs = "run_id IN (SELECT id FROM meeting_run WHERE meeting_id = 'weekly-1')";
+    for table in [
+        "meeting_hypothesis",
+        "meeting_span",
+        "meeting_output",
+        "meeting_speaker",
+    ] {
+        assert_eq!(count_where(&env, table, of_runs), 0, "{table}");
+    }
+    assert_eq!(
+        count_where(&env, "meeting_run", "meeting_id = 'weekly-1'"),
+        0
+    );
+    assert_eq!(count_where(&env, "meeting", "id = 'weekly-1'"), 0);
+    assert_eq!(
+        count_where(&env, "meeting_transcript", "meeting_id = 'weekly-1'"),
+        0
+    );
+    assert!(!holds(&stored_bytes(&env), "I'll update the Q4 plan."));
+    let (ok, gone) = env.run(&["meeting", "commitments", "weekly-1"]);
+    assert!(!ok);
+    assert!(gone["error"].as_str().unwrap().contains("unknown meeting"));
+    for operation in ["replay", "forget", "export"] {
+        let (ok, _) = env.run(&["meeting", operation, "weekly-1"]);
+        assert!(!ok, "{operation}");
+    }
+    // The other meeting still reads.
+    let kept = env.ok(&["meeting", "commitments", "other"]);
+    assert_eq!(kept["hypotheses"].as_array().unwrap().len(), 3);
+}
+
+/// S6: a meeting with nothing recorded can't be replayed, and replaying records nothing.
+#[test]
+fn S6_replay_without_recorded_output_is_an_error_and_records_nothing() {
+    let env = Env::new();
+    fs::write(env.path("response.json"), "not json").unwrap();
+    let (ok, failed) = env.import(&["--owner-speaker", "Alice"]);
+    assert!(!ok);
+    assert_eq!(failed["extraction"]["state"], "failed");
+    let runs = rows(&env, "meeting_run");
+    let (ok, error) = env.run(&["meeting", "replay", "weekly-1"]);
+    assert!(!ok);
+    assert!(
+        error["error"]
+            .as_str()
+            .unwrap()
+            .contains("nothing recorded")
+    );
+    assert_eq!(rows(&env, "meeting_run"), runs);
+}
+
+/// S7: by default the supporting spans and the recorded output are kept for replay and the full
+/// transcript is not; an export leaves recorded model output out; opting in keeps the transcript.
+#[test]
+fn S7_default_import_retains_spans_and_output_but_not_the_transcript() {
+    let env = Env::new();
+    env.import_ok(&["--owner-speaker", "Alice"]);
+    assert_eq!(rows(&env, "meeting_transcript"), 0);
+    assert_eq!(rows(&env, "meeting_output"), 1);
+    assert!(rows(&env, "meeting_span") >= 3);
+    let bytes = stored_bytes(&env);
+    // Cited turns are kept; a turn nothing cites is not.
+    assert!(holds(&bytes, "I'll send Bob the budget by Friday"));
+    assert!(!holds(&bytes, "I will email Dave the notes tomorrow"));
+    assert!(!holds(&bytes, "Thanks. I'll review it next week"));
+    assert_eq!(env.read()["transcript_retained"], false);
+
+    let export = env.ok(&["meeting", "export", "weekly-1"]);
+    assert_eq!(export["meeting"]["id"], "weekly-1");
+    assert_eq!(export["owner_speaker"], "Alice");
+    assert!(export.get("transcript").is_none());
+    assert!(export.get("hypotheses").is_none());
+    let text = export.to_string();
+    for model_output in ["send Bob the budget", "candidates", "Friday", "budget"] {
+        assert!(!text.contains(model_output), "{model_output}: {text}");
+    }
+
+    // Opt in: the transcript is kept, and exported.
+    env.import_ok(&["--owner-speaker", "Alice", "--retain-transcript"]);
+    assert_eq!(rows(&env, "meeting_transcript"), 1);
+    assert!(holds(
+        &stored_bytes(&env),
+        "I will email Dave the notes tomorrow"
+    ));
+    assert_eq!(env.read()["transcript_retained"], true);
+    let export = env.ok(&["meeting", "export", "weekly-1"]);
+    assert_eq!(export["transcript"], TRANSCRIPT);
+    // What the model proposed is still not in it.
+    assert!(!export.to_string().contains("share the roadmap with Alice"));
+    assert!(export.get("hypotheses").is_none());
+
+    // Importing again without the opt-in does not keep the earlier opt-in's text.
+    env.import_ok(&["--owner-speaker", "Alice"]);
+    assert_eq!(rows(&env, "meeting_transcript"), 0);
+    assert_eq!(env.read()["transcript_retained"], false);
+}
+
+/// S6: a replay whose recorded output no longer passes the core's checks fails visibly and leaves
+/// the earlier results stale, without calling the extractor.
+#[test]
+fn S6_a_replay_that_no_longer_validates_fails_and_marks_the_results_stale() {
+    let env = Env::new();
+    let imported = env.import_ok(&["--owner-speaker", "Alice"]);
+    database(&env)
+        .execute(
+            "UPDATE meeting_output SET candidates = replace(candidates, 'budget by Friday', 'budget by Never')",
+            [],
+        )
+        .unwrap();
+    fs::remove_file(env.path("request.json")).unwrap();
+    let (ok, failed) = env.run(&["meeting", "replay", "weekly-1"]);
+    let failed = failed["result"].clone();
+    assert!(!ok);
+    assert!(!env.path("request.json").exists());
+    assert_eq!(failed["extraction"]["state"], "failed");
+    assert_eq!(failed["extraction"]["cause"], "invalid_quote");
+    assert_eq!(
+        failed["extraction"]["replay_of"],
+        imported["extraction"]["run"]
+    );
+    assert_eq!(failed["stale"], true);
+    assert_eq!(failed["hypotheses"], imported["hypotheses"]);
+}

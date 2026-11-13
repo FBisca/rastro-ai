@@ -6,6 +6,11 @@
 //! never takes a candidate on trust. It checks the quote, the owner's involvement and the stated
 //! date itself, resolves people only through the owner's explicit mapping, and keeps the previous
 //! good results when a run fails.
+//!
+//! A successful run also records what replay needs, and nothing more: the candidates it kept (the
+//! recorded model output), the turns they cite (the supporting spans) and the speaker mappings.
+//! Replay checks that record again with no model call. The transcript is kept only on opt-in, and
+//! forgetting a meeting deletes all of it.
 use crate::{CoverageState, Rastro, ReadStorage, Reader, Scope, Snapshot, Storage};
 use anyhow::{Context, Result, bail, ensure};
 use chrono::{DateTime, Utc};
@@ -209,6 +214,9 @@ pub struct Extraction {
     pub finished_at: DateTime<Utc>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub extractor: Option<String>,
+    /// The run whose recorded output this run checked again, with no model call.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub replay_of: Option<i64>,
     /// Candidates the core left out because the transcript did not support the owner's part.
     pub excluded: usize,
 }
@@ -234,9 +242,55 @@ pub struct MeetingCommitments {
     pub notice: String,
     pub extraction: Extraction,
     pub coverage: MeetingCoverage,
+    /// True when the latest run failed and the hypotheses below come from an earlier good run:
+    /// they say what an earlier look found, not what the transcript now says.
+    pub stale: bool,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub results_from: Option<ResultsFrom>,
+    /// Whether the full transcript is kept (only on opt-in at import).
+    pub transcript_retained: bool,
     pub hypotheses: Vec<Hypothesis>,
+}
+
+/// A meeting as `meeting export` writes it: what the owner supplied, not what a model proposed.
+/// Hypotheses, recorded model output and supporting spans are left out.
+#[derive(Clone, Debug, JsonSchema, Serialize)]
+pub struct MeetingExport {
+    pub format: String,
+    pub notice: String,
+    pub meeting: MeetingRef,
+    /// The owner's speaker label in the latest run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub owner_speaker: Option<String>,
+    /// The explicit speaker mappings of the latest good run, the owner's left out.
+    pub speakers: Vec<ExportedSpeaker>,
+    /// The full transcript, only when the owner opted in to keep it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub transcript: Option<String>,
+}
+/// One explicit speaker mapping.
+#[derive(Clone, Debug, JsonSchema, Serialize)]
+pub struct ExportedSpeaker {
+    pub label: String,
+    pub identity: Identity,
+}
+pub const EXPORT_FORMAT: &str = "rastro-meeting-export/1";
+pub const EXPORT_NOTICE: &str = "The meeting as the owner supplied it. Commitment hypotheses, recorded model output and supporting spans are derived and are not exported.";
+
+/// What forgetting a meeting removed.
+#[derive(Clone, Debug, Default, JsonSchema, Serialize)]
+pub struct Removed {
+    pub runs: usize,
+    pub hypotheses: usize,
+    pub spans: usize,
+    pub recorded_output: usize,
+    pub transcript: bool,
+}
+/// What `meeting forget` returns.
+#[derive(Clone, Debug, JsonSchema, Serialize)]
+pub struct MeetingForgotten {
+    pub meeting: String,
+    pub removed: Removed,
 }
 
 /// One run as storage keeps it.
@@ -248,6 +302,7 @@ pub struct RunRow {
     pub cause: Option<Cause>,
     pub reason: Option<String>,
     pub extractor: Option<String>,
+    pub replay_of: Option<i64>,
     pub turns_total: usize,
     pub turns_read: usize,
     pub excluded: usize,
@@ -259,6 +314,47 @@ pub struct StoredMeeting {
     pub latest: RunRow,
     pub good: Option<RunRow>,
     pub hypotheses: Vec<Hypothesis>,
+    pub transcript_retained: bool,
+}
+/// One supporting span: a turn a recorded candidate cites, with its text, or a turn beside it,
+/// kept for its speaker only (its text is empty).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct Span {
+    pub turn: usize,
+    pub speaker: String,
+    pub text: String,
+}
+/// What a successful run keeps for replay.
+#[derive(Clone, Debug)]
+pub struct Recorded {
+    /// The kept candidates as the extractor proposed them, as JSON.
+    pub candidates: String,
+    pub spans: Vec<Span>,
+    /// The explicit speaker mappings the run used, the owner's included.
+    pub speakers: Vec<(String, Identity)>,
+}
+/// What a run does to the meeting's retained transcript.
+#[derive(Clone, Debug)]
+pub enum TranscriptKeep {
+    /// The run did not read the transcript: whatever is kept stays.
+    Untouched,
+    /// The run read it without the opt-in: nothing is kept.
+    Drop,
+    /// The run read it with the opt-in: this replaces what was kept.
+    Store(String),
+}
+/// What replay starts from: the latest good run's record.
+#[derive(Clone, Debug)]
+pub struct Recording {
+    pub meeting: MeetingRef,
+    pub run: i64,
+    pub extractor: Option<String>,
+    pub owner_speaker: String,
+    pub turns_total: usize,
+    pub excluded: usize,
+    pub candidates: String,
+    pub spans: Vec<Span>,
+    pub speakers: Vec<(String, Identity)>,
 }
 /// A finished run to record, with its hypotheses when it succeeded.
 #[derive(Clone, Debug)]
@@ -275,6 +371,11 @@ pub struct RunRecord {
     pub turns_read: usize,
     pub excluded: usize,
     pub hypotheses: Vec<Hypothesis>,
+    /// The run whose recorded output this one checked again.
+    pub replay_of: Option<i64>,
+    /// Present on a successful run.
+    pub recorded: Option<Recorded>,
+    pub transcript: TranscriptKeep,
 }
 
 impl StoredMeeting {
@@ -308,9 +409,12 @@ impl StoredMeeting {
                 run: latest.id,
                 finished_at: latest.finished_at,
                 extractor: latest.extractor.clone(),
+                replay_of: latest.replay_of,
                 excluded: latest.excluded,
             },
             coverage,
+            stale: self.good.as_ref().is_some_and(|good| good.id != latest.id),
+            transcript_retained: self.transcript_retained,
             results_from: self
                 .good
                 .as_ref()
@@ -397,7 +501,7 @@ struct RequestOwner<'a> {
 struct Response {
     candidates: Vec<Candidate>,
 }
-#[derive(Deserialize)]
+#[derive(Clone, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct Candidate {
     turn: usize,
@@ -587,8 +691,9 @@ fn validate(
     candidates: Vec<Candidate>,
     turns: &[Turn],
     people: &People,
-) -> Result<(Vec<Hypothesis>, usize), Failure> {
+) -> Result<Validated, Failure> {
     let mut kept = Vec::new();
+    let mut proposed = Vec::new();
     let mut excluded = 0;
     for (n, candidate) in candidates.into_iter().enumerate() {
         let number = n + 1;
@@ -650,6 +755,7 @@ fn validate(
             excluded += 1;
             continue;
         }
+        proposed.push(candidate.clone());
         let end = start + candidate.quote.len();
         let stated_date = match candidate
             .stated_date
@@ -679,7 +785,55 @@ fn validate(
             },
         });
     }
-    Ok((kept, excluded))
+    Ok(Validated {
+        hypotheses: kept,
+        proposed,
+        excluded,
+    })
+}
+
+/// What passed the core's checks.
+struct Validated {
+    hypotheses: Vec<Hypothesis>,
+    /// The candidates behind the hypotheses, as proposed.
+    proposed: Vec<Candidate>,
+    excluded: usize,
+}
+
+/// The record a successful run keeps for replay: the kept candidates, the turns they cite and the
+/// speakers beside those turns, and the speaker mappings.
+fn record_of(validated: &Validated, turns: &[Turn], people: &People) -> Recorded {
+    let cited: std::collections::BTreeSet<usize> =
+        validated.proposed.iter().map(|c| c.turn).collect();
+    let mut wanted = cited.clone();
+    for &turn in &cited {
+        wanted.insert(turn.saturating_sub(1));
+        wanted.insert(turn + 1);
+    }
+    let spans = wanted
+        .into_iter()
+        .filter_map(|turn| {
+            let found = turn.checked_sub(1).and_then(|index| turns.get(index))?;
+            Some(Span {
+                turn,
+                speaker: found.speaker.clone(),
+                text: if cited.contains(&turn) {
+                    found.text.clone()
+                } else {
+                    String::new()
+                },
+            })
+        })
+        .collect();
+    Recorded {
+        candidates: serde_json::to_string(&validated.proposed).expect("candidates serialise"),
+        spans,
+        speakers: people
+            .mapped
+            .iter()
+            .map(|(label, identity)| (label.clone(), identity.clone()))
+            .collect(),
+    }
 }
 
 /// What one import asks for.
@@ -693,6 +847,8 @@ pub struct ImportRequest {
     pub owner_speaker: Option<String>,
     /// Other labels mapped to existing entities: (label, entity form).
     pub speakers: Vec<(String, String)>,
+    /// Keep the full transcript, which is not kept by default.
+    pub retain_transcript: bool,
 }
 
 fn read_transcript(path: &Path) -> Result<String, Failure> {
@@ -836,13 +992,19 @@ impl<S: Storage> Rastro<S> {
         let started_at = crate::coverage::now()?;
         let mut turns_total = 0;
         let mut extractor = None;
-        let outcome = (|| -> Result<(Vec<Hypothesis>, usize), Failure> {
+        let mut transcript = TranscriptKeep::Untouched;
+        let outcome = (|| -> Result<(Validated, Recorded), Failure> {
             let text = read_transcript(&request.file)?;
             let turns = match parse_transcript(&text) {
                 Ok(turns) => turns,
                 Err(reason) => return fail(Cause::TranscriptInvalid, reason),
             };
             turns_total = turns.len();
+            transcript = if request.retain_transcript {
+                TranscriptKeep::Store(text)
+            } else {
+                TranscriptKeep::Drop
+            };
             let people = self
                 .storage
                 .snapshot(|view| Ok(resolve_people(view, request, &turns)))
@@ -871,7 +1033,9 @@ impl<S: Storage> Rastro<S> {
             })
             .expect("the request serialises");
             let candidates = run_extractor(&config, &body)?;
-            validate(candidates, &turns, &people)
+            let validated = validate(candidates, &turns, &people)?;
+            let recorded = record_of(&validated, &turns, &people);
+            Ok((validated, recorded))
         })();
         let finished_at = crate::coverage::now()?;
         let mut record = RunRecord {
@@ -891,13 +1055,17 @@ impl<S: Storage> Rastro<S> {
             turns_read: 0,
             excluded: 0,
             hypotheses: Vec::new(),
+            replay_of: None,
+            recorded: None,
+            transcript,
         };
         match outcome {
-            Ok((hypotheses, excluded)) => {
+            Ok((validated, recorded)) => {
                 record.state = RunState::Succeeded;
                 record.turns_read = turns_total;
-                record.excluded = excluded;
-                record.hypotheses = hypotheses;
+                record.excluded = validated.excluded;
+                record.hypotheses = validated.hypotheses;
+                record.recorded = Some(recorded);
             }
             Err(failure) => {
                 record.cause = Some(failure.cause);
@@ -913,6 +1081,121 @@ impl<S: Storage> Rastro<S> {
 }
 
 impl<S: Storage> Rastro<S> {
+    /// Checks the latest good run's recorded output against its retained spans again, with no
+    /// model call and without the transcript, and records the outcome as a new run. A meeting
+    /// with nothing recorded can't be replayed, and records nothing.
+    pub fn replay_meeting(&mut self, meeting: &str) -> Result<MeetingCommitments> {
+        if self
+            .storage
+            .snapshot(|view| view.meeting(meeting, &[]))?
+            .is_none()
+        {
+            bail!("unknown meeting: {meeting}");
+        }
+        let Some(recording) = self
+            .storage
+            .snapshot(|view| view.meeting_recording(meeting))?
+        else {
+            bail!(
+                "nothing recorded to replay for meeting {meeting}: no extraction has succeeded since it was imported, or its record was forgotten"
+            );
+        };
+        let started_at = crate::coverage::now()?;
+        let outcome = (|| -> Result<(Validated, Recorded), Failure> {
+            let candidates: Vec<Candidate> = match serde_json::from_str(&recording.candidates) {
+                Ok(candidates) => candidates,
+                Err(error) => {
+                    return fail(
+                        Cause::ExtractorOutputInvalid,
+                        format!("the recorded output can't be read: {error}"),
+                    );
+                }
+            };
+            let size = recording
+                .spans
+                .iter()
+                .map(|span| span.turn)
+                .max()
+                .unwrap_or(0)
+                .max(recording.turns_total);
+            // Only the retained spans are known; every other turn is a blank no candidate cites.
+            let mut turns: Vec<Turn> = (1..=size)
+                .map(|index| Turn {
+                    index,
+                    speaker: String::new(),
+                    text: String::new(),
+                })
+                .collect();
+            for span in &recording.spans {
+                turns[span.turn - 1] = Turn {
+                    index: span.turn,
+                    speaker: span.speaker.clone(),
+                    text: span.text.clone(),
+                };
+            }
+            let people = People {
+                owner: recording.owner_speaker.clone(),
+                mapped: recording.speakers.iter().cloned().collect(),
+            };
+            let validated = validate(candidates, &turns, &people)?;
+            let recorded = record_of(&validated, &turns, &people);
+            Ok((validated, recorded))
+        })();
+        let finished_at = crate::coverage::now()?;
+        let mut record = RunRecord {
+            meeting: recording.meeting.clone(),
+            started_at,
+            finished_at,
+            state: RunState::Failed,
+            cause: None,
+            reason: None,
+            extractor: recording.extractor.clone(),
+            owner_speaker: Some(recording.owner_speaker.clone()),
+            turns_total: recording.turns_total,
+            turns_read: 0,
+            excluded: 0,
+            hypotheses: Vec::new(),
+            replay_of: Some(recording.run),
+            recorded: None,
+            transcript: TranscriptKeep::Untouched,
+        };
+        match outcome {
+            Ok((validated, recorded)) => {
+                record.state = RunState::Succeeded;
+                record.turns_read = recording.turns_total;
+                record.excluded = recording.excluded + validated.excluded;
+                record.hypotheses = validated.hypotheses;
+                record.recorded = Some(recorded);
+            }
+            Err(failure) => {
+                record.cause = Some(failure.cause);
+                record.reason = Some(failure.reason);
+            }
+        }
+        self.storage.record_meeting_run(&record)?;
+        self.meeting_commitments(meeting)
+    }
+
+    /// Deletes everything kept for a meeting: its runs, results, supporting spans, recorded
+    /// output, speaker mappings and retained transcript.
+    pub fn forget_meeting(&mut self, meeting: &str) -> Result<MeetingForgotten> {
+        match self.storage.forget_meeting(meeting)? {
+            Some(removed) => Ok(MeetingForgotten {
+                meeting: meeting.into(),
+                removed,
+            }),
+            None => bail!("unknown meeting: {meeting}"),
+        }
+    }
+
+    /// The meeting as the owner supplied it, without anything a model proposed.
+    pub fn export_meeting(&mut self, meeting: &str) -> Result<MeetingExport> {
+        match self.storage.snapshot(|view| view.meeting_export(meeting))? {
+            Some(export) => Ok(export),
+            None => bail!("unknown meeting: {meeting}"),
+        }
+    }
+
     /// The same read as [`Reader::meeting_commitments`], on a writing open.
     pub fn meeting_commitments(&mut self, meeting: &str) -> Result<MeetingCommitments> {
         match self.storage.snapshot(|view| view.meeting(meeting, &[]))? {

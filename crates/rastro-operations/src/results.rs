@@ -58,6 +58,10 @@ pub struct ClaimsRebuildResult {
 }
 /// A meeting's commitment hypotheses with extraction and coverage state.
 pub type MeetingResult = rastro_core::meeting::MeetingCommitments;
+/// What forgetting a meeting removed.
+pub type MeetingForgetResult = rastro_core::meeting::MeetingForgotten;
+/// A meeting as the owner supplied it, without recorded model output.
+pub type MeetingExportResult = rastro_core::meeting::MeetingExport;
 
 /// A claim and bounded complete justifications, each citing every required span.
 pub type WhyResult = rastro_core::knowledge::Explanation;
@@ -66,7 +70,7 @@ impl Response {
     pub fn envelope(&self) -> Value {
         envelope::success(self.operation(), &self.result())
     }
-    /// False when a sync ran a source, or its extractor, that failed, or a meeting import's run failed.
+    /// False when a sync ran a source, or its extractor, that failed, or a meeting import's or replay's run failed.
     pub fn succeeded(&self) -> bool {
         match self {
             Self::Sync(r) => r.runs.iter().all(|run| {
@@ -77,7 +81,7 @@ impl Response {
                         .is_none_or(|e| e.state != ExtractionState::Failed)
             }),
             Self::ClaimsRebuild(r) => r.pairs.iter().all(|p| p.state != ExtractionState::Failed),
-            Self::MeetingImport(r) => {
+            Self::MeetingImport(r) | Self::MeetingReplay(r) => {
                 r.extraction.state == rastro_core::meeting::RunState::Succeeded
             }
             _ => true,
@@ -168,6 +172,7 @@ mod tests {
                 run: 1,
                 finished_at: at,
                 extractor: None,
+                replay_of: None,
                 excluded: 0,
             },
             coverage: MeetingCoverage {
@@ -176,7 +181,9 @@ mod tests {
                 turns_total: 0,
                 reason: None,
             },
+            stale: false,
             results_from: None,
+            transcript_retained: false,
             hypotheses: vec![],
         }
     }
@@ -268,6 +275,19 @@ mod tests {
             Response::IdentityAnswer(IdentityWriteResult { intents: vec![] }),
             Response::MeetingImport(meeting()),
             Response::MeetingCommitments(meeting()),
+            Response::MeetingReplay(meeting()),
+            Response::MeetingForget(rastro_core::meeting::MeetingForgotten {
+                meeting: "m".into(),
+                removed: Default::default(),
+            }),
+            Response::MeetingExport(rastro_core::meeting::MeetingExport {
+                format: rastro_core::meeting::EXPORT_FORMAT.into(),
+                notice: rastro_core::meeting::EXPORT_NOTICE.into(),
+                meeting: meeting().meeting,
+                owner_speaker: None,
+                speakers: vec![],
+                transcript: None,
+            }),
         ];
         let arguments = |name: &str| match name {
             "source.add" => {
@@ -279,7 +299,9 @@ mod tests {
             "identity.person.create" => serde_json::json!({"name": "Ana"}),
             "meeting.import" => serde_json::json!({"file": "t.txt", "meeting": "m", "scope": "w",
                 "captured_at": "2026-11-10T10:00:00Z"}),
-            "meeting.commitments" => serde_json::json!({"meeting": "m"}),
+            "meeting.commitments" | "meeting.replay" | "meeting.forget" | "meeting.export" => {
+                serde_json::json!({"meeting": "m"})
+            }
             "identity.link" => serde_json::json!({"account": "github:login/a", "person": "me"}),
             "identity.merge" => serde_json::json!({"person": "me", "other": "rastro:name/Ana"}),
             "identity.undo" => serde_json::json!({"intent": "i_1"}),

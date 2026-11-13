@@ -26,5 +26,16 @@ A user imports one speaker-labelled transcript for one meeting. A configured ext
 - **Core-side name matching to find people.** Rejected: it would infer identity from names (`../decisions/knowledge.md` §54).
 
 ## Consequences
-- Recorded output, replay without a model call, stale results, retention and forgetting build on `meeting_run` and `meeting_hypothesis` (the follow-up ticket); this ADR is amended there.
+- Recorded output, replay without a model call, stale results, retention and forgetting build on `meeting_run` and `meeting_hypothesis`; see Amendment 2026-11-13 below.
 - The owner's mapping is per import, not remembered.
+
+## Amendment 2026-11-13: replay, retention and forgetting
+Migration `202611131100_meeting_retention` adds `meeting_run.replay_of` and four tables.
+- **Recorded output.** A successful run writes `meeting_output` (the candidates the core kept, as the extractor proposed them, as JSON), `meeting_span` (the turns those candidates cite, with their text, and the turns beside them, speaker only) and `meeting_speaker` (the mappings used, the owner's included). Candidates the core excluded are not recorded, matching §4. Only the latest good run keeps them: a later success deletes the earlier runs' copies in the same transaction, and a failed run writes none, so the last good record stays replayable.
+- **Replay** (`meeting.replay`, CLI only) reads that record without a transcript or an extractor, runs the same checks (§4) over the spans, and records a run with `replay_of` set to the run it checked. It writes the record again for itself. A check that no longer passes is a failed run with its cause, so the earlier results turn stale as in §5. The count of excluded candidates adds those of the replayed run. With no recorded output it is an operation error and records nothing.
+- **Stale.** A read reports `stale` when the latest run failed and the hypotheses come from an earlier good run, which `results_from` names (§5).
+- **Transcript retention.** `meeting_transcript` holds the full text only when the import had `--retain-transcript`. Any import that reads a transcript replaces what was kept: with the opt-in, the new text; without it, nothing. A run that never read it (unreadable file) leaves it as it was.
+- **Export** (`meeting.export`, CLI only, read-only) writes the meeting identity, the owner label, the explicit mappings of the latest good run and the retained transcript if any. Hypotheses, recorded output and spans are not exported (the slice-13 export of precious inputs, `../decisions/sharing.md` §8, will take this as it is).
+- **Forgetting** (`meeting.forget`, CLI only) deletes every row kept for the meeting in one transaction, then truncates the write-ahead log. The connection sets `secure_delete`, so deleted pages are overwritten and a replaced result does not linger in a free page of the database file. A copy in a backup, or in a write-ahead log a concurrent reader holds, is outside what the core can scrub.
+- **Rejected: keeping the whole extractor response for replay.** It would store the candidates the core excluded, about people the transcript does not tie to the owner. Rejected: replay re-checks only what was kept.
+- **Rejected: replay as an unrecorded read.** A replay that fails its checks has to turn the earlier results stale, and a replay that succeeds has to show which run it came from, so each is a run.
