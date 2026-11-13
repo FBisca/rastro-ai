@@ -86,13 +86,9 @@ impl Env {
         self.home.path().join(name)
     }
 
-    /// What the adapter answers with.
+    /// What the adapter answers with: the candidates the script wraps in its answer.
     fn candidates(&self, candidates: &[Value]) {
-        fs::write(
-            self.path("candidates.json"),
-            json!({ "candidates": candidates }).to_string(),
-        )
-        .unwrap();
+        fs::write(self.path("candidates.json"), json!(candidates).to_string()).unwrap();
     }
 
     fn command(&self, args: &[&str]) -> Command {
@@ -473,8 +469,16 @@ fn S5_every_hypothesis_carries_the_standard_terms_it_expresses() {
     .unwrap();
     let entries: Vec<&toml::Value> = vocabulary
         .get("types")
+        .and_then(|types| types.as_array())
         .into_iter()
-        .chain(vocabulary.get("predicates").into_iter())
+        .flatten()
+        .chain(
+            vocabulary
+                .get("predicates")
+                .and_then(|predicates| predicates.as_array())
+                .into_iter()
+                .flatten(),
+        )
         .collect();
     let ids: Vec<&str> = entries
         .iter()
