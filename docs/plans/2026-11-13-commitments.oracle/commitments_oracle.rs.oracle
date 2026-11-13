@@ -4,7 +4,7 @@
 //! Labels are read as JSON values, so the checks need no new Rust types.
 #![allow(non_snake_case)]
 mod support;
-use serde_json::{json, Value};
+use serde_json::{Value, json};
 use std::{
     fs,
     io::{BufRead, BufReader, Write},
