@@ -2,6 +2,7 @@
 use rastro_core::{Scope, Source, Storage};
 use rastro_storage_sqlite::SqliteStorage;
 use rusqlite::Connection;
+use std::fs;
 
 /// evidence/R4: stored evidence rejects updates and deletes
 #[test]
@@ -711,4 +712,287 @@ fn a_label_lookup_by_location_and_field_uses_an_index() {
             .any(|step| step.contains("SEARCH evidence USING INDEX evidence_by_location")),
         "{plan:?}"
     );
+}
+
+/// A conversation, imported through a fake adapter that records whether it was ever called, so a
+/// replay or a rebuild can be shown to need no model.
+mod recorded {
+    use rastro_core::Storage;
+    use rastro_core::{
+        Locations, Rastro, Scope,
+        meeting::{ImportRequest, MeetingCommitments, RunState},
+    };
+    use rastro_storage_sqlite::SqliteStorage;
+    use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf};
+    use tempfile::TempDir;
+
+    const TRANSCRIPT: &str = "Alice: I'll send Bob the budget by Friday.\n\
+Bob: Thanks. I'll review it next week for you if the numbers are final.\n\
+Alice: Bob, can you share the roadmap?\n";
+    const CANDIDATES: &str = r#"[{"turn":1,"kind":"promise","responsible":"Alice","recipient":"Bob","promise":"send Bob the budget","stated_date":"by Friday","quote":"I'll send Bob the budget by Friday"}]"#;
+    const MANIFEST: &str = r#"id = "test-adapter"
+name = "Rastro test agent tool adapter"
+version = "0.1.0"
+author = "Rastro"
+kinds = ["agent-tool-adapter"]
+protocol = 1
+command = "adapter"
+agent_tool = { capabilities = ["judge_text"] }
+
+[permissions]
+submit = []
+scopes = []
+env = []
+actions = []
+"#;
+
+    pub struct Env {
+        pub home: TempDir,
+    }
+    impl Env {
+        pub fn new() -> Self {
+            let env = Self {
+                home: tempfile::tempdir().unwrap(),
+            };
+            let plugin = env.path("config/plugins/test-adapter");
+            fs::create_dir_all(&plugin).unwrap();
+            fs::write(
+                env.path("config/config.toml"),
+                "[commitment_adapter]\nplugin = \"test-adapter\"\n",
+            )
+            .unwrap();
+            fs::write(plugin.join("rastro-plugin.toml"), MANIFEST).unwrap();
+            fs::write(env.path("candidates.json"), CANDIDATES).unwrap();
+            // Every call of the adapter leaves a line in `called`.
+            let script = format!(
+                r#"#!/bin/sh
+echo called >> "{called}"
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+  case "$line" in
+    *'"method":"initialize"'*)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocol":"1.0","manifest_id":"test-adapter"}}}}\n' "$id"
+      ;;
+    *'"method":"judgment.request"'*)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"candidates":' "$id"
+      cat "{candidates}"
+      printf '}}}}\n'
+      ;;
+    *'"method":"run.finish"'*)
+      printf '{{"jsonrpc":"2.0","id":%s,"result":{{"status":"ok","submitted":1}}}}\n' "$id"
+      ;;
+  esac
+done
+"#,
+                called = env.path("called").display(),
+                candidates = env.path("candidates.json").display(),
+            );
+            let adapter = plugin.join("adapter");
+            fs::write(&adapter, script).unwrap();
+            fs::set_permissions(&adapter, fs::Permissions::from_mode(0o755)).unwrap();
+            fs::write(env.path("transcript.txt"), TRANSCRIPT).unwrap();
+            env
+        }
+        pub fn path(&self, name: &str) -> PathBuf {
+            self.home.path().join(name)
+        }
+        pub fn database(&self) -> PathBuf {
+            self.path("data/rastro.sqlite3")
+        }
+        pub fn open(&self) -> Rastro<SqliteStorage> {
+            fs::create_dir_all(self.path("data")).unwrap();
+            Rastro::open(
+                Locations {
+                    data: self.path("data"),
+                    config: self.path("config"),
+                },
+                SqliteStorage::open(&self.database()).unwrap(),
+            )
+            .unwrap()
+        }
+        /// What the database keeps of the latest good run, read through a second connection.
+        pub fn recording(&self, meeting: &str) -> Option<rastro_core::meeting::Recording> {
+            SqliteStorage::open(&self.database())
+                .unwrap()
+                .snapshot(|view| view.meeting_recording(meeting))
+                .unwrap()
+        }
+        /// How many times the adapter was started.
+        pub fn calls(&self) -> usize {
+            fs::read_to_string(self.path("called")).map_or(0, |text| text.lines().count())
+        }
+        pub fn import(
+            &self,
+            rastro: &mut Rastro<SqliteStorage>,
+            meeting: &str,
+        ) -> MeetingCommitments {
+            rastro.identity_me().unwrap();
+            let imported = rastro
+                .import_meeting(&ImportRequest {
+                    meeting: meeting.into(),
+                    scope: Scope("work".into()),
+                    captured_at: "2026-11-10T10:00:00Z".parse().unwrap(),
+                    file: self.path("transcript.txt"),
+                    owner_speaker: Some("Alice".into()),
+                    speakers: Vec::new(),
+                    retain_transcript: false,
+                })
+                .unwrap();
+            assert_eq!(
+                imported.extraction.state,
+                RunState::Succeeded,
+                "{imported:?}"
+            );
+            assert_eq!(imported.hypotheses.len(), 1, "{imported:?}");
+            imported
+        }
+    }
+}
+
+/// commitments/S8: a successful run records the interpretation with the spans it cites, and
+/// nothing beyond them.
+#[test]
+fn S8_the_interpretation_is_recorded_with_the_spans_it_cites() {
+    let env = recorded::Env::new();
+    let mut rastro = env.open();
+    env.import(&mut rastro, "weekly-1");
+    let recording = env
+        .recording("weekly-1")
+        .expect("a successful run records its interpretation");
+    assert!(
+        recording
+            .candidates
+            .contains("I'll send Bob the budget by Friday")
+    );
+    let cited: Vec<_> = recording
+        .spans
+        .iter()
+        .filter(|span| !span.text.is_empty())
+        .collect();
+    assert_eq!(cited.len(), 1, "{:?}", recording.spans);
+    assert_eq!(cited[0].turn, 1);
+    assert!(cited[0].text.contains("I'll send Bob the budget by Friday"));
+    // The turn beside it is kept for its speaker only; turn 3 is neither cited nor beside it.
+    assert!(
+        recording
+            .spans
+            .iter()
+            .all(|span| span.turn == 1 || span.text.is_empty()),
+        "{:?}",
+        recording.spans
+    );
+    assert!(recording.spans.iter().all(|span| span.turn != 3));
+}
+
+/// commitments/S8: a replay checks the record again with no model call, and a replay of a record
+/// that no longer validates fails and marks the results stale.
+#[test]
+fn S8_a_replay_checks_the_record_with_no_model_call_and_a_broken_record_fails_stale() {
+    use rastro_core::{
+        commitments::SourceKind,
+        meeting::{Cause, RunState},
+    };
+    let env = recorded::Env::new();
+    let mut rastro = env.open();
+    let imported = env.import(&mut rastro, "weekly-1");
+    assert_eq!(env.calls(), 1);
+
+    // The adapter is gone: the replay still checks the record.
+    fs::remove_file(env.path("config/plugins/test-adapter/adapter")).unwrap();
+    let replayed = rastro.replay_commitments(None).unwrap();
+    assert_eq!(replayed.sources.len(), 1, "{replayed:?}");
+    let source = &replayed.sources[0];
+    assert_eq!(
+        (source.kind, source.name.as_str()),
+        (SourceKind::Meeting, "weekly-1")
+    );
+    assert_eq!(source.state, RunState::Succeeded, "{source:?}");
+    assert!(!source.stale, "{source:?}");
+    assert_eq!(env.calls(), 1, "a replay called the adapter");
+    let read = rastro.commitments(None, None).unwrap();
+    assert_eq!(read.sources[0].hypotheses.len(), 1);
+    assert_eq!(
+        read.sources[0].extraction.replay_of.as_deref(),
+        Some(imported.extraction.run.to_string().as_str())
+    );
+
+    // A record that no longer validates fails the replay and leaves the results stale.
+    rusqlite::Connection::open(env.database())
+        .unwrap()
+        .execute(
+            "UPDATE meeting_output SET candidates = replace(candidates, 'budget by Friday', 'budget by Never')",
+            [],
+        )
+        .unwrap();
+    let failed = rastro.replay_commitments(Some("weekly-1")).unwrap();
+    let source = &failed.sources[0];
+    assert_eq!(source.state, RunState::Failed, "{source:?}");
+    assert_eq!(source.cause, Some(Cause::InvalidQuote), "{source:?}");
+    assert!(source.stale, "{source:?}");
+    let read = rastro.commitments(None, None).unwrap();
+    assert!(read.sources[0].stale);
+    assert_eq!(
+        read.sources[0].hypotheses.len(),
+        1,
+        "the last good results stay"
+    );
+    assert_eq!(env.calls(), 1);
+
+    // A source with nothing recorded can't be replayed by name, and is skipped in a sweep.
+    assert!(rastro.replay_commitments(Some("nope")).is_err());
+}
+
+/// commitments/S8: a rebuild never calls a model: the claims rebuild leaves the hypotheses and
+/// their record as they were, and re-deriving the hypotheses reads the record only.
+#[test]
+fn S8_a_rebuild_never_calls_a_model() {
+    let env = recorded::Env::new();
+    let mut rastro = env.open();
+    env.import(&mut rastro, "weekly-1");
+    let before = rastro.commitments(None, None).unwrap();
+    let recorded_before = env.recording("weekly-1").unwrap();
+    assert_eq!(env.calls(), 1);
+
+    rastro.rebuild_claims().unwrap();
+    let after = rastro.commitments(None, None).unwrap();
+    assert_eq!(
+        format!("{:?}", after.sources[0].hypotheses),
+        format!("{:?}", before.sources[0].hypotheses)
+    );
+    assert_eq!(
+        after.sources[0].extraction.run,
+        before.sources[0].extraction.run
+    );
+    let recorded_after = env.recording("weekly-1").unwrap();
+    assert_eq!(recorded_after.candidates, recorded_before.candidates);
+    assert_eq!(recorded_after.spans, recorded_before.spans);
+
+    // Re-deriving the hypotheses from the record, with the adapter configured away, needs none.
+    fs::write(env.path("config/config.toml"), "").unwrap();
+    let mut rastro = env.open();
+    rastro.rebuild_claims().unwrap();
+    let rebuilt = rastro.replay_commitments(None).unwrap();
+    assert_eq!(rebuilt.sources.len(), 1, "{rebuilt:?}");
+    assert_eq!(env.calls(), 1, "a rebuild called the adapter");
+}
+
+/// commitments/S8: an export leaves the recorded output and the spans out.
+#[test]
+fn S8_an_export_leaves_the_recorded_output_and_the_spans_out() {
+    let env = recorded::Env::new();
+    let mut rastro = env.open();
+    env.import(&mut rastro, "weekly-1");
+    let exported = serde_json::to_value(rastro.export_meeting("weekly-1").unwrap()).unwrap();
+    // Only what the owner supplied: no hypothesis, no recorded output, no span.
+    let mut keys: Vec<_> = exported.as_object().unwrap().keys().cloned().collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        ["format", "meeting", "notice", "owner_speaker", "speakers"],
+        "{exported}"
+    );
+    let text = exported.to_string();
+    for derived in ["budget", "Friday", "roadmap"] {
+        assert!(!text.contains(derived), "{derived} leaked: {text}");
+    }
 }
