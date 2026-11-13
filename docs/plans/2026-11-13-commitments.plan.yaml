@@ -190,3 +190,8 @@ tickets:
     paths: [docs/roadmap.md, README.md]
     owner: fbisca
     blocked_by: [T1, T2, T3, T4, T5]
+approval:
+  by: felippe.bisca@gmail.com
+  at: '2026-11-13T18:05:20.240838+00:00'
+  base: 60a47cff5a96d668f8cfc0a186cde8a95d7a0548
+  digest: bc8fc9c575ddd14ccd8724980a20bf07656ad06e9e4ad32a80ee92220f8ad47e
