@@ -1,0 +1,197 @@
+schema: plan/1
+slug: commitments
+goal: The owner reads the commitments their conversations proposed, as cited hypotheses with their quotes and kinds, from one `commitments` list on CLI and MCP.
+spec: docs/specs/commitments.md
+outcome: [S1, S2, S5, S8, S10]
+
+scenarios:
+  # The list
+  - id: S1
+    when: The owner asks for commitments and a source has hypotheses.
+    then: The list shows every hypothesis with its source (kind, name, scope), its kind (`ask`, `promise` or `waiting_on`), the promise text, the stated date or null, the responsible and the recipient (label, and the entity only when the owner mapped it explicitly, else null), the exact quote with its turn, speaker and byte range, the status `hypothesis`, and the standard vocabulary terms it expresses; and for each source its extraction state, its coverage state and whether its results are stale.
+    evidence:
+      check: CARGO_TARGET_DIR="$XDG_CACHE_HOME/rastro-eec-target" cargo test -p rastro-cli --test commitments_oracle S1_
+      baseline: fail
+      oracle: [commitments_oracle.rs.oracle]
+      place: crates/rastro-cli/tests/
+      timeout: 2400
+  - id: S2
+    when: Two sources have hypotheses, or the caller filters by source or by vocabulary term.
+    then: One list holds both sources' hypotheses, each naming its source; a source filter narrows the list to that source and drops the other sources' entries; a term filter narrows the hypotheses to those expressing that term; a filter that matches nothing returns an empty list, not an error.
+    evidence:
+      check: CARGO_TARGET_DIR="$XDG_CACHE_HOME/rastro-eec-target" cargo test -p rastro-cli --test commitments_oracle S2_
+      baseline: fail
+      oracle: [commitments_oracle.rs.oracle]
+      place: crates/rastro-cli/tests/
+      timeout: 2400
+  - id: S3
+    when: A source has no hypotheses, or its last run failed, or its coverage couldn't look.
+    then: "The list names that source: `found nothing` when it has none, the failed run with its cause, or `couldn't look` with its reason; a source is never left out silently."
+    evidence:
+      check: CARGO_TARGET_DIR="$XDG_CACHE_HOME/rastro-eec-target" cargo test -p rastro-cli --test commitments_oracle S3_
+      baseline: fail
+      oracle: [commitments_oracle.rs.oracle]
+      place: crates/rastro-cli/tests/
+      timeout: 2400
+  - id: S4
+    when: The launch scope hides a source.
+    then: Its hypotheses are absent from the list, and the list still succeeds.
+    evidence:
+      check: CARGO_TARGET_DIR="$XDG_CACHE_HOME/rastro-eec-target" cargo test -p rastro-cli --test commitments_oracle S4_
+      baseline: fail
+      oracle: [commitments_oracle.rs.oracle]
+      place: crates/rastro-cli/tests/
+      timeout: 2400
+
+  # The standard vocabulary
+  - id: S5
+    when: The standard vocabulary is loaded.
+    then: "It defines `std:Commitment` and the predicates `std:owes`, `std:owed_to`, `std:due` and `std:waiting_on`, each with a definition, what it is not, examples and the evidence it needs; and every hypothesis carries the terms it expresses: `std:owes` when it has a responsible party, `std:owed_to` when it has a recipient, `std:due` when it states a date, and `std:waiting_on` when it is a waiting-on."
+    evidence:
+      check: CARGO_TARGET_DIR="$XDG_CACHE_HOME/rastro-eec-target" cargo test -p rastro-cli --test commitments_oracle S5_
+      baseline: fail
+      oracle: [commitments_oracle.rs.oracle]
+      place: crates/rastro-cli/tests/
+      timeout: 2400
+
+  # The agent tool adapter
+  - id: S6
+    when: The owner imports a conversation with a configured agent tool adapter.
+    then: The core calls the adapter over the plugin protocol with the content, its own instructions and the fields it expects, and keeps only the candidates that pass the core's own checks (an exact contiguous quote, the owner's involvement, a stated date the quote states); an adapter whose response breaks the expected shape fails the run and keeps the last good results.
+    evidence:
+      check: CARGO_TARGET_DIR="$XDG_CACHE_HOME/rastro-eec-target" cargo test -p rastro-cli --test adapter S6_
+      baseline: fail
+      timeout: 2400
+  - id: S7
+    when: An adapter's manifest is checked.
+    then: It declares the kind `agent-tool-adapter` and the agent-tool capabilities it needs, never a named tool; a manifest that names a tool, or that doesn't declare the kind, is refused before anything runs.
+    evidence:
+      check: CARGO_TARGET_DIR="$XDG_CACHE_HOME/rastro-eec-target" cargo test -p rastro-cli --test adapter S7_
+      baseline: fail
+      timeout: 2400
+
+  # Recorded, replayed, never re-called
+  - id: S8
+    when: A run succeeds, is replayed, or the projection is rebuilt.
+    then: The interpretation is recorded with the spans it cites; a replay checks it again with no model call, and a replay of a record that no longer validates fails and marks the results stale; a rebuild never calls a model; an export leaves the recorded output and the spans out.
+    evidence:
+      check: CARGO_TARGET_DIR="$XDG_CACHE_HOME/rastro-eec-target" cargo test -p rastro-cli --test commitments_oracle S8_
+      baseline: fail
+      oracle: [commitments_oracle.rs.oracle]
+      place: crates/rastro-cli/tests/
+      timeout: 2400
+
+  # Bots
+  - id: S9
+    when: A candidate's party is explicitly mapped to an account the evidence says is a bot.
+    then: The candidate is excluded and counted; a party that is only named is not excluded.
+    evidence:
+      check: CARGO_TARGET_DIR="$XDG_CACHE_HOME/rastro-eec-target" cargo test -p rastro-cli --test commitments S9_
+      baseline: fail
+      timeout: 2400
+
+  # Switch day
+  - id: S10
+    when: The slice has landed.
+    then: The owner reads the commitments of a real conversation from the `commitments` list over MCP, without opening the transcript by hand.
+    evidence:
+      human: The owner read one real conversation's commitments over MCP, from the `commitments` list, without opening the transcript by hand.
+
+tickets:
+  - id: T3
+    delivers: "The agent tool adapter: the plugin SDK's manifest field and kind, the plugin protocol's judgment message, the core's call and strict validation, the reference Claude Code adapter, and the conversation import's use of it"
+    satisfies: [S6, S7]
+    paths:
+      - crates/rastro-plugin-sdk/
+      - crates/rastro-core/src/host/
+      - crates/rastro-core/src/meeting.rs
+      - crates/rastro-core/src/lib.rs
+      - crates/rastro-adapter-claude-code/
+      - crates/rastro-cli/tests/adapter.rs
+      - crates/rastro-cli/tests/meeting.rs
+      - docs/adr/
+      - docs/decisions/plugins.md
+      - docs/decisions/meetings.md
+      - docs/decisions/surfaces.md
+      - docs/GLOSSARY.md
+    size: regular
+    difficulty: complex
+    risk: [security, external]
+  - id: T1
+    delivers: One `commitments` list on CLI and MCP over every source that has hypotheses, with the source-neutral hypothesis shape, the source and term filters, scope filtering and honest gaps; it is additive within v2, so the meeting read stays until the next schema version
+    satisfies: [S1, S2, S3, S4]
+    paths:
+      - crates/rastro-core/src/commitments/
+      - crates/rastro-core/src/meeting.rs
+      - crates/rastro-core/src/read_only.rs
+      - crates/rastro-core/src/lib.rs
+      - crates/rastro-storage-sqlite/src/commitments.rs
+      - crates/rastro-storage-sqlite/src/meeting.rs
+      - crates/rastro-storage-sqlite/src/lib.rs
+      - crates/rastro-operations/
+      - crates/rastro-cli/src/
+      - crates/rastro-cli/tests/commitments_oracle.rs
+      - crates/rastro-cli/tests/mcp.rs
+      - crates/rastro-cli/tests/meeting.rs
+      - schema/
+      - docs/specs/commitments.md
+      - docs/specs/surfaces.md
+      - docs/specs/meetings.md
+      - docs/decisions/surfaces.md
+      - docs/decisions/knowledge.md
+      - docs/decisions/meetings.md
+      - docs/GLOSSARY.md
+    size: regular
+    difficulty: complex
+    risk: [state, migration]
+    blocked_by: [T3]
+  - id: T2
+    delivers: The standard vocabulary `std:` bundled with the core, defining `std:Commitment` and its four predicates with the fields a vocabulary needs; every hypothesis carries the terms it expresses
+    satisfies: [S5]
+    paths:
+      - crates/rastro-core/src/commitments/
+      - crates/rastro-core/src/lib.rs
+      - crates/rastro-cli/src/
+      - crates/rastro-cli/tests/commitments_oracle.rs
+      - docs/decisions/vocabulary.md
+      - docs/GLOSSARY.md
+    size: small
+    difficulty: simple
+    blocked_by: [T1]
+  - id: T4
+    delivers: The recorded interpretation, the replay that needs no model call and the rebuild that never calls one, behind the source-neutral seam; exports leave the recorded output and the spans out
+    satisfies: [S8]
+    paths:
+      - crates/rastro-core/src/commitments/
+      - crates/rastro-core/src/meeting.rs
+      - crates/rastro-storage-sqlite/src/commitments.rs
+      - crates/rastro-storage-sqlite/src/meeting.rs
+      - crates/rastro-cli/tests/commitments_oracle.rs
+      - docs/decisions/knowledge.md
+      - docs/decisions/meetings.md
+    size: regular
+    difficulty: complex
+    risk: [state, migration]
+    blocked_by: [T1]
+  - id: T5
+    delivers: A candidate whose party is mapped to an account the evidence says is a bot is excluded and counted; a party only named is not
+    satisfies: [S9]
+    paths:
+      - crates/rastro-core/src/commitments/
+      - crates/rastro-cli/tests/commitments.rs
+      - docs/open-questions.md
+      - docs/decisions/knowledge.md
+    size: small
+    difficulty: simple
+    blocked_by: [T1]
+  - id: T6
+    delivers: "Switch day: install the adapter, import a real conversation, read its commitments from the `commitments` list over MCP"
+    satisfies: [S10]
+    paths: [docs/roadmap.md, README.md]
+    owner: fbisca
+    blocked_by: [T1, T2, T3, T4, T5]
+approval:
+  by: felippe.bisca@gmail.com
+  at: '2026-11-13T18:05:20.240838+00:00'
+  base: 60a47cff5a96d668f8cfc0a186cde8a95d7a0548
+  digest: bc8fc9c575ddd14ccd8724980a20bf07656ad06e9e4ad32a80ee92220f8ad47e
