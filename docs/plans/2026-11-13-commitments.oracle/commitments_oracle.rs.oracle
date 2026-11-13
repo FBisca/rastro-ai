@@ -86,13 +86,9 @@ impl Env {
         self.home.path().join(name)
     }
 
-    /// What the adapter answers with.
+    /// What the adapter answers with: the candidates the script wraps in its answer.
     fn candidates(&self, candidates: &[Value]) {
-        fs::write(
-            self.path("candidates.json"),
-            json!({ "candidates": candidates }).to_string(),
-        )
-        .unwrap();
+        fs::write(self.path("candidates.json"), json!(candidates).to_string()).unwrap();
     }
 
     fn command(&self, args: &[&str]) -> Command {
@@ -127,10 +123,11 @@ impl Env {
 
     /// Imports one conversation, with the usual arguments plus `extra`.
     fn import_with(&self, meeting: &str, extra: &[&str]) -> (bool, Value) {
+        let transcript = self.path("transcript.txt");
         let mut args = vec![
             "meeting",
             "import",
-            self.path("transcript.txt").to_str().unwrap(),
+            transcript.to_str().unwrap(),
             "--meeting",
             meeting,
             "--scope",
@@ -464,12 +461,24 @@ fn S5_every_hypothesis_carries_the_standard_terms_it_expresses() {
     );
 
     // The vocabulary itself: every term says what it means, what it isn't, and what it needs.
-    let vocabulary: toml::Value =
-        toml::from_str(include_str!("../../../crates/rastro-core/src/commitments/std.toml")).unwrap();
+    let path = std::path::Path::new("../rastro-core/src/commitments/std.toml");
+    let vocabulary: toml::Value = toml::from_str(
+        &std::fs::read_to_string(path)
+            .unwrap_or_else(|error| panic!("the standard vocabulary is missing: {error}")),
+    )
+    .unwrap();
     let entries: Vec<&toml::Value> = vocabulary
         .get("types")
+        .and_then(|types| types.as_array())
         .into_iter()
-        .chain(vocabulary.get("predicates").into_iter())
+        .flatten()
+        .chain(
+            vocabulary
+                .get("predicates")
+                .and_then(|predicates| predicates.as_array())
+                .into_iter()
+                .flatten(),
+        )
         .collect();
     let ids: Vec<&str> = entries
         .iter()

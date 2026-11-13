@@ -132,10 +132,11 @@ tickets:
       - crates/rastro-core/src/lib.rs
       - crates/rastro-storage-sqlite/src/commitments.rs
       - crates/rastro-storage-sqlite/src/meeting.rs
+      - crates/rastro-storage-sqlite/migrations/
+      - crates/rastro-storage-sqlite/tests/migrations.rs
       - crates/rastro-storage-sqlite/src/lib.rs
       - crates/rastro-operations/
       - crates/rastro-cli/src/
-      - crates/rastro-cli/tests/commitments_oracle.rs
       - crates/rastro-cli/tests/mcp.rs
       - crates/rastro-cli/tests/meeting.rs
       - crates/rastro-cli/tests/support/mod.rs
@@ -158,7 +159,6 @@ tickets:
       - crates/rastro-core/src/commitments/
       - crates/rastro-core/src/lib.rs
       - crates/rastro-cli/src/
-      - crates/rastro-cli/tests/commitments_oracle.rs
       - docs/decisions/vocabulary.md
       - docs/GLOSSARY.md
     size: small
@@ -172,7 +172,8 @@ tickets:
       - crates/rastro-core/src/meeting.rs
       - crates/rastro-storage-sqlite/src/commitments.rs
       - crates/rastro-storage-sqlite/src/meeting.rs
-      - crates/rastro-cli/tests/commitments_oracle.rs
+      - crates/rastro-storage-sqlite/migrations/
+      - crates/rastro-storage-sqlite/tests/migrations.rs
       - docs/decisions/knowledge.md
       - docs/decisions/meetings.md
     size: regular
@@ -198,9 +199,9 @@ tickets:
     blocked_by: [T1, T2, T3, T4, T5]
 approval:
   by: felippe.bisca@gmail.com
-  at: '2026-11-13T18:46:51.351844+00:00'
+  at: '2026-11-13T19:26:29.937766+00:00'
   base: 60a47cff5a96d668f8cfc0a186cde8a95d7a0548
-  digest: 19c28567b159f2bd29dafeae49ad89875a9840a053facd04186969aa3e6456e1
+  digest: 339f89e3fc07ca55f8d742a6222835e894ba2d79e221e2fcc3c28ded609096f7
 amendments:
 - prev_digest: bc8fc9c575ddd14ccd8724980a20bf07656ad06e9e4ad32a80ee92220f8ad47e
   digest: 3425213d9028a9c2999fd9a811d71f20f306e828ff2bf7e420e0db3b89ecb757
@@ -227,3 +228,22 @@ amendments:
     core left the candidate out, correctly; the fixture now addresses the owner beside
     her turn.
   tickets: []
+- prev_digest: 19c28567b159f2bd29dafeae49ad89875a9840a053facd04186969aa3e6456e1
+  digest: d0fc35f1855ee498386ad67807b0d8f84bb3426f73c7b51599ab05f4df8fbb48
+  at: '2026-11-13T19:17:15.665567+00:00'
+  by: felippe.bisca@gmail.com (t2b2)
+  reason: 'The oracle did not compile: a borrowed path and a vocabulary file that
+    lands with the vocabulary ticket; both are fixed, so the checks now fail on assertions
+    as they should.'
+  tickets: []
+- prev_digest: d0fc35f1855ee498386ad67807b0d8f84bb3426f73c7b51599ab05f4df8fbb48
+  digest: 339f89e3fc07ca55f8d742a6222835e894ba2d79e221e2fcc3c28ded609096f7
+  at: '2026-11-13T19:26:29.937766+00:00'
+  by: felippe.bisca@gmail.com (t2b2)
+  reason: The oracle's candidates file and its vocabulary entries were wrong, so the
+    checks failed in setup; both are fixed and the checks now fail on assertions.
+    The list ticket also needs the storage migrations for the hypothesis kind.
+  tickets:
+  - T1
+  - T2
+  - T4
