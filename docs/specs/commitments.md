@@ -28,6 +28,6 @@ A hypothesis keeps the kind its run's recorded output holds; one whose recorded 
 | Requirement | Scenario | Test nodes |
 |---|---|---|
 | R1 | S1 | `crates/rastro-cli/tests/commitments_oracle.rs::S1_the_list_shows_every_hypothesis_with_its_source_and_state`<br>`crates/rastro-cli/tests/meeting.rs::S1_a_commitments_hypothesis_keeps_its_kind_and_defaults_to_a_promise` |
-| R2 | S2 | `crates/rastro-cli/tests/commitments_oracle.rs::S2_the_list_holds_every_source_and_the_filters_narrow_it` |
+| R2 | S2 | `crates/rastro-cli/tests/commitments_oracle.rs::S2_the_list_holds_every_source_and_the_filters_narrow_it`<br>`crates/rastro-cli/tests/meeting.rs::S2_the_commitments_list_holds_every_source_and_the_filters_narrow_it` |
 | R3 | S3 | `crates/rastro-cli/tests/commitments_oracle.rs::S3_a_source_with_nothing_and_a_failed_run_are_both_named`<br>`crates/rastro-cli/tests/meeting.rs::S3_a_commitments_term_filter_keeps_a_source_whose_run_failed` |
 | R4 | S4 | `crates/rastro-cli/tests/commitments_oracle.rs::S4_a_scope_that_hides_a_source_hides_its_hypotheses`<br>`crates/rastro-cli/tests/meeting.rs::S4_the_commitments_list_shows_each_scope_only_to_a_server_that_holds_it` |

@@ -1118,3 +1118,45 @@ fn S1_a_commitments_hypothesis_keeps_its_kind_and_defaults_to_a_promise() {
         ["promise", "promise", "promise"]
     );
 }
+
+/// commitments/S2: one list holds both sources' hypotheses, a source filter drops the other
+/// source, a term filter keeps the hypotheses expressing the term, and a filter that matches
+/// nothing is an empty list.
+#[test]
+fn S2_the_commitments_list_holds_every_source_and_the_filters_narrow_it() {
+    let env = Env::new();
+    let mut kinds = good();
+    kinds[1]["kind"] = json!("waiting_on");
+    env.extractor(&kinds);
+    import_as(&env, "weekly-1", "work");
+    import_as(&env, "weekly-2", "work");
+
+    let all = env.ok(&["commitments"]);
+    let mut names: Vec<&str> = all["sources"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|source| source["name"].as_str().unwrap())
+        .collect();
+    names.sort();
+    assert_eq!(names, ["weekly-1", "weekly-2"], "{all}");
+
+    let one = env.ok(&["commitments", "--source", "weekly-1"]);
+    let sources = one["sources"].as_array().unwrap();
+    assert_eq!(sources.len(), 1, "{one}");
+    assert_eq!(sources[0]["name"], "weekly-1", "{one}");
+
+    let waiting = env.ok(&["commitments", "--term", "std:waiting_on"]);
+    let sources = waiting["sources"].as_array().unwrap();
+    assert_eq!(sources.len(), 2, "{waiting}");
+    for source in sources {
+        let hypotheses = source["hypotheses"].as_array().unwrap();
+        assert_eq!(hypotheses.len(), 1, "{waiting}");
+        assert_eq!(hypotheses[0]["kind"], "waiting_on", "{waiting}");
+    }
+
+    let nothing = env.ok(&["commitments", "--source", "nope"]);
+    assert_eq!(nothing["sources"], json!([]), "{nothing}");
+    let no_term = env.ok(&["commitments", "--term", "std:supertype"]);
+    assert_eq!(no_term["sources"], json!([]), "{no_term}");
+}
