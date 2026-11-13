@@ -1,0 +1,542 @@
+//! Oracle for plan `commitments`: black-box checks of the source-neutral commitments list, on
+//! the CLI and over MCP. The agent tool adapter here is a shell script that speaks the plugin
+//! protocol and answers with the candidates in `candidates.json`, so no model is ever called.
+//! Labels are read as JSON values, so the checks need no new Rust types.
+#![allow(non_snake_case)]
+mod support;
+use serde_json::{Value, json};
+use std::{
+    fs,
+    io::{BufRead, BufReader, Write},
+    os::unix::fs::PermissionsExt,
+    path::PathBuf,
+    process::{Command, Stdio},
+};
+use tempfile::TempDir;
+
+const TRANSCRIPT: &str = "Alice: I'll send Bob the budget by Friday.\n\
+Bob: Thanks. I'll review it next week if the numbers are final.\n\
+Alice: Bob, can you share the roadmap?\n";
+
+const MANIFEST: &str = r#"id = "test-adapter"
+name = "Rastro test agent tool adapter"
+version = "0.1.0"
+author = "Rastro"
+kinds = ["agent-tool-adapter"]
+protocol = 1
+command = "adapter"
+agent_tool = { capabilities = ["judge_text"] }
+
+[permissions]
+submit = []
+scopes = []
+env = []
+actions = []
+"#;
+
+/// A fake agent tool adapter: it answers the plugin protocol and returns the candidates in
+/// `$RASTRO_HOME/candidates.json`.
+const ADAPTER: &str = r#"#!/bin/sh
+while IFS= read -r line; do
+  id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
+  case "$line" in
+    *'"method":"initialize"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"protocol":"1.0","manifest_id":"test-adapter"}}\n' "$id"
+      ;;
+    *'"method":"judgment.request"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"candidates":' "$id"
+      cat "$RASTRO_HOME/candidates.json"
+      printf '}}\n'
+      ;;
+    *'"method":"run.finish"'*)
+      printf '{"jsonrpc":"2.0","id":%s,"result":{"status":"ok","submitted":1}}\n' "$id"
+      ;;
+  esac
+done
+"#;
+
+struct Env {
+    home: TempDir,
+}
+
+impl Env {
+    fn new() -> Self {
+        let env = Self {
+            home: tempfile::tempdir().unwrap(),
+        };
+        fs::create_dir_all(env.path("config/plugins/test-adapter")).unwrap();
+        fs::write(
+            env.path("config/config.toml"),
+            "[commitment_adapter]\nplugin = \"test-adapter\"\n",
+        )
+        .unwrap();
+        fs::write(
+            env.path("config/plugins/test-adapter/rastro-plugin.toml"),
+            MANIFEST,
+        )
+        .unwrap();
+        let adapter = env.path("config/plugins/test-adapter/adapter");
+        fs::write(&adapter, ADAPTER).unwrap();
+        fs::set_permissions(&adapter, fs::Permissions::from_mode(0o755)).unwrap();
+        fs::write(env.path("transcript.txt"), TRANSCRIPT).unwrap();
+        env
+    }
+
+    fn path(&self, name: &str) -> PathBuf {
+        self.home.path().join(name)
+    }
+
+    /// What the adapter answers with.
+    fn candidates(&self, candidates: &[Value]) {
+        fs::write(
+            self.path("candidates.json"),
+            json!({ "candidates": candidates }).to_string(),
+        )
+        .unwrap();
+    }
+
+    fn command(&self, args: &[&str]) -> Command {
+        let mut command = Command::new(support::rastro());
+        command.env("RASTRO_HOME", self.home.path()).args(args);
+        command
+    }
+
+    fn run(&self, args: &[&str]) -> (bool, Value) {
+        let out = self.command(args).arg("--json").output().unwrap();
+        let value: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|_| {
+            panic!(
+                "{args:?}: {}{}",
+                String::from_utf8_lossy(&out.stdout),
+                String::from_utf8_lossy(&out.stderr)
+            )
+        });
+        let schema: Value =
+            serde_json::from_str(include_str!("../../../schema/operations-v2.schema.json")).unwrap();
+        jsonschema::validator_for(&schema)
+            .unwrap()
+            .validate(&value)
+            .unwrap_or_else(|error| panic!("{error}: {value}"));
+        (out.status.success(), value)
+    }
+
+    fn ok(&self, args: &[&str]) -> Value {
+        let (ok, value) = self.run(args);
+        assert!(ok, "{args:?}: {value}");
+        value["result"].clone()
+    }
+
+    /// Imports one conversation, with the usual arguments plus `extra`.
+    fn import_with(&self, meeting: &str, extra: &[&str]) -> (bool, Value) {
+        let mut args = vec![
+            "meeting",
+            "import",
+            self.path("transcript.txt").to_str().unwrap(),
+            "--meeting",
+            meeting,
+            "--scope",
+            "work",
+            "--captured-at",
+            "2026-11-10T10:00:00Z",
+        ];
+        args.extend_from_slice(extra);
+        let (ok, value) = self.run(&args);
+        (ok, value["result"].clone())
+    }
+
+    fn import_ok(&self, meeting: &str, extra: &[&str]) -> Value {
+        let (ok, result) = self.import_with(meeting, extra);
+        assert!(ok, "{result}");
+        result
+    }
+
+    /// The list, with the filters in `extra`.
+    fn list(&self, extra: &[&str]) -> Value {
+        let mut args = vec!["commitments"];
+        args.extend_from_slice(extra);
+        self.ok(&args)
+    }
+
+    fn mcp(&self, scopes: &[&str], tool: &str, arguments: Value) -> Value {
+        let mut command = self.command(&["mcp"]);
+        for scope in scopes {
+            command.args(["--scope", scope]);
+        }
+        let mut child = command
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+        let mut send = |message: Value| writeln!(stdin, "{message}").unwrap();
+        send(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "2025-11-25", "capabilities": {},
+            "clientInfo": {"name": "test", "version": "1"}}}),
+        );
+        lines.next().unwrap().unwrap();
+        send(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
+        send(json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": tool, "arguments": arguments}}));
+        let reply: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+        drop(stdin);
+        let _ = child.wait();
+        reply["result"].clone()
+    }
+}
+
+fn identifier(person: &Value) -> String {
+    person["person"]["identifier"].as_str().unwrap().to_string()
+}
+
+/// A candidate the adapter proposes.
+fn candidate(
+    turn: u32,
+    kind: &str,
+    responsible: Option<&str>,
+    recipient: Option<&str>,
+    promise: &str,
+    date: Option<&str>,
+    quote: &str,
+) -> Value {
+    json!({"turn": turn, "kind": kind, "responsible": responsible, "recipient": recipient,
+        "promise": promise, "stated_date": date, "quote": quote})
+}
+
+/// The three owner-involved commitments of `TRANSCRIPT`: a promise, a waiting-on and an ask.
+fn good() -> Vec<Value> {
+    vec![
+        candidate(
+            1,
+            "promise",
+            Some("Alice"),
+            Some("Bob"),
+            "send Bob the budget",
+            Some("by Friday"),
+            "I'll send Bob the budget by Friday",
+        ),
+        candidate(
+            2,
+            "waiting_on",
+            Some("Bob"),
+            Some("Alice"),
+            "review the numbers",
+            Some("next week"),
+            "I'll review it next week if the numbers are final.",
+        ),
+        candidate(
+            3,
+            "ask",
+            Some("Alice"),
+            Some("Bob"),
+            "share the roadmap",
+            None,
+            "Bob, can you share the roadmap?",
+        ),
+    ]
+}
+
+/// The hypothesis of a source whose quote is `quote`.
+fn hypothesis<'a>(source: &'a Value, quote: &str) -> &'a Value {
+    source["hypotheses"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|hypothesis| hypothesis["quote"]["text"] == quote)
+        .unwrap_or_else(|| panic!("no hypothesis with the quote {quote:?}: {source}"))
+}
+
+/// The terms of a hypothesis, sorted.
+fn terms(hypothesis: &Value) -> Vec<String> {
+    let mut terms: Vec<String> = hypothesis["terms"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|term| term.as_str().unwrap().to_string())
+        .collect();
+    terms.sort();
+    terms
+}
+
+/// S1: the list shows every hypothesis with its source, its kind, its parties, its stated date,
+/// its exact quote, its terms and its status, and the source's extraction, coverage and stale
+/// state.
+#[test]
+fn S1_the_list_shows_every_hypothesis_with_its_source_and_state() {
+    let env = Env::new();
+    let me = identifier(&env.ok(&["identity", "me"]));
+    let bob = identifier(&env.ok(&["identity", "person", "create", "--name", "Bob"]));
+    env.candidates(&good());
+    env.import_ok(
+        "weekly-1",
+        &["--owner-speaker", "Alice", "--speaker", "Bob=rastro:name/Bob"],
+    );
+
+    let list = env.list(&[]);
+    let sources = list["sources"].as_array().unwrap();
+    assert_eq!(sources.len(), 1, "{list}");
+    let source = &sources[0];
+    assert_eq!(source["kind"], "meeting", "{source}");
+    assert_eq!(source["name"], "weekly-1", "{source}");
+    assert_eq!(source["scope"], "work", "{source}");
+    assert_eq!(source["extraction"]["state"], "succeeded", "{source}");
+    assert_eq!(source["extraction"]["cause"], Value::Null, "{source}");
+    assert_eq!(source["extraction"]["adapter"], "test-adapter", "{source}");
+    assert_eq!(source["coverage"]["state"], "found", "{source}");
+    assert_eq!(source["coverage"]["turns_read"], 3, "{source}");
+    assert_eq!(source["coverage"]["turns_total"], 3, "{source}");
+    assert_eq!(source["stale"], false, "{source}");
+
+    let hypotheses = source["hypotheses"].as_array().unwrap();
+    assert_eq!(hypotheses.len(), 3, "{source}");
+
+    let promise = hypothesis(source, "I'll send Bob the budget by Friday");
+    assert_eq!(promise["status"], "hypothesis", "{promise}");
+    assert_eq!(promise["kind"], "promise", "{promise}");
+    assert_eq!(promise["promise"], "send Bob the budget", "{promise}");
+    assert_eq!(
+        promise["stated_date"],
+        json!({"state": "stated", "text": "by Friday"}),
+        "{promise}"
+    );
+    assert_eq!(promise["responsible"]["state"], "mapped", "{promise}");
+    assert_eq!(promise["responsible"]["identity"]["identifier"], me, "{promise}");
+    assert_eq!(promise["recipient"]["identity"]["identifier"], bob, "{promise}");
+    assert_eq!(promise["quote"]["turn"], 1, "{promise}");
+    assert_eq!(promise["quote"]["speaker"], "Alice", "{promise}");
+    assert!(promise["quote"]["start"].is_number(), "{promise}");
+    assert!(promise["quote"]["end"].is_number(), "{promise}");
+
+    // The other direction: Bob owes the owner, so the owner waits on him.
+    let waiting = hypothesis(source, "I'll review it next week if the numbers are final.");
+    assert_eq!(waiting["kind"], "waiting_on", "{waiting}");
+    assert_eq!(waiting["responsible"]["identity"]["identifier"], bob, "{waiting}");
+    assert_eq!(waiting["recipient"]["identity"]["identifier"], me, "{waiting}");
+
+    // An ask: no stated date, so none is read.
+    let ask = hypothesis(source, "Bob, can you share the roadmap?");
+    assert_eq!(ask["kind"], "ask", "{ask}");
+    assert_eq!(ask["stated_date"]["state"], "unknown", "{ask}");
+
+    // The agent-facing read is the same envelope.
+    let mcp = env.mcp(&["work"], "commitments", json!({}));
+    let (_, cli) = env.run(&["commitments"]);
+    assert_eq!(mcp["structuredContent"], cli);
+}
+
+/// S2: one list holds every source's hypotheses, a source filter drops the other sources, a term
+/// filter keeps only the hypotheses expressing that term, and a filter that matches nothing is
+/// an empty list.
+#[test]
+fn S2_the_list_holds_every_source_and_the_filters_narrow_it() {
+    let env = Env::new();
+    let _me = identifier(&env.ok(&["identity", "me"]));
+    let _bob = identifier(&env.ok(&["identity", "person", "create", "--name", "Bob"]));
+    env.candidates(&good());
+    env.import_ok(
+        "weekly-1",
+        &["--owner-speaker", "Alice", "--speaker", "Bob=rastro:name/Bob"],
+    );
+    env.import_ok(
+        "weekly-2",
+        &["--owner-speaker", "Alice", "--speaker", "Bob=rastro:name/Bob"],
+    );
+
+    let all = env.list(&[]);
+    let sources = all["sources"].as_array().unwrap();
+    assert_eq!(sources.len(), 2, "{all}");
+    let names: Vec<&str> = sources
+        .iter()
+        .map(|source| source["name"].as_str().unwrap())
+        .collect();
+    assert!(names.contains(&"weekly-1"), "{all}");
+    assert!(names.contains(&"weekly-2"), "{all}");
+
+    // A source filter drops the other source's entry, not only its hypotheses.
+    let one = env.list(&["--source", "weekly-1"]);
+    let sources = one["sources"].as_array().unwrap();
+    assert_eq!(sources.len(), 1, "{one}");
+    assert_eq!(sources[0]["name"], "weekly-1", "{one}");
+
+    // A term filter keeps only the hypotheses expressing that term, in every source.
+    let waiting = env.list(&["--term", "std:waiting_on"]);
+    let sources = waiting["sources"].as_array().unwrap();
+    assert_eq!(sources.len(), 2, "{waiting}");
+    for source in sources {
+        let hypotheses = source["hypotheses"].as_array().unwrap();
+        assert_eq!(hypotheses.len(), 1, "{waiting}");
+        assert_eq!(hypotheses[0]["kind"], "waiting_on", "{waiting}");
+    }
+
+    // A filter that matches nothing is an empty list, not an error.
+    let none = env.list(&["--source", "nope"]);
+    assert_eq!(none["sources"], json!([]), "{none}");
+    let no_term = env.list(&["--term", "std:supertype"]);
+    assert_eq!(no_term["sources"], json!([]), "{no_term}");
+}
+
+/// S3: a source with nothing to show, and a source whose last run failed, are both named.
+#[test]
+fn S3_a_source_with_nothing_and_a_failed_run_are_both_named() {
+    let env = Env::new();
+    let _me = identifier(&env.ok(&["identity", "me"]));
+    env.candidates(&[]);
+    env.import_ok("empty-1", &["--owner-speaker", "Alice"]);
+
+    let list = env.list(&[]);
+    let sources = list["sources"].as_array().unwrap();
+    assert_eq!(sources.len(), 1, "{list}");
+    let source = &sources[0];
+    assert_eq!(source["name"], "empty-1", "{source}");
+    assert_eq!(source["hypotheses"], json!([]), "{source}");
+    assert_eq!(source["extraction"]["state"], "succeeded", "{source}");
+    assert_eq!(source["coverage"]["state"], "found", "{source}");
+
+    // A run that fails is named with its cause, and the list still succeeds.
+    fs::write(env.path("candidates.json"), "not json").unwrap();
+    let (ok, failed) = env.import_with("broken-1", &["--owner-speaker", "Alice"]);
+    assert!(!ok, "{failed}");
+    let list = env.list(&[]);
+    let sources = list["sources"].as_array().unwrap();
+    let broken = sources
+        .iter()
+        .find(|source| source["name"] == "broken-1")
+        .unwrap_or_else(|| panic!("the failed source is missing: {list}"));
+    assert_eq!(broken["extraction"]["state"], "failed", "{broken}");
+    assert!(broken["extraction"]["cause"].is_string(), "{broken}");
+    assert_eq!(broken["hypotheses"], json!([]), "{broken}");
+}
+
+/// S4: a scope that hides a source hides its hypotheses, and the list still succeeds.
+#[test]
+fn S4_a_scope_that_hides_a_source_hides_its_hypotheses() {
+    let env = Env::new();
+    let _me = identifier(&env.ok(&["identity", "me"]));
+    env.candidates(&good());
+    env.import_ok("weekly-1", &["--owner-speaker", "Alice"]);
+
+    let hidden = env.mcp(&["personal"], "commitments", json!({}));
+    let listed = &hidden["structuredContent"];
+    assert_eq!(listed["result"]["sources"], json!([]), "{hidden}");
+
+    let shown = env.mcp(&["work"], "commitments", json!({}));
+    let sources = shown["structuredContent"]["result"]["sources"]
+        .as_array()
+        .unwrap();
+    assert_eq!(sources.len(), 1, "{shown}");
+}
+
+/// S5: the standard vocabulary defines the commitment terms, and every hypothesis carries the
+/// terms it expresses.
+#[test]
+fn S5_every_hypothesis_carries_the_standard_terms_it_expresses() {
+    let env = Env::new();
+    let _me = identifier(&env.ok(&["identity", "me"]));
+    let _bob = identifier(&env.ok(&["identity", "person", "create", "--name", "Bob"]));
+    env.candidates(&good());
+    env.import_ok(
+        "weekly-1",
+        &["--owner-speaker", "Alice", "--speaker", "Bob=rastro:name/Bob"],
+    );
+
+    let list = env.list(&[]);
+    let source = &list["sources"].as_array().unwrap()[0];
+
+    // A promise owes, is owed to, and states a date.
+    let promise = hypothesis(source, "I'll send Bob the budget by Friday");
+    assert_eq!(
+        terms(promise),
+        vec!["std:due", "std:owed_to", "std:owes"],
+        "{promise}"
+    );
+
+    // An ask owes and is owed to, but states no date.
+    let ask = hypothesis(source, "Bob, can you share the roadmap?");
+    assert_eq!(terms(ask), vec!["std:owed_to", "std:owes"], "{ask}");
+
+    // A waiting-on waits, and is owed to.
+    let waiting = hypothesis(source, "I'll review it next week if the numbers are final.");
+    assert_eq!(
+        terms(waiting),
+        vec!["std:due", "std:owed_to", "std:waiting_on"],
+        "{waiting}"
+    );
+
+    // The vocabulary itself: every term says what it means, what it isn't, and what it needs.
+    let vocabulary: toml::Value =
+        toml::from_str(include_str!("../../../crates/rastro-core/src/commitments/std.toml")).unwrap();
+    let entries: Vec<&toml::Value> = vocabulary
+        .get("types")
+        .into_iter()
+        .chain(vocabulary.get("predicates").into_iter())
+        .collect();
+    let ids: Vec<&str> = entries
+        .iter()
+        .filter_map(|entry| entry.get("id").and_then(|id| id.as_str()))
+        .collect();
+    for id in [
+        "std:Commitment",
+        "std:owes",
+        "std:owed_to",
+        "std:due",
+        "std:waiting_on",
+    ] {
+        assert!(ids.contains(&id), "the vocabulary misses {id}: {ids:?}");
+    }
+    for entry in entries {
+        let id = entry.get("id").and_then(|id| id.as_str()).unwrap();
+        for field in [
+            "definition",
+            "not_to_confuse_with",
+            "examples",
+            "counter_examples",
+            "evidence_requirement",
+        ] {
+            assert!(
+                entry.get(field).is_some(),
+                "{id} misses {field}: {entry:?}"
+            );
+        }
+    }
+}
+
+/// S8: the interpretation is recorded with the spans it cites, a replay checks it again with no
+/// model call, a record that no longer validates fails and marks the results stale, and an export
+/// leaves the recorded output out.
+#[test]
+fn S8_the_interpretation_is_recorded_replayed_without_a_model_and_never_exported() {
+    let env = Env::new();
+    let _me = identifier(&env.ok(&["identity", "me"]));
+    env.candidates(&good());
+    let imported = env.import_ok("weekly-1", &["--owner-speaker", "Alice"]);
+
+    // The adapter is gone: a replay still checks the record, with no model call.
+    fs::remove_file(env.path("config/plugins/test-adapter/adapter")).unwrap();
+    let replayed = env.ok(&["meeting", "replay", "weekly-1"]);
+    assert_eq!(replayed["hypotheses"], imported["hypotheses"]);
+    assert_eq!(replayed["stale"], false, "{replayed}");
+    assert_eq!(replayed["extraction"]["replay_of"], imported["extraction"]["run"]);
+
+    // A record that no longer validates fails the replay and leaves the results stale.
+    let database = rusqlite::Connection::open(env.path("data/rastro.sqlite3")).unwrap();
+    database
+        .execute(
+            "UPDATE meeting_output SET candidates = replace(candidates, 'budget by Friday', 'budget by Never')",
+            [],
+        )
+        .unwrap();
+    let (ok, failed) = env.run(&["meeting", "replay", "weekly-1"]);
+    let failed = failed["result"].clone();
+    assert!(!ok, "{failed}");
+    assert_eq!(failed["extraction"]["state"], "failed", "{failed}");
+    assert_eq!(failed["extraction"]["cause"], "invalid_quote", "{failed}");
+    assert_eq!(failed["stale"], true, "{failed}");
+    assert_eq!(failed["hypotheses"], imported["hypotheses"], "{failed}");
+
+    // An export leaves the recorded output and the spans out.
+    let exported = env.ok(&["meeting", "export", "weekly-1"]);
+    let exported = exported.to_string();
+    assert!(!exported.contains("budget by Friday"), "{exported}");
+    assert!(!exported.contains("candidates"), "{exported}");
+}
