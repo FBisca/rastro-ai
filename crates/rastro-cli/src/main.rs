@@ -466,6 +466,84 @@ fn candidates_text(result: &rastro_operations::results::IdentityCandidatesResult
         .collect();
     lines.join("\n")
 }
+fn party_text(party: &rastro_core::meeting::Party) -> String {
+    let label = party.label.as_deref().map(display_safe);
+    match (&party.identity, label) {
+        (Some(identity), Some(label)) => {
+            format!("{} ({label})", display_safe(&identity.identifier))
+        }
+        (Some(identity), None) => display_safe(&identity.identifier),
+        (None, Some(label)) => format!("unknown ({label})"),
+        (None, None) => "unknown".into(),
+    }
+}
+fn meeting_text(m: &rastro_core::meeting::MeetingCommitments) -> String {
+    let mut lines = vec![
+        format!(
+            "Meeting: {} | Scope: {} | Captured: {}",
+            display_safe(&m.meeting.id),
+            display_safe(&m.meeting.scope),
+            stamp(m.meeting.captured_at)
+        ),
+        m.notice.clone(),
+    ];
+    let e = &m.extraction;
+    let mut line = format!(
+        "Extraction: {} | Run: {} | Finished: {}",
+        e.state.as_str(),
+        e.run,
+        stamp(e.finished_at)
+    );
+    if let Some(extractor) = &e.extractor {
+        line += &format!(" | Extractor: {}", display_safe(extractor));
+    }
+    line += &format!(" | Excluded: {}", e.excluded);
+    if let Some(cause) = e.cause {
+        line += &format!(" | Cause: {}", cause.as_str());
+    }
+    if let Some(reason) = &e.reason {
+        line += &format!(" | Reason: {}", display_safe(reason));
+    }
+    lines.push(line);
+    lines.push(format!(
+        "Coverage: {} | Turns read: {} of {}",
+        m.coverage.state.as_str(),
+        m.coverage.turns_read,
+        m.coverage.turns_total
+    ));
+    if let Some(from) = &m.results_from {
+        lines.push(format!(
+            "The hypotheses below come from the last good run {} ({}), not the latest",
+            from.run,
+            stamp(from.finished_at)
+        ));
+    }
+    if m.hypotheses.is_empty() {
+        lines.push("No hypotheses".into());
+    }
+    for h in &m.hypotheses {
+        let date = match &h.stated_date.text {
+            Some(text) => display_safe(text),
+            None => "unknown".into(),
+        };
+        lines.push(format!(
+            "Hypothesis: {} -> {} | Promise: {} | Date: {}",
+            party_text(&h.responsible),
+            party_text(&h.recipient),
+            display_safe(&h.promise),
+            date
+        ));
+        lines.push(format!(
+            "  \"{}\" | Turn: {} | Speaker: {} | Span: [{}, {})",
+            display_escaped(&h.quote.text),
+            h.quote.turn,
+            display_safe(&h.quote.speaker),
+            h.quote.start,
+            h.quote.end
+        ));
+    }
+    lines.join("\n")
+}
 /// The result of an operation, its human form, and whether it succeeded.
 type Outcome = (Response, String);
 
@@ -507,6 +585,7 @@ fn human(response: &Response) -> String {
         Response::Search(r) => search_text(&r.query, r),
         Response::Why(r) => why_text(r),
         Response::About(r) => about_text(r),
+        Response::MeetingImport(r) | Response::MeetingCommitments(r) => meeting_text(r),
         Response::IdentityMe(r) | Response::IdentityPersonCreate(r) => person_text(r),
         Response::IdentityLink(r)
         | Response::IdentityMerge(r)

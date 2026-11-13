@@ -133,6 +133,15 @@ pub trait Snapshot {
     fn identity_accounts(&self) -> Result<Vec<crate::identity::AccountFacts>> {
         anyhow::bail!("storage does not support identity candidates")
     }
+    /// A meeting with its latest run and the hypotheses of its last good run, when it exists and
+    /// its scope is allowed (empty `scopes` allows every scope).
+    fn meeting(
+        &self,
+        _meeting: &str,
+        _scopes: &[Scope],
+    ) -> Result<Option<crate::meeting::StoredMeeting>> {
+        anyhow::bail!("storage does not support meetings")
+    }
     /// What storage recorded for the source, before the freshness rule is applied.
     fn coverage(&self, pair: &Pair, all_windows: bool) -> Result<Coverage>;
     /// Allowed (source, scope) pairs storage holds anything for, with stored freshness rules.

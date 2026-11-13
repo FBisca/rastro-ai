@@ -21,6 +21,7 @@ mod knowledge;
 /// `(name, sql)`, named `YYYYMMDDHHmm_<what>` so migrations from different branches
 /// order by time. Never edit one that has shipped; add a new one.
 mod lifecycle;
+mod meeting;
 mod scoped;
 #[doc(hidden)]
 pub use scoped::{cache_len as scoped_cache_len, clear_cache as clear_scoped_cache};
@@ -28,7 +29,7 @@ pub use scoped::{cache_len as scoped_cache_len, clear_cache as clear_scoped_cach
 /// The migration recording when an intent's contribution ended; an open that applies it replays
 /// the stored intents once all migrations are in.
 const INTENT_END: &str = "202611081000_intent_justification_end";
-const MIGRATIONS: [(&str, &str); 13] = [
+const MIGRATIONS: [(&str, &str); 14] = [
     (
         "202611041200_initial",
         include_str!("../migrations/202611041200_initial.sql"),
@@ -80,6 +81,10 @@ const MIGRATIONS: [(&str, &str); 13] = [
     (
         "202611121000_evidence_by_location",
         include_str!("../migrations/202611121000_evidence_by_location.sql"),
+    ),
+    (
+        "202611131000_meeting_commitments",
+        include_str!("../migrations/202611131000_meeting_commitments.sql"),
     ),
 ];
 
@@ -338,6 +343,9 @@ impl rastro_core::runs::StoredTwins for SqliteStorage {
     }
 }
 impl Storage for SqliteStorage {
+    fn record_meeting_run(&mut self, run: &rastro_core::meeting::RunRecord) -> Result<i64> {
+        meeting::record(&mut self.connection, run)
+    }
     fn project_sources(&mut self, sources: &[Source]) -> Result<()> {
         let transaction = self.connection.transaction()?;
         for source in sources {
@@ -882,6 +890,13 @@ impl View<'_> {
     }
 }
 impl Snapshot for View<'_> {
+    fn meeting(
+        &self,
+        meeting: &str,
+        scopes: &[Scope],
+    ) -> Result<Option<rastro_core::meeting::StoredMeeting>> {
+        meeting::load(self, meeting, scopes)
+    }
     fn about_view(
         &self,
         entity: &str,

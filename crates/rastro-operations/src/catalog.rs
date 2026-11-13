@@ -311,6 +311,15 @@ operations! {
     Why(WhyRequest => WhyResult) {
         slot: 6, name: "why", surfaces: [Cli, Mcp], read_only: true, reader: run_read, cli_read_path: true
     }
+    /// Import a meeting transcript and read its commitment hypotheses.
+    Meeting / MeetingRequest {
+        Import(MeetingImportRequest => MeetingResult) as MeetingImport {
+            slot: 17, name: "meeting.import", surfaces: [Cli], read_only: false
+        },
+        Commitments(MeetingCommitmentsRequest => MeetingResult) as MeetingCommitments {
+            slot: 18, name: "meeting.commitments", surfaces: [Cli, Mcp], read_only: true, reader: run_read, cli_read_path: true
+        },
+    }
     /// Owner identity: Persons, links between accounts and Persons, and merges. Writes are CLI only.
     Identity / IdentityRequest {
         Me(IdentityMeRequest => IdentityPersonResult) as IdentityMe {

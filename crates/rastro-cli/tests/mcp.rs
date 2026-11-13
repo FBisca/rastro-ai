@@ -287,7 +287,7 @@ fn listed_tools_equal_the_catalog_entries() {
 
 /// surfaces/R4: exactly search, coverage, about and why, read-only; any other tool is a JSON-RPC error and runs nothing
 #[test]
-fn exactly_four_read_only_tools_and_writes_are_protocol_errors() {
+fn exactly_five_read_only_tools_and_writes_are_protocol_errors() {
     let env = seeded();
     let config = env.home.path().join("config/config.toml");
     let config_before = fs::read(&config).unwrap();
@@ -296,7 +296,10 @@ fn exactly_four_read_only_tools_and_writes_are_protocol_errors() {
     let tools = session.list_tools();
     let mut names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     names.sort();
-    assert_eq!(names, ["about", "coverage", "search", "why"]);
+    assert_eq!(
+        names,
+        ["about", "coverage", "meeting.commitments", "search", "why"]
+    );
     for t in &tools {
         assert_eq!(t["annotations"]["readOnlyHint"], true, "{t}");
         assert_eq!(t["annotations"]["openWorldHint"], false, "{t}");
@@ -348,6 +351,7 @@ fn launch_migrates_recovers_and_turns_on_wal_before_the_first_answer() {
     let last = last_migration(&db);
     db.execute_batch(
         "DROP INDEX evidence_by_location;
+         DROP TABLE meeting_hypothesis; DROP TABLE meeting_run; DROP TABLE meeting;
          DROP TABLE automatic_justification; ALTER TABLE coverage DROP COLUMN gaps_json;
          DROP TABLE intent_justification; DROP TABLE intent;
          DELETE FROM schema_migrations WHERE name > '202611061200_knowledge_v2';
@@ -548,7 +552,7 @@ fn an_unsupported_revision_is_answered_with_the_pinned_revision() {
         let init = session.initialize_as(asked, "scripted-client");
         assert_eq!(init["result"]["protocolVersion"], PINNED, "asked {asked}");
         // Codex's default request (2025-06-18) proceeds: it lists tools and calls one.
-        assert_eq!(session.list_tools().len(), 4, "asked {asked}");
+        assert_eq!(session.list_tools().len(), 5, "asked {asked}");
         let call = session.call("coverage", json!({}));
         ok_result(&call["result"]);
     }
@@ -601,7 +605,7 @@ fn server_discover_first_does_not_end_the_session_and_initialize_then_works() {
     }
     let init = session.initialize();
     assert_eq!(init["result"]["protocolVersion"], PINNED);
-    assert_eq!(session.list_tools().len(), 4);
+    assert_eq!(session.list_tools().len(), 5);
 }
 
 /// surfaces/R25: two clients with different clientInfo get identical results; no name is stored
