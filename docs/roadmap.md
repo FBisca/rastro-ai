@@ -22,7 +22,7 @@ Status: `todo` · `planning` · `doing` · `done`
 
 | # | Slice | Outcome: from here on you can… | Builds on | Concept / decisions | Status |
 |---|---|---|---|---|---|
-| 5 | **Commitments from conversations** | See commitments (asks, promises, dates, waiting-on) pulled from an unstructured source as hypotheses, each with its quoted span, through a `commitments` list on CLI and MCP. Uses an agent tool adapter and a minimal standard vocabulary; a model's interpretation is recorded and replayed, never re-called at rebuild | 4b | knowledge §6, §13, §23, §46; vocabulary §1, §5; plugins §2, §10; meetings 1–13 | doing (`plans/2026-11-13-commitments.plan.yaml`, spec `specs/commitments.md`) |
+| 5 | **Commitments from conversations** | See commitments (asks, promises, dates, waiting-on) pulled from an unstructured source as hypotheses, each with its quoted span, through a `commitments` list on CLI and MCP. Uses an agent tool adapter and a minimal standard vocabulary; a model's interpretation is recorded and replayed, never re-called at rebuild | 4b | knowledge §6, §13, §23, §46; vocabulary §1, §5; plugins §2, §10; meetings 1–13 | done (`plans/2026-11-13-commitments.plan.yaml`, spec `specs/commitments.md`; switch day 2026-11-13) |
 | 6 | **The commitments queue** | Work a terminal queue of proposals and questions, checked against what's known first: accept, edit, reject, answer, `missed`. Outcomes are recorded, and the renderer reports what it showed | 5 | renderers §1–2, §6; learning §2–3, §11 | todo |
 | 7 | **Correct anything** | Confirm, fix or retract any claim; a retraction carries through to derived claims and pending proposals; "as of" queries | 6 | knowledge §7, §10; renderers §5 | todo |
 
