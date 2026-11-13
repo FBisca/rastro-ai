@@ -683,6 +683,23 @@
       ],
       "type": "object"
     },
+    "ExportedSpeaker": {
+      "additionalProperties": false,
+      "description": "One explicit speaker mapping.",
+      "properties": {
+        "identity": {
+          "$ref": "#/$defs/Identity"
+        },
+        "label": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "label",
+        "identity"
+      ],
+      "type": "object"
+    },
     "Extraction": {
       "additionalProperties": false,
       "description": "How the latest run went.",
@@ -712,6 +729,11 @@
         },
         "reason": {
           "type": "string"
+        },
+        "replay_of": {
+          "description": "The run whose recorded output this run checked again, with no model call.",
+          "format": "int64",
+          "type": "integer"
         },
         "run": {
           "format": "int64",
@@ -1591,6 +1613,43 @@
         "extractor_version",
         "state",
         "counts"
+      ],
+      "type": "object"
+    },
+    "Removed": {
+      "additionalProperties": false,
+      "description": "What forgetting a meeting removed.",
+      "properties": {
+        "hypotheses": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "recorded_output": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "runs": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "spans": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "transcript": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "runs",
+        "hypotheses",
+        "spans",
+        "recorded_output",
+        "transcript"
       ],
       "type": "object"
     },
@@ -2491,6 +2550,14 @@
                       "type": "null"
                     }
                   ]
+                },
+                "stale": {
+                  "description": "True when the latest run failed and the hypotheses below come from an earlier good run:\nthey say what an earlier look found, not what the transcript now says.",
+                  "type": "boolean"
+                },
+                "transcript_retained": {
+                  "description": "Whether the full transcript is kept (only on opt-in at import).",
+                  "type": "boolean"
                 }
               },
               "required": [
@@ -2498,6 +2565,8 @@
                 "notice",
                 "extraction",
                 "coverage",
+                "stale",
+                "transcript_retained",
                 "hypotheses"
               ],
               "title": "MeetingCommitments",
@@ -2541,6 +2610,14 @@
                       "type": "null"
                     }
                   ]
+                },
+                "stale": {
+                  "description": "True when the latest run failed and the hypotheses below come from an earlier good run:\nthey say what an earlier look found, not what the transcript now says.",
+                  "type": "boolean"
+                },
+                "transcript_retained": {
+                  "description": "Whether the full transcript is kept (only on opt-in at import).",
+                  "type": "boolean"
                 }
               },
               "required": [
@@ -2548,9 +2625,141 @@
                 "notice",
                 "extraction",
                 "coverage",
+                "stale",
+                "transcript_retained",
                 "hypotheses"
               ],
               "title": "MeetingCommitments",
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "meeting.replay"
+            },
+            "result": {
+              "additionalProperties": false,
+              "description": "What `meeting import` and `meeting commitments` return.",
+              "properties": {
+                "coverage": {
+                  "$ref": "#/$defs/MeetingCoverage"
+                },
+                "extraction": {
+                  "$ref": "#/$defs/Extraction"
+                },
+                "hypotheses": {
+                  "items": {
+                    "$ref": "#/$defs/Hypothesis"
+                  },
+                  "type": "array"
+                },
+                "meeting": {
+                  "$ref": "#/$defs/MeetingRef"
+                },
+                "notice": {
+                  "type": "string"
+                },
+                "results_from": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ResultsFrom"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ]
+                },
+                "stale": {
+                  "description": "True when the latest run failed and the hypotheses below come from an earlier good run:\nthey say what an earlier look found, not what the transcript now says.",
+                  "type": "boolean"
+                },
+                "transcript_retained": {
+                  "description": "Whether the full transcript is kept (only on opt-in at import).",
+                  "type": "boolean"
+                }
+              },
+              "required": [
+                "meeting",
+                "notice",
+                "extraction",
+                "coverage",
+                "stale",
+                "transcript_retained",
+                "hypotheses"
+              ],
+              "title": "MeetingCommitments",
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "meeting.forget"
+            },
+            "result": {
+              "additionalProperties": false,
+              "description": "What `meeting forget` returns.",
+              "properties": {
+                "meeting": {
+                  "type": "string"
+                },
+                "removed": {
+                  "$ref": "#/$defs/Removed"
+                }
+              },
+              "required": [
+                "meeting",
+                "removed"
+              ],
+              "title": "MeetingForgotten",
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "meeting.export"
+            },
+            "result": {
+              "additionalProperties": false,
+              "description": "A meeting as `meeting export` writes it: what the owner supplied, not what a model proposed.\nHypotheses, recorded model output and supporting spans are left out.",
+              "properties": {
+                "format": {
+                  "type": "string"
+                },
+                "meeting": {
+                  "$ref": "#/$defs/MeetingRef"
+                },
+                "notice": {
+                  "type": "string"
+                },
+                "owner_speaker": {
+                  "description": "The owner's speaker label in the latest run.",
+                  "type": "string"
+                },
+                "speakers": {
+                  "description": "The explicit speaker mappings of the latest good run, the owner's left out.",
+                  "items": {
+                    "$ref": "#/$defs/ExportedSpeaker"
+                  },
+                  "type": "array"
+                },
+                "transcript": {
+                  "description": "The full transcript, only when the owner opted in to keep it.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "format",
+                "notice",
+                "meeting",
+                "speakers"
+              ],
+              "title": "MeetingExport",
               "type": "object"
             }
           }
@@ -2586,7 +2795,10 @@
         "identity.candidates",
         "identity.answer",
         "meeting.import",
-        "meeting.commitments"
+        "meeting.commitments",
+        "meeting.replay",
+        "meeting.forget",
+        "meeting.export"
       ]
     },
     "result": {
@@ -3509,6 +3721,11 @@
               "null"
             ]
           },
+          "retain_transcript": {
+            "default": false,
+            "description": "Keep the full transcript. By default only the turns the results cite are kept, for replay, and the file is not copied.",
+            "type": "boolean"
+          },
           "scope": {
             "description": "Scope the meeting belongs to; a server limited to other scopes can't see it.",
             "type": "string"
@@ -3563,6 +3780,14 @@
                 "type": "null"
               }
             ]
+          },
+          "stale": {
+            "description": "True when the latest run failed and the hypotheses below come from an earlier good run:\nthey say what an earlier look found, not what the transcript now says.",
+            "type": "boolean"
+          },
+          "transcript_retained": {
+            "description": "Whether the full transcript is kept (only on opt-in at import).",
+            "type": "boolean"
           }
         },
         "required": [
@@ -3570,6 +3795,8 @@
           "notice",
           "extraction",
           "coverage",
+          "stale",
+          "transcript_retained",
           "hypotheses"
         ],
         "title": "MeetingCommitments",
@@ -3629,6 +3856,14 @@
                 "type": "null"
               }
             ]
+          },
+          "stale": {
+            "description": "True when the latest run failed and the hypotheses below come from an earlier good run:\nthey say what an earlier look found, not what the transcript now says.",
+            "type": "boolean"
+          },
+          "transcript_retained": {
+            "description": "Whether the full transcript is kept (only on opt-in at import).",
+            "type": "boolean"
           }
         },
         "required": [
@@ -3636,6 +3871,8 @@
           "notice",
           "extraction",
           "coverage",
+          "stale",
+          "transcript_retained",
           "hypotheses"
         ],
         "title": "MeetingCommitments",
@@ -3644,6 +3881,181 @@
       "surfaces": [
         "cli",
         "mcp"
+      ]
+    },
+    {
+      "description": "Check a meeting's recorded extractor output against its retained turns again, with no model call and without the transcript, and record the outcome as a new run. A meeting with nothing recorded can't be replayed.",
+      "input": {
+        "additionalProperties": false,
+        "description": "Check a meeting's recorded extractor output against its retained turns again, with no model call and without the transcript, and record the outcome as a new run. A meeting with nothing recorded can't be replayed.",
+        "properties": {
+          "meeting": {
+            "description": "The meeting's identifier.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "meeting"
+        ],
+        "title": "MeetingReplayRequest",
+        "type": "object"
+      },
+      "name": "meeting.replay",
+      "result": {
+        "additionalProperties": false,
+        "description": "What `meeting import` and `meeting commitments` return.",
+        "properties": {
+          "coverage": {
+            "$ref": "#/$defs/MeetingCoverage"
+          },
+          "extraction": {
+            "$ref": "#/$defs/Extraction"
+          },
+          "hypotheses": {
+            "items": {
+              "$ref": "#/$defs/Hypothesis"
+            },
+            "type": "array"
+          },
+          "meeting": {
+            "$ref": "#/$defs/MeetingRef"
+          },
+          "notice": {
+            "type": "string"
+          },
+          "results_from": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ResultsFrom"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "stale": {
+            "description": "True when the latest run failed and the hypotheses below come from an earlier good run:\nthey say what an earlier look found, not what the transcript now says.",
+            "type": "boolean"
+          },
+          "transcript_retained": {
+            "description": "Whether the full transcript is kept (only on opt-in at import).",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "meeting",
+          "notice",
+          "extraction",
+          "coverage",
+          "stale",
+          "transcript_retained",
+          "hypotheses"
+        ],
+        "title": "MeetingCommitments",
+        "type": "object"
+      },
+      "surfaces": [
+        "cli"
+      ]
+    },
+    {
+      "description": "Forget a meeting: delete its results, runs, retained turns, recorded extractor output, speaker mappings and retained transcript. The transcript file you imported is not touched.",
+      "input": {
+        "additionalProperties": false,
+        "description": "Forget a meeting: delete its results, runs, retained turns, recorded extractor output, speaker mappings and retained transcript. The transcript file you imported is not touched.",
+        "properties": {
+          "meeting": {
+            "description": "The meeting's identifier.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "meeting"
+        ],
+        "title": "MeetingForgetRequest",
+        "type": "object"
+      },
+      "name": "meeting.forget",
+      "result": {
+        "additionalProperties": false,
+        "description": "What `meeting forget` returns.",
+        "properties": {
+          "meeting": {
+            "type": "string"
+          },
+          "removed": {
+            "$ref": "#/$defs/Removed"
+          }
+        },
+        "required": [
+          "meeting",
+          "removed"
+        ],
+        "title": "MeetingForgotten",
+        "type": "object"
+      },
+      "surfaces": [
+        "cli"
+      ]
+    },
+    {
+      "description": "Export a meeting as you supplied it: its identity, your speaker mappings and, if you opted in, the transcript. Commitment hypotheses and the extractor's recorded output are not exported.",
+      "input": {
+        "additionalProperties": false,
+        "description": "Export a meeting as you supplied it: its identity, your speaker mappings and, if you opted in, the transcript. Commitment hypotheses and the extractor's recorded output are not exported.",
+        "properties": {
+          "meeting": {
+            "description": "The meeting's identifier.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "meeting"
+        ],
+        "title": "MeetingExportRequest",
+        "type": "object"
+      },
+      "name": "meeting.export",
+      "result": {
+        "additionalProperties": false,
+        "description": "A meeting as `meeting export` writes it: what the owner supplied, not what a model proposed.\nHypotheses, recorded model output and supporting spans are left out.",
+        "properties": {
+          "format": {
+            "type": "string"
+          },
+          "meeting": {
+            "$ref": "#/$defs/MeetingRef"
+          },
+          "notice": {
+            "type": "string"
+          },
+          "owner_speaker": {
+            "description": "The owner's speaker label in the latest run.",
+            "type": "string"
+          },
+          "speakers": {
+            "description": "The explicit speaker mappings of the latest good run, the owner's left out.",
+            "items": {
+              "$ref": "#/$defs/ExportedSpeaker"
+            },
+            "type": "array"
+          },
+          "transcript": {
+            "description": "The full transcript, only when the owner opted in to keep it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "format",
+          "notice",
+          "meeting",
+          "speakers"
+        ],
+        "title": "MeetingExport",
+        "type": "object"
+      },
+      "surfaces": [
+        "cli"
       ]
     }
   ]

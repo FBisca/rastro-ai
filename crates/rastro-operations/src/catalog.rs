@@ -311,13 +311,22 @@ operations! {
     Why(WhyRequest => WhyResult) {
         slot: 6, name: "why", surfaces: [Cli, Mcp], read_only: true, reader: run_read, cli_read_path: true
     }
-    /// Import a meeting transcript and read its commitment hypotheses.
+    /// Import a meeting transcript, read its commitment hypotheses, replay, forget or export it.
     Meeting / MeetingRequest {
         Import(MeetingImportRequest => MeetingResult) as MeetingImport {
             slot: 17, name: "meeting.import", surfaces: [Cli], read_only: false
         },
         Commitments(MeetingCommitmentsRequest => MeetingResult) as MeetingCommitments {
             slot: 18, name: "meeting.commitments", surfaces: [Cli, Mcp], read_only: true, reader: run_read, cli_read_path: true
+        },
+        Replay(MeetingReplayRequest => MeetingResult) as MeetingReplay {
+            slot: 19, name: "meeting.replay", surfaces: [Cli], read_only: false
+        },
+        Forget(MeetingForgetRequest => MeetingForgetResult) as MeetingForget {
+            slot: 20, name: "meeting.forget", surfaces: [Cli], read_only: false
+        },
+        Export(MeetingExportRequest => MeetingExportResult) as MeetingExport {
+            slot: 21, name: "meeting.export", surfaces: [Cli], read_only: true
         },
     }
     /// Owner identity: Persons, links between accounts and Persons, and merges. Writes are CLI only.

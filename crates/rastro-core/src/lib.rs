@@ -446,6 +446,9 @@ pub trait Storage {
     /// time updated; a different scope is refused) and the run. A succeeded run's hypotheses
     /// replace those of the earlier good runs; a failed run leaves them untouched.
     fn record_meeting_run(&mut self, run: &meeting::RunRecord) -> Result<i64>;
+    /// Deletes a meeting and everything kept for it in one transaction, and scrubs the freed
+    /// space. `None` when there is no such meeting.
+    fn forget_meeting(&mut self, meeting: &str) -> Result<Option<meeting::Removed>>;
 }
 
 pub struct Rastro<S> {

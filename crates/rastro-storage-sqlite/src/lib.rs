@@ -29,7 +29,7 @@ pub use scoped::{cache_len as scoped_cache_len, clear_cache as clear_scoped_cach
 /// The migration recording when an intent's contribution ended; an open that applies it replays
 /// the stored intents once all migrations are in.
 const INTENT_END: &str = "202611081000_intent_justification_end";
-const MIGRATIONS: [(&str, &str); 14] = [
+const MIGRATIONS: [(&str, &str); 15] = [
     (
         "202611041200_initial",
         include_str!("../migrations/202611041200_initial.sql"),
@@ -86,6 +86,10 @@ const MIGRATIONS: [(&str, &str); 14] = [
         "202611131000_meeting_commitments",
         include_str!("../migrations/202611131000_meeting_commitments.sql"),
     ),
+    (
+        "202611131100_meeting_retention",
+        include_str!("../migrations/202611131100_meeting_retention.sql"),
+    ),
 ];
 
 fn stamp(time: DateTime<Utc>) -> String {
@@ -110,7 +114,8 @@ impl SqliteStorage {
         }
         let _file = rastro_core::files::private_file(path)?;
         let mut connection = Connection::open(path)?;
-        connection.execute_batch("PRAGMA foreign_keys = ON;")?;
+        // Deleted content is overwritten, so forgotten text does not linger in free pages.
+        connection.execute_batch("PRAGMA foreign_keys = ON; PRAGMA secure_delete = ON;")?;
         connection.busy_timeout(BUSY_TIMEOUT)?;
         // WAL lets a read-only process read while this one writes. It sticks to the file, so
         // this is a no-op once set; an older database switches on its next writing open. If
@@ -345,6 +350,9 @@ impl rastro_core::runs::StoredTwins for SqliteStorage {
 impl Storage for SqliteStorage {
     fn record_meeting_run(&mut self, run: &rastro_core::meeting::RunRecord) -> Result<i64> {
         meeting::record(&mut self.connection, run)
+    }
+    fn forget_meeting(&mut self, meeting: &str) -> Result<Option<rastro_core::meeting::Removed>> {
+        meeting::forget(&mut self.connection, meeting)
     }
     fn project_sources(&mut self, sources: &[Source]) -> Result<()> {
         let transaction = self.connection.transaction()?;
@@ -896,6 +904,12 @@ impl Snapshot for View<'_> {
         scopes: &[Scope],
     ) -> Result<Option<rastro_core::meeting::StoredMeeting>> {
         meeting::load(self, meeting, scopes)
+    }
+    fn meeting_recording(&self, meeting: &str) -> Result<Option<rastro_core::meeting::Recording>> {
+        meeting::recording(self, meeting)
+    }
+    fn meeting_export(&self, meeting: &str) -> Result<Option<rastro_core::meeting::MeetingExport>> {
+        meeting::export(self, meeting)
     }
     fn about_view(
         &self,

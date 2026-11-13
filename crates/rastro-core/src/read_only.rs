@@ -142,6 +142,14 @@ pub trait Snapshot {
     ) -> Result<Option<crate::meeting::StoredMeeting>> {
         anyhow::bail!("storage does not support meetings")
     }
+    /// What replay starts from: the latest good run's recorded output, spans and mappings.
+    fn meeting_recording(&self, _meeting: &str) -> Result<Option<crate::meeting::Recording>> {
+        anyhow::bail!("storage does not support meetings")
+    }
+    /// A meeting as the owner supplied it, for export.
+    fn meeting_export(&self, _meeting: &str) -> Result<Option<crate::meeting::MeetingExport>> {
+        anyhow::bail!("storage does not support meetings")
+    }
     /// What storage recorded for the source, before the freshness rule is applied.
     fn coverage(&self, pair: &Pair, all_windows: bool) -> Result<Coverage>;
     /// Allowed (source, scope) pairs storage holds anything for, with stored freshness rules.

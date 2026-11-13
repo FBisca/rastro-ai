@@ -497,6 +497,9 @@ fn meeting_text(m: &rastro_core::meeting::MeetingCommitments) -> String {
     if let Some(extractor) = &e.extractor {
         line += &format!(" | Extractor: {}", display_safe(extractor));
     }
+    if let Some(source) = e.replay_of {
+        line += &format!(" | Replay of run {source}, no model call");
+    }
     line += &format!(" | Excluded: {}", e.excluded);
     if let Some(cause) = e.cause {
         line += &format!(" | Cause: {}", cause.as_str());
@@ -513,11 +516,19 @@ fn meeting_text(m: &rastro_core::meeting::MeetingCommitments) -> String {
     ));
     if let Some(from) = &m.results_from {
         lines.push(format!(
-            "The hypotheses below come from the last good run {} ({}), not the latest",
+            "STALE: the hypotheses below come from the last good run {} ({}), not the latest",
             from.run,
             stamp(from.finished_at)
         ));
     }
+    lines.push(format!(
+        "Transcript: {}",
+        if m.transcript_retained {
+            "retained (opt-in)"
+        } else {
+            "not retained"
+        }
+    ));
     if m.hypotheses.is_empty() {
         lines.push("No hypotheses".into());
     }
@@ -585,7 +596,28 @@ fn human(response: &Response) -> String {
         Response::Search(r) => search_text(&r.query, r),
         Response::Why(r) => why_text(r),
         Response::About(r) => about_text(r),
-        Response::MeetingImport(r) | Response::MeetingCommitments(r) => meeting_text(r),
+        Response::MeetingImport(r)
+        | Response::MeetingCommitments(r)
+        | Response::MeetingReplay(r) => meeting_text(r),
+        Response::MeetingForget(r) => {
+            let removed = &r.removed;
+            format!(
+                "Forgot meeting {}: {} runs, {} hypotheses, {} spans, {} recorded outputs{}",
+                display_safe(&r.meeting),
+                removed.runs,
+                removed.hypotheses,
+                removed.spans,
+                removed.recorded_output,
+                if removed.transcript {
+                    ", the retained transcript"
+                } else {
+                    ""
+                }
+            )
+        }
+        Response::MeetingExport(r) => {
+            serde_json::to_string_pretty(r).expect("an export serialises")
+        }
         Response::IdentityMe(r) | Response::IdentityPersonCreate(r) => person_text(r),
         Response::IdentityLink(r)
         | Response::IdentityMerge(r)

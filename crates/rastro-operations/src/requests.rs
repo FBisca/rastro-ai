@@ -560,6 +560,10 @@ pub struct MeetingImportRequest {
     #[arg(long = "speaker")]
     #[serde(default)]
     pub speakers: Vec<String>,
+    /// Keep the full transcript. By default only the turns the results cite are kept, for replay, and the file is not copied.
+    #[arg(long)]
+    #[serde(default)]
+    pub retain_transcript: bool,
 }
 impl MeetingImportRequest {
     pub(crate) fn run<S: Storage + StoredTwins>(
@@ -581,6 +585,7 @@ impl MeetingImportRequest {
             file: self.file.into(),
             owner_speaker: self.owner_speaker,
             speakers,
+            retain_transcript: self.retain_transcript,
         })
     }
 }
@@ -598,5 +603,53 @@ impl MeetingCommitmentsRequest {
         rastro: &mut Rastro<S>,
     ) -> Result<MeetingResult> {
         rastro.meeting_commitments(&self.meeting)
+    }
+}
+
+/// Check a meeting's recorded extractor output against its retained turns again, with no model call and without the transcript, and record the outcome as a new run. A meeting with nothing recorded can't be replayed.
+#[derive(Args, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MeetingReplayRequest {
+    /// The meeting's identifier.
+    pub meeting: String,
+}
+impl MeetingReplayRequest {
+    pub(crate) fn run<S: Storage + StoredTwins>(
+        self,
+        rastro: &mut Rastro<S>,
+    ) -> Result<MeetingResult> {
+        rastro.replay_meeting(&self.meeting)
+    }
+}
+
+/// Forget a meeting: delete its results, runs, retained turns, recorded extractor output, speaker mappings and retained transcript. The transcript file you imported is not touched.
+#[derive(Args, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MeetingForgetRequest {
+    /// The meeting's identifier.
+    pub meeting: String,
+}
+impl MeetingForgetRequest {
+    pub(crate) fn run<S: Storage + StoredTwins>(
+        self,
+        rastro: &mut Rastro<S>,
+    ) -> Result<MeetingForgetResult> {
+        rastro.forget_meeting(&self.meeting)
+    }
+}
+
+/// Export a meeting as you supplied it: its identity, your speaker mappings and, if you opted in, the transcript. Commitment hypotheses and the extractor's recorded output are not exported.
+#[derive(Args, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MeetingExportRequest {
+    /// The meeting's identifier.
+    pub meeting: String,
+}
+impl MeetingExportRequest {
+    pub(crate) fn run<S: Storage + StoredTwins>(
+        self,
+        rastro: &mut Rastro<S>,
+    ) -> Result<MeetingExportResult> {
+        rastro.export_meeting(&self.meeting)
     }
 }
