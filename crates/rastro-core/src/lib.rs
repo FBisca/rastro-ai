@@ -6,6 +6,7 @@ pub mod files;
 pub mod host;
 pub mod identity;
 pub mod knowledge;
+pub mod meeting;
 pub mod read_only;
 pub mod runs;
 pub mod search;
@@ -174,6 +175,9 @@ impl Locations {
 pub struct Config {
     #[serde(default)]
     pub sources: Vec<Source>,
+    /// The extractor `meeting import` sends transcripts to; none until the owner configures one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub meeting_extractor: Option<meeting::MeetingExtractor>,
 }
 impl Config {
     pub fn load(locations: &Locations) -> Result<Self> {
@@ -438,6 +442,10 @@ pub trait Storage {
         sees: &[Scope],
         plan: impl FnOnce(&dyn Snapshot) -> Result<(Vec<identity::Intent>, T)>,
     ) -> Result<(Vec<identity::Intent>, T)>;
+    /// Records one meeting import run in one transaction: the meeting (created, or its capture
+    /// time updated; a different scope is refused) and the run. A succeeded run's hypotheses
+    /// replace those of the earlier good runs; a failed run leaves them untouched.
+    fn record_meeting_run(&mut self, run: &meeting::RunRecord) -> Result<i64>;
 }
 
 pub struct Rastro<S> {

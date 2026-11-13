@@ -30,6 +30,12 @@ impl AboutRequest {
     }
 }
 
+impl MeetingCommitmentsRequest {
+    pub(crate) fn run_read<S: ReadStorage>(self, reader: &mut Reader<S>) -> Result<MeetingResult> {
+        reader.meeting_commitments(&self.meeting)
+    }
+}
+
 impl WhyRequest {
     pub(crate) fn run_read<S: ReadStorage>(self, reader: &mut Reader<S>) -> Result<WhyResult> {
         reader.explain(&self.claim, &self.options())

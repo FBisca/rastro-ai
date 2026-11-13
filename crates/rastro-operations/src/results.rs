@@ -56,6 +56,9 @@ pub struct ClaimsRebuildResult {
     /// Every (source, scope) pair the rebuild visited.
     pub pairs: Vec<rastro_core::runs::RebuildPair>,
 }
+/// A meeting's commitment hypotheses with extraction and coverage state.
+pub type MeetingResult = rastro_core::meeting::MeetingCommitments;
+
 /// A claim and bounded complete justifications, each citing every required span.
 pub type WhyResult = rastro_core::knowledge::Explanation;
 
@@ -63,7 +66,7 @@ impl Response {
     pub fn envelope(&self) -> Value {
         envelope::success(self.operation(), &self.result())
     }
-    /// False when a sync ran a source, or its extractor, that failed.
+    /// False when a sync ran a source, or its extractor, that failed, or a meeting import's run failed.
     pub fn succeeded(&self) -> bool {
         match self {
             Self::Sync(r) => r.runs.iter().all(|run| {
@@ -74,6 +77,9 @@ impl Response {
                         .is_none_or(|e| e.state != ExtractionState::Failed)
             }),
             Self::ClaimsRebuild(r) => r.pairs.iter().all(|p| p.state != ExtractionState::Failed),
+            Self::MeetingImport(r) => {
+                r.extraction.state == rastro_core::meeting::RunState::Succeeded
+            }
             _ => true,
         }
     }
@@ -144,6 +150,36 @@ mod tests {
     use super::*;
     use crate::catalog::CATALOG;
     use rastro_core::{Scope, Source};
+
+    fn meeting() -> MeetingResult {
+        use rastro_core::meeting::*;
+        let at = "2026-11-10T10:00:00Z".parse().unwrap();
+        MeetingResult {
+            meeting: MeetingRef {
+                id: "m".into(),
+                scope: "w".into(),
+                captured_at: at,
+            },
+            notice: NOTICE.into(),
+            extraction: Extraction {
+                state: RunState::Succeeded,
+                cause: None,
+                reason: None,
+                run: 1,
+                finished_at: at,
+                extractor: None,
+                excluded: 0,
+            },
+            coverage: MeetingCoverage {
+                state: rastro_core::CoverageState::Empty,
+                turns_read: 0,
+                turns_total: 0,
+                reason: None,
+            },
+            results_from: None,
+            hypotheses: vec![],
+        }
+    }
 
     fn person() -> IdentityPersonResult {
         IdentityPersonResult {
@@ -230,6 +266,8 @@ mod tests {
             }),
             Response::IdentityCandidates(IdentityCandidatesResult { candidates: vec![] }),
             Response::IdentityAnswer(IdentityWriteResult { intents: vec![] }),
+            Response::MeetingImport(meeting()),
+            Response::MeetingCommitments(meeting()),
         ];
         let arguments = |name: &str| match name {
             "source.add" => {
@@ -239,6 +277,9 @@ mod tests {
             "why" => serde_json::json!({"claim": "c"}),
             "about" => serde_json::json!({"entity": "github:account/1"}),
             "identity.person.create" => serde_json::json!({"name": "Ana"}),
+            "meeting.import" => serde_json::json!({"file": "t.txt", "meeting": "m", "scope": "w",
+                "captured_at": "2026-11-10T10:00:00Z"}),
+            "meeting.commitments" => serde_json::json!({"meeting": "m"}),
             "identity.link" => serde_json::json!({"account": "github:login/a", "person": "me"}),
             "identity.merge" => serde_json::json!({"person": "me", "other": "rastro:name/Ana"}),
             "identity.undo" => serde_json::json!({"intent": "i_1"}),

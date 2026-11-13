@@ -893,7 +893,7 @@ pub struct Issued {
     pub created: bool,
 }
 /// The entity a form names, with `role`: `me`, or a form `about` accepts, resolved unscoped.
-fn resolve(
+pub(crate) fn resolve(
     view: &dyn Snapshot,
     resolution: &Resolution,
     form: &str,

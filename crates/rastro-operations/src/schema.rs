@@ -1,5 +1,8 @@
 //! Generates `schema/operations-v2.schema.json` from the catalog.
-use crate::{catalog::CATALOG, envelope::SCHEMA_VERSION};
+use crate::{
+    catalog::{CATALOG, Surface},
+    envelope::SCHEMA_VERSION,
+};
 use serde_json::{Map, Value, json};
 
 /// Rebuilds objects with sorted keys so the file does not depend on map ordering features.
@@ -42,13 +45,18 @@ pub fn generate() -> String {
         let input = absorb(spec.input_schema(), &mut definitions);
         let output = absorb(spec.output_schema(), &mut definitions);
         let surfaces: Vec<_> = spec.surfaces.iter().map(|s| s.as_str()).collect();
-        operations.push(json!({
+        let mut operation = json!({
             "name": spec.name,
             "description": spec.description(),
             "surfaces": surfaces,
             "input": input,
             "result": output,
-        }));
+        });
+        // Only an operation whose MCP tool name differs from its name says so.
+        if spec.exposed_on(Surface::Mcp) && spec.mcp_name() != spec.name {
+            operation["mcp_tool"] = json!(spec.mcp_name());
+        }
+        operations.push(operation);
         branches.push(json!({
             "properties": {
                 "operation": {"const": spec.name},

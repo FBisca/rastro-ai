@@ -54,6 +54,8 @@ The core's own language. Code, docs, plugins and the interface all use these wor
 | **Interruption level** | How much an item may break the owner's focus: 0 silent, 1 ambient, 2 nudge, 3 notify, 4 interrupt | Level |
 | **Operation** | A named read or write the core offers, defined once in the catalog and exposed on one or more surfaces. "MCP tool" is only the protocol's name for an exposed operation | Agent tool |
 | **Agent tool** | Any runtime that does judgment: Claude Code, Codex, a local model… | Operation, MCP tool |
+| **Meeting** | One imported speaker-labelled transcript, named by an identifier the owner chooses, in one scope. Its text is untrusted content | Source: a meeting is not synced |
+| **Commitment hypothesis** | A promise involving the owner that an extractor proposed from a meeting, with its exact quote. Kept outside the claims projection; never says whether the commitment is open, done or tracked | Claim with status `hypothesis` |
 | **Quarantine** | A plugin that reads untrusted content can't hold action permissions | |
 | **Share** | Scoped claims sent to another owner, who receives them as evidence from a person | Export |
 | **Export** | Evidence, confirmations, rules, outcomes and owner intents in an open format, from which the knowledge can be rebuilt | |

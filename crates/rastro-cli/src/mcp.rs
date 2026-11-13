@@ -37,7 +37,7 @@ fn tool(spec: &OperationSpec) -> Tool {
     let Value::Object(schema) = spec.input_schema() else {
         unreachable!("an input schema is an object")
     };
-    Tool::new(spec.name, spec.description(), schema).with_annotations(
+    Tool::new(spec.mcp_name(), spec.description(), schema).with_annotations(
         ToolAnnotations::new()
             .read_only(spec.read_only)
             .open_world(false),
@@ -94,7 +94,7 @@ impl ServerHandler for Server {
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
         let spec = specs()
-            .find(|spec| spec.name == request.name)
+            .find(|spec| spec.mcp_name() == request.name)
             .ok_or_else(|| {
                 ErrorData::invalid_params(format!("unknown tool: {}", request.name), None)
             })?;
