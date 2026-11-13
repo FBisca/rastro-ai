@@ -125,6 +125,11 @@ pub trait Snapshot {
     }
     /// The entity (id, canonical identifier) a form names, resolved unscoped as `about` resolves
     /// it: an exact id or identifier, else a canonical alias. An ambiguous alias is an error.
+    /// Whether the evidence says the entity `id` is a bot: one of its current types is a
+    /// [`crate::commitments::is_bot_type`].
+    fn is_bot(&self, _id: &str) -> Result<bool> {
+        anyhow::bail!("storage does not support bot checks")
+    }
     fn resolve_entity(&self, _form: &str) -> Result<Option<(String, String)>> {
         anyhow::bail!("storage does not support entity resolution")
     }

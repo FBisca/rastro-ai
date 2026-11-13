@@ -22,7 +22,7 @@ use rastro_plugin_sdk::{CandidateKind, JudgmentCandidate, JudgmentRequest, Judgm
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     io::Read,
     path::{Path, PathBuf},
     time::Duration,
@@ -531,8 +531,27 @@ fn ask_adapter(
 struct People {
     owner: String,
     mapped: BTreeMap<String, Identity>,
+    /// The labels whose mapped entity the evidence says is a bot.
+    bots: BTreeSet<String>,
+}
+/// The labels whose mapped entity the evidence says is a bot.
+fn bot_labels(
+    view: &dyn Snapshot,
+    mapped: &BTreeMap<String, Identity>,
+) -> Result<BTreeSet<String>> {
+    let mut bots = BTreeSet::new();
+    for (label, identity) in mapped {
+        if view.is_bot(&identity.id)? {
+            bots.insert(label.clone());
+        }
+    }
+    Ok(bots)
 }
 impl People {
+    /// Whether a party is a label mapped to a bot.
+    fn bot(&self, label: Option<&str>) -> bool {
+        label.is_some_and(|label| self.bots.contains(label))
+    }
     fn party(&self, label: Option<&str>) -> Party {
         let Some(label) = label else {
             return Party {
@@ -649,7 +668,8 @@ fn validate(
         } else {
             false
         };
-        if !supported {
+        // A party mapped to a bot is not a person's commitment, whatever the transcript says.
+        if !supported || people.bot(responsible) || people.bot(recipient) {
             excluded += 1;
             continue;
         }
@@ -853,9 +873,14 @@ fn resolve_people(
             }
         }
     }
+    let bots = match bot_labels(view, &mapped) {
+        Ok(bots) => bots,
+        Err(error) => return fail(Cause::StorageFailed, format!("{error:#}")),
+    };
     Ok(People {
         owner: owner.to_string(),
         mapped,
+        bots,
     })
 }
 
@@ -987,6 +1012,9 @@ impl<S: Storage> Rastro<S> {
             );
         };
         let started_at = crate::coverage::now()?;
+        // A replay checks the recorded parties against the evidence as it is now.
+        let mapped: BTreeMap<String, Identity> = recording.speakers.iter().cloned().collect();
+        let bots = self.storage.snapshot(|view| bot_labels(view, &mapped))?;
         let outcome = (|| -> Result<(Validated, Recorded), Failure> {
             let candidates: Vec<Candidate> = match serde_json::from_str(&recording.candidates) {
                 Ok(candidates) => candidates,
@@ -1021,7 +1049,8 @@ impl<S: Storage> Rastro<S> {
             }
             let people = People {
                 owner: recording.owner_speaker.clone(),
-                mapped: recording.speakers.iter().cloned().collect(),
+                mapped,
+                bots: bots.clone(),
             };
             let validated = validate(candidates, &turns, &people)?;
             let recorded = record_of(&validated, &turns, &people);

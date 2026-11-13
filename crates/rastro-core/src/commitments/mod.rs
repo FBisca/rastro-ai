@@ -195,6 +195,15 @@ impl From<&crate::meeting::Hypothesis> for Hypothesis {
     }
 }
 
+/// Whether a current type value is a bot: the `Bot` of a namespace, such as `code:Bot` or
+/// `tracker:Bot`. Evidence that says so excludes a candidate whose party is mapped to that
+/// account; a party that is only named is never excluded.
+pub fn is_bot_type(value: &str) -> bool {
+    value
+        .split_once(':')
+        .is_some_and(|(namespace, name)| !namespace.is_empty() && name == "Bot")
+}
+
 /// What kind of source a conversation comes from.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
