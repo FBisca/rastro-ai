@@ -44,6 +44,12 @@ expect_failure test_an_unknown_role_fails scripts/fixtures/crate-gate/unknown-ro
   "fixture-wizard" "wizard"
 
 # spec: Crates depend by role
+# A role that is not even a string is refused by name too, instead of aborting the gate's jq with an
+# error that names no crate.
+expect_failure test_a_role_that_is_not_a_string_fails scripts/fixtures/crate-gate/non-string-role \
+  "fixture-numbered" "not in the role table"
+
+# spec: Crates depend by role
 # This workspace passes: every member carries a role and every member dependency is allowed.
 status=0
 out=$(scripts/crate-gate.sh 2>&1) || status=$?

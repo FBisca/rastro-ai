@@ -29,23 +29,24 @@ violations=$(cargo metadata --format-version 1 --no-deps | jq -r '
     "surface": ["core", "operations", "storage", "sdk"],
     "plugin": ["sdk"]
   };
-  [.packages[] | {name: .name, role: (.metadata.rastro.role // null)}] as $members
+  [.packages[] | {name: .name, role: .metadata.rastro.role}] as $members
   | ($members | map({key: .name, value: .role}) | from_entries) as $role_of
   | ($members | map(.name)) as $names
-  | (table | keys | join(", ")) as $known
+  | (table | keys) as $roles
+  | ($roles | join(", ")) as $known
   | [
       .packages[] as $p
-      | ($p.metadata.rastro.role // null) as $role
+      | ($p.metadata.rastro.role) as $role
       | if $role == null then
           "crate-gate: \($p.name) declares no role in [package.metadata.rastro]; known roles: \($known)"
-        elif (table | has($role) | not) then
-          "crate-gate: \($p.name) declares role \"\($role)\", which is not in the role table; known roles: \($known)"
+        elif (any($roles[]; . == $role) | not) then
+          "crate-gate: \($p.name) declares role \($role | tojson), which is not in the role table; known roles: \($known)"
         else
           $p.dependencies[]
           | select(.path != null)
           | .name as $dep
           | select($names | index($dep))
-          | select(table[$role] | index($role_of[$dep]) | not)
+          | select((any(table[$role][]; . == $role_of[$dep])) | not)
           | "crate-gate: \($p.name) (role \($role)) depends on \($dep) (role \($role_of[$dep] // "none")), which role \($role) does not allow"
         end
     ]
