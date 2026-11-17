@@ -1,0 +1,3 @@
+# The fixture projects build and lock in place when someone runs them by hand.
+target/
+Cargo.lock

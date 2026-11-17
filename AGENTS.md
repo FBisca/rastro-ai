@@ -3,7 +3,8 @@
 ## Rust changes
 
 - Before changing Rust code, manifests, or tests, read [docs/development.md](docs/development.md) for standards, the red → green loop, affected-test selection, and completion checks.
-- Treat `Cargo.toml`, `rust-toolchain.toml`, and `.github/workflows/ci.yml` as the sources for workspace configuration, toolchain, and CI gates.
+- Run the tests with `cargo nextest run`, not `cargo test`: `.config/nextest.toml` is the source for the 20-second SLOW threshold, the 60-second kill and the JUnit report, and `NEXTEST_USER_CONFIG_FILE=.config/nextest-user.toml` makes `--rerun latest` rerun the last run's failures (see [docs/development.md](docs/development.md#tests-run-under-nextest)).
+- Treat `Cargo.toml`, `rust-toolchain.toml`, `.config/nextest.toml`, and `.github/workflows/ci.yml` as the sources for workspace configuration, toolchain, test runner, and CI gates.
 - Report checks run, their results, and any skipped checks with the reason. A filtered run that executes zero tests is not evidence.
 
 ## Product and architecture

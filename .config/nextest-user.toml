@@ -1,0 +1,19 @@
+# User-level nextest configuration for this repository.
+#
+# nextest reads the record-replay-rerun feature only from the user config file, never from the
+# repository's .config/nextest.toml, so the last run's failures can be rerun with
+# `cargo nextest run --rerun latest` once this file is the user config: either copy it to
+# ~/.config/nextest/config.toml, or point NEXTEST_USER_CONFIG_FILE at it. CI does the latter, so a
+# failed CI run leaves a recording behind too.
+#
+# Recording is an experimental nextest feature. When it stabilizes, this table moves into
+# .config/nextest.toml and this file goes away. See docs/adr/0013-cargo-nextest-runs-the-tests.md.
+
+[experimental]
+record = true
+
+[record]
+enabled = true
+# The last few runs only: enough to rerun failures after a green run, small enough to stay tidy.
+max-records = 20
+max-age = "7d"

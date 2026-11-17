@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# Checks scripts/affected-tests.sh --dry-run against the real workspace graph.
+# Checks scripts/affected-tests.sh against the real workspace graph: the --dry-run selection, and the
+# nextest invocation it runs for the selection.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
@@ -30,4 +31,32 @@ expect "workspace" Cargo.lock docs/concept.md
 expect "workspace" rust-toolchain.toml
 # Docs and other non-crate paths select nothing.
 expect "nothing selected" docs/concept.md README.md
+
+# spec: Tests run under nextest
+# The selector runs the selected crates' tests under nextest: one -p per crate, or --workspace for a
+# path that touches every crate. A cargo stand-in records the invocation instead of running the tests.
+stub=$PWD/scripts/fixtures/nextest/cargo
+log=$(mktemp)
+trap 'rm -f "$log"' EXIT
+
+expect_run() { # want-command, paths...
+  local want=$1; shift
+  local got
+  : > "$log"
+  CARGO=$stub NEXTEST_FIXTURE_REAL_CARGO=$(command -v cargo) NEXTEST_FIXTURE_LOG=$log \
+    scripts/affected-tests.sh "$@" >/dev/null 2>&1 || true
+  got=$(cat "$log")
+  if [ "$got" != "$want" ]; then
+    echo "FAIL: run $* -> '$got' (want '$want')"
+    fail=1
+  else
+    echo "ok: run $* -> $got"
+  fi
+}
+
+expect_run "nextest run -p rastro-cli" crates/rastro-cli/src/main.rs
+expect_run "nextest run --workspace" Cargo.toml
+expect_run "nextest run -p rastro-cli -p rastro-connector-linear" \
+  crates/rastro-cli/src/a.rs crates/rastro-connector-linear
+expect_run "" docs/concept.md README.md
 exit $fail
