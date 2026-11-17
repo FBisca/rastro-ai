@@ -47,16 +47,27 @@ expect_run() { # want-command, paths...
     scripts/affected-tests.sh "$@" >/dev/null 2>&1 || true
   got=$(cat "$log")
   if [ "$got" != "$want" ]; then
-    echo "FAIL: run $* -> '$got' (want '$want')"
+    echo "  run $* -> '$got' (want '$want')"
     fail=1
   else
-    echo "ok: run $* -> $got"
+    echo "  ok: run $* -> $got"
   fi
 }
 
-expect_run "nextest run -p rastro-cli" crates/rastro-cli/src/main.rs
-expect_run "nextest run --workspace" Cargo.toml
-expect_run "nextest run -p rastro-cli -p rastro-connector-linear" \
-  crates/rastro-cli/src/a.rs crates/rastro-connector-linear
-expect_run "" docs/concept.md README.md
+test_the_selector_runs_the_selected_crates_under_nextest() {
+  echo "test: the_selector_runs_the_selected_crates_under_nextest"
+  local before=$fail
+  expect_run "nextest run -p rastro-cli" crates/rastro-cli/src/main.rs
+  expect_run "nextest run --workspace" Cargo.toml
+  expect_run "nextest run -p rastro-cli -p rastro-connector-linear" \
+    crates/rastro-cli/src/a.rs crates/rastro-connector-linear
+  expect_run "" docs/concept.md README.md
+  if [ "$fail" -eq "$before" ]; then
+    echo "ok: the_selector_runs_the_selected_crates_under_nextest"
+  else
+    echo "FAIL: the_selector_runs_the_selected_crates_under_nextest"
+  fi
+}
+
+test_the_selector_runs_the_selected_crates_under_nextest
 exit $fail
