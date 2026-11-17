@@ -161,6 +161,10 @@ pub enum Targets {
         yes: bool,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         person: Option<AnswerPerson>,
+        /// The accounts the answer links to that Person, as it decided when it was written.
+        /// A replay uses these, never what later intents made of the accounts.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        linked: Vec<EntityTarget>,
     },
 }
 /// The Person a question's yes holds its accounts by.
@@ -466,13 +470,20 @@ impl Intent {
                     endpoints,
                     yes,
                     person,
+                    linked,
                     ..
                 } => {
                     let accounts = endpoints[0].role == "account"
                         && endpoints[1].role == "account"
                         && endpoints[0].id != endpoints[1].id;
+                    // What it links is what it decided: one of its own accounts.
+                    let links = (linked.iter()).all(|account| {
+                        account.role == "account"
+                            && endpoints.iter().any(|endpoint| endpoint.id == account.id)
+                    });
                     plain(item)
                         && accounts
+                        && links
                         && if *yes {
                             // A yes names the Person that holds them; a created one is named.
                             person.as_ref().is_some_and(|answer| {
@@ -480,7 +491,7 @@ impl Intent {
                                     && (!answer.created || answer.name.is_some())
                             })
                         } else {
-                            person.is_none()
+                            person.is_none() && linked.is_empty()
                         }
                 }
                 _ => false,
@@ -680,6 +691,7 @@ impl Resolution {
                         endpoints: [a, b],
                         yes,
                         person,
+                        linked,
                         ..
                     } = &intent.targets
                     else {
@@ -703,20 +715,12 @@ impl Resolution {
                             r.names.insert(holder.id.clone(), (name, id.clone()));
                         }
                     }
-                    // A link only for an account no Person holds yet, as `plan_answer` decides:
-                    // a link an undo ended is no holder.
-                    let held: Vec<String> = (r.links.iter())
-                        .filter(|((_, _), by)| {
-                            matches!(r.status.get(*by), Some((IntentStatus::Effective, _)))
-                        })
-                        .map(|((account, _), _)| account.clone())
-                        .collect();
-                    for account in [a, b] {
-                        if !held.contains(&account.id) {
-                            r.links
-                                .insert((account.id.clone(), holder.id.clone()), id.clone());
-                            r.clear(&sorted(&account.id, &holder.id), &id);
-                        }
+                    // The accounts the answer decided to link, as it recorded them: a later
+                    // intent on those accounts never changes what this answer said.
+                    for account in linked {
+                        r.links
+                            .insert((account.id.clone(), holder.id.clone()), id.clone());
+                        r.clear(&sorted(&account.id, &holder.id), &id);
                     }
                 }
                 // A proposal's answer is the owner's record of what they decided; its item
@@ -819,10 +823,32 @@ impl Resolution {
                     }
                     IntentKind::CreatePerson => bail!("creating a Person can't be undone"),
                     IntentKind::Name | IntentKind::Link | IntentKind::SameAs => {}
-                    IntentKind::Answer => ensure!(
-                        matches!(&target.targets, Targets::Answer { yes: true, .. }),
-                        "a no can't be undone, as a cannot-link can't; link the accounts instead"
-                    ),
+                    IntentKind::Answer => {
+                        let Targets::Answer { yes, person, .. } = &target.targets else {
+                            bail!("an answer names the question it answered");
+                        };
+                        ensure!(
+                            *yes,
+                            "a no can't be undone, as a cannot-link can't; link the accounts instead"
+                        );
+                        // Undoing a yes ends what it decided; a Person it created goes with it,
+                        // so nothing accepted after the answer may depend on that Person.
+                        if let Some(answer) = person
+                            && answer.created
+                        {
+                            let person = &answer.entity;
+                            let held = (self.links.iter()).any(|((_, holder), by)| {
+                                holder == &person.id && by.as_str() != undone
+                            });
+                            let merged = (self.merges.keys())
+                                .any(|(a, b)| a == &person.id || b == &person.id);
+                            ensure!(
+                                !held && !merged,
+                                "{} was created by this answer and a later intent now holds or                                  merges it; undo those first",
+                                person.identifier
+                            );
+                        }
+                    }
                     // A proposal's answer is a decision about one item; undoing it would bring
                     // back an item whose source may have replaced it.
                     IntentKind::Accept
@@ -931,12 +957,15 @@ impl Resolution {
                         stretch,
                     )
                 }
-                // One answer backs every claim it decided: the Person it creates exists while
-                // the answer holds, and each account it links is held by that Person.
+                // One answer backs every claim it decided, from what it recorded: the Person
+                // it creates exists while the answer holds, and each account it linked is held
+                // by that Person over the same stretch — an undo ends them, it doesn't erase
+                // that they held.
                 (IntentKind::Answer, _) => {
                     let Targets::Answer {
                         yes: true,
                         person: Some(answer),
+                        linked,
                         ..
                     } = &intent.targets
                     else {
@@ -955,17 +984,15 @@ impl Resolution {
                             stretch,
                         );
                     }
-                    for ((account, person), by) in &self.links {
-                        if by == id {
-                            push(
-                                &self.entities[account],
-                                HELD_BY,
-                                person_object(person),
-                                false,
-                                id,
-                                stretch,
-                            );
-                        }
+                    for account in linked {
+                        push(
+                            &self.entities[&account.id],
+                            HELD_BY,
+                            person_object(&answer.entity.id),
+                            false,
+                            id,
+                            stretch,
+                        );
                     }
                 }
                 _ => {}
@@ -1536,10 +1563,10 @@ mod tests {
         }
     }
 
-    /// A yes answered in the queue holds an account whose earlier link an undo ended: the answer
-    /// decides from the effective links, as `plan_answer` decides from the current holders.
+    /// A yes answered in the queue holds the accounts it recorded, whatever a later undo did to
+    /// the links on those accounts: a replay never re-decides the answer.
     #[test]
-    fn an_answers_yes_holds_an_account_whose_link_was_undone() {
+    fn an_answers_yes_holds_the_accounts_it_recorded_after_a_link_is_undone() {
         let p = target("rastro:person/1", "person");
         let a = target("github:account/1", "account");
         let b = target("linear:user/u-1", "account");
@@ -1562,13 +1589,14 @@ mod tests {
             Targets::Answer {
                 version: SHAPE_VERSION,
                 item: "q_1".into(),
-                endpoints: [a, b],
+                endpoints: [a.clone(), b.clone()],
                 yes: true,
                 person: Some(AnswerPerson {
                     entity: p,
                     name: None,
                     created: false,
                 }),
+                linked: vec![a, b],
             },
             None,
             "i_4",

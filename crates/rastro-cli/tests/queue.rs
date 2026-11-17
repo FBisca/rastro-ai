@@ -1042,6 +1042,112 @@ fn undoing_a_queues_yes_ends_its_decision_and_returns_the_question() {
         .filter(|claim| claim["predicate"] == "rastro:held_by")
         .count();
     assert_eq!(held, 0, "no current held-by claim: {about}");
+    // It ends the claim; it does not erase that the account was held until the undo.
+    let history = env.ok(&["about", "github:account/7", "--history"]);
+    let ended = (history["claims"].as_array().unwrap().iter())
+        .find(|claim| claim["predicate"] == "rastro:held_by")
+        .unwrap_or_else(|| panic!("the held-by claim is gone, not ended: {history}"));
+    assert_eq!(ended["status"], "superseded", "{history}");
+    let known = (ended["known_intervals"].as_array().unwrap().iter())
+        .any(|interval| interval["end"].is_string());
+    assert!(known, "the claim ends at the undo: {history}");
+}
+
+/// The answer records the accounts it links when it is written: undoing an earlier link on one of
+/// them never re-decides the answer on replay.
+#[test]
+fn an_answers_decision_survives_undoing_an_earlier_link() {
+    let env = Env::new();
+    env.typed_account(
+        "github:account/1",
+        "code:Account",
+        ("name", "Ana Silva"),
+        "https://api.github.com/users/1",
+    );
+    env.typed_account(
+        "linear:user/u-1",
+        "tracker:Account",
+        ("name", "ana silva"),
+        "https://linear.app/rastro/profiles/u-1",
+    );
+    // The first account is the owner's, so a yes links only the second.
+    let linked = env.ok(&["identity", "link", "github:account/1", "me"]);
+    let link = linked["intents"][0]["id"].as_str().unwrap().to_string();
+    let item = question(&env.queue(), "github:account/1")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let answered = env.ok(&["queue", "answer", &item, "yes"]);
+    assert_eq!(
+        answered["intents"].as_array().unwrap().len(),
+        1,
+        "{answered}"
+    );
+
+    // Undoing the earlier link leaves the answer's decision as it was written: one account.
+    env.ok(&["identity", "undo", &link]);
+    let me = env.ok(&["about", "me"]);
+    let accounts: Vec<&str> = (me["person"]["accounts"].as_array().unwrap().iter())
+        .map(|account| account["identifier"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        accounts,
+        ["linear:user/u-1"],
+        "the answer still links only the account it recorded: {me}"
+    );
+}
+
+/// A yes that created a Person can't be undone while a later intent holds or merges that Person:
+/// the undo would leave a held-by claim pointing at something that is no longer a Person.
+#[test]
+fn an_answer_that_created_a_person_is_kept_while_later_intents_depend_on_it() {
+    let env = Env::new();
+    env.typed_account(
+        "github:account/9",
+        "code:Account",
+        ("name", "Dora Melo"),
+        "https://api.github.com/users/9",
+    );
+    env.typed_account(
+        "linear:user/u-9",
+        "tracker:Account",
+        ("name", "dora melo"),
+        "https://linear.app/rastro/profiles/u-9",
+    );
+    env.typed_account(
+        "github:account/10",
+        "code:Account",
+        ("name", "Dora Work"),
+        "https://api.github.com/users/10",
+    );
+    let item = question(&env.queue(), "github:account/9")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let answered = env.ok(&["queue", "answer", &item, "yes"]);
+    let answer = answered["intents"][0]["id"].as_str().unwrap().to_string();
+    // A later link holds a third account by the Person the answer created.
+    let person = env.ok(&["about", "rastro:name/Dora Melo"]);
+    let person = person["person"]["identifier"].as_str().unwrap().to_string();
+    env.ok(&["identity", "link", "github:account/10", &person]);
+
+    let intents = env.intents();
+    let (ok, refused) = env.run(&["identity", "undo", &answer]);
+    assert!(!ok, "{refused}");
+    assert!(
+        refused["error"].as_str().unwrap().contains(&person),
+        "the refusal names the Person: {refused}"
+    );
+    assert_eq!(env.intents(), intents, "nothing is recorded");
+    let me = env.ok(&["about", &person]);
+    let accounts: Vec<&str> = (me["person"]["accounts"].as_array().unwrap().iter())
+        .map(|account| account["identifier"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        accounts,
+        ["github:account/10", "github:account/9", "linear:user/u-9"],
+        "the Person still holds what it did: {me}"
+    );
 }
 
 /// S7: a missed report records its text and, when one was named, the item; the named item stays

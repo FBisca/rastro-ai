@@ -230,10 +230,21 @@ impl<S: Storage> Rastro<S> {
                 yes,
                 name.as_deref(),
             )?;
-            // The name a yes gives the Person it creates is the one its plan chose.
+            // The name a yes gives the Person it creates is the one its plan chose, and the
+            // accounts it links are the ones its plan links: recorded here, so a replay never
+            // re-decides them from what later intents made of those accounts.
             let named = (planned.iter())
                 .find(|intent| intent.kind == IntentKind::Name)
                 .and_then(|intent| intent.payload.name.clone());
+            let linked: Vec<identity::EntityTarget> = (planned.iter())
+                .filter(|intent| intent.kind == IntentKind::Link)
+                .filter_map(|intent| {
+                    intent
+                        .targets
+                        .endpoints()
+                        .map(|[account, _]| account.clone())
+                })
+                .collect();
             let targets = Targets::Answer {
                 version: identity::SHAPE_VERSION,
                 item: pending.id.clone(),
@@ -244,6 +255,7 @@ impl<S: Storage> Rastro<S> {
                     name: named,
                     created,
                 }),
+                linked,
             };
             let intent = identity::new_intent(
                 IntentKind::Answer,
