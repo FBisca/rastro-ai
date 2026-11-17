@@ -1,0 +1,5 @@
+# A workspace with one member whose role is a number rather than a role name. The crate gate must
+# refuse it, naming the crate, instead of failing with a parser error that names nothing.
+[workspace]
+members = ["fixture-numbered"]
+resolver = "3"

@@ -3,6 +3,9 @@ name = "rastro-storage-sqlite"
 version.workspace = true
 edition.workspace = true
 
+[package.metadata.rastro]
+role = "storage"
+
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true

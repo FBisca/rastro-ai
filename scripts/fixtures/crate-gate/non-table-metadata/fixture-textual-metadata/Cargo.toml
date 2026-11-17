@@ -1,0 +1,8 @@
+[package]
+name = "fixture-textual-metadata"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata]
+rastro = "core"

@@ -1,0 +1,5 @@
+# A workspace with one member whose role is not in the table. The crate gate must refuse it, naming
+# the crate.
+[workspace]
+members = ["fixture-wizard"]
+resolver = "3"

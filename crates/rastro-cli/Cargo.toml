@@ -3,6 +3,9 @@ name = "rastro-cli"
 version.workspace = true
 edition.workspace = true
 
+[package.metadata.rastro]
+role = "surface"
+
 [[bin]]
 name = "rastro"
 path = "src/main.rs"

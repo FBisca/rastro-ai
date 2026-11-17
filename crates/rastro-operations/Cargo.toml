@@ -3,6 +3,9 @@ name = "rastro-operations"
 version.workspace = true
 edition.workspace = true
 
+[package.metadata.rastro]
+role = "operations"
+
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true
