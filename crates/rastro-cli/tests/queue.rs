@@ -542,6 +542,32 @@ fn S2_identity_candidates_are_questions_with_labels_and_no_duplicate() {
         assert_eq!(question["name"], "Ana Silva", "{question}");
     }
 
+    // A question has no time, so it sorts before every proposal and its order is its accounts'
+    // identifiers, not its hash.
+    let pairs: Vec<(String, String)> = (items.iter())
+        .map(|item| {
+            let accounts = item["question"]["accounts"].as_array().unwrap();
+            (
+                accounts[0]["identifier"].as_str().unwrap().to_string(),
+                accounts[1]["identifier"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        pairs,
+        [
+            (
+                "github:account/1".to_string(),
+                "linear:user/u-1".to_string()
+            ),
+            (
+                "github:account/2".to_string(),
+                "linear:user/u-1".to_string()
+            ),
+        ],
+        "{queue}"
+    );
+
     // The same content-addressed id on a second read.
     assert_eq!(ids(&queue), ids(&env.queue()));
 }

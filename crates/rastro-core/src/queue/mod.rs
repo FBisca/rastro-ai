@@ -198,6 +198,7 @@ impl Queue {
                         at: Some(origin.at),
                         question: false,
                         turn: hypothesis.quote.turn,
+                        accounts: String::new(),
                         item,
                     });
                 }
@@ -216,11 +217,18 @@ impl Queue {
             };
             if seen.insert(item.id.clone()) {
                 // Computed on read, so a question has no time: it is older than every proposal
-                // and sorts before one on that tie.
+                // and sorts before one on that tie, ordered by its accounts' identifiers.
+                let accounts = (item.question.as_ref()).map(|question| {
+                    format!(
+                        "{}\u{1f}{}",
+                        question.accounts[0].identifier, question.accounts[1].identifier
+                    )
+                });
                 aged.push(Aged {
                     at: None,
                     question: true,
                     turn: 0,
+                    accounts: accounts.unwrap_or_default(),
                     item,
                 });
             }
@@ -242,12 +250,22 @@ struct Aged {
     question: bool,
     /// The quote's turn, which orders one source's proposals.
     turn: usize,
+    /// A question's two account identifiers, in order: its content has no time, so this is what
+    /// orders it. A proposal leaves it empty and is ordered by its time, then its turn.
+    accounts: String,
     item: Item,
 }
 impl Aged {
-    /// Oldest first, questions before proposals, then by turn and id, so the order is stable.
-    fn key(&self) -> (Option<DateTime<Utc>>, bool, usize, &str) {
-        (self.at, self.question, self.turn, &self.item.id)
+    /// Oldest first, questions before proposals; questions by their accounts' identifiers and
+    /// proposals by their turn, then by id, so the order is stable across reads.
+    fn key(&self) -> (Option<DateTime<Utc>>, bool, usize, &str, &str) {
+        (
+            self.at,
+            self.question,
+            self.turn,
+            &self.accounts,
+            &self.item.id,
+        )
     }
 }
 
@@ -457,10 +475,10 @@ impl<S: ReadStorage> Reader<S> {
 mod tests {
     use super::*;
 
-    /// S3: a source that couldn't look is named with its reason, and none of its hypotheses is
-    /// shown, even when an earlier run's results survive the failure.
+    /// S3: a source that couldn't look is named with its reason, and the last good run's
+    /// proposals stay listed beside the gap, never silently dropped.
     #[test]
-    fn a_source_that_could_not_look_names_its_reason_and_shows_no_item() {
+    fn a_source_that_could_not_look_names_its_reason_and_keeps_the_last_good_items() {
         use crate::commitments::{
             Extraction, Known, Party, PartyState, Quote, Source as CommitmentSource,
             SourceCoverage, SourceKind as CommitmentSourceKind, StatedDate,
