@@ -5,39 +5,73 @@
 //! file changes under it (SIGKILL, empty stderr). Each test process therefore takes its own
 //! snapshot, named for the process, and never reuses one by metadata: the bytes it runs are the
 //! bytes the source held when it copied.
+//!
+//! A publish removes the old binary before it links the new one, so the source is missing for a
+//! moment and a copy of it is torn while it is written. `private_copy` waits for a copy the source
+//! held still for, and `sweep` takes away only what a process that no longer exists left behind.
 #![allow(dead_code)]
 use std::{
+    collections::BTreeSet,
     fs,
     os::unix::fs::PermissionsExt,
     path::{Path, PathBuf},
     process::{Command, Stdio},
-    time::UNIX_EPOCH,
+    thread,
+    time::{Duration, Instant, UNIX_EPOCH},
 };
 
-fn stamp(path: &Path) -> (u64, u128) {
-    let meta = fs::metadata(path).unwrap();
-    let modified = meta.modified().unwrap().duration_since(UNIX_EPOCH).unwrap();
-    (meta.len(), modified.as_nanos())
+/// How long a source may be missing or keep changing before `private_copy` gives up.
+const PATIENCE: Duration = Duration::from_secs(10);
+/// How long to let a source that was missing or changing settle before looking again.
+const PAUSE: Duration = Duration::from_millis(10);
+
+/// The size and modification time of a file, or `None` while it is not there: another `cargo`
+/// removes a binary before it publishes a new build in its place.
+fn stamp(path: &Path) -> Option<(u64, u128)> {
+    let meta = fs::metadata(path).ok()?;
+    let modified = meta.modified().ok()?.duration_since(UNIX_EPOCH).ok()?;
+    Some((meta.len(), modified.as_nanos()))
 }
 
-fn alive(pid: &str) -> bool {
+fn alive(pid: u32) -> bool {
     Command::new("kill")
-        .args(["-0", pid])
+        .args(["-0", &pid.to_string()])
         .stderr(Stdio::null())
         .status()
         .is_ok_and(|s| s.success())
 }
 
-/// Removes snapshots left by test processes that no longer exist.
+/// The process a file in the snapshot directory belongs to: `<binary>-<pid>-<nonce>` for a
+/// snapshot, `<binary>.<pid>.partial` for a copy in progress. Anything else belongs to nobody here.
+fn owner(name: &str) -> Option<u32> {
+    let (_, pid) = match name.strip_suffix(".partial") {
+        Some(partial) => partial.rsplit_once('.')?,
+        None => name.rsplit_once('-')?.0.rsplit_once('-')?,
+    };
+    if pid.is_empty() || !pid.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    pid.parse().ok()
+}
+
+/// Removes what test processes that no longer exist left behind: their snapshots and the partial
+/// copies of a run that died mid-copy. A file of a process that is still running stays, whatever it
+/// is: from here it looks exactly like the copy a live test is making right now.
 fn sweep(directory: &Path) {
-    for entry in fs::read_dir(directory).into_iter().flatten().flatten() {
-        let name = entry.file_name().to_string_lossy().into_owned();
-        // `<binary>-<pid>-<nonce>`
-        let mut parts = name.rsplitn(3, '-');
-        let (_nonce, pid) = (parts.next(), parts.next());
-        if let Some(pid) = pid.filter(|p| p.bytes().all(|b| b.is_ascii_digit()) && !p.is_empty())
-            && !alive(pid)
-        {
+    let entries: Vec<fs::DirEntry> = fs::read_dir(directory)
+        .into_iter()
+        .flatten()
+        .flatten()
+        .collect();
+    let gone: BTreeSet<u32> = entries
+        .iter()
+        .filter_map(|entry| owner(&entry.file_name().to_string_lossy()))
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .filter(|pid| !alive(*pid))
+        .collect();
+    for entry in entries {
+        if owner(&entry.file_name().to_string_lossy()).is_some_and(|pid| gone.contains(&pid)) {
             let _ = fs::remove_file(entry.path());
         }
     }
@@ -55,18 +89,28 @@ pub fn private_copy(source: &Path) -> PathBuf {
         .unwrap()
         .as_nanos();
     let pid = std::process::id();
-    for _ in 0..200 {
-        let before = stamp(source);
-        let partial = directory.join(format!("{name}.{pid}.partial"));
-        let copied = fs::copy(source, &partial);
-        if copied.is_ok_and(|n| n == before.0) && stamp(source) == before {
-            let target = directory.join(format!("{name}-{pid}-{nonce}"));
-            fs::set_permissions(&partial, fs::Permissions::from_mode(0o755)).unwrap();
-            fs::rename(&partial, &target).unwrap();
-            return target;
+    let partial = directory.join(format!("{name}.{pid}.partial"));
+    // Only this process writes its partial copy; an earlier one left it behind by dying mid-copy.
+    let _ = fs::remove_file(&partial);
+    let deadline = Instant::now() + PATIENCE;
+    loop {
+        // Skipped while the source is missing, which is the first moment of every publish.
+        if let Some(before) = stamp(source) {
+            let copied = fs::copy(source, &partial);
+            if copied.is_ok_and(|size| size == before.0) && stamp(source) == Some(before) {
+                let target = directory.join(format!("{name}-{pid}-{nonce}"));
+                fs::set_permissions(&partial, fs::Permissions::from_mode(0o755)).unwrap();
+                fs::rename(&partial, &target).unwrap();
+                return target;
+            }
         }
         let _ = fs::remove_file(&partial);
-        std::thread::sleep(std::time::Duration::from_millis(50));
+        assert!(
+            Instant::now() < deadline,
+            "{} was missing or kept changing for {}s and was never copied whole",
+            source.display(),
+            PATIENCE.as_secs()
+        );
+        thread::sleep(PAUSE);
     }
-    panic!("{} kept changing while it was copied", source.display());
 }
