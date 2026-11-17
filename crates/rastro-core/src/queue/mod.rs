@@ -23,6 +23,10 @@
 //! an exact statement match drops an item, never a name, a text or a partial match, and claims
 //! on several commitments never add up to one. A proposal's mapped parties bring their visible
 //! claims as the item's context, and the item stays.
+
+mod answers;
+pub use answers::{Answered, answered_items};
+
 use crate::commitments::{self, Hypothesis};
 use crate::identity::{
     AccountFacts, CandidateAccount, CandidateReason, Resolution, candidate_pairs,
@@ -218,8 +222,14 @@ impl Queue {
 
     /// Assembles the queue from the sources storage keeps and the identity graph's candidates.
     /// An item whose source is hidden never reaches here: storage filters the sources before
-    /// this reads them. Identical items collapse to one, so no candidate is shown twice.
-    pub fn new(origins: Vec<Origin>, questions: Vec<Question>) -> Self {
+    /// this reads them. Identical items collapse to one, so no candidate is shown twice. A
+    /// proposal the owner has answered is left out: the answer is recorded, and the queue holds
+    /// only what still waits.
+    pub fn new(
+        origins: Vec<Origin>,
+        questions: Vec<Question>,
+        answered: &BTreeSet<String>,
+    ) -> Self {
         let mut known: BTreeMap<String, BTreeSet<Statement>> = BTreeMap::new();
         for commitment in origins.iter().flat_map(|origin| origin.known.iter()) {
             known
@@ -242,6 +252,9 @@ impl Queue {
                     question: None,
                     context: Vec::new(),
                 };
+                if answered.contains(&item.id) {
+                    continue;
+                }
                 if !seen.insert(item.id.clone()) {
                     continue;
                 }
@@ -550,17 +563,31 @@ impl ItemKind {
     }
 }
 
+/// The queue as `scopes` sees it (empty: every scope), inside a snapshot the caller holds.
+pub(crate) fn read(
+    view: &dyn crate::read_only::Snapshot,
+    scopes: &[crate::Scope],
+) -> Result<Queue> {
+    let intents = view.intents()?;
+    let answered = answered_items(&intents);
+    let origins = view.queue_sources(scopes)?;
+    // Same-person candidates are computed over every scope, so only an unscoped caller is
+    // shown a question.
+    let questions = if scopes.is_empty() {
+        let resolution = Resolution::of(&intents);
+        questions(&view.identity_accounts()?, &resolution)
+    } else {
+        Vec::new()
+    };
+    let mut queue = Queue::new(origins, questions, &answered);
+    queue.attach_context(view, scopes)?;
+    Ok(queue)
+}
+
 impl<S: Storage> Rastro<S> {
     /// The queue over every scope, on a writing open.
     pub fn queue(&mut self) -> Result<Queue> {
-        self.storage.snapshot(|view| {
-            let origins = view.queue_sources(&[])?;
-            let resolution = Resolution::of(&view.intents()?);
-            let questions = questions(&view.identity_accounts()?, &resolution);
-            let mut queue = Queue::new(origins, questions);
-            queue.attach_context(view, &[])?;
-            Ok(queue)
-        })
+        self.storage.snapshot(|view| read(view, &[]))
     }
 }
 
@@ -580,16 +607,7 @@ impl<S: ReadStorage> Reader<S> {
             let Some(view) = view else {
                 return Ok(Queue::empty());
             };
-            let origins = view.queue_sources(scopes)?;
-            let questions = if scopes.is_empty() {
-                let resolution = Resolution::of(&view.intents()?);
-                questions(&view.identity_accounts()?, &resolution)
-            } else {
-                Vec::new()
-            };
-            let mut queue = Queue::new(origins, questions);
-            queue.attach_context(view, scopes)?;
-            Ok(queue)
+            read(view, scopes)
         })
     }
 }
@@ -664,6 +682,7 @@ mod tests {
                 known: Vec::new(),
             }],
             Vec::new(),
+            &BTreeSet::new(),
         );
         assert_eq!(queue.items.len(), 1, "the earlier results stay pending");
         let gap = &queue.gaps[0];
@@ -792,6 +811,7 @@ mod tests {
         let queue = Queue::new(
             vec![origin(vec![same, narrower], vec![accepted])],
             Vec::new(),
+            &BTreeSet::new(),
         );
         let shown: Vec<&str> = (queue.items.iter())
             .filter_map(|item| item.proposal.as_ref().map(|p| p.promise.as_str()))

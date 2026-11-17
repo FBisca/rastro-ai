@@ -11,6 +11,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod candidates;
+pub(crate) use candidates::plan_answer;
 pub use candidates::*;
 
 /// The canonical encoding version of an intent row.
@@ -46,15 +47,27 @@ pub enum IntentKind {
     CannotLink,
     SameAs,
     Undo,
+    /// Accept a queue proposal unchanged.
+    Accept,
+    /// Accept a queue proposal with the owner's edits.
+    Edit,
+    /// Reject a queue proposal, with the owner's reason.
+    Reject,
+    /// Report something Rastro should have caught, about an item or not.
+    Missed,
 }
 impl IntentKind {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 10] = [
         Self::CreatePerson,
         Self::Name,
         Self::Link,
         Self::CannotLink,
         Self::SameAs,
         Self::Undo,
+        Self::Accept,
+        Self::Edit,
+        Self::Reject,
+        Self::Missed,
     ];
     pub fn as_str(self) -> &'static str {
         match self {
@@ -64,6 +77,10 @@ impl IntentKind {
             Self::CannotLink => "cannot_link",
             Self::SameAs => "same_as",
             Self::Undo => "undo",
+            Self::Accept => "accept",
+            Self::Edit => "edit",
+            Self::Reject => "reject",
+            Self::Missed => "missed",
         }
     }
     /// The core validates kinds; storage keeps them as text with no SQL enum.
@@ -89,7 +106,8 @@ pub struct ClaimTarget {
     pub statement: Value,
     pub lifecycle_binding: Option<Value>,
 }
-/// The tagged target structure. Entity and pair are used now; claim and claim set are reserved.
+/// The tagged target structure: an entity, a pair, or the queue item an answer names; claim and
+/// claim set are reserved.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "shape", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Targets {
@@ -113,6 +131,37 @@ pub enum Targets {
         members: Vec<ClaimTarget>,
         anchor: String,
     },
+    /// One queue proposal, named by the content-addressed id the queue read gave it, and what
+    /// the owner answered about it: the reason they rejected it, the words of a missed report,
+    /// and the statement they saw and, when they edited it, the one they made. A missed report
+    /// may name no item: it can be about something that was never queued.
+    Proposal {
+        version: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seen: Option<StatementSnapshot>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        edited: Option<StatementSnapshot>,
+    },
+    /// A queue question's answer: the item it settles and the pair the link or cannot-link
+    /// takes, so one intent both records the answer and does what the identity graph does.
+    Question {
+        version: u32,
+        item: String,
+        endpoints: [EntityTarget; 2],
+    },
+}
+/// A proposal's statement, as the owner saw it and, when they edited it, as they made it: the
+/// promise and the stated date's text, snapshotted so the record outlives the item's source.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct StatementSnapshot {
+    pub promise: String,
+    /// The date as the source stated it; none when it was unknown.
+    pub stated_date: Option<String>,
 }
 impl Targets {
     fn entity(entity: EntityTarget) -> Self {
@@ -134,12 +183,14 @@ impl Targets {
             endpoints,
         }
     }
-    /// Every entity the targets name, in order.
+    /// Every entity the targets name, in order. A queue item is not an entity.
     pub fn entities(&self) -> Vec<&EntityTarget> {
         match self {
             Self::Entity { entity, .. } => vec![entity],
-            Self::Pair { endpoints, .. } => endpoints.iter().collect(),
-            Self::Claim { .. } | Self::ClaimSet { .. } => vec![],
+            Self::Pair { endpoints, .. } | Self::Question { endpoints, .. } => {
+                endpoints.iter().collect()
+            }
+            Self::Claim { .. } | Self::ClaimSet { .. } | Self::Proposal { .. } => vec![],
         }
     }
     fn version(&self) -> u32 {
@@ -147,12 +198,22 @@ impl Targets {
             Self::Entity { version, .. }
             | Self::Pair { version, .. }
             | Self::Claim { version, .. }
-            | Self::ClaimSet { version, .. } => *version,
+            | Self::ClaimSet { version, .. }
+            | Self::Proposal { version, .. }
+            | Self::Question { version, .. } => *version,
         }
     }
-    fn endpoints(&self) -> Option<&[EntityTarget; 2]> {
+    /// The queue item the targets name, when they name one.
+    pub fn queue_item(&self) -> Option<&str> {
         match self {
-            Self::Pair { endpoints, .. } => Some(endpoints),
+            Self::Proposal { item, .. } => item.as_deref(),
+            Self::Question { item, .. } => Some(item),
+            _ => None,
+        }
+    }
+    pub(crate) fn endpoints(&self) -> Option<&[EntityTarget; 2]> {
+        match self {
+            Self::Pair { endpoints, .. } | Self::Question { endpoints, .. } => Some(endpoints),
             _ => None,
         }
     }
@@ -173,7 +234,7 @@ pub struct Payload {
     pub name: Option<String>,
 }
 impl Payload {
-    fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self {
             version: SHAPE_VERSION,
             name: None,
@@ -253,7 +314,20 @@ impl Intent {
             IntentKind::CannotLink => pair("cannot_link"),
             IntentKind::SameAs => pair("same_as"),
             IntentKind::Undo => None,
+            IntentKind::Accept | IntentKind::Edit | IntentKind::Reject => self
+                .targets
+                .queue_item()
+                .map(|item| format!("queue/{item}")),
+            // A missed report needs no item, so its domain names only what it is.
+            IntentKind::Missed => Some(match self.targets.queue_item() {
+                Some(item) => format!("queue/{item}"),
+                None => "queue/missed".into(),
+            }),
         }
+    }
+    /// The queue item this intent names, when it answers one.
+    pub fn queue_item(&self) -> Option<&str> {
+        self.targets.queue_item()
     }
     /// Checks the row on its own: the envelope, the JSON shapes and the kind's target shape.
     /// What it says about other intents (an undo's target) is checked against the log.
@@ -314,16 +388,43 @@ impl Intent {
             IntentKind::CreatePerson | IntentKind::Name => {
                 matches!(&self.targets, Targets::Entity { entity, .. } if entity.identifier.starts_with(PERSON_PREFIX))
             }
-            IntentKind::Link => {
-                matches!(&self.targets, Targets::Pair { symmetric: false, endpoints, .. } if endpoints[0].role == "account" && endpoints[1].role == "person")
-            }
-            IntentKind::CannotLink | IntentKind::SameAs => {
+            IntentKind::Link => match &self.targets {
+                Targets::Pair {
+                    symmetric: false,
+                    endpoints,
+                    ..
+                }
+                | Targets::Question { endpoints, .. } => {
+                    endpoints[0].role == "account" && endpoints[1].role == "person"
+                }
+                _ => false,
+            },
+            IntentKind::CannotLink => match &self.targets {
+                Targets::Pair {
+                    symmetric: true,
+                    endpoints,
+                    ..
+                }
+                | Targets::Question { endpoints, .. } => endpoints[0].id < endpoints[1].id,
+                _ => false,
+            },
+            IntentKind::SameAs => {
                 matches!(&self.targets, Targets::Pair { symmetric: true, endpoints, .. } if endpoints[0].id < endpoints[1].id)
             }
             IntentKind::Undo => !matches!(
                 &self.targets,
                 Targets::Claim { .. } | Targets::ClaimSet { .. }
             ),
+            IntentKind::Accept | IntentKind::Edit | IntentKind::Reject => {
+                matches!(&self.targets, Targets::Proposal { item: Some(item), .. } if plain(item))
+            }
+            IntentKind::Missed => match &self.targets {
+                Targets::Proposal {
+                    item: Some(item), ..
+                } => plain(item),
+                Targets::Proposal { item: None, .. } => true,
+                _ => false,
+            },
         };
         ensure!(
             shape_fits,
@@ -338,6 +439,44 @@ impl Intent {
             (IntentKind::Name, None) => bail!("a name intent carries the name"),
             (_, Some(_)) => bail!("only a name intent carries a name"),
             _ => {}
+        }
+        // A question is answered with the link or cannot-link the identity graph already takes,
+        // so only those answer a question, and only a link records what it answered.
+        ensure!(
+            !matches!(&self.targets, Targets::Question { .. })
+                || matches!(self.kind, IntentKind::Link | IntentKind::CannotLink),
+            "only a link or a cannot-link answers a queue question"
+        );
+        match &self.targets {
+            Targets::Proposal {
+                text, seen, edited, ..
+            } => match self.kind {
+                IntentKind::Accept => ensure!(
+                    seen.is_some() && edited.is_none(),
+                    "an accept snapshots the proposal it saw, and no edit"
+                ),
+                IntentKind::Edit => ensure!(
+                    seen.is_some() && edited.is_some(),
+                    "an edit snapshots the proposal it saw and the one it made"
+                ),
+                IntentKind::Reject | IntentKind::Missed => ensure!(
+                    text.as_ref().is_some_and(|text| !text.trim().is_empty()),
+                    "a {} carries its text",
+                    self.kind.as_str()
+                ),
+                _ => ensure!(
+                    seen.is_none() && edited.is_none() && text.is_none(),
+                    "only a queue answer carries what the owner answered"
+                ),
+            },
+            _ => ensure!(
+                self.kind != IntentKind::Accept
+                    && self.kind != IntentKind::Edit
+                    && self.kind != IntentKind::Reject
+                    && self.kind != IntentKind::Missed,
+                "a {} intent takes a queue proposal",
+                self.kind.as_str()
+            ),
         }
         ensure!(
             (self.kind == IntentKind::Undo) == self.undo_of.is_some(),
@@ -476,6 +615,10 @@ impl Resolution {
                         r.cannot.entry(sorted(&a.id, &b.id)).or_insert(id);
                     }
                 }
+                // A queue answer is the owner's record of what they decided; its item leaves
+                // the queue by that record alone and it backs no claim.
+                IntentKind::Accept | IntentKind::Edit | IntentKind::Reject | IntentKind::Missed => {
+                }
                 IntentKind::Undo => {}
             }
         }
@@ -544,6 +687,9 @@ impl Resolution {
                 }
             }
             IntentKind::CannotLink => {}
+            // A queue answer is judged when it is written, against the queue it names; nothing
+            // about an earlier intent can refuse it.
+            IntentKind::Accept | IntentKind::Edit | IntentKind::Reject | IntentKind::Missed => {}
             IntentKind::Undo => {
                 let undone = intent.undo_of.as_deref().unwrap_or_default();
                 let Some(target) = self.intents.get(undone) else {
@@ -565,6 +711,10 @@ impl Resolution {
                     }
                     IntentKind::CreatePerson => bail!("creating a Person can't be undone"),
                     IntentKind::Name | IntentKind::Link | IntentKind::SameAs => {}
+                    IntentKind::Accept
+                    | IntentKind::Edit
+                    | IntentKind::Reject
+                    | IntentKind::Missed => bail!("a queue answer can't be undone"),
                 }
             }
         }
@@ -853,7 +1003,7 @@ fn mint_person() -> Result<EntityTarget> {
         role: "person".into(),
     })
 }
-fn new_intent(
+pub(crate) fn new_intent(
     kind: IntentKind,
     domain_key: String,
     targets: Targets,
@@ -1070,7 +1220,7 @@ impl<S: Storage> Rastro<S> {
             })
         })
     }
-    fn issue(
+    pub(crate) fn issue(
         &mut self,
         plan: impl FnOnce(
             &dyn Snapshot,

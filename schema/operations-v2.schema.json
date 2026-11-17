@@ -1114,15 +1114,39 @@
     },
     "IntentKind": {
       "description": "The kinds this slice enables. Slice 7 adds claim and claim-set kinds to the same table.",
-      "enum": [
-        "create_person",
-        "name",
-        "link",
-        "cannot_link",
-        "same_as",
-        "undo"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "create_person",
+            "name",
+            "link",
+            "cannot_link",
+            "same_as",
+            "undo"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "accept",
+          "description": "Accept a queue proposal unchanged.",
+          "type": "string"
+        },
+        {
+          "const": "edit",
+          "description": "Accept a queue proposal with the owner's edits.",
+          "type": "string"
+        },
+        {
+          "const": "reject",
+          "description": "Reject a queue proposal, with the owner's reason.",
+          "type": "string"
+        },
+        {
+          "const": "missed",
+          "description": "Report something Rastro should have caught, about an item or not.",
+          "type": "string"
+        }
+      ]
     },
     "IntentStatus": {
       "description": "Where an intent stands once every later intent is read.",
@@ -3332,6 +3356,151 @@
               "type": "object"
             }
           }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "queue.accept"
+            },
+            "result": {
+              "additionalProperties": false,
+              "description": "What a queue answer recorded: the item it named and the owner intents it accepted.",
+              "properties": {
+                "intents": {
+                  "description": "The owner intents the answer accepted, in acceptance order.",
+                  "items": {
+                    "$ref": "#/$defs/IntentView"
+                  },
+                  "type": "array"
+                },
+                "item": {
+                  "description": "The item's id as `queue` listed it; absent for a missed report about nothing queued.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "intents"
+              ],
+              "title": "QueueAnswerResult",
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "queue.edit"
+            },
+            "result": {
+              "additionalProperties": false,
+              "description": "What a queue answer recorded: the item it named and the owner intents it accepted.",
+              "properties": {
+                "intents": {
+                  "description": "The owner intents the answer accepted, in acceptance order.",
+                  "items": {
+                    "$ref": "#/$defs/IntentView"
+                  },
+                  "type": "array"
+                },
+                "item": {
+                  "description": "The item's id as `queue` listed it; absent for a missed report about nothing queued.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "intents"
+              ],
+              "title": "QueueAnswerResult",
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "queue.reject"
+            },
+            "result": {
+              "additionalProperties": false,
+              "description": "What a queue answer recorded: the item it named and the owner intents it accepted.",
+              "properties": {
+                "intents": {
+                  "description": "The owner intents the answer accepted, in acceptance order.",
+                  "items": {
+                    "$ref": "#/$defs/IntentView"
+                  },
+                  "type": "array"
+                },
+                "item": {
+                  "description": "The item's id as `queue` listed it; absent for a missed report about nothing queued.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "intents"
+              ],
+              "title": "QueueAnswerResult",
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "queue.answer"
+            },
+            "result": {
+              "additionalProperties": false,
+              "description": "What a queue answer recorded: the item it named and the owner intents it accepted.",
+              "properties": {
+                "intents": {
+                  "description": "The owner intents the answer accepted, in acceptance order.",
+                  "items": {
+                    "$ref": "#/$defs/IntentView"
+                  },
+                  "type": "array"
+                },
+                "item": {
+                  "description": "The item's id as `queue` listed it; absent for a missed report about nothing queued.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "intents"
+              ],
+              "title": "QueueAnswerResult",
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "queue.missed"
+            },
+            "result": {
+              "additionalProperties": false,
+              "description": "What a queue answer recorded: the item it named and the owner intents it accepted.",
+              "properties": {
+                "intents": {
+                  "description": "The owner intents the answer accepted, in acceptance order.",
+                  "items": {
+                    "$ref": "#/$defs/IntentView"
+                  },
+                  "type": "array"
+                },
+                "item": {
+                  "description": "The item's id as `queue` listed it; absent for a missed report about nothing queued.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "intents"
+              ],
+              "title": "QueueAnswerResult",
+              "type": "object"
+            }
+          }
         }
       ],
       "required": [
@@ -3369,7 +3538,12 @@
         "meeting.forget",
         "meeting.export",
         "commitments",
-        "queue"
+        "queue",
+        "queue.accept",
+        "queue.edit",
+        "queue.reject",
+        "queue.answer",
+        "queue.missed"
       ]
     },
     "result": {
@@ -4731,6 +4905,268 @@
       "surfaces": [
         "cli",
         "mcp"
+      ]
+    },
+    {
+      "description": "Accept a proposal unchanged: one owner intent snapshots what you saw, and the item leaves the queue.",
+      "input": {
+        "additionalProperties": false,
+        "description": "Accept a proposal unchanged: one owner intent snapshots what you saw, and the item leaves the queue.",
+        "properties": {
+          "item": {
+            "description": "The item's id as `queue` lists it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "item"
+        ],
+        "title": "QueueAcceptRequest",
+        "type": "object"
+      },
+      "name": "queue.accept",
+      "result": {
+        "additionalProperties": false,
+        "description": "What a queue answer recorded: the item it named and the owner intents it accepted.",
+        "properties": {
+          "intents": {
+            "description": "The owner intents the answer accepted, in acceptance order.",
+            "items": {
+              "$ref": "#/$defs/IntentView"
+            },
+            "type": "array"
+          },
+          "item": {
+            "description": "The item's id as `queue` listed it; absent for a missed report about nothing queued.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "intents"
+        ],
+        "title": "QueueAnswerResult",
+        "type": "object"
+      },
+      "surfaces": [
+        "cli"
+      ]
+    },
+    {
+      "description": "Accept a proposal with your edits: one owner intent snapshots both what you saw and what you made, and the item leaves the queue.",
+      "input": {
+        "additionalProperties": false,
+        "description": "Accept a proposal with your edits: one owner intent snapshots both what you saw and what you made, and the item leaves the queue.",
+        "properties": {
+          "date": {
+            "default": null,
+            "description": "The stated date as you state it; omit to keep the one it says.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "item": {
+            "description": "The item's id as `queue` lists it.",
+            "type": "string"
+          },
+          "promise": {
+            "default": null,
+            "description": "The promise as you state it; omit to keep the one it says.",
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        },
+        "required": [
+          "item"
+        ],
+        "title": "QueueEditRequest",
+        "type": "object"
+      },
+      "name": "queue.edit",
+      "result": {
+        "additionalProperties": false,
+        "description": "What a queue answer recorded: the item it named and the owner intents it accepted.",
+        "properties": {
+          "intents": {
+            "description": "The owner intents the answer accepted, in acceptance order.",
+            "items": {
+              "$ref": "#/$defs/IntentView"
+            },
+            "type": "array"
+          },
+          "item": {
+            "description": "The item's id as `queue` listed it; absent for a missed report about nothing queued.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "intents"
+        ],
+        "title": "QueueAnswerResult",
+        "type": "object"
+      },
+      "surfaces": [
+        "cli"
+      ]
+    },
+    {
+      "description": "Reject a proposal, with your reason: one owner intent records it, the item leaves the queue, and no claim is minted.",
+      "input": {
+        "additionalProperties": false,
+        "description": "Reject a proposal, with your reason: one owner intent records it, the item leaves the queue, and no claim is minted.",
+        "properties": {
+          "item": {
+            "description": "The item's id as `queue` lists it.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "Why it is not a commitment you hold.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "item",
+          "reason"
+        ],
+        "title": "QueueRejectRequest",
+        "type": "object"
+      },
+      "name": "queue.reject",
+      "result": {
+        "additionalProperties": false,
+        "description": "What a queue answer recorded: the item it named and the owner intents it accepted.",
+        "properties": {
+          "intents": {
+            "description": "The owner intents the answer accepted, in acceptance order.",
+            "items": {
+              "$ref": "#/$defs/IntentView"
+            },
+            "type": "array"
+          },
+          "item": {
+            "description": "The item's id as `queue` listed it; absent for a missed report about nothing queued.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "intents"
+        ],
+        "title": "QueueAnswerResult",
+        "type": "object"
+      },
+      "surfaces": [
+        "cli"
+      ]
+    },
+    {
+      "description": "Answer a question yes or no. A yes holds both accounts by one Person, creating and naming one from the candidate when neither is held; a no records a cannot-link. Either way one answer is recorded, the question leaves the queue, and answering it again is refused.",
+      "input": {
+        "additionalProperties": false,
+        "description": "Answer a question yes or no. A yes holds both accounts by one Person, creating and naming one from the candidate when neither is held; a no records a cannot-link. Either way one answer is recorded, the question leaves the queue, and answering it again is refused.",
+        "properties": {
+          "item": {
+            "description": "The item's id as `queue` lists it.",
+            "type": "string"
+          },
+          "name": {
+            "default": null,
+            "description": "The name of the Person a yes creates when neither account is held; the candidate's name by default.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "verdict": {
+            "$ref": "#/$defs/Verdict",
+            "description": "`yes` or `no`."
+          }
+        },
+        "required": [
+          "item",
+          "verdict"
+        ],
+        "title": "QueueAnswerRequest",
+        "type": "object"
+      },
+      "name": "queue.answer",
+      "result": {
+        "additionalProperties": false,
+        "description": "What a queue answer recorded: the item it named and the owner intents it accepted.",
+        "properties": {
+          "intents": {
+            "description": "The owner intents the answer accepted, in acceptance order.",
+            "items": {
+              "$ref": "#/$defs/IntentView"
+            },
+            "type": "array"
+          },
+          "item": {
+            "description": "The item's id as `queue` listed it; absent for a missed report about nothing queued.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "intents"
+        ],
+        "title": "QueueAnswerResult",
+        "type": "object"
+      },
+      "surfaces": [
+        "cli"
+      ]
+    },
+    {
+      "description": "Report something Rastro should have caught. One owner intent records your words and, when you name one, the item it is about; a named item stays pending.",
+      "input": {
+        "additionalProperties": false,
+        "description": "Report something Rastro should have caught. One owner intent records your words and, when you name one, the item it is about; a named item stays pending.",
+        "properties": {
+          "item": {
+            "default": null,
+            "description": "The item's id as `queue` lists it, when the report is about one; it stays pending.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "text": {
+            "description": "What Rastro should have caught, in your words.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "title": "QueueMissedRequest",
+        "type": "object"
+      },
+      "name": "queue.missed",
+      "result": {
+        "additionalProperties": false,
+        "description": "What a queue answer recorded: the item it named and the owner intents it accepted.",
+        "properties": {
+          "intents": {
+            "description": "The owner intents the answer accepted, in acceptance order.",
+            "items": {
+              "$ref": "#/$defs/IntentView"
+            },
+            "type": "array"
+          },
+          "item": {
+            "description": "The item's id as `queue` listed it; absent for a missed report about nothing queued.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "intents"
+        ],
+        "title": "QueueAnswerResult",
+        "type": "object"
+      },
+      "surfaces": [
+        "cli"
       ]
     }
   ]
