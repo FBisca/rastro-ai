@@ -6,8 +6,9 @@ use rastro_core::{
     Scope,
     commitments::Source,
     meeting::StoredMeeting,
-    queue::{Origin, Statement},
+    queue::{KnownCommitment, Origin, Statement},
 };
+use std::collections::{BTreeMap, BTreeSet};
 
 /// Every source visible to `scopes` (empty: every scope), most recently captured first.
 pub(crate) fn sources(view: &View, scopes: &[Scope]) -> Result<Vec<Source>> {
@@ -17,7 +18,7 @@ pub(crate) fn sources(view: &View, scopes: &[Scope]) -> Result<Vec<Source>> {
         .collect())
 }
 
-/// The same sources, each with the time its content belongs to and the statements observed
+/// The same sources, each with the time its content belongs to and the commitments observed
 /// claims already hold: what the queue reads to leave out an item it can tell is known.
 pub(crate) fn origins(view: &View, scopes: &[Scope]) -> Result<Vec<Origin>> {
     let known = known(view, scopes)?;
@@ -43,12 +44,12 @@ fn loaded(view: &View, scopes: &[Scope]) -> Result<Vec<StoredMeeting>> {
         .collect()
 }
 
-/// The statements observed `std:` claims hold, visible to `scopes` (empty: every scope). The
-/// queue drops a proposal whose statement one of these holds, so only an exact statement match
-/// can make an item known; a name or a text match never does.
-fn known(view: &View, scopes: &[Scope]) -> Result<Vec<Statement>> {
+/// The commitments observed `std:` claims hold, visible to `scopes` (empty: every scope), each
+/// with the statements its claims carry. Claims are grouped by their subject, so the queue only
+/// ever matches a hypothesis against one commitment; a name or a text match drops nothing.
+fn known(view: &View, scopes: &[Scope]) -> Result<Vec<KnownCommitment>> {
     let mut statement = view.0.prepare_cached(&format!(
-        "SELECT DISTINCT predicate, object_value FROM claim c
+        "SELECT subject, predicate, object_value FROM claim c
          WHERE predicate LIKE 'std:%' AND status = 'observed' AND object_value IS NOT NULL
          AND (?1 OR {})",
         scoped::VISIBLE_CLAIM
@@ -56,10 +57,23 @@ fn known(view: &View, scopes: &[Scope]) -> Result<Vec<Statement>> {
     let every = scopes.is_empty();
     let scopes = serde_json::to_string(scopes)?;
     let rows = statement.query_map(rusqlite::params![every, scopes], |row| {
-        Ok(Statement {
-            predicate: row.get(0)?,
-            value: row.get(1)?,
-        })
+        Ok((
+            row.get::<_, String>(0)?,
+            Statement {
+                predicate: row.get(1)?,
+                value: row.get(2)?,
+            },
+        ))
     })?;
-    Ok(rows.collect::<Result<_, _>>()?)
+    let mut held: BTreeMap<String, BTreeSet<Statement>> = BTreeMap::new();
+    for row in rows {
+        let (subject, statement) = row?;
+        held.entry(subject).or_default().insert(statement);
+    }
+    Ok((held.into_iter())
+        .map(|(subject, statements)| KnownCommitment {
+            subject,
+            statements,
+        })
+        .collect())
 }

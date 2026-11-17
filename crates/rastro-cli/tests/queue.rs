@@ -703,8 +703,8 @@ fn S4_an_item_an_observed_claim_already_holds_is_omitted_and_counted() {
     assert_eq!(queue["already_known"], 0, "{queue}");
 
     // Look-alikes that hold no more than a part of a statement: a title repeating the promise's
-    // words, a tracker field repeating a party's name, one standard predicate naming a party and
-    // a stated date that is not the item's.
+    // words, a tracker field repeating a party's name, and the promise's two party names and its
+    // date each on a different commitment, so no one commitment holds the item's statement.
     let issue = Entity::new("tracker:issue/1".into(), "tracker:Issue".into());
     env.record(
         &issue,
@@ -718,17 +718,25 @@ fn S4_an_item_an_observed_claim_already_holds_is_omitted_and_counted() {
         literal("Alice"),
         ("https://tracker.test/issue/1", "/assignee"),
     );
-    let other = Entity::new("std:commitment/other".into(), "std:Commitment".into());
+    let owes = Entity::new("std:commitment/owes".into(), "std:Commitment".into());
     env.record(
-        &other,
+        &owes,
         "std:owes",
         literal("Alice"),
         ("https://meetings.test/other", "/owes"),
     );
+    let owed_to = Entity::new("std:commitment/owed-to".into(), "std:Commitment".into());
     env.record(
-        &other,
+        &owed_to,
+        "std:owed_to",
+        literal("Bob"),
+        ("https://meetings.test/other", "/owed_to"),
+    );
+    let due = Entity::new("std:commitment/due".into(), "std:Commitment".into());
+    env.record(
+        &due,
         "std:due",
-        literal("by Monday"),
+        literal("by Friday"),
         ("https://meetings.test/other", "/due"),
     );
     let queue = env.queue();

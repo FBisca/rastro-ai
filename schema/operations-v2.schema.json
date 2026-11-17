@@ -3299,7 +3299,7 @@
               "description": "What `queue` returns.",
               "properties": {
                 "already_known": {
-                  "description": "How many proposals this read left out because an observed claim already held every\nstandard statement they express.",
+                  "description": "How many proposals this read left out because one observed commitment already held\nexactly the standard statements they express.",
                   "format": "uint",
                   "minimum": 0,
                   "type": "integer"
@@ -4696,7 +4696,7 @@
         "description": "What `queue` returns.",
         "properties": {
           "already_known": {
-            "description": "How many proposals this read left out because an observed claim already held every\nstandard statement they express.",
+            "description": "How many proposals this read left out because one observed commitment already held\nexactly the standard statements they express.",
             "format": "uint",
             "minimum": 0,
             "type": "integer"
