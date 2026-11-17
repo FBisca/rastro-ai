@@ -1,0 +1,4 @@
+# A workspace with one member that declares no role. The crate gate must refuse it, naming the crate.
+[workspace]
+members = ["fixture-unspecified"]
+resolver = "3"

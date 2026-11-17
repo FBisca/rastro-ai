@@ -1,0 +1,14 @@
+[package]
+name = "fixture-plugin-sdk"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata.rastro]
+role = "sdk"
+
+[dependencies]
+fixture-core = { path = "../core" }
+
+[dev-dependencies]
+fixture-tool = { path = "../tool" }

@@ -1,0 +1,6 @@
+# A workspace where the plugin SDK depends on the core, and dev-depends on another core-role crate.
+# Neither edge is one its role allows, so the crate gate must refuse both, naming both crates and
+# their roles.
+[workspace]
+members = ["plugin-sdk", "core", "tool"]
+resolver = "3"

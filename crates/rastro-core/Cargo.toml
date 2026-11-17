@@ -3,6 +3,9 @@ name = "rastro-core"
 version.workspace = true
 edition.workspace = true
 
+[package.metadata.rastro]
+role = "core"
+
 [dependencies]
 anyhow.workspace = true
 chrono.workspace = true

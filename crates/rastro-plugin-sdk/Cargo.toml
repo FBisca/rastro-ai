@@ -3,6 +3,9 @@ name = "rastro-plugin-sdk"
 version.workspace = true
 edition.workspace = true
 
+[package.metadata.rastro]
+role = "sdk"
+
 [dependencies]
 anyhow.workspace = true
 regex = "1.13.1"
