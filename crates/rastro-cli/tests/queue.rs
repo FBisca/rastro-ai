@@ -871,7 +871,8 @@ fn S5_a_mapped_partys_visible_claims_are_the_items_context() {
 }
 
 /// S6: a rejection with a reason and a yes or no answer each record one owner intent, the item
-/// leaves the queue on the CLI and on an MCP read, and a rejection mints no claim.
+/// leaves the queue on the CLI and on an MCP read, a rejection mints no claim, and a yes still
+/// creates and names the Person that holds a pair nobody held.
 #[test]
 fn S6_a_rejection_and_an_answer_record_one_intent_and_leave_every_surface() {
     let env = Env::new();
@@ -906,16 +907,14 @@ fn S6_a_rejection_and_an_answer_record_one_intent_and_leave_every_surface() {
         ("name", "bob jones"),
         "https://linear.app/rastro/profiles/u-2",
     );
-    // The first account is already the owner's, so a yes on its pair needs one link and no Person.
-    env.ok(&["identity", "link", "github:account/1", "me"]);
 
     let queue = env.queue();
     let proposal = item(&queue, "weekly-1")["id"].as_str().unwrap().to_string();
-    let held = question(&queue, "github:account/1")["id"]
+    let ana = question(&queue, "github:account/1")["id"]
         .as_str()
         .unwrap()
         .to_string();
-    let unheld = question(&queue, "github:account/2")["id"]
+    let bob = question(&queue, "github:account/2")["id"]
         .as_str()
         .unwrap()
         .to_string();
@@ -943,42 +942,106 @@ fn S6_a_rejection_and_an_answer_record_one_intent_and_leave_every_surface() {
         "still on MCP: {read}"
     );
 
-    // A yes: one link intent, and the question leaves too.
+    // A yes on a pair no Person holds yet: still one intent, and it is the answer itself.
+    let claims = env.claims();
     let before = env.intents();
-    let answered = env.ok(&["queue", "answer", &held, "yes"]);
+    let answered = env.ok(&["queue", "answer", &bob, "yes"]);
     let recorded = answered["intents"].as_array().unwrap();
     assert_eq!(recorded.len(), 1, "{answered}");
-    assert_eq!(recorded[0]["kind"], "link", "{answered}");
+    assert_eq!(recorded[0]["kind"], "answer", "{answered}");
     assert_eq!(env.intents(), before + 1, "{answered}");
-    assert!(!ids(&env.queue()).contains(&held), "still queued");
+    assert!(!ids(&env.queue()).contains(&bob), "still queued");
     let read = env.mcp(&[], "queue", json!({}));
     assert!(
-        !ids(&read["structuredContent"]["result"]).contains(&held),
+        !ids(&read["structuredContent"]["result"]).contains(&bob),
         "still on MCP: {read}"
     );
-    // The yes took effect in the identity graph: the Person holds both accounts.
-    let me = env.ok(&["about", "me"]);
-    let accounts: Vec<&str> = (me["person"]["accounts"].as_array().unwrap().iter())
+    // The one answer decided the whole question: its Person is named, typed and holds both
+    // accounts, and those claims are the answer's.
+    assert!(env.claims() > claims, "a yes mints the claims it decides");
+    let person = env.ok(&["about", "rastro:name/Bob Jones"]);
+    let accounts: Vec<&str> = (person["person"]["accounts"].as_array().unwrap().iter())
         .map(|account| account["identifier"].as_str().unwrap())
         .collect();
     assert!(
-        accounts.contains(&"github:account/1") && accounts.contains(&"linear:user/u-1"),
-        "{me}"
+        accounts.contains(&"github:account/2") && accounts.contains(&"linear:user/u-2"),
+        "{person}"
+    );
+    let held: Vec<&str> = (person["person"]["accounts"].as_array().unwrap().iter())
+        .map(|account| account["reasons"][0]["intent"].as_str().unwrap())
+        .collect();
+    assert_eq!(held.len(), 2, "{person}");
+    assert_eq!(
+        held,
+        [recorded[0]["id"].as_str().unwrap(); 2],
+        "both held-by claims are the one answer's: {person}"
     );
 
-    // A no: one cannot-link intent, and the question leaves too.
+    // A no: still one intent, and the question leaves too.
+    let claims = env.claims();
     let before = env.intents();
-    let answered = env.ok(&["queue", "answer", &unheld, "no"]);
+    let answered = env.ok(&["queue", "answer", &ana, "no"]);
     let recorded = answered["intents"].as_array().unwrap();
     assert_eq!(recorded.len(), 1, "{answered}");
-    assert_eq!(recorded[0]["kind"], "cannot_link", "{answered}");
+    assert_eq!(recorded[0]["kind"], "answer", "{answered}");
     assert_eq!(env.intents(), before + 1, "{answered}");
-    assert!(!ids(&env.queue()).contains(&unheld), "still queued");
+    assert!(!ids(&env.queue()).contains(&ana), "still queued");
+    assert_eq!(env.claims(), claims, "a no mints no claim");
     let read = env.mcp(&[], "queue", json!({}));
     assert!(
-        !ids(&read["structuredContent"]["result"]).contains(&unheld),
+        !ids(&read["structuredContent"]["result"]).contains(&ana),
         "still on MCP: {read}"
     );
+}
+
+/// spec: One intent per answer, recorded once
+/// Undoing a yes that was answered in the queue ends what it decided — the accounts it held and
+/// the name it gave — and the question waits again.
+#[test]
+fn undoing_a_queues_yes_ends_its_decision_and_returns_the_question() {
+    let env = Env::new();
+    env.typed_account(
+        "github:account/7",
+        "code:Account",
+        ("name", "Carla Dias"),
+        "https://api.github.com/users/7",
+    );
+    env.typed_account(
+        "linear:user/u-7",
+        "tracker:Account",
+        ("name", "carla dias"),
+        "https://linear.app/rastro/profiles/u-7",
+    );
+    let queue = env.queue();
+    let item = question(&queue, "github:account/7")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let answered = env.ok(&["queue", "answer", &item, "yes"]);
+    let answer = answered["intents"][0]["id"].as_str().unwrap().to_string();
+    assert!(!ids(&env.queue()).contains(&item), "{answered}");
+
+    // Undoing the answer is refused by nothing: it ends the answer's decision.
+    let undone = env.ok(&["identity", "undo", &answer]);
+    assert_eq!(undone["intents"][0]["kind"], "undo", "{undone}");
+    assert_eq!(undone["intents"][0]["status"], "effective", "{undone}");
+    let history = env.ok(&["identity", "history", "github:account/7"]);
+    let answer_row = (history["intents"].as_array().unwrap().iter())
+        .find(|intent| intent["id"] == answer.as_str())
+        .unwrap_or_else(|| panic!("the answer is not in the account's history: {history}"));
+    assert_eq!(answer_row["status"], "undone", "{history}");
+
+    // The question waits again, and no account is held now.
+    assert!(
+        ids(&env.queue()).contains(&item),
+        "the question returns: {}",
+        env.queue()
+    );
+    let about = env.ok(&["about", "github:account/7"]);
+    let held = (about["claims"].as_array().unwrap().iter())
+        .filter(|claim| claim["predicate"] == "rastro:held_by")
+        .count();
+    assert_eq!(held, 0, "no current held-by claim: {about}");
 }
 
 /// S7: a missed report records its text and, when one was named, the item; the named item stays

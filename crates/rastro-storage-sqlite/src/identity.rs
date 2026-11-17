@@ -11,7 +11,8 @@ use rastro_core::claims::{
     revision_with_links,
 };
 use rastro_core::identity::{
-    AccountFacts, HELD_BY, Intent, IntentKind, Resolution, SAME_AS, SeenType, admit_account,
+    AccountFacts, HELD_BY, Intent, IntentKind, Resolution, SAME_AS, SeenType, Targets,
+    admit_account,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::{BTreeMap, BTreeSet};
@@ -115,8 +116,11 @@ pub(crate) fn insert_all(
             continue;
         }
         Resolution::of(&log).admit(&intent)?;
+        // A Person the intent itself mints (a creation, or an answer's yes) is new: nobody
+        // could see it before.
+        let minted_here = intent.minted_person().map(|person| person.id.clone());
         for entity in intent.targets.entities() {
-            if intent.kind == IntentKind::CreatePerson || minted.contains(&entity.id) {
+            if minted_here.as_deref() == Some(entity.id.as_str()) || minted.contains(&entity.id) {
                 minted.insert(entity.id.clone());
                 continue;
             }
@@ -132,6 +136,18 @@ pub(crate) fn insert_all(
             && let Some(account) = intent.targets.entities().first()
         {
             admit_account(&account.identifier, &types(db, &account.id, sees)?)?;
+        }
+        // An answer's yes holds its two accounts by one Person, so both are held as accounts.
+        if intent.kind == IntentKind::Answer
+            && let Targets::Answer {
+                yes: true,
+                endpoints,
+                ..
+            } = &intent.targets
+        {
+            for account in endpoints {
+                admit_account(&account.identifier, &types(db, &account.id, sees)?)?;
+            }
         }
         db.execute(
             "INSERT INTO main.intent (id, format_version, kind, owner_id, issuer_context, issued_at,

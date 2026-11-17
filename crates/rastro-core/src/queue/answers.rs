@@ -7,7 +7,8 @@
 //! waiting. A rejection mints no claim.
 use super::{Item, read};
 use crate::identity::{
-    self, Intent, IntentKind, Payload, StatementSnapshot, Targets, plan_answer, resolve,
+    self, AnswerPerson, Intent, IntentKind, Payload, StatementSnapshot, Targets, plan_answer,
+    resolve,
 };
 use crate::read_only::Snapshot;
 use crate::{Rastro, Storage};
@@ -194,9 +195,10 @@ impl<S: Storage> Rastro<S> {
         })
     }
 
-    /// Answers a question yes or no, naming the item: a no records one cannot-link, a yes the
-    /// links that hold its accounts, as `rastro identity answer` records them. Each link and the
-    /// cannot-link also records the item it settles.
+    /// Answers a question yes or no, naming the item. One intent records the whole answer: the
+    /// verdict, and for a yes the Person that holds the accounts and, when this answer creates
+    /// it, the name it gives. The identity graph's own planner decides who holds whom, so a yes
+    /// follows `rastro identity answer`'s rules; what differs is that the decision is one row.
     pub fn queue_answer(&mut self, item: &str, yes: bool, name: Option<&str>) -> Result<Answered> {
         let id = item.to_string();
         let name = name.map(String::from);
@@ -220,31 +222,37 @@ impl<S: Storage> Rastro<S> {
                 &question.accounts[1].identifier,
                 "account",
             )?;
-            let (intents, person, created) = plan_answer(
-                a,
-                b,
+            let (planned, person, created) = plan_answer(
+                a.clone(),
+                b.clone(),
                 &view.identity_accounts()?,
                 resolution,
                 yes,
                 name.as_deref(),
             )?;
-            let mut recorded = Vec::with_capacity(intents.len());
-            for mut intent in intents {
-                // A yesses's minted Person and its name are the answer's consequence; the link
-                // and the cannot-link are what records which item was answered.
-                if matches!(intent.kind, IntentKind::Link | IntentKind::CannotLink)
-                    && let Some(endpoints) = intent.targets.endpoints().cloned()
-                {
-                    intent.targets = Targets::Question {
-                        version: identity::SHAPE_VERSION,
-                        item: pending.id.clone(),
-                        endpoints,
-                    };
-                    intent.check()?;
-                }
-                recorded.push(intent);
-            }
-            Ok((recorded, person, created))
+            // The name a yes gives the Person it creates is the one its plan chose.
+            let named = (planned.iter())
+                .find(|intent| intent.kind == IntentKind::Name)
+                .and_then(|intent| intent.payload.name.clone());
+            let targets = Targets::Answer {
+                version: identity::SHAPE_VERSION,
+                item: pending.id.clone(),
+                endpoints: [a, b],
+                yes,
+                person: person.map(|entity| AnswerPerson {
+                    entity,
+                    name: named,
+                    created,
+                }),
+            };
+            let intent = identity::new_intent(
+                IntentKind::Answer,
+                String::new(),
+                targets,
+                Payload::empty(),
+                None,
+            )?;
+            Ok((vec![intent], None, false))
         })?;
         Ok(Answered {
             item: Some(id),

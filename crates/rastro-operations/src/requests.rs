@@ -637,7 +637,7 @@ impl QueueRejectRequest {
     }
 }
 
-/// Answer a question yes or no. A yes holds both accounts by one Person, creating and naming one from the candidate when neither is held; a no records a cannot-link. Either way one answer is recorded, the question leaves the queue, and answering it again is refused.
+/// Answer a question yes or no. A yes holds both accounts by one Person, creating and naming one from the candidate when neither is held; a no records a cannot-link between them. One answer is one owner intent, the question leaves the queue, and answering it again is refused.
 #[derive(Args, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct QueueAnswerRequest {

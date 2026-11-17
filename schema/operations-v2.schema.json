@@ -1145,6 +1145,11 @@
           "const": "missed",
           "description": "Report something Rastro should have caught, about an item or not.",
           "type": "string"
+        },
+        {
+          "const": "answer",
+          "description": "Answer a queue question: the two accounts are one person, or are not. One answer, one\nintent, whatever it decides.",
+          "type": "string"
         }
       ]
     },
@@ -5061,10 +5066,10 @@
       ]
     },
     {
-      "description": "Answer a question yes or no. A yes holds both accounts by one Person, creating and naming one from the candidate when neither is held; a no records a cannot-link. Either way one answer is recorded, the question leaves the queue, and answering it again is refused.",
+      "description": "Answer a question yes or no. A yes holds both accounts by one Person, creating and naming one from the candidate when neither is held; a no records a cannot-link between them. One answer is one owner intent, the question leaves the queue, and answering it again is refused.",
       "input": {
         "additionalProperties": false,
-        "description": "Answer a question yes or no. A yes holds both accounts by one Person, creating and naming one from the candidate when neither is held; a no records a cannot-link. Either way one answer is recorded, the question leaves the queue, and answering it again is refused.",
+        "description": "Answer a question yes or no. A yes holds both accounts by one Person, creating and naming one from the candidate when neither is held; a no records a cannot-link between them. One answer is one owner intent, the question leaves the queue, and answering it again is refused.",
         "properties": {
           "item": {
             "description": "The item's id as `queue` lists it.",
