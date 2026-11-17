@@ -676,3 +676,144 @@ fn S3_every_gap_is_named_and_a_hidden_sources_items_are_absent() {
     assert!(!names.contains(&"weekly-1"), "{personal}");
     assert!(names.contains(&"private-1"), "{personal}");
 }
+
+/// A literal claim object, as an extractor submits the text a source states.
+fn literal(value: &str) -> Object {
+    Object::Literal {
+        value: value.into(),
+        datatype: "string".into(),
+    }
+}
+
+/// S4: an item whose standard statement an observed claim already holds is absent from the queue
+/// and the result counts it as already known; a claim matching only a name or the promise's text
+/// drops nothing.
+#[test]
+fn S4_an_item_an_observed_claim_already_holds_is_omitted_and_counted() {
+    let env = Env::new();
+    env.candidates(&good());
+    env.import_ok(
+        "weekly-1",
+        "work",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+    );
+    let queue = env.queue();
+    assert_eq!(queue["items"].as_array().unwrap().len(), 2, "{queue}");
+    assert_eq!(queue["already_known"], 0, "{queue}");
+
+    // Look-alikes that hold no more than a part of a statement: a title repeating the promise's
+    // words, a tracker field repeating a party's name, one standard predicate naming a party and
+    // a stated date that is not the item's.
+    let issue = Entity::new("tracker:issue/1".into(), "tracker:Issue".into());
+    env.record(
+        &issue,
+        "tracker:title",
+        literal("send Bob the budget"),
+        ("https://tracker.test/issue/1", "/title"),
+    );
+    env.record(
+        &issue,
+        "tracker:assignee",
+        literal("Alice"),
+        ("https://tracker.test/issue/1", "/assignee"),
+    );
+    let other = Entity::new("std:commitment/other".into(), "std:Commitment".into());
+    env.record(
+        &other,
+        "std:owes",
+        literal("Alice"),
+        ("https://meetings.test/other", "/owes"),
+    );
+    env.record(
+        &other,
+        "std:due",
+        literal("by Monday"),
+        ("https://meetings.test/other", "/due"),
+    );
+    let queue = env.queue();
+    assert_eq!(queue["items"].as_array().unwrap().len(), 2, "{queue}");
+    assert_eq!(queue["already_known"], 0, "{queue}");
+
+    // Observed claims hold the first proposal's statements: the same standard predicates, party
+    // names and stated date.
+    let commitment = Entity::new("std:commitment/1".into(), "std:Commitment".into());
+    env.record(
+        &commitment,
+        "std:owes",
+        literal("Alice"),
+        ("https://meetings.test/weekly-1", "/owes"),
+    );
+    env.record(
+        &commitment,
+        "std:owed_to",
+        literal("Bob"),
+        ("https://meetings.test/weekly-1", "/owed_to"),
+    );
+    env.record(
+        &commitment,
+        "std:due",
+        literal("by Friday"),
+        ("https://meetings.test/weekly-1", "/due"),
+    );
+
+    let queue = env.queue();
+    let items = queue["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{queue}");
+    assert_eq!(
+        items[0]["proposal"]["kind"], "waiting_on",
+        "the promise is known, the waiting-on is not: {queue}"
+    );
+    assert_eq!(queue["already_known"], 1, "{queue}");
+}
+
+/// S5: a proposal naming a party the owner mapped to an entity that has visible claims carries
+/// those claims as context and stays in the queue.
+#[test]
+fn S5_a_mapped_partys_visible_claims_are_the_items_context() {
+    let env = Env::new();
+    let me = env.ok(&["identity", "me"])["person"]["identifier"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let person = Entity::new(me.clone(), "rastro:Person".into());
+    let owns = literal("the budget");
+    env.record(
+        &person,
+        "note:owns",
+        owns.clone(),
+        ("https://contacts.test/owner", "/owns"),
+    );
+
+    env.candidates(&good());
+    env.import_ok(
+        "weekly-1",
+        "work",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+    );
+
+    let queue = env.queue();
+    assert_eq!(queue["items"].as_array().unwrap().len(), 2, "{queue}");
+    let promise = item(&queue, "weekly-1");
+    assert_eq!(
+        promise["proposal"]["responsible"]["identity"]["identifier"], me,
+        "{promise}"
+    );
+    let context = promise["context"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the mapped party brings no context: {promise}"));
+    let held = context
+        .iter()
+        .find(|claim| claim["id"] == claims::claim_id(&person.id, "note:owns", &owns))
+        .unwrap_or_else(|| panic!("the party's visible claim is not context: {promise}"));
+    assert_eq!(held["subject"]["id"], person.id, "{promise}");
+    assert_eq!(held["object"]["value"], "the budget", "{promise}");
+    assert_eq!(held["status"], "observed", "{promise}");
+    // The item stays in the queue, and every claim appears once.
+    let ids: BTreeSet<&str> = context
+        .iter()
+        .map(|claim| claim["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids.len(), context.len(), "{promise}");
+}
