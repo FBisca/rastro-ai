@@ -13,6 +13,28 @@ Read the relevant spec and accepted ADRs before changing a boundary. Use the cra
 - Keep protocol stdout machine-readable and diagnostics on stderr. Preserve operation envelopes, scope filtering, evidence provenance, and replay semantics when extending their boundaries.
 - Document new public contracts, including failure conditions and invariants. Use runnable rustdoc examples where they clarify a caller's use.
 
+## Crate roles
+
+Every workspace member declares the role it plays, in its own manifest:
+
+```toml
+[package.metadata.rastro]
+role = "core"
+```
+
+[`scripts/crate-gate.sh`](../scripts/crate-gate.sh) reads those roles and fails when a member declares none, declares one the table does not name, or depends — normal, dev or build — on a member whose role its own role does not allow. The table lives in that script:
+
+| Role | Crates | May depend on |
+|---|---|---|
+| `sdk` | `rastro-plugin-sdk` | nothing |
+| `core` | `rastro-core` | `sdk` |
+| `storage` | `rastro-storage-sqlite` | `core`, `sdk` |
+| `operations` | `rastro-operations` | `core`, `sdk` |
+| `surface` | `rastro-cli` | `core`, `operations`, `storage`, `sdk` |
+| `plugin` | `rastro-connector-*`, `rastro-extractor-*`, `rastro-adapter-claude-code`, `rastro-test-*` | `sdk` |
+
+An edge the table does not allow is a design change, not a local one: amend the table in the script and here in the same commit, and say why in the pull request. Run the gate from the workspace root, or point it at another workspace with `--root <dir>`, which is how [`scripts/crate-gate.test.sh`](../scripts/crate-gate.test.sh) checks it against the fixture workspaces in `scripts/fixtures/crate-gate/`. The gate needs Cargo and jq, like the affected selector.
+
 ## Red → green
 
 Use this loop for behavior changes and bug fixes. When `/tdd` is available, use its admission rules; this guide also works without a personal skill installation.
@@ -68,5 +90,5 @@ The NUL-delimited list preserves spaces; disabling rename detection includes bot
 - During iteration, run the focused test. Once green, run the affected selection once; rerun only after further relevant changes or a failure.
 - For Rust changes, run `cargo fmt --all --check` and Clippy for the selected packages (`cargo clippy -p <package> --all-targets -- -D warnings`, repeat `-p` for dependents). Use workspace scope for global configuration or uncertain impact.
 - For documentation-only changes, check links, examples, and `git diff --check`; skip Rust compilation unless executable examples or behavior changed.
-- For selector changes, run `scripts/affected-tests.test.sh`. For toolchain, dependency, shared build, or cross-workspace changes, run the full CI commands from [.github/workflows/ci.yml](../.github/workflows/ci.yml). CI remains the full workspace gate for every PR.
+- For selector changes, run `scripts/affected-tests.test.sh`. For role, manifest, or gate changes, run `scripts/crate-gate.sh` and `scripts/crate-gate.test.sh`. For toolchain, dependency, shared build, or cross-workspace changes, run the full CI commands from [.github/workflows/ci.yml](../.github/workflows/ci.yml). CI remains the full workspace gate for every PR.
 - Report exact commands and outcomes, including the red/green observation for behavior changes. Separate focused or affected evidence from a full workspace pass; state anything left to CI.
