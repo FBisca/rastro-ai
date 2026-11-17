@@ -314,6 +314,9 @@ operations! {
     Commitments(CommitmentsRequest => CommitmentsResult) {
         slot: 22, name: "commitments", surfaces: [Cli, Mcp], read_only: true, reader: run_read, cli_read_path: true
     }
+    Queue(QueueRequest => QueueResult) {
+        slot: 23, name: "queue", surfaces: [Cli, Mcp], read_only: true, reader: run_read, cli_read_path: true
+    }
     /// Import a meeting transcript, read its commitment hypotheses, replay, forget or export it.
     Meeting / MeetingRequest {
         Import(MeetingImportRequest => MeetingResult) as MeetingImport {

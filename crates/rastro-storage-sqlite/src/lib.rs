@@ -912,6 +912,9 @@ impl Snapshot for View<'_> {
     ) -> Result<Vec<rastro_core::commitments::Source>> {
         commitments::sources(self, scopes)
     }
+    fn queue_sources(&self, scopes: &[Scope]) -> Result<Vec<rastro_core::queue::Origin>> {
+        commitments::origins(self, scopes)
+    }
     fn meeting_recording(&self, meeting: &str) -> Result<Option<rastro_core::meeting::Recording>> {
         meeting::recording(self, meeting)
     }
