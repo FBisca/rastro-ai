@@ -60,6 +60,8 @@ pub struct ClaimsRebuildResult {
 pub type CommitmentsResult = rastro_core::commitments::Commitments;
 /// A meeting's commitment hypotheses with extraction and coverage state.
 pub type MeetingResult = rastro_core::meeting::MeetingCommitments;
+/// Every pending proposal and question, oldest first, with each source's gap.
+pub type QueueResult = rastro_core::queue::Queue;
 /// What forgetting a meeting removed.
 pub type MeetingForgetResult = rastro_core::meeting::MeetingForgotten;
 /// A meeting as the owner supplied it, without recorded model output.
@@ -294,6 +296,7 @@ mod tests {
                 notice: rastro_core::commitments::NOTICE.into(),
                 sources: vec![],
             }),
+            Response::Queue(rastro_core::queue::Queue::empty()),
         ];
         let arguments = |name: &str| match name {
             "source.add" => {

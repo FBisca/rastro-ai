@@ -160,6 +160,11 @@ pub trait Snapshot {
     fn commitment_sources(&self, _scopes: &[Scope]) -> Result<Vec<crate::commitments::Source>> {
         anyhow::bail!("storage does not support commitments")
     }
+    /// The same sources as [`Snapshot::commitment_sources`], each with the time its content
+    /// belongs to: a meeting's capture time, for the queue's oldest-first order.
+    fn queue_sources(&self, _scopes: &[Scope]) -> Result<Vec<crate::queue::Origin>> {
+        anyhow::bail!("storage does not support the queue")
+    }
     /// What storage recorded for the source, before the freshness rule is applied.
     fn coverage(&self, pair: &Pair, all_windows: bool) -> Result<Coverage>;
     /// Allowed (source, scope) pairs storage holds anything for, with stored freshness rules.

@@ -656,6 +656,118 @@ fn commitments_text(list: &rastro_core::commitments::Commitments) -> String {
     }
     lines.join("\n")
 }
+/// The queue: each proposal or question with its id and source, then each source's gap.
+fn queue_text(queue: &rastro_core::queue::Queue) -> String {
+    use rastro_core::queue::ItemKind;
+    let mut lines = vec![queue.notice.clone()];
+    if queue.items.is_empty() && queue.gaps.is_empty() {
+        lines.push("Nothing is waiting".into());
+    }
+    for item in &queue.items {
+        let source = format!(
+            "{} {}",
+            match item.source.kind {
+                rastro_core::queue::SourceKind::Meeting => "meeting",
+                rastro_core::queue::SourceKind::Identity => "identity",
+            },
+            display_safe(&item.source.name)
+        );
+        match item.kind {
+            ItemKind::Proposal => {
+                let h = item.proposal.as_ref().expect("a proposal item carries one");
+                lines.push(format!(
+                    "Proposal | Id: {} | Source: {source} | Scope: {}",
+                    item.id,
+                    display_safe(&item.source.scope)
+                ));
+                let date = match &h.stated_date.text {
+                    Some(text) => display_safe(text),
+                    None => "unknown".into(),
+                };
+                lines.push(format!(
+                    "  {} | {} -> {} | Promise: {} | Date: {} | Terms: {}",
+                    h.kind.as_str(),
+                    commitment_party_text(&h.responsible),
+                    commitment_party_text(&h.recipient),
+                    display_safe(&h.promise),
+                    date,
+                    h.terms.join(", ")
+                ));
+                lines.push(format!(
+                    "  \"{}\" | Turn: {} | Speaker: {} | Span: [{}, {})",
+                    display_escaped(&h.quote.text),
+                    h.quote.turn,
+                    display_safe(&h.quote.speaker),
+                    h.quote.start,
+                    h.quote.end
+                ));
+            }
+            ItemKind::Question => {
+                let q = item.question.as_ref().expect("a question item carries one");
+                lines.push(format!("Question | Id: {} | Source: {source}", item.id));
+                let account = |a: &rastro_core::queue::Account| {
+                    let mut text = display_safe(&a.identifier);
+                    if !a.names.is_empty() {
+                        text += &format!(
+                            " ({})",
+                            a.names
+                                .iter()
+                                .map(|n| display_safe(n))
+                                .collect::<Vec<_>>()
+                                .join(", ")
+                        );
+                    }
+                    text
+                };
+                let reason = |r: &rastro_core::identity::CandidateReason| {
+                    let name = serde_json::to_value(r.reason)
+                        .ok()
+                        .and_then(|v| v.as_str().map(String::from))
+                        .unwrap_or_default();
+                    format!(
+                        "{name}: {} = {}",
+                        display_safe(&r.values[0]),
+                        display_safe(&r.values[1])
+                    )
+                };
+                let reasons: Vec<String> = q.reasons.iter().map(reason).collect();
+                lines.push(format!(
+                    "  {} ~ {} | {} | Name: {}",
+                    account(&q.accounts[0]),
+                    account(&q.accounts[1]),
+                    reasons.join(" | "),
+                    display_safe(&q.name)
+                ));
+            }
+        }
+    }
+    for gap in &queue.gaps {
+        let mut line = format!(
+            "Gap: {} | Kind: {} | Scope: {} | Run: {}",
+            display_safe(&gap.source.name),
+            match gap.source.kind {
+                rastro_core::queue::SourceKind::Meeting => "meeting",
+                rastro_core::queue::SourceKind::Identity => "identity",
+            },
+            display_safe(&gap.source.scope),
+            gap.run
+        );
+        line += match gap.state {
+            rastro_core::queue::GapState::FoundNothing => " | Found nothing",
+            rastro_core::queue::GapState::Failed => " | Failed",
+            rastro_core::queue::GapState::CouldNotLook => " | Couldn't look",
+        };
+        if let Some(cause) = gap.cause {
+            line += &format!(" | Cause: {}", cause.as_str());
+        }
+        if let Some(reason) = &gap.reason {
+            line += &format!(" | Reason: {}", display_safe(reason));
+        }
+        lines.push(line);
+    }
+    lines.join("\n")
+}
+
 /// The result of an operation, its human form, and whether it succeeded.
 type Outcome = (Response, String);
 
@@ -698,6 +810,7 @@ fn human(response: &Response) -> String {
         Response::Why(r) => why_text(r),
         Response::About(r) => about_text(r),
         Response::Commitments(r) => commitments_text(r),
+        Response::Queue(r) => queue_text(r),
         Response::MeetingImport(r)
         | Response::MeetingCommitments(r)
         | Response::MeetingReplay(r) => meeting_text(r),

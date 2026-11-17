@@ -8,6 +8,7 @@ pub mod host;
 pub mod identity;
 pub mod knowledge;
 pub mod meeting;
+pub mod queue;
 pub mod read_only;
 pub mod runs;
 pub mod search;
