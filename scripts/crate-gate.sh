@@ -29,14 +29,20 @@ violations=$(cargo metadata --format-version 1 --no-deps | jq -r '
     "surface": ["core", "operations", "storage", "sdk"],
     "plugin": ["sdk"]
   };
-  [.packages[] | {name: .name, role: .metadata.rastro.role}] as $members
+  # `role` for a package whose metadata declares one, and null for anything else: metadata that is
+  # not a table, rastro that is not a table, or no metadata at all. Reaching into a value that is not
+  # a table would abort jq and lose the crate name.
+  def declared_role:
+    (if (.metadata | type) == "object" then .metadata.rastro else null end)
+    | if type == "object" then .role else null end;
+  [.packages[] | {name: .name, role: declared_role}] as $members
   | ($members | map({key: .name, value: .role}) | from_entries) as $role_of
   | ($members | map(.name)) as $names
   | (table | keys) as $roles
   | ($roles | join(", ")) as $known
   | [
       .packages[] as $p
-      | ($p.metadata.rastro.role) as $role
+      | ($p | declared_role) as $role
       | if $role == null then
           "crate-gate: \($p.name) declares no role in [package.metadata.rastro]; known roles: \($known)"
         elif (any($roles[]; . == $role) | not) then

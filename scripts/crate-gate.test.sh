@@ -50,6 +50,12 @@ expect_failure test_a_role_that_is_not_a_string_fails scripts/fixtures/crate-gat
   "fixture-numbered" "not in the role table"
 
 # spec: Crates depend by role
+# Metadata that is not a table declares no role, and is refused by name rather than aborting the
+# gate's jq on a field that cannot exist.
+expect_failure test_metadata_that_is_not_a_table_declares_no_role scripts/fixtures/crate-gate/non-table-metadata \
+  "fixture-textual-metadata" "declares no role"
+
+# spec: Crates depend by role
 # This workspace passes: every member carries a role and every member dependency is allowed.
 status=0
 out=$(scripts/crate-gate.sh 2>&1) || status=$?

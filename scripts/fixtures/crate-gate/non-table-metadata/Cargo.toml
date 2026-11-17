@@ -1,0 +1,6 @@
+# A workspace with one member whose [package.metadata] rastro value is a string, not a table, so it
+# declares no role at all. The crate gate must refuse it, naming the crate, instead of failing with a
+# parser error that names nothing.
+[workspace]
+members = ["fixture-textual-metadata"]
+resolver = "3"
