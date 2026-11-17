@@ -832,21 +832,37 @@ impl Resolution {
                             "a no can't be undone, as a cannot-link can't; link the accounts instead"
                         );
                         // Undoing a yes ends what it decided; a Person it created goes with it,
-                        // so nothing accepted after the answer may depend on that Person.
+                        // so no effective later intent may hold, name or merge that Person: each
+                        // would be left claiming something that is no longer a Person.
                         if let Some(answer) = person
                             && answer.created
                         {
                             let person = &answer.entity;
-                            let held = (self.links.iter()).any(|((_, holder), by)| {
-                                holder == &person.id && by.as_str() != undone
-                            });
-                            let merged = (self.merges.keys())
-                                .any(|(a, b)| a == &person.id || b == &person.id);
-                            ensure!(
-                                !held && !merged,
-                                "{} was created by this answer and a later intent now holds or                                  merges it; undo those first",
-                                person.identifier
+                            let mut later: Vec<&String> = (self.links.iter())
+                                .filter(|((_, holder), _)| holder == &person.id)
+                                .map(|(_, by)| by)
+                                .collect();
+                            later.extend(
+                                (self.merges.iter())
+                                    .filter(|((a, b), _)| a == &person.id || b == &person.id)
+                                    .map(|(_, by)| by),
                             );
+                            if let Some((_, by)) = self.names.get(&person.id) {
+                                later.push(by);
+                            }
+                            let effective = |by: &&String| {
+                                by.as_str() != undone
+                                    && matches!(
+                                        self.status.get(by.as_str()),
+                                        Some((IntentStatus::Effective, _))
+                                    )
+                            };
+                            if let Some(by) = later.into_iter().find(effective) {
+                                bail!(
+                                    "{} is held, named or merged by intent {by}; undo that first",
+                                    person.identifier
+                                );
+                            }
                         }
                     }
                     // A proposal's answer is a decision about one item; undoing it would bring

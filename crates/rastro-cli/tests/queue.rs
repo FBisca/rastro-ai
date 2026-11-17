@@ -274,7 +274,7 @@ impl Env {
     /// The newest owner intent, as the insert-only table stores it.
     fn last_intent(&self) -> Value {
         let recorded: String = self.sql(
-            "SELECT json_object('kind', kind, 'domain', domain_key,\n\
+            "SELECT json_object('id', id, 'kind', kind, 'domain', domain_key,\n\
              'targets', json(targets_json), 'payload', json(payload_json))\n\
              FROM intent ORDER BY append_seq DESC LIMIT 1",
         );
@@ -392,6 +392,43 @@ fn item<'a>(queue: &'a Value, name: &str) -> &'a Value {
         .iter()
         .find(|item| item["source"]["name"] == name)
         .unwrap_or_else(|| panic!("no item from {name}: {queue}"))
+}
+
+/// Records one later `name` intent for `person` and returns its id. No CLI operation names an
+/// existing Person yet, so the test seeds the intent a naming surface would record.
+fn name_person(env: &Env, person: &Value, name: &str) -> String {
+    use rastro_core::identity::{
+        EntityTarget, FORMAT_VERSION, Intent, IntentKind, IssuerContext, OWNER, Payload,
+        SHAPE_VERSION, Targets,
+    };
+    let mut intent = Intent {
+        id: "i_test_name".into(),
+        append_seq: 0,
+        format_version: FORMAT_VERSION,
+        kind: IntentKind::Name,
+        owner_id: OWNER.into(),
+        issuer_context: IssuerContext::owner_cli(&[]),
+        issued_at: Utc::now(),
+        domain_key: String::new(),
+        targets: Targets::Entity {
+            version: SHAPE_VERSION,
+            entity: EntityTarget {
+                id: person["id"].as_str().unwrap().into(),
+                identifier: person["identifier"].as_str().unwrap().into(),
+                role: "person".into(),
+            },
+        },
+        payload: Payload {
+            version: SHAPE_VERSION,
+            name: Some(name.into()),
+        },
+        undo_of: None,
+        supersedes: None,
+    };
+    intent.domain_key = intent.expected_domain().unwrap_or_default();
+    let mut db = rastro_storage_sqlite::SqliteStorage::open(&env.database()).unwrap();
+    db.issue_intents(&[], |_| Ok((vec![intent], ()))).unwrap();
+    "i_test_name".into()
 }
 
 /// The question item whose accounts include `identifier`.
@@ -1131,12 +1168,14 @@ fn an_answer_that_created_a_person_is_kept_while_later_intents_depend_on_it() {
     let person = person["person"]["identifier"].as_str().unwrap().to_string();
     env.ok(&["identity", "link", "github:account/10", &person]);
 
+    let link = env.last_intent()["id"].as_str().unwrap().to_string();
     let intents = env.intents();
     let (ok, refused) = env.run(&["identity", "undo", &answer]);
     assert!(!ok, "{refused}");
-    assert!(
-        refused["error"].as_str().unwrap().contains(&person),
-        "the refusal names the Person: {refused}"
+    assert_eq!(
+        refused["error"].as_str().unwrap(),
+        format!("{person} is held, named or merged by intent {link}; undo that first"),
+        "the refusal reads as one sentence: {refused}"
     );
     assert_eq!(env.intents(), intents, "nothing is recorded");
     let me = env.ok(&["about", &person]);
@@ -1147,6 +1186,56 @@ fn an_answer_that_created_a_person_is_kept_while_later_intents_depend_on_it() {
         accounts,
         ["github:account/10", "github:account/9", "linear:user/u-9"],
         "the Person still holds what it did: {me}"
+    );
+}
+
+/// A yes that created a Person can't be undone while a later name intent targets that Person:
+/// the undo would leave a name claim on an entity that is no longer a Person.
+#[test]
+fn an_answer_that_created_a_person_is_kept_while_a_later_name_targets_it() {
+    let env = Env::new();
+    env.typed_account(
+        "github:account/11",
+        "code:Account",
+        ("name", "Dora Melo"),
+        "https://api.github.com/users/11",
+    );
+    env.typed_account(
+        "linear:user/u-11",
+        "tracker:Account",
+        ("name", "dora melo"),
+        "https://linear.app/rastro/profiles/u-11",
+    );
+    let item = question(&env.queue(), "github:account/11")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let answered = env.ok(&["queue", "answer", &item, "yes"]);
+    let answer = answered["intents"][0]["id"].as_str().unwrap().to_string();
+    let person = env.ok(&["about", "rastro:name/Dora Melo"])["person"].clone();
+    let name = name_person(&env, &person, "Dora M.");
+
+    let intents = env.intents();
+    let (ok, refused) = env.run(&["identity", "undo", &answer]);
+    assert!(!ok, "{refused}");
+    let identifier = person["identifier"].as_str().unwrap();
+    assert_eq!(
+        refused["error"].as_str().unwrap(),
+        format!("{identifier} is held, named or merged by intent {name}; undo that first"),
+        "the refusal names the later name intent: {refused}"
+    );
+    assert_eq!(env.intents(), intents, "nothing is recorded");
+
+    // The Person keeps its new name and both accounts.
+    let about = env.ok(&["about", "rastro:name/Dora M."]);
+    let mut accounts: Vec<&str> = (about["person"]["accounts"].as_array().unwrap().iter())
+        .map(|account| account["identifier"].as_str().unwrap())
+        .collect();
+    accounts.sort();
+    assert_eq!(
+        accounts,
+        ["github:account/11", "linear:user/u-11"],
+        "{about}"
     );
 }
 
