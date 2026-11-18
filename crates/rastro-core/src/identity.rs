@@ -656,10 +656,9 @@ impl Intent {
             IntentKind::SameAs => {
                 matches!(&self.targets, Targets::Pair { symmetric: true, endpoints, .. } if endpoints[0].id < endpoints[1].id)
             }
-            IntentKind::Undo => !matches!(
-                &self.targets,
-                Targets::Claim { .. } | Targets::ClaimSet { .. }
-            ),
+            // An undo takes the targets of the intent it undoes, so the log's check of that
+            // target stands for the claim a correction named.
+            IntentKind::Undo => !matches!(&self.targets, Targets::ClaimSet { .. }),
             // A correction names the claim it reviewed: the statement it said, the revision the
             // owner read and the lifecycle state it binds to.
             IntentKind::Confirm | IntentKind::Reject | IntentKind::Edit
@@ -1182,20 +1181,18 @@ impl Resolution {
                             }
                         }
                     }
+                    // A correction of a claim is undone with `rastro claim undo`, which takes
+                    // back only that intent.
+                    IntentKind::Confirm | IntentKind::Reject | IntentKind::Edit
+                        if target.targets.claim().is_some() => {}
                     // A proposal's answer is a decision about one item; undoing it would bring
                     // back an item whose source may have replaced it.
-                    IntentKind::Reject if target.targets.claim().is_some() => {
-                        bail!("a retraction can't be undone with `rastro identity undo`")
-                    }
-                    IntentKind::Edit if target.targets.claim().is_some() => {
-                        bail!("an edit can't be undone with `rastro identity undo`")
-                    }
                     IntentKind::Accept
                     | IntentKind::Edit
                     | IntentKind::Reject
                     | IntentKind::Missed => bail!("a proposal's answer can't be undone"),
                     IntentKind::Confirm => {
-                        bail!("a confirmation can't be undone with `rastro identity undo`")
+                        bail!("a confirmation can only be undone with `rastro claim undo`")
                     }
                 }
             }
@@ -1813,6 +1810,10 @@ impl<S: Storage> Rastro<S> {
             let Some(target) = resolution.intents.get(intent_id) else {
                 bail!("unknown intent: {intent_id}");
             };
+            ensure!(
+                target.kind == IntentKind::Undo || target.targets.claim().is_none(),
+                "intent {intent_id} corrects a claim; undo it with `rastro claim undo {intent_id}`"
+            );
             let mut intents = vec![new_intent(
                 IntentKind::Undo,
                 target.domain_key.clone(),
@@ -1832,6 +1833,29 @@ impl<S: Storage> Rastro<S> {
                 )?);
             }
             Ok((intents, None, false))
+        })
+    }
+    /// Undoes one correction of a claim, removing only its contribution: the claim reads as the
+    /// latest correction still in force says, or as its evidence does when none is. Undoing an
+    /// edit takes back both the retraction and the claim it asserted. Refused for an intent that
+    /// corrects no claim, naming `rastro identity undo`, and for one already undone.
+    pub fn undo_claim(&mut self, intent_id: &str) -> Result<Issued> {
+        self.issue(|_, resolution| {
+            let Some(target) = resolution.intents.get(intent_id) else {
+                bail!("unknown intent: {intent_id}");
+            };
+            ensure!(
+                target.targets.claim().is_some(),
+                "intent {intent_id} corrects no claim; undo it with `rastro identity undo {intent_id}`"
+            );
+            let undo = new_intent(
+                IntentKind::Undo,
+                target.domain_key.clone(),
+                target.targets.clone(),
+                Payload::empty(),
+                Some(target.id.clone()),
+            )?;
+            Ok((vec![undo], None, false))
         })
     }
     /// Confirms a claim the owner read at revision `seen`: one `confirm` intent that binds to the
