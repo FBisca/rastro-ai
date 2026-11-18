@@ -661,6 +661,10 @@ impl Storage for SqliteStorage {
         )?;
         rows.map(|row| row?.into_evidence(source)).collect()
     }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the claims, their justifications and the coverage they carry are written in one transaction, so the counts and the checkpoint come from the same commit"
+    )]
     fn record_claims(
         &mut self,
         run_id: i64,

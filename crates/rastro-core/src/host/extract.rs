@@ -260,6 +260,10 @@ fn drive<S: Storage>(
     outcome
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the conversation keeps its request, refusal and recording steps beside the state they share"
+)]
 fn converse<S: Storage>(
     storage: &mut S,
     wire: &mut Wire,

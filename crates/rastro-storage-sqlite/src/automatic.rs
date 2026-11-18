@@ -189,6 +189,14 @@ fn permitted(
 /// In a scoped replay, `allowed` holds the windows in which the full projection links each
 /// (account, Person) pair automatically: hidden data may suppress a link there but never create
 /// one.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the links, the blocks and their writes are one pass over the merged windows; a split would separate a link from the guard that hides it"
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "each link's visibility depends on the windows allowed and the blocks settled in this same pass"
+)]
 pub(crate) fn apply_within(db: &Connection, allowed: Option<&BTreeSet<Held>>) -> Result<()> {
     let resolution = Resolution::of(&identity::load(db)?);
     let mut affected: BTreeSet<String> = db

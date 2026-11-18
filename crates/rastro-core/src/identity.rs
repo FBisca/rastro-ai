@@ -432,6 +432,10 @@ impl Intent {
     }
     /// Checks the row on its own: the envelope, the JSON shapes and the kind's target shape.
     /// What it says about other intents (an undo's target) is checked against the log.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the envelope's field checks read as the schema they enforce"
+    )]
     pub fn check(&self) -> Result<()> {
         let plain = |text: &str| !text.is_empty() && !text.chars().any(char::is_whitespace);
         ensure!(
@@ -725,6 +729,10 @@ fn sorted(a: &str, b: &str) -> (String, String) {
 }
 impl Resolution {
     /// Resolves intents given in acceptance order.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "resolution folds every intent's targets into the indexes in one ordered pass"
+    )]
     pub fn of(intents: &[Intent]) -> Self {
         let undone: BTreeMap<&str, &str> = intents
             .iter()
@@ -853,6 +861,10 @@ impl Resolution {
     /// for a non-Person, a second creation of a Person or of `me`, and an undo of a missing,
     /// undone, cannot-link, undo or creation intent, or one whose domain or targets differ.
     /// Storage calls it on every intent, whoever built it.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one arm per intent kind keeps the ADR's refusals readable side by side"
+    )]
     pub fn admit(&self, intent: &Intent) -> Result<()> {
         let person = |e: &EntityTarget| self.is_person(&e.id);
         match intent.kind {
@@ -991,6 +1003,10 @@ impl Resolution {
     /// The claims the intents back, each with the intent that backs it: what the effective
     /// intents say, and what an undone link, merge or name, or a name a newer one replaced, said
     /// until then (its claim stays, superseded, with the time its contribution ended).
+    #[expect(
+        clippy::too_many_lines,
+        reason = "effective and superseded claims are built in one pass over the resolution"
+    )]
     pub fn claims(&self) -> Vec<IntentClaim> {
         let person_object = |id: &str| {
             let entity = &self.entities[id];
