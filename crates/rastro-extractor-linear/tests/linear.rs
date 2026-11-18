@@ -401,6 +401,7 @@ fn an_app_user_syncs_as_a_bot_and_a_link_to_it_is_refused() {
 /// labels/S9: WHEN an issue has a current observed `tracker:state`, THEN its label holds that
 /// value, and an issue whose state is null has `label.state` null. The state is the name Linear
 /// gives it, and it follows the state's change.
+/// spec: The label carries the current state
 #[test]
 fn S9_a_linear_issue_label_holds_its_current_state_or_null() {
     let mut without = issue(
@@ -439,6 +440,7 @@ fn S9_a_linear_issue_label_holds_its_current_state_or_null() {
 /// labels/S12: WHEN a Linear issue's `/state/name` is extracted and the name later changes, THEN
 /// an observed `tracker:state` claim holds the name, and after the change the old claim is
 /// superseded and the new one is current.
+/// spec: A Linear state change supersedes its tracker state claim
 #[test]
 fn S12_a_linear_issue_state_is_a_tracker_state_claim_superseded_by_a_change() {
     let fixture = Fixture::start(world());

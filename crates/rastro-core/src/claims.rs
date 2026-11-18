@@ -654,6 +654,7 @@ mod tests {
     use super::*;
 
     /// claims/R10: revision ignores local ids and rules
+    /// spec: A claim's id and revision survive replay
     #[test]
     fn revision_ignores_local_ids_and_rules() {
         let first = Support {
@@ -673,8 +674,9 @@ mod tests {
         );
     }
 
-    /// claims/R8: ids are stable across builds. The canonical encoding is fixed: these ids (checked against an independent SHA-256 of
+    /// claims/R10: ids are stable across builds. The canonical encoding is fixed: these ids (checked against an independent SHA-256 of
     /// the encoding) must never change within version 1.
+    /// spec: A claim's id and revision survive replay
     #[test]
     fn ids_are_stable_across_builds() {
         let pr = entity_id("https://github.com/o/p/pull/1");
@@ -857,6 +859,7 @@ mod tests {
     }
 
     /// claims/R56: a subject or object identifier outside the entity forms is rejected
+    /// spec: An identifier outside the entity forms is rejected
     #[test]
     fn an_identifier_outside_the_entity_forms_is_rejected() {
         let mut bad_subject = submit(TYPE_PREDICATE, "x:Account", "x:Account", TYPE_DATATYPE);
@@ -930,6 +933,7 @@ mod tests {
     }
 
     /// claims/R5: a claim whose endpoint type is not claimed in the submission is rejected
+    /// spec: A type must come from the submission that uses it
     #[test]
     fn a_claim_whose_endpoint_type_is_not_claimed_in_the_submission_is_rejected() {
         let author = about(("i/1", "x:Item"), ("github:account/7", "x:Account"));

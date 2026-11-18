@@ -148,6 +148,7 @@ fn small(dir: &tempfile::TempDir) -> std::path::PathBuf {
 }
 
 /// claims/R33: hidden claims over the work budget answer like an unknown entity
+/// spec: An unknown entity reads as empty with coverage
 #[test]
 fn hidden_claims_over_the_work_budget_answer_like_an_unknown_entity() {
     let _serial = exclusive_cache();

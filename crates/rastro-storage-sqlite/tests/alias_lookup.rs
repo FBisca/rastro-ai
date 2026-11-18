@@ -81,6 +81,7 @@ fn about(db: &SqliteStorage, entity: &str) -> anyhow::Result<Value> {
 }
 
 /// claims/R41: hypothesis and retracted alias claims are not lookup candidates
+/// spec: A hypothesis or retracted alias is no lookup candidate
 #[test]
 fn hypothesis_and_retracted_aliases_are_not_candidates() {
     let home = tempfile::tempdir().unwrap();

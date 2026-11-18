@@ -66,6 +66,7 @@ mod tests {
     use super::*;
 
     /// claims/R30: the three forms and the shapes around them
+    /// spec: About resolves an entity's current claims
     #[test]
     fn accepts_the_three_forms_and_refuses_the_rest() {
         for good in [

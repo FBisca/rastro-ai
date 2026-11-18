@@ -1670,6 +1670,7 @@ fn coverage_gaps_are_scoped_and_visible_in_mcp() {
 }
 
 /// claims/R33: unknown and hidden only entity have the same empty scoped answer
+/// spec: An unknown entity reads as empty with coverage
 #[test]
 fn unknown_and_hidden_only_entity_have_the_same_empty_scoped_answer() {
     let env = Env::new();
@@ -1686,6 +1687,7 @@ fn unknown_and_hidden_only_entity_have_the_same_empty_scoped_answer() {
     assert!(hidden["coverage"].is_array());
 }
 /// claims/R36: unknown and hidden only claim are the same scoped operation error
+/// spec: An unknown claim is an operation error
 #[test]
 fn unknown_and_hidden_only_claim_are_the_same_scoped_operation_error() {
     let env = Env::new();
@@ -1812,6 +1814,7 @@ fn scoped_replay_filters_metadata_and_hidden_replacements_before_limit() {
 }
 
 /// claims/R31: scoped about resolves a canonical alias only through visible claims
+/// spec: A login resolves through its alias claim
 #[test]
 fn scoped_about_resolves_a_canonical_alias_only_through_visible_claims() {
     let env = Env::new();
@@ -2169,6 +2172,7 @@ fn random_scope_sets_equal_visible_rebuild_when_queried_by_alias() {
 
 /// claims/R53: an entity form outside the three accepted ones is a tool result with `isError`, not a
 /// JSON-RPC error.
+/// spec: A malformed entity form is an operation error
 #[test]
 fn a_malformed_entity_form_is_a_tool_error_over_mcp() {
     let env = seeded();
@@ -2325,6 +2329,62 @@ fn a_person_is_visible_only_where_one_of_its_linked_accounts_is() {
     assert!(account.to_string().contains(&ana), "{account}");
     let all = about_text(&mut everything, "me");
     assert_eq!(linked(&all), [ACCOUNT, "linear:user/u-1"], "{all}");
+}
+
+/// claims/R78: one morning's standup comes from a single `about me` over MCP — both linked accounts and
+/// their own claims arrive in that one read, and the server offers only its seven read-only tools, so
+/// the read reaches neither GitHub nor Linear
+/// spec: The owner preps a standup from about me
+#[test]
+fn about_me_over_mcp_answers_one_morning_from_both_accounts() {
+    let env = Env::new();
+    env.account_in("personal", ACCOUNT, "code:Account", "octocat", 0);
+    env.account_in(
+        "work",
+        "linear:user/u-1",
+        "tracker:Account",
+        "ana-at-work",
+        0,
+    );
+    env.json(&["identity", "me"]);
+    env.json(&["identity", "link", ACCOUNT, "me"]);
+    env.json(&["identity", "link", "linear:user/u-1", "me"]);
+    let mut everywhere = env.scoped(&[]);
+
+    // The morning's one read: the owner's Person with both accounts, each carrying its claims.
+    let about = about_text(&mut everywhere, "me");
+    assert_eq!(about["resolved"], true, "{about}");
+    let mut held = linked(&about);
+    held.sort();
+    assert_eq!(held, [ACCOUNT, "linear:user/u-1"], "{about}");
+    let accounts = about["person"]["accounts"].as_array().unwrap();
+    assert_eq!(accounts[0]["type"], "code:Account", "{about}");
+    assert_eq!(accounts[1]["type"], "tracker:Account", "{about}");
+    let shown = about.to_string();
+    for login in ["octocat", "ana-at-work"] {
+        assert!(shown.contains(login), "{login} missing: {about}");
+    }
+
+    // Nothing on this server could reach GitHub or Linear: seven read-only tools and no write.
+    let mut names: Vec<String> = everywhere
+        .list_tools()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "about",
+            "commitments",
+            "coverage",
+            "meeting_commitments",
+            "queue",
+            "search",
+            "why"
+        ],
+        "a morning's read opens neither GitHub nor Linear"
+    );
 }
 
 /// surfaces/R36: over MCP, `about` says `resolved: false` for a hidden-only entity and for an unknown one,
@@ -3220,6 +3280,7 @@ fn subject_label(session: &mut Session, claim: &str) -> Value {
 
 /// labels/S7: a launch scope that hides the only title leaves a null label and a successful call;
 /// a visible copy in another scope is used
+/// spec: A scope decides whose title is labelled
 #[test]
 fn S7_a_scope_hiding_the_only_title_gives_a_null_label_and_a_visible_copy_is_used() {
     let env = Env::new();
@@ -3269,6 +3330,7 @@ fn S7_a_scope_hiding_the_only_title_gives_a_null_label_and_a_visible_copy_is_use
 }
 
 /// labels/S10: with --json the CLI envelope equals the MCP result, labels included
+/// spec: The CLI shows labels as the MCP result does
 #[test]
 fn S10_the_cli_envelope_with_labels_equals_the_mcp_result() {
     let env = Env::new();
@@ -3293,6 +3355,7 @@ fn S10_the_cli_envelope_with_labels_equals_the_mcp_result() {
 }
 
 /// labels/S11: the about and why descriptions say label text is untrusted data
+/// spec: The tool descriptions say label text is untrusted
 #[test]
 fn S11_the_about_and_why_descriptions_say_label_text_is_untrusted_data() {
     let env = Env::new();
