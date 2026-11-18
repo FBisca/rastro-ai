@@ -34,10 +34,12 @@ pub const NAME_KIND: &str = "name";
 /// The justification kind of an intent-backed claim.
 pub const OWNER_INTENT: &str = "owner_intent";
 const PERSON_PREFIX: &str = "rastro:person/";
+/// The prefix of the domain of an intent about one claim: `claim/<claim id>`.
+const CLAIM_DOMAIN: &str = "claim/";
 /// The identifier prefix of the `std:Commitment` an accepted queue item becomes.
 const COMMITMENT_PREFIX: &str = "std:commitment/";
 
-/// The kinds this slice enables. Slice 7 adds claim and claim-set kinds to the same table.
+/// The kinds the table holds. A claim intent (`confirm`) names a [`Targets::Claim`].
 #[derive(
     Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
 )]
@@ -60,9 +62,11 @@ pub enum IntentKind {
     /// Answer a queue question: the two accounts are one person, or are not. One answer, one
     /// intent, whatever it decides.
     Answer,
+    /// Confirm a claim the owner read: it stays alive on the owner's word and reads `confirmed`.
+    Confirm,
 }
 impl IntentKind {
-    pub const ALL: [Self; 11] = [
+    pub const ALL: [Self; 12] = [
         Self::CreatePerson,
         Self::Name,
         Self::Link,
@@ -74,6 +78,7 @@ impl IntentKind {
         Self::Reject,
         Self::Missed,
         Self::Answer,
+        Self::Confirm,
     ];
     pub fn as_str(self) -> &'static str {
         match self {
@@ -88,6 +93,7 @@ impl IntentKind {
             Self::Reject => "reject",
             Self::Missed => "missed",
             Self::Answer => "answer",
+            Self::Confirm => "confirm",
         }
     }
     /// The core validates kinds; storage keeps them as text with no SQL enum.
@@ -104,17 +110,75 @@ pub struct EntityTarget {
     pub identifier: String,
     pub role: String,
 }
-/// A claim a slice-7 intent reviews. Reserved: no identity kind targets a claim.
+/// A claim an intent reviews: its id, the revision the owner saw, the statement it said, and the
+/// lifecycle state the intent binds to.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct ClaimTarget {
     pub id: String,
     pub revision: String,
+    /// A [`ClaimStatement`], snapshotted so a replay holds the claim without its evidence.
     pub statement: Value,
+    /// A [`LifecycleBinding`]; none on a target that binds to nothing.
     pub lifecycle_binding: Option<Value>,
 }
-/// The tagged target structure: an entity, a pair, or the queue item an answer names; claim and
-/// claim set are reserved.
+/// What a claim says, as the owner read it: copied into the intent, because the projection that
+/// held the claim is rebuilt from evidence and may no longer hold it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ClaimStatement {
+    pub subject: EntityTarget,
+    pub predicate: String,
+    pub object: Object,
+    /// Whether a newer value of the predicate supersedes this one.
+    pub scalar: bool,
+}
+impl ClaimStatement {
+    /// The claim id this statement has: the hash of its subject, predicate and object.
+    pub fn claim_id(&self) -> String {
+        claims::claim_id(&self.subject.id, &self.predicate, &self.object)
+    }
+}
+/// The lifecycle state an intent binds to (ADR 0014), versioned so the definition can change.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct LifecycleBinding {
+    pub version: u32,
+    /// [`claims::lifecycle_fingerprint`] of the claim when the owner issued the intent.
+    pub fingerprint: String,
+}
+impl ClaimTarget {
+    /// A claim target for `claim` as the owner saw it at `revision`, bound to `fingerprint`.
+    pub fn review(
+        revision: String,
+        statement: &ClaimStatement,
+        fingerprint: String,
+    ) -> Result<Self> {
+        Ok(Self {
+            id: statement.claim_id(),
+            revision,
+            statement: serde_json::to_value(statement)?,
+            lifecycle_binding: Some(serde_json::to_value(LifecycleBinding {
+                version: SHAPE_VERSION,
+                fingerprint,
+            })?),
+        })
+    }
+    /// The statement, when it parses.
+    pub fn statement(&self) -> Result<ClaimStatement> {
+        Ok(serde_json::from_value(self.statement.clone())?)
+    }
+    /// The lifecycle binding, when there is one and it parses.
+    pub fn binding(&self) -> Result<Option<LifecycleBinding>> {
+        Ok(self
+            .lifecycle_binding
+            .clone()
+            .map(serde_json::from_value)
+            .transpose()?)
+    }
+}
+/// The tagged target structure: an entity, a pair, a claim, or the queue item an answer names;
+/// claim set is reserved.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "shape", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Targets {
@@ -274,6 +338,13 @@ impl Targets {
             | Self::Answer { version, .. } => *version,
         }
     }
+    /// The claim the targets review, when they name one.
+    pub fn claim(&self) -> Option<&ClaimTarget> {
+        match self {
+            Self::Claim { claim, .. } => Some(claim),
+            _ => None,
+        }
+    }
     /// The queue item the targets name, when they name one.
     pub fn queue_item(&self) -> Option<&str> {
         match self {
@@ -399,6 +470,10 @@ impl Intent {
                 .targets
                 .queue_item()
                 .map(|item| format!("queue/{item}")),
+            IntentKind::Confirm => self
+                .targets
+                .claim()
+                .map(|claim| format!("{CLAIM_DOMAIN}{}", claim.id)),
             // A missed report needs no item, so its domain names only what it is.
             IntentKind::Missed => Some(match self.targets.queue_item() {
                 Some(item) => format!("queue/{item}"),
@@ -506,6 +581,28 @@ impl Intent {
                 &self.targets,
                 Targets::Claim { .. } | Targets::ClaimSet { .. }
             ),
+            IntentKind::Confirm => match &self.targets {
+                Targets::Claim { claim, .. } => {
+                    let statement = claim.statement()?;
+                    ensure!(
+                        statement.claim_id() == claim.id,
+                        "a claim target's id is the hash of its statement"
+                    );
+                    let binding = claim.binding()?;
+                    ensure!(
+                        binding.is_some_and(
+                            |b| b.version == SHAPE_VERSION && !b.fingerprint.is_empty()
+                        ),
+                        "a confirmation binds to the lifecycle state the owner saw"
+                    );
+                    ensure!(
+                        !claim.revision.is_empty(),
+                        "a confirmation names the revision seen"
+                    );
+                    true
+                }
+                _ => false,
+            },
             IntentKind::Accept | IntentKind::Edit | IntentKind::Reject => {
                 matches!(&self.targets, Targets::Proposal { item: Some(item), .. } if plain(item))
             }
@@ -711,6 +808,8 @@ pub struct Resolution {
     pub merges: BTreeMap<(String, String), String>,
     /// Sorted endpoint ids to the cannot-link intent in force.
     pub cannot: BTreeMap<(String, String), String>,
+    /// Claim id to the confirmation in force on it.
+    pub confirmed: BTreeMap<String, String>,
     /// Each intent's status, and the intent that gave it that status (the undo, the clearing
     /// link or merge, the newer name).
     pub status: BTreeMap<String, (IntentStatus, Option<String>)>,
@@ -844,6 +943,11 @@ impl Resolution {
                 // leaves the queue by that record alone and it backs no claim.
                 IntentKind::Accept | IntentKind::Edit | IntentKind::Reject | IntentKind::Missed => {
                 }
+                IntentKind::Confirm => {
+                    if let Some(claim) = intent.targets.claim() {
+                        r.confirmed.insert(claim.id.clone(), id);
+                    }
+                }
                 IntentKind::Undo => {}
             }
         }
@@ -922,7 +1026,8 @@ impl Resolution {
             | IntentKind::Accept
             | IntentKind::Edit
             | IntentKind::Reject
-            | IntentKind::Missed => {}
+            | IntentKind::Missed
+            | IntentKind::Confirm => {}
             IntentKind::Undo => {
                 let undone = intent.undo_of.as_deref().unwrap_or_default();
                 let Some(target) = self.intents.get(undone) else {
@@ -992,6 +1097,9 @@ impl Resolution {
                     | IntentKind::Edit
                     | IntentKind::Reject
                     | IntentKind::Missed => bail!("a proposal's answer can't be undone"),
+                    IntentKind::Confirm => {
+                        bail!("a confirmation can't be undone with `rastro identity undo`")
+                    }
                 }
             }
         }
@@ -1135,6 +1243,24 @@ impl Resolution {
                             stretch,
                         );
                     }
+                }
+                // A confirmation holds the claim it reviewed from the statement it snapshotted,
+                // while it stands: a rebuild keeps the claim even when its evidence is gone.
+                (IntentKind::Confirm, _) => {
+                    let Some(claim) = intent.targets.claim() else {
+                        continue;
+                    };
+                    let Ok(statement) = claim.statement() else {
+                        continue;
+                    };
+                    push(
+                        &statement.subject,
+                        &statement.predicate,
+                        statement.object.clone(),
+                        statement.scalar,
+                        id,
+                        stretch,
+                    );
                 }
                 _ => {}
             }
@@ -1574,6 +1700,55 @@ impl<S: Storage> Rastro<S> {
                 )?);
             }
             Ok((intents, None, false))
+        })
+    }
+    /// Confirms a claim the owner read at revision `seen`: one `confirm` intent that binds to the
+    /// claim's lifecycle state and holds the claim from the statement the owner saw. Refused when
+    /// the claim's current revision is not `seen`, naming the claim and its current revision.
+    /// Confirming a claim already confirmed at that revision records nothing.
+    pub fn confirm_claim(&mut self, claim: &str, seen: &str) -> Result<Issued> {
+        self.issue(|view, resolution| {
+            let explained = view
+                .explain(claim, &crate::knowledge::WhyOptions::default())?
+                .ok_or_else(|| anyhow::anyhow!("unknown claim: {claim}"))?;
+            let current = explained.claim.claim;
+            ensure!(
+                current.revision == seen,
+                "claim {} changed since you saw it (now {}); read it again with `rastro why {}`",
+                current.id,
+                current.revision,
+                current.id
+            );
+            if current.status == "confirmed" && resolution.confirmed.contains_key(&current.id) {
+                return Ok((vec![], None, false));
+            }
+            let state = view
+                .claim_lifecycle(&current.id)?
+                .ok_or_else(|| anyhow::anyhow!("unknown claim: {claim}"))?;
+            let statement = ClaimStatement {
+                subject: EntityTarget {
+                    id: current.subject.id,
+                    identifier: current.subject.identifier,
+                    role: "subject".into(),
+                },
+                predicate: current.predicate,
+                object: current.object,
+                scalar: state.scalar,
+            };
+            let review = ClaimTarget::review(current.revision, &statement, state.fingerprint)?;
+            let id = review.id.clone();
+            let intent = new_intent(
+                IntentKind::Confirm,
+                String::new(),
+                Targets::Claim {
+                    version: SHAPE_VERSION,
+                    claim: review,
+                    anchor: id,
+                },
+                Payload::empty(),
+                None,
+            )?;
+            Ok((vec![intent], None, false))
         })
     }
     /// Every intent naming the entity, in acceptance order, with where each stands.

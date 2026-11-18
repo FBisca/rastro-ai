@@ -156,6 +156,22 @@ impl IdentityWriteResult {
         }
     }
 }
+/// What a claim correction recorded.
+#[derive(Debug, JsonSchema, Serialize)]
+pub struct ClaimWriteResult {
+    /// The claim the correction names.
+    pub claim: String,
+    /// The intents accepted, in acceptance order; none when the correction was already in force.
+    pub intents: Vec<IntentView>,
+}
+impl ClaimWriteResult {
+    pub(crate) fn of(claim: &str, issued: Issued) -> Self {
+        Self {
+            claim: claim.into(),
+            intents: views(&issued.intents),
+        }
+    }
+}
 /// Freshly accepted intents stand as written.
 fn views(intents: &[rastro_core::identity::Intent]) -> Vec<IntentView> {
     let resolution = rastro_core::identity::Resolution::of(intents);
@@ -341,6 +357,10 @@ mod tests {
                 intents: vec![],
             }),
             Response::QueueOutcomes(OutcomesResult::empty()),
+            Response::ClaimConfirm(ClaimWriteResult {
+                claim: "c_1".into(),
+                intents: vec![],
+            }),
         ];
         let arguments = |name: &str| match name {
             "source.add" => {
@@ -358,6 +378,7 @@ mod tests {
             "identity.link" => serde_json::json!({"account": "github:login/a", "person": "me"}),
             "identity.merge" => serde_json::json!({"person": "me", "other": "rastro:name/Ana"}),
             "identity.undo" => serde_json::json!({"intent": "i_1"}),
+            "claim.confirm" => serde_json::json!({"claim": "c_1", "seen": "r_1"}),
             "identity.history" => serde_json::json!({"entity": "me"}),
             "identity.answer" => {
                 serde_json::json!({"account": "github:login/a", "other": "linear:user/u", "verdict": "no"})

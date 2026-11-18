@@ -221,7 +221,7 @@ impl View<'_> {
         const STATES: &str = "c.subject = ?1 AND c.predicate IN ('code:state', 'tracker:state') AND c.object_value IS NOT NULL";
         Ok(match scope_parameter(scopes)? {
             None => self.0.query_row(
-                &format!("SELECT c.object_value FROM claim c WHERE {STATES} AND c.status = 'observed' ORDER BY c.known_since DESC, c.id LIMIT 1"),
+                &format!("SELECT c.object_value FROM claim c WHERE {STATES} AND c.status IN ('observed', 'confirmed') ORDER BY c.known_since DESC, c.id LIMIT 1"),
                 [entity],
                 |row| row.get(0),
             ),
@@ -272,7 +272,7 @@ impl View<'_> {
         let mut class = BTreeSet::from([entity.to_string()]);
         let mut pending = vec![entity.to_string()];
         let mut statement = self.0.prepare_cached(
-            "SELECT subject, object_entity FROM claim WHERE predicate = ?2 AND status = 'observed' \
+            "SELECT subject, object_entity FROM claim WHERE predicate = ?2 AND status IN ('observed', 'confirmed') \
              AND (subject = ?1 OR object_entity = ?1)",
         )?;
         while let Some(next) = pending.pop() {
@@ -349,7 +349,7 @@ impl View<'_> {
         if !self.is_person(&entity)? {
             let mut statement = self.0.prepare(
                 "SELECT id FROM claim WHERE (subject = ?1 OR object_entity = ?1) \
-                 AND (?2 OR status = 'observed') AND (?3 IS NULL OR known_since >= ?3) \
+                 AND (?2 OR status IN ('observed', 'confirmed')) AND (?3 IS NULL OR known_since >= ?3) \
                  ORDER BY known_since DESC, id LIMIT ?4",
             )?;
             let ids = statement
@@ -378,7 +378,7 @@ impl View<'_> {
         let accounts: BTreeSet<String> = self
             .0
             .prepare(
-                "SELECT DISTINCT subject FROM claim WHERE predicate = ?2 AND status = 'observed' \
+                "SELECT DISTINCT subject FROM claim WHERE predicate = ?2 AND status IN ('observed', 'confirmed') \
                  AND object_entity IN (SELECT value FROM json_each(?1))",
             )?
             .query_map(
@@ -407,7 +407,7 @@ impl View<'_> {
             .0
             .prepare(&format!(
                 "SELECT c.id FROM claim c WHERE c.id IN ({TOUCHING}) \
-                 AND (?2 OR c.status = 'observed') AND (?3 IS NULL OR c.known_since >= ?3) \
+                 AND (?2 OR c.status IN ('observed', 'confirmed')) AND (?3 IS NULL OR c.known_since >= ?3) \
                  ORDER BY c.known_since DESC, c.id"
             ))?
             .query_map(params![view, options.history, since], |row| {
@@ -427,7 +427,8 @@ impl View<'_> {
                 .0
                 .prepare(
                     "SELECT c.id, ij.id, ij.intent_id FROM claim c JOIN intent_justification ij ON ij.claim_id = c.id \
-                     WHERE c.subject = ?1 AND c.predicate = ?3 AND c.status = 'observed' AND ij.ended_at IS NULL \
+                     JOIN intent i ON i.id = ij.intent_id \
+                     WHERE i.kind <> 'confirm' AND c.subject = ?1 AND c.predicate = ?3 AND c.status IN ('observed', 'confirmed') AND ij.ended_at IS NULL \
                      AND c.object_entity IN (SELECT value FROM json_each(?2)) ORDER BY c.id, ij.id",
                 )?
                 .query_map(
@@ -446,7 +447,7 @@ impl View<'_> {
                     },
                 )?
                 .collect::<Result<_, _>>()?;
-            let auto = self.0.prepare("SELECT c.id, a.id, a.reason FROM claim c JOIN automatic_justification a ON a.claim_id = c.id WHERE c.subject = ?1 AND c.predicate = ?3 AND c.status = 'observed' AND a.ended_at IS NULL AND c.object_entity IN (SELECT value FROM json_each(?2)) ORDER BY c.id, a.id")?
+            let auto = self.0.prepare("SELECT c.id, a.id, a.reason FROM claim c JOIN automatic_justification a ON a.claim_id = c.id WHERE c.subject = ?1 AND c.predicate = ?3 AND c.status IN ('observed', 'confirmed') AND a.ended_at IS NULL AND c.object_entity IN (SELECT value FROM json_each(?2)) ORDER BY c.id, a.id")?
                 .query_map(params![account, serde_json::to_string(&class)?, rastro_core::identity::HELD_BY], |r| Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?, r.get::<_, String>(2)?)))?
                 .collect::<Result<Vec<_>, _>>()?;
             reasons.extend(
@@ -523,7 +524,12 @@ impl View<'_> {
         for ([id, intent, kind], version, [issued_at, issuer], current) in rows {
             supports.push(JustificationView {
                 justification_id: id,
-                justification_kind: rastro_core::identity::OWNER_INTENT.into(),
+                // A confirmation is the owner's word on a claim, not a claim the owner made.
+                justification_kind: if kind == "confirm" {
+                    "confirmation".into()
+                } else {
+                    rastro_core::identity::OWNER_INTENT.into()
+                },
                 extractor: rastro_core::identity::OWNER.into(),
                 extractor_version: version.to_string(),
                 extraction_rule: kind,
