@@ -857,3 +857,40 @@ fn a_scoped_mcp_read_shows_the_fixed_claim_and_not_the_one_it_replaced() {
         "{listed:?}"
     );
 }
+
+// spec: The owner fixes a claim's object
+#[test]
+fn the_owner_can_fix_a_claim_an_earlier_edit_asserted() {
+    let env = Env::with_vocabulary();
+    let pr = env.pull_request();
+    let seen = env.claim(pr, "code:state", "open");
+    env.edit(&seen, "closd");
+    let typo = env.claim(pr, "code:state", "closd");
+
+    env.edit(&typo, "closed");
+    assert_eq!(
+        listed(&env, pr, "code:state"),
+        [("closed".to_string(), "observed".to_string())],
+        "{}",
+        env.about(pr)
+    );
+}
+
+// spec: The owner fixes a claim's object
+#[test]
+fn a_second_fix_of_the_same_claim_replaces_the_first_fix() {
+    let env = Env::with_vocabulary();
+    let pr = env.pull_request();
+    let seen = env.claim(pr, "code:state", "open");
+    env.edit(&seen, "closed");
+    // The owner reads the retracted claim again and fixes it to something else.
+    let again = env.ok(&["why", seen["id"].as_str().unwrap()]);
+    env.edit(&again["claim"], "merged");
+
+    assert_eq!(
+        listed(&env, pr, "code:state"),
+        [("merged".to_string(), "observed".to_string())],
+        "{}",
+        env.about(pr)
+    );
+}

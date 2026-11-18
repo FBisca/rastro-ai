@@ -562,9 +562,6 @@ fn visible_links(db: &Connection, id: &str) -> Result<Vec<(String, String)>> {
     }
     Ok(found)
 }
-/// The lifecycle fingerprint of a claim and whether it is scalar (ADR 0014). Its primary live
-/// justification is the one that has held longest: an open occurrence of evidence, a live
-/// automatic link, or a live owner intent that is not itself a correction, by start and then key.
 /// SQL: the intent justification `ij`, joined to its intent `i`, is the owner's word on a claim
 /// (a confirmation, a retraction, or the retraction half of a fix) and not a claim the owner made.
 /// A fix's other half, the claim it asserts, is justified by the same intent and is an ordinary
@@ -577,6 +574,9 @@ macro_rules! correction {
 pub(crate) use correction;
 /// [`correction!`] for a statement built at run time.
 pub(crate) const CORRECTION: &str = correction!();
+/// The lifecycle fingerprint of a claim and whether it is scalar (ADR 0014). Its primary live
+/// justification is the one that has held longest: an open occurrence of evidence, a live
+/// automatic link, or a live owner intent that is not itself a correction, by start and then key.
 pub(crate) fn fingerprint(db: &Connection, id: &str) -> Result<Option<(String, bool)>> {
     let Some(scalar) = db
         .query_row("SELECT scalar FROM claim WHERE id = ?1", [id], |r| r.get(0))

@@ -1366,7 +1366,8 @@ impl Resolution {
                 }
                 // A fix retracts the claim it fixes, held from its snapshot like a rejection,
                 // and asserts the claim with the new object: the same subject and predicate,
-                // backed by this intent alone from the edit until an undo, if any.
+                // backed by this intent alone. Both halves end together, by an undo or by a
+                // newer correction of the fixed claim, so a second fix replaces the first.
                 (IntentKind::Edit, _) if intent.targets.claim().is_some() => {
                     let Some(claim) = intent.targets.claim() else {
                         continue;
@@ -1383,17 +1384,13 @@ impl Resolution {
                         stretch,
                     );
                     if let Some(fixed) = &claim.fixed {
-                        let held = (
-                            intent.issued_at,
-                            ended_by_undo(&self.status, &self.issued, id),
-                        );
                         push(
                             &statement.subject,
                             &statement.predicate,
                             fixed.clone(),
                             statement.scalar,
                             id,
-                            held,
+                            stretch,
                         );
                     }
                 }
@@ -1618,17 +1615,6 @@ pub fn admit_account(identifier: &str, types: &[SeenType]) -> Result<()> {
     )
 }
 
-/// When an undo ended what an intent asserted, when one did.
-fn ended_by_undo(
-    status: &BTreeMap<String, (IntentStatus, Option<String>)>,
-    issued: &BTreeMap<String, DateTime<Utc>>,
-    id: &str,
-) -> Option<DateTime<Utc>> {
-    match status.get(id) {
-        Some((IntentStatus::Undone, Some(by))) => Some(issued[by]),
-        _ => None,
-    }
-}
 /// A stretch of a Person's name: (Person id, name, intent id, (start, end)).
 type NameStretch = (
     String,
@@ -1882,17 +1868,36 @@ impl<S: Storage> Rastro<S> {
     /// The vocabularies that define the predicate of `claim`: those of the extractors that read
     /// it, when they are installed, and the standard one the core bundles.
     fn claim_vocabularies(&self, claim: &str) -> Result<Vec<rastro_plugin_sdk::Vocabulary>> {
-        let explained = self
-            .storage
-            .snapshot(|view| view.explain(claim, &crate::knowledge::WhyOptions::default()))?
-            .ok_or_else(|| anyhow::anyhow!("unknown claim: {claim}"))?;
-        let extractors: BTreeSet<&str> = (explained.supports.iter())
-            .filter(|support| support.justification_kind == "provenance")
-            .map(|support| support.extractor.as_str())
-            .collect();
+        // A claim an earlier fix asserted has no evidence of its own: its vocabulary is that of
+        // the claim the fix replaced, and so on back to the one evidence read.
+        let extractors = self.storage.snapshot(|view| {
+            let log = view.intents()?;
+            let options = crate::knowledge::WhyOptions::default();
+            let mut extractors = BTreeSet::new();
+            let mut visited = BTreeSet::new();
+            let mut next = Some(claim.to_string());
+            while let Some(id) = next.take() {
+                if !visited.insert(id.clone()) {
+                    break;
+                }
+                let Some(explained) = view.explain(&id, &options)? else {
+                    ensure!(visited.len() > 1, "unknown claim: {claim}");
+                    break;
+                };
+                extractors.extend(
+                    (explained.supports.iter())
+                        .filter(|support| support.justification_kind == "provenance")
+                        .map(|support| support.extractor.clone()),
+                );
+                next = (log.iter().rev())
+                    .find(|intent| intent.asserted_claim().as_deref() == Some(id.as_str()))
+                    .and_then(|intent| intent.corrects().map(String::from));
+            }
+            Ok(extractors)
+        })?;
         let mut vocabularies = vec![crate::commitments::vocabulary::standard()?];
         for extractor in extractors {
-            if let Ok(plugin) = crate::host::discover(&self.locations, extractor, "extractor")
+            if let Ok(plugin) = crate::host::discover(&self.locations, &extractor, "extractor")
                 && let Ok(vocabulary) = crate::host::vocabulary(&plugin)
             {
                 vocabularies.push(vocabulary);
@@ -1968,9 +1973,10 @@ impl<S: Storage> Rastro<S> {
                     return Ok((vec![], None, false));
                 }
                 let asserted = claims::claim_id(&statement.subject.id, &statement.predicate, &fixed);
+                // A claim an earlier fix made and a later one replaced may be asserted again.
                 ensure!(
                     view.explain(&asserted, &crate::knowledge::WhyOptions::default())?
-                        .is_none(),
+                        .is_none_or(|existing| existing.claim.claim.status == "superseded"),
                     "claim {asserted} already says that; confirm it with `rastro claim confirm` instead"
                 );
                 review = review.fixing(fixed);
