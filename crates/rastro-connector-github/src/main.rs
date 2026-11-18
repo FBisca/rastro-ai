@@ -159,6 +159,10 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
         }
     }
 
+    #[expect(
+        clippy::too_many_lines,
+        reason = "every selection reads from the one viewer and the one page budget, in the order the manifest declares them"
+    )]
     fn read_all(&mut self, from: &str, to: &str) -> Result<(), Failure> {
         let user = self.client.get("/user", &[])?;
         let viewer_id = user.body["id"].as_u64().map(|id| id.to_string());

@@ -274,6 +274,10 @@ fn a_rejected_key_is_an_auth_failure_and_never_appears_anywhere() {
 
 /// identity/R18: the connector reads every workspace user (deactivated ones too), the issues involving
 /// the API-key user in the window, and whose key it is, with fixed queries only
+#[expect(
+    clippy::too_many_lines,
+    reason = "the three fixed queries and their window are asserted against one sync's record"
+)]
 #[test]
 fn the_connector_reads_users_involved_issues_and_the_key_user_with_fixed_queries() {
     let fixture = Fixture::start(World {
