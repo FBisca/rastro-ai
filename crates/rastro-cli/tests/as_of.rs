@@ -6,6 +6,7 @@
 mod support;
 use chrono::{DateTime, Utc};
 use rastro_core::claims::{self, Entity, Object, ObservedClaim, Support};
+use rastro_core::knowledge::AboutOptions;
 use rastro_core::{Evidence, Scope, Source, Storage, TrustClass};
 use rastro_storage_sqlite::SqliteStorage;
 use serde_json::Value;
@@ -66,12 +67,54 @@ impl Env {
     /// The login `value` of account 7, read at `location` by `source` at `captured`. A later
     /// capture at the same location replaces the earlier one.
     fn login(&self, source: &str, location: &str, value: &str, captured: &str) {
-        let captured: DateTime<Utc> = captured.parse().unwrap();
-        let source = Source::github(source.into(), "o/p".into(), Scope("personal".into()));
+        self.login_in("personal", source, location, value, captured);
+    }
+    /// [`Env::login`] read in `scope`.
+    fn login_in(&self, scope: &str, source: &str, location: &str, value: &str, captured: &str) {
         let subject = Entity::new(ACCOUNT.into(), "code:Account".into());
         let object = Object::Literal {
             value: value.into(),
             datatype: "login".into(),
+        };
+        let alias = (claims::ALIAS_PREDICATE, object, "/login", Vec::new());
+        self.record((scope, source), &subject, alias, location, captured);
+    }
+    /// Account `n`, typed `code:Account` with a login alias, read in `scope` by `source`.
+    fn account_in(&self, scope: &str, source: &str, n: u32, login: &str) {
+        let location = format!("https://api.github.com/users/{n}");
+        let subject = Entity::new(format!("github:account/{n}"), "code:Account".into());
+        let typed = Object::Literal {
+            value: "code:Account".into(),
+            datatype: claims::TYPE_DATATYPE.into(),
+        };
+        let typed = (
+            claims::TYPE_PREDICATE,
+            typed,
+            "/type",
+            vec![rastro_core::identity::ACCOUNT_TYPE.to_string()],
+        );
+        self.record((scope, source), &subject, typed, &location, READ);
+        let alias = Object::Literal {
+            value: login.into(),
+            datatype: "login".into(),
+        };
+        let alias = (claims::ALIAS_PREDICATE, alias, "/login", Vec::new());
+        self.record((scope, source), &subject, alias, &location, READ);
+    }
+    /// Records one claim of `subject` read at `location` by `source` of `scope` at `captured`.
+    fn record(
+        &self,
+        (scope, source): (&str, &str),
+        subject: &Entity,
+        (predicate, object, field, ancestors): (&str, Object, &str, Vec<String>),
+        location: &str,
+        captured: &str,
+    ) {
+        let captured: DateTime<Utc> = captured.parse().unwrap();
+        let source = Source::github(source.into(), "o/p".into(), Scope(scope.into()));
+        let quote = match &object {
+            Object::Literal { value, .. } => value.clone(),
+            Object::Entity { identifier, .. } => identifier.clone(),
         };
         let mut db = SqliteStorage::open(&self.home.path().join("data/rastro.sqlite3")).unwrap();
         db.project_sources(std::slice::from_ref(&source)).unwrap();
@@ -83,10 +126,10 @@ impl Env {
             source: source.name.clone(),
             scope: source.scope.clone(),
             location: location.into(),
-            field: "/login".into(),
+            field: field.into(),
             start: 0,
-            end: value.len() as u64,
-            quote: value.into(),
+            end: quote.len() as u64,
+            quote,
             trust_class: TrustClass::Structured,
             captured_at: captured,
             source_updated_at: Some(captured),
@@ -98,19 +141,19 @@ impl Env {
             .unwrap()
             .into_iter()
             .rev()
-            .find(|(_, item)| item.location == location && item.field == "/login")
+            .find(|(_, item)| item.location == location && item.field == field)
             .unwrap();
         let observed = ObservedClaim {
-            id: claims::claim_id(&subject.id, claims::ALIAS_PREDICATE, &object),
-            subject,
-            predicate: claims::ALIAS_PREDICATE.into(),
+            id: claims::claim_id(&subject.id, predicate, &object),
+            subject: subject.clone(),
+            predicate: predicate.into(),
             object,
             scalar: true,
-            type_ancestors: Vec::new(),
+            type_ancestors: ancestors,
             supports: BTreeSet::from([Support {
                 portable_key: claims::portable_evidence_key(&evidence),
                 evidence_id,
-                field: "/login".into(),
+                field: field.into(),
                 start: 0,
                 end: evidence.end,
                 extraction_rule: "fixture-rule".into(),
@@ -118,6 +161,36 @@ impl Env {
         };
         db.record_claims(run, (EXTRACTOR, "1"), &[observed], None)
             .unwrap();
+    }
+    /// The operation error a refused command gives.
+    fn refused(&self, args: &[&str]) -> String {
+        let out = Command::new(support::rastro())
+            .env("RASTRO_HOME", self.home.path())
+            .env("RASTRO_PLUGIN_PATH", self.home.path().join("no-plugins"))
+            .args(args)
+            .arg("--json")
+            .output()
+            .unwrap();
+        assert!(!out.status.success(), "{args:?} should be refused");
+        let value: Value = serde_json::from_slice(&out.stdout).unwrap();
+        value["error"].as_str().unwrap().to_string()
+    }
+    /// The (id, status) of every claim a read scoped to `scope` lists for `entity`, as of `as_of`
+    /// when given, sorted.
+    fn scoped(&self, scope: &str, entity: &str, as_of: Option<&str>) -> Vec<(String, String)> {
+        let mut db = SqliteStorage::open(&self.home.path().join("data/rastro.sqlite3")).unwrap();
+        let options = AboutOptions {
+            as_of: as_of.map(|at| at.parse().unwrap()),
+            ..AboutOptions::default()
+        };
+        let mut read: Vec<_> = db
+            .about_scoped_within(entity, &options, &[Scope(scope.into())], 1_000)
+            .unwrap()
+            .into_iter()
+            .map(|c| (c.claim.id, c.claim.status))
+            .collect();
+        read.sort();
+        read
     }
     /// What `about` lists for account 7, as of `as_of` when given: each alias claim's id and
     /// status, sorted, and the whole answer.
@@ -274,6 +347,73 @@ fn why_as_of_explains_the_claim_by_the_evidence_captured_then() {
         why["reconstruction"]["not_read_yet"][0]["source"], "mirror",
         "{why}"
     );
+}
+
+// spec: Reads as of a past time
+#[test]
+fn a_scoped_read_as_of_leaves_out_what_its_scope_cannot_see() {
+    let env = Env::new();
+    env.account_in("work", "hub", 8, "hubber");
+    let ana = env.ok(&["identity", "person", "create", "--name", "Ana"])["person"]["identifier"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    env.ok(&["identity", "link", "github:login/hubber", &ana]);
+
+    let today = env.scoped("personal", &ana, None);
+    let past = env.scoped("personal", &ana, Some(AFTER_ALL));
+    assert_eq!(
+        past, today,
+        "a scope reads the same claims as of any time after them"
+    );
+    // Nothing of the work account's link shows to the personal scope: its claims are the Person's.
+    let work = env.scoped("work", &ana, Some(AFTER_ALL));
+    assert!(
+        work.len() > past.len(),
+        "the work scope sees the link: {work:?} {past:?}"
+    );
+}
+
+// spec: Reads as of a past time
+#[test]
+fn a_scoped_read_as_of_keeps_a_retraction_where_the_store_keeps_it() {
+    let env = Env::new();
+    // The retraction binds to the work reading, the claim's primary justification, which the
+    // personal scope cannot see; it sees only the later corroboration.
+    env.login_in("work", "project", PROJECT, "octocat", READ);
+    env.login_in("personal", "mirror", MIRROR, "octocat", REREAD);
+    env.reject(&env.seen("octocat"));
+    assert!(
+        env.about(Some(AFTER_ALL)).0.is_empty(),
+        "the store keeps it"
+    );
+
+    assert!(
+        env.scoped("personal", ACCOUNT, None)
+            .iter()
+            .all(|(_, status)| status != "observed"),
+        "a read today leaves it out"
+    );
+    let past = env.scoped("personal", ACCOUNT, Some(AFTER_ALL));
+    assert!(
+        past.iter().all(|(_, status)| status != "observed"),
+        "as of after the rejection the scope reads it observed: {past:?}"
+    );
+}
+
+// spec: Reads as of a past time
+#[test]
+fn a_claim_not_known_yet_is_told_apart_from_one_that_does_not_exist() {
+    let env = Env::new();
+    env.login("mirror", MIRROR, "octocat", REREAD);
+    let id = env.seen("octocat")["id"].as_str().unwrap().to_string();
+
+    let error = env.refused(&["why", &id, "--as-of", BETWEEN]);
+    assert!(error.contains("not known"), "{error}");
+    assert!(error.contains("Reconstructed from"), "{error}");
+    assert!(error.contains("mirror: not read yet"), "{error}");
+    let error = env.refused(&["why", "c_nothing", "--as-of", BETWEEN]);
+    assert!(error.contains("unknown claim"), "{error}");
 }
 
 /// `rastro mcp --scope personal`, driven over stdio by raw JSON lines.

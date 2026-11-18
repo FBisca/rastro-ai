@@ -61,11 +61,19 @@ const KNOWN_BY: &str = "EXISTS (SELECT 1 FROM justification_span s WHERE s.justi
      WHERE s.justification_id = j.id AND e.captured_at > ?1)";
 /// Rebuilds what `source` held at `at`. A quote is copied only for the evidence `claim` cites:
 /// replaying a lifecycle needs none, and `why` cites one claim's.
+///
+/// A scoped read passes its scoped replay as `source` and the store as `full`. The scoped replay
+/// holds every intent, so what its scope cannot see is cut after the intents are applied: only
+/// claims the replay holds stay. Whether a correction still holds at `at` is the store's decision
+/// then, carried in as a scoped replay carries it today, since the scope's own occurrences are
+/// not the ones the correction was bound to.
 fn reconstruct(
     source: &Connection,
     at: chrono::DateTime<chrono::Utc>,
     claim: Option<&str>,
+    full: Option<&Connection>,
 ) -> Result<Past> {
+    let moment = at;
     let at = crate::stamp(at);
     let db = Connection::open_in_memory()?;
     db.execute_batch("PRAGMA foreign_keys = OFF;")?;
@@ -136,6 +144,19 @@ fn reconstruct(
     lifecycle::refresh(&db, &components)?;
     super::identity::apply(&db)?;
     super::automatic::apply(&db)?;
+    if let Some(full) = full {
+        let seen = id_list(source, "SELECT id FROM claim")?;
+        for sql in [
+            "DELETE FROM claim_link WHERE from_claim NOT IN (SELECT value FROM json_each(?1)) OR to_claim NOT IN (SELECT value FROM json_each(?1))",
+            "DELETE FROM intent_justification WHERE claim_id NOT IN (SELECT value FROM json_each(?1))",
+            "DELETE FROM automatic_justification WHERE claim_id NOT IN (SELECT value FROM json_each(?1))",
+            "DELETE FROM claim WHERE id NOT IN (SELECT value FROM json_each(?1))",
+        ] {
+            db.execute(sql, [&seen])?;
+        }
+        db.execute_batch("DELETE FROM entity WHERE id NOT IN (SELECT subject FROM claim UNION SELECT object_entity FROM claim WHERE object_entity IS NOT NULL)")?;
+        lifecycle::carry_holds(&reconstruct(full, moment, None, None)?.db, &db)?;
+    }
     lifecycle::settle(&db)?;
     let versions = db
         .prepare("SELECT DISTINCT extractor, extractor_version, vocabulary_version FROM justification ORDER BY 1, 2, 3")?
@@ -641,6 +662,25 @@ impl View<'_> {
         options: &AboutOptions,
         budget: usize,
     ) -> Result<AboutClaims> {
+        self.about_past(entity, options, budget, self.0)
+    }
+    /// [`View::about_view`] on a scoped replay of the store `full`.
+    pub(super) fn about_view_scoped(
+        &self,
+        entity: &str,
+        options: &AboutOptions,
+        budget: usize,
+        full: &Connection,
+    ) -> Result<AboutClaims> {
+        self.about_past(entity, options, budget, full)
+    }
+    fn about_past(
+        &self,
+        entity: &str,
+        options: &AboutOptions,
+        budget: usize,
+        full: &Connection,
+    ) -> Result<AboutClaims> {
         let Some(at) = options.as_of else {
             return self.about_now(entity, options, budget);
         };
@@ -661,11 +701,12 @@ impl View<'_> {
                     .iter()
                     .map(|c| c.summary.claim.id.clone())
                     .collect();
-                self.unread(&ids, at)?
+                self.unread(&ids, at, full)?
             }
             None => Vec::new(),
         };
-        let past = reconstruct(self.0, at, None)?;
+        let scoped = !std::ptr::eq(self.0, full);
+        let past = reconstruct(self.0, at, None, scoped.then_some(full))?;
         let mut read = View(&past.db).about_now(
             entity,
             &AboutOptions {
@@ -677,54 +718,104 @@ impl View<'_> {
         read.reconstruction = Some(Reconstruction::new(at, past.versions, unread));
         Ok(read)
     }
-    /// The sources, with their scopes, that `claims` cite today and that held no evidence by `at`,
-    /// by name.
+    /// The sources, with their scopes, that `claims` cite here today and that held no evidence by
+    /// `at` in the store `full`.
     fn unread(
         &self,
         claims: &[String],
         at: chrono::DateTime<chrono::Utc>,
+        full: &Connection,
     ) -> Result<Vec<UnreadSource>> {
-        let mut unread: Vec<UnreadSource> = self
+        let cited: Vec<(String, String)> = self
             .0
             .prepare(
                 "SELECT DISTINCT e.source, e.scope FROM justification j \
                  JOIN justification_span s ON s.justification_id = j.id JOIN evidence e ON e.id = s.evidence_id \
-                 WHERE j.claim_id IN (SELECT value FROM json_each(?1)) \
-                 AND NOT EXISTS (SELECT 1 FROM evidence o WHERE o.source = e.source AND o.scope = e.scope AND o.captured_at <= ?2)",
+                 WHERE j.claim_id IN (SELECT value FROM json_each(?1))",
             )?
-            .query_map(params![serde_json::to_string(claims)?, crate::stamp(at)], |r| {
-                Ok(UnreadSource {
-                    source: r.get(0)?,
-                    scope: Scope(r.get(1)?),
-                })
+            .query_map([serde_json::to_string(claims)?], |r| {
+                Ok((r.get(0)?, r.get(1)?))
             })?
             .collect::<Result<_, _>>()?;
+        let mut read = full.prepare(
+            "SELECT EXISTS (SELECT 1 FROM evidence WHERE source = ?1 AND scope = ?2 AND captured_at <= ?3)",
+        )?;
+        let mut unread = Vec::new();
+        for (source, scope) in cited {
+            if !read.query_row(params![source, scope, crate::stamp(at)], |r| {
+                r.get::<_, bool>(0)
+            })? {
+                unread.push(UnreadSource {
+                    source,
+                    scope: Scope(scope),
+                });
+            }
+        }
         unread.sort_by(|a, b| (&a.source, &a.scope.0).cmp(&(&b.source, &b.scope.0)));
         Ok(unread)
     }
     /// Why a claim is held: today's justifications, or as of `options.as_of` those of the store as
-    /// it stood then. A claim nothing yet held then is unknown.
+    /// it stood then. A claim that exists today but nothing yet held then is refused as not known
+    /// yet, by an error that says what the reconstruction says, so it is not taken for a mistyped
+    /// id (`None`).
     pub(super) fn explanation(
         &self,
         claim: &str,
         options: &WhyOptions,
     ) -> Result<Option<Explanation>> {
+        self.explanation_past(claim, options, self.0)
+    }
+    /// [`View::explanation`] on a scoped replay of the store `full`.
+    pub(super) fn explanation_scoped(
+        &self,
+        claim: &str,
+        options: &WhyOptions,
+        full: &Connection,
+    ) -> Result<Option<Explanation>> {
+        self.explanation_past(claim, options, full)
+    }
+    fn explanation_past(
+        &self,
+        claim: &str,
+        options: &WhyOptions,
+        full: &Connection,
+    ) -> Result<Option<Explanation>> {
         let Some(at) = options.as_of else {
             return self.explanation_now(claim, options);
         };
-        let unread = self.unread(&[claim.to_string()], at)?;
-        let past = reconstruct(self.0, at, Some(claim))?;
-        let mut why = View(&past.db).explanation_now(
+        let unread = self.unread(&[claim.to_string()], at, full)?;
+        let scoped = !std::ptr::eq(self.0, full);
+        let past = reconstruct(self.0, at, Some(claim), scoped.then_some(full))?;
+        let why = View(&past.db).explanation_now(
             claim,
             &WhyOptions {
                 as_of: None,
                 ..*options
             },
         )?;
-        if let Some(why) = &mut why {
-            why.reconstruction = Some(Reconstruction::new(at, past.versions, unread));
-        }
-        Ok(why)
+        let reconstruction = Reconstruction::new(at, past.versions, unread);
+        let Some(mut why) = why else {
+            if self.summary(claim)?.is_none() {
+                return Ok(None);
+            }
+            let unread: String = reconstruction
+                .not_read_yet
+                .iter()
+                .map(|u| {
+                    format!(
+                        " {}: not read yet at this time (scope {}).",
+                        u.source, u.scope.0
+                    )
+                })
+                .collect();
+            bail!(
+                "claim {claim} is not known as of {}: nothing that holds it had been captured yet. {}{unread}",
+                at.to_rfc3339(),
+                reconstruction.statement
+            );
+        };
+        why.reconstruction = Some(reconstruction);
+        Ok(Some(why))
     }
     fn explanation_now(&self, claim: &str, options: &WhyOptions) -> Result<Option<Explanation>> {
         let Some(claim) = self.summary(claim)? else {
