@@ -29,18 +29,11 @@ store-failure-output = true
 #
 #   cargo nextest run --workspace --profile fast
 #
-# A profile inherits nothing from another, so the timeout, the report and the retries are repeated
-# here: a hung unit test fails the fast run just as it fails the default one.
+# A custom profile inherits the default profile's settings, so the timeout, the failure report
+# and the retries are the default run's: a hung unit test fails the fast run just as it does the
+# default one, and its report lands at target/nextest/fast/junit.xml.
 [profile.fast]
 default-filter = "kind(lib) + kind(bin)"
-slow-timeout = { period = "20s", terminate-after = 3 }
-fail-fast = false
-retries = 0
-
-[profile.fast.junit]
-path = "junit.xml"
-store-success-output = false
-store-failure-output = true
 
 # The live tests: the ignored ones, which talk to a real service or read a copy of the owner's data, so
 # only the owner's machine can run them, one run at a time, with a network's patience. The live run is

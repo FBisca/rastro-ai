@@ -287,13 +287,6 @@ impl SqliteStorage {
                 .collect())
         })
     }
-
-    /// The store's SQLite connection, for a test that reads a rebuild's shadow tables between
-    /// the begin and the finish: no operation exposes them (tests only).
-    #[doc(hidden)]
-    pub fn connection(&self) -> &Connection {
-        &self.connection
-    }
 }
 /// A read that failed because SQLite needed to write (to create the WAL side files) becomes a
 /// typed refusal; anything else passes through.

@@ -480,8 +480,9 @@ pub struct Connector {
 }
 impl Connector {
     /// Starts the command with piped stdio and its own process group,
-    /// so everything it starts can be stopped with it.
-    pub fn launch(mut command: Command, id: &str, limits: Limits) -> std::io::Result<Self> {
+    /// so everything it starts can be stopped with it. The caller hands it the environment its
+    /// plugin may see; `run`, the extractor and the judge clear the owner's first (ADR 0004).
+    fn launch(mut command: Command, id: &str, limits: Limits) -> std::io::Result<Self> {
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -540,6 +541,19 @@ impl Connector {
         io::Printer::global().flush(self.limits.shutdown);
         self.tally
     }
+}
+
+/// Spawns `command` with an empty environment and these limits, for the tests that drive a
+/// connector's process directly. It clears the owner's environment here, so no caller of this
+/// seam can hand a plugin what the host withholds (ADR 0004); `run` clears and then adds the
+/// plugin's allowed variables before it launches (tests only).
+#[doc(hidden)]
+pub fn launch_without_environment(
+    mut command: Command,
+    limits: Limits,
+) -> std::io::Result<Connector> {
+    command.env_clear();
+    Connector::launch(command, "test", limits)
 }
 
 /// Whether the child has exited, seen without reaping it (`waitid` with `WNOWAIT`).

@@ -65,7 +65,7 @@ cargo nextest run --workspace --profile fast
 The orchestrator's fast check tier runs the same command on every hand-in, so a change that breaks a
 unit test fails the cheapest tier first. [`scripts/fast-suite.test.sh`](../scripts/fast-suite.test.sh)
 proves the selection — every unit test, no test from a `tests/` binary — and that the run is green.
-CI and the affected selector still run the whole suite under the default profile.
+CI runs the whole suite under the default profile, and the affected selector runs the selected crates' tests plus their dependents.
 
 ### Live and bench tests
 
