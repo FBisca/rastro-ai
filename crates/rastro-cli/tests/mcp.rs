@@ -1670,6 +1670,7 @@ fn coverage_gaps_are_scoped_and_visible_in_mcp() {
 }
 
 /// claims/R33: unknown and hidden only entity have the same empty scoped answer
+/// spec: An unknown entity reads as empty with coverage
 #[test]
 fn unknown_and_hidden_only_entity_have_the_same_empty_scoped_answer() {
     let env = Env::new();
@@ -1686,6 +1687,7 @@ fn unknown_and_hidden_only_entity_have_the_same_empty_scoped_answer() {
     assert!(hidden["coverage"].is_array());
 }
 /// claims/R36: unknown and hidden only claim are the same scoped operation error
+/// spec: An unknown claim is an operation error
 #[test]
 fn unknown_and_hidden_only_claim_are_the_same_scoped_operation_error() {
     let env = Env::new();
@@ -1812,6 +1814,7 @@ fn scoped_replay_filters_metadata_and_hidden_replacements_before_limit() {
 }
 
 /// claims/R31: scoped about resolves a canonical alias only through visible claims
+/// spec: A login resolves through its alias claim
 #[test]
 fn scoped_about_resolves_a_canonical_alias_only_through_visible_claims() {
     let env = Env::new();
@@ -2169,6 +2172,7 @@ fn random_scope_sets_equal_visible_rebuild_when_queried_by_alias() {
 
 /// claims/R53: an entity form outside the three accepted ones is a tool result with `isError`, not a
 /// JSON-RPC error.
+/// spec: A malformed entity form is an operation error
 #[test]
 fn a_malformed_entity_form_is_a_tool_error_over_mcp() {
     let env = seeded();
@@ -3212,6 +3216,7 @@ fn subject_label(session: &mut Session, claim: &str) -> Value {
 
 /// labels/S7: a launch scope that hides the only title leaves a null label and a successful call;
 /// a visible copy in another scope is used
+/// spec: A scope decides whose title is labelled
 #[test]
 fn S7_a_scope_hiding_the_only_title_gives_a_null_label_and_a_visible_copy_is_used() {
     let env = Env::new();
@@ -3261,6 +3266,7 @@ fn S7_a_scope_hiding_the_only_title_gives_a_null_label_and_a_visible_copy_is_use
 }
 
 /// labels/S10: with --json the CLI envelope equals the MCP result, labels included
+/// spec: The CLI shows labels as the MCP result does
 #[test]
 fn S10_the_cli_envelope_with_labels_equals_the_mcp_result() {
     let env = Env::new();
@@ -3285,6 +3291,7 @@ fn S10_the_cli_envelope_with_labels_equals_the_mcp_result() {
 }
 
 /// labels/S11: the about and why descriptions say label text is untrusted data
+/// spec: The tool descriptions say label text is untrusted
 #[test]
 fn S11_the_about_and_why_descriptions_say_label_text_is_untrusted_data() {
     let env = Env::new();

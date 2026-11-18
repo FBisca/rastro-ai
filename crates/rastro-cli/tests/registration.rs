@@ -672,6 +672,7 @@ impl Synced {
 /// rename-warning/S18: a source with no complete check and a stored source gone from config
 /// with the same connector and selector, in another scope, is warned about, naming both; the
 /// read still runs from window_start
+/// spec: A renamed source is warned about before its full read
 #[test]
 fn S18_a_renamed_source_is_warned_about_on_stderr_and_in_warnings() {
     let env = Synced::new();
@@ -691,6 +692,7 @@ fn S18_a_renamed_source_is_warned_about_on_stderr_and_in_warnings() {
 
 /// rename-warning/S19: a source with a complete check, or with no stored-only source sharing
 /// its connector and selector, gets no warning
+/// spec: No warning when a complete check exists
 #[test]
 fn S19_no_warning_with_a_complete_check_or_without_a_twin() {
     let env = Synced::new();

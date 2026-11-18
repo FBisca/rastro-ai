@@ -375,6 +375,7 @@ fn control_about_still_returns_claims() {
 }
 
 /// S1: a GitHub PR side carries its `/title` label with every cited field
+/// spec: A GitHub issue or pull request side carries its title
 #[test]
 fn S1_a_github_pr_side_carries_its_cited_title_label() {
     let env = Env::new();
@@ -402,6 +403,7 @@ fn S1_a_github_pr_side_carries_its_cited_title_label() {
 
 /// S4: repositories, comments and GitHub accounts get a null label, even with title- or
 /// name-shaped evidence at their location
+/// spec: A repository, comment, account or Person has no label
 #[test]
 fn S4_repository_comment_and_account_sides_have_a_null_label() {
     let env = Env::new();
@@ -511,6 +513,7 @@ fn linear(env: &Env) {
 /// `tracker:state` the real Linear extractor reads from `/state/name`; an entity with no state
 /// claim has a null state. A Linear issue's label comes from `/title` with a null url; a
 /// Linear user's from `/name`, not `/displayName`.
+/// spec: The label carries the current state
 #[test]
 fn S9_label_state_holds_the_current_code_or_tracker_state() {
     let env = Env::new();
@@ -561,6 +564,7 @@ fn S9_label_state_holds_the_current_code_or_tracker_state() {
 
 /// S10: CLI text shows the label after the id, control chars escaped; `--json` carries the
 /// labels and equals the MCP result
+/// spec: The CLI shows labels as the MCP result does
 #[test]
 fn S10_cli_text_shows_the_escaped_label_after_the_id_and_json_equals_mcp() {
     let env = Env::new();
@@ -617,6 +621,7 @@ fn S10_cli_text_shows_the_escaped_label_after_the_id_and_json_equals_mcp() {
 }
 
 /// S11: the MCP `about` and `why` descriptions say label text is untrusted data
+/// spec: The tool descriptions say label text is untrusted
 #[test]
 fn S11_mcp_about_and_why_descriptions_mark_label_text_untrusted() {
     let env = Env::new();

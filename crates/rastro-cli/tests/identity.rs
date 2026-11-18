@@ -1267,6 +1267,7 @@ fn rows(env: &Env) -> (Vec<String>, Vec<String>) {
 /// claims/R58: a rebuild, with the evidence's extractor missing so its pair is carried over, brings
 /// back every intent-backed Person, name, link and merge identically, and leaves the intent
 /// table as it was
+/// spec: A rebuild reproduces every intent-backed claim
 #[test]
 fn a_rebuild_with_a_carried_pair_brings_intent_backed_claims_back_identically() {
     let env = Env::new();

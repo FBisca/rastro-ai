@@ -213,6 +213,7 @@ fn item_number(location: &str) -> &str {
 /// pull request or issue in that repository, usually the owner's) and `gh auth login` or
 /// `GH_TOKEN`; run with
 /// `cargo nextest run --profile live --run-ignored only`.
+/// spec: The owner's claims and receipts match GitHub
 #[test]
 #[ignore = "live: talks to GitHub; set RASTRO_LIVE_REPO and RASTRO_LIVE_GITHUB_LOGIN, and GH_TOKEN or gh auth login"]
 #[expect(
@@ -418,6 +419,7 @@ fn half_configured_or_malformed_live_variables_fail_naming_them() {
 /// `sqlite3 ~/.local/share/rastro/rastro.sqlite3 ".backup /tmp/rastro-copy.sqlite3"`). The test
 /// copies it again into a temporary home, so the file it is given is never written. Run with
 /// `cargo nextest run --profile live --run-ignored only`.
+/// spec: The owner preps a standup from about me
 #[test]
 #[ignore = "live: reads a copy of the owner's database; set RASTRO_LIVE_DB"]
 fn the_owners_copy_lists_github_and_linear_accounts_and_runs_candidates() {

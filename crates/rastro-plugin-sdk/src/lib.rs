@@ -909,6 +909,7 @@ evidence_requirement = "r"
     }
 
     /// claims/R19: a vocabulary with every definition field loads
+    /// spec: The GitHub extractor emits cited code claims
     #[test]
     fn a_vocabulary_with_every_definition_field_loads() {
         let parsed = Vocabulary::parse(&vocabulary(POLICY)).unwrap();
@@ -922,6 +923,7 @@ evidence_requirement = "r"
     }
 
     /// claims/R20: a vocabulary missing a definition field is refused
+    /// spec: The core refuses a vocabulary it cannot hold
     #[test]
     fn a_vocabulary_missing_a_definition_field_is_refused() {
         for (field, line) in [
@@ -952,6 +954,7 @@ evidence_requirement = "r"
     }
 
     /// claims/R20: an unknown field or a bad cardinality is refused naming it
+    /// spec: The core refuses a vocabulary it cannot hold
     #[test]
     fn an_unknown_field_or_a_bad_cardinality_is_refused_naming_it() {
         let top = format!("flavour = \"x\"\n{}", vocabulary(POLICY));
@@ -970,6 +973,7 @@ evidence_requirement = "r"
     }
 
     /// claims/R20: an alias kind with `/`, `:` or whitespace is refused
+    /// spec: The core refuses a vocabulary it cannot hold
     #[test]
     fn an_alias_kind_with_a_separator_or_whitespace_is_refused() {
         for kind in ["", "a/b", "a:b", "a b", "a\tb"] {
@@ -986,6 +990,7 @@ evidence_requirement = "r"
     }
 
     /// claims/R20: a name under the rastro prefix is refused
+    /// spec: The core refuses a vocabulary it cannot hold
     #[test]
     fn a_name_under_the_rastro_prefix_is_refused() {
         let named = |id: &str| vocabulary(POLICY).replacen("x:T", id, 2);
@@ -1015,6 +1020,7 @@ evidence_requirement = "r"
     }
 
     /// claims/R5: a supertype relates two types so they do not conflict
+    /// spec: A type must come from the submission that uses it
     #[test]
     fn a_supertype_relates_two_types_so_they_do_not_conflict() {
         let text = format!(
@@ -1061,6 +1067,7 @@ evidence_requirement = "r"
     }
 
     /// claims/R20: a supertype cycle is refused
+    /// spec: The core refuses a vocabulary it cannot hold
     #[test]
     fn a_supertype_cycle_is_refused() {
         let text = format!(
@@ -1072,6 +1079,7 @@ evidence_requirement = "r"
     }
 
     /// claims/R20: a range names a defined type or a known datatype
+    /// spec: The core refuses a vocabulary it cannot hold
     #[test]
     fn a_range_names_a_defined_type_or_a_known_datatype() {
         for bad in ["x:Missing", "rastro:type", "text"] {

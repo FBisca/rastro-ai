@@ -29,6 +29,7 @@ fn time() -> DateTime<Utc> {
     "2026-11-01T00:00:00Z".parse().unwrap()
 }
 /// claims/R22: incremental record on a hub is near linear and equals the full replay
+/// spec: A rebuild equals the incremental projection
 #[test]
 fn incremental_record_on_a_hub_is_near_linear_and_equals_the_full_replay() {
     let n: usize = 4000;
@@ -125,6 +126,7 @@ fn incremental_record_on_a_hub_is_near_linear_and_equals_the_full_replay() {
     clippy::too_many_lines,
     reason = "the scenario seeds a hub typed at many locations and asserts the replay, the conflict and the rebuild in one journey"
 )]
+/// spec: A new observation replays only its slots
 #[test]
 fn a_new_observation_on_a_hub_replays_only_its_slots_and_equals_a_rebuild() {
     let n: usize = 4000;

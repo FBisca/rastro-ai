@@ -89,6 +89,7 @@ fn store(db: &mut SqliteStorage, e: &Evidence, predicate: &str, value: &str) -> 
     result
 }
 /// claims/R12: equal capture recurrence keeps separate ordered occurrences
+/// spec: Recurrences at one captured time stay separate and ordered
 #[test]
 fn equal_capture_recurrence_keeps_separate_ordered_occurrences() {
     let home = tempfile::tempdir().unwrap();
@@ -125,6 +126,7 @@ fn equal_capture_recurrence_keeps_separate_ordered_occurrences() {
     assert_eq!(why.claim.claim.known_intervals[0].end, Some(time()));
 }
 /// claims/R15: one span can justify two conclusions without collision
+/// spec: One span can justify two claims
 #[test]
 fn one_span_can_justify_two_conclusions_without_collision() {
     let home = tempfile::tempdir().unwrap();
@@ -140,6 +142,7 @@ fn one_span_can_justify_two_conclusions_without_collision() {
 }
 
 /// claims/R10: fresh databases with other local ids keep revisions and ids
+/// spec: A claim's id and revision survive replay
 #[test]
 fn fresh_databases_with_other_local_ids_keep_revisions_and_ids() {
     let home = tempfile::tempdir().unwrap();
@@ -183,6 +186,7 @@ fn fresh_databases_with_other_local_ids_keep_revisions_and_ids() {
 }
 
 /// claims/R4: all required spans of one evidence are retained as an and bundle
+/// spec: One failing span rejects the whole claim
 #[test]
 fn all_required_spans_of_one_evidence_are_retained_as_an_and_bundle() {
     let home = tempfile::tempdir().unwrap();
@@ -209,6 +213,7 @@ fn all_required_spans_of_one_evidence_are_retained_as_an_and_bundle() {
 }
 
 /// claims/R1: late append advances boundary even when its portable key sorts before previous
+/// spec: A bound extractor runs over its source's pending evidence
 #[test]
 fn late_append_advances_boundary_even_when_its_portable_key_sorts_before_previous() {
     let home = tempfile::tempdir().unwrap();
@@ -244,6 +249,7 @@ fn late_append_advances_boundary_even_when_its_portable_key_sorts_before_previou
 }
 
 /// claims/R12: same pair recurrence at equal capture stays separate
+/// spec: Recurrences at one captured time stay separate and ordered
 #[test]
 fn same_pair_recurrence_at_equal_capture_stays_separate() {
     let home = tempfile::tempdir().unwrap();
@@ -281,6 +287,7 @@ fn same_pair_recurrence_at_equal_capture_stays_separate() {
 }
 
 /// claims/R22: vocabulary and run metadata match replay without extractor bump
+/// spec: A rebuild equals the incremental projection
 #[test]
 fn vocabulary_and_run_metadata_match_replay_without_extractor_bump() {
     let home = tempfile::tempdir().unwrap();
@@ -336,6 +343,7 @@ fn vocabulary_and_run_metadata_match_replay_without_extractor_bump() {
 }
 
 /// claims/R16: corroboration keeps the start of the claim union interval
+/// spec: A claim's known interval comes from its evidence
 #[test]
 fn corroboration_keeps_the_start_of_the_claim_union_interval() {
     let home = tempfile::tempdir().unwrap();
@@ -358,6 +366,7 @@ fn corroboration_keeps_the_start_of_the_claim_union_interval() {
 }
 
 /// claims/R14: related types do not conflict but unrelated types and replacement do
+/// spec: The newer comparable observation wins its slot
 #[test]
 fn related_types_do_not_conflict_but_unrelated_types_and_replacement_do() {
     let home = tempfile::tempdir().unwrap();
@@ -410,6 +419,7 @@ fn related_types_do_not_conflict_but_unrelated_types_and_replacement_do() {
 }
 
 /// claims/R50: conflicting types with equal known times display the lowest claim id
+/// spec: A conflicted entity displays one type
 #[test]
 fn equal_known_times_display_the_lowest_claim_id() {
     let home = tempfile::tempdir().unwrap();
@@ -438,6 +448,7 @@ fn equal_known_times_display_the_lowest_claim_id() {
 }
 /// claims/R45: a claim justified by a carried-over pair and a rebuilt pair equals the incremental one,
 /// whichever is staged first, and the carried pair keeps its checkpoint
+/// spec: A claim carried and rebuilt reads as incremental
 #[test]
 fn a_claim_justified_by_a_carried_pair_and_a_rebuilt_pair_equals_the_incremental_one() {
     for carry_first in [true, false] {
