@@ -1773,6 +1773,44 @@
       ],
       "type": "object"
     },
+    "QueueCorrection": {
+      "additionalProperties": false,
+      "description": "A claim the owner corrected whose correction no longer holds, asked about again.",
+      "properties": {
+        "claim": {
+          "$ref": "#/$defs/ClaimSummary",
+          "description": "The claim as it reads now: its current status and marks."
+        },
+        "intent": {
+          "description": "The owner intent that retracted or confirmed it, whose correction has lapsed or gone stale.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/QueueCorrectionKind"
+        }
+      },
+      "required": [
+        "kind",
+        "claim",
+        "intent"
+      ],
+      "type": "object"
+    },
+    "QueueCorrectionKind": {
+      "description": "Why the queue asks about a claim the owner corrected.",
+      "oneOf": [
+        {
+          "const": "lapsed_retraction",
+          "description": "The owner retracted the claim and the lifecycle state they retracted it in has changed:\nthe claim reads again, with its evidence-derived status.",
+          "type": "string"
+        },
+        {
+          "const": "stale_confirmation",
+          "description": "The owner confirmed the claim and its lifecycle state has changed since: it stays\nconfirmed, and what it rested on is not what the owner saw.",
+          "type": "string"
+        }
+      ]
+    },
     "QueueGap": {
       "additionalProperties": false,
       "description": "Why a source shows no item, or fewer than its content now says.",
@@ -1841,6 +1879,17 @@
           },
           "type": "array"
         },
+        "correction": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/QueueCorrection"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The corrected claim; present on a `question` that asks about a retraction that lapsed or a\nconfirmation that went stale. A yes records the earlier correction again."
+        },
         "earlier_retracted": {
           "description": "Set on a proposal that one commitment covered before the owner retracted some of its\nstatements: new evidence proposes it again, and the owner decides again. Never set on a\nquestion.",
           "type": "boolean"
@@ -1872,7 +1921,7 @@
               "type": "null"
             }
           ],
-          "description": "The same-person candidate; present exactly when `kind` is `question`."
+          "description": "The same-person candidate; present on a `question` that asks whether two accounts are one\nperson."
         },
         "source": {
           "$ref": "#/$defs/QueueSource"

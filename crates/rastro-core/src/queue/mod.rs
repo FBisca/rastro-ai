@@ -11,6 +11,13 @@
 //! meeting's capture time. Questions are computed on read and have no such time, so they come
 //! first, ordered by their accounts' identifiers.
 //!
+//! A claim the owner corrected asks a question of its own once the correction no longer holds: a
+//! retraction whose bound lifecycle state changed (the claim is back, marked earlier retracted) and
+//! a confirmation whose state changed (it stays confirmed, marked stale). Each is one question,
+//! computed on read from the claim's marks, naming the claim as it reads now and the intent that
+//! corrected it; a yes records the earlier correction again, bound to the state the claim has now,
+//! which is what takes the question out.
+//!
 //! A source that found nothing, failed or couldn't look is never left out silently: its gap is
 //! named beside the items. A source in a scope the caller can't see is absent, items and gap
 //! alike, and the read still succeeds. Same-person candidates are computed over every scope, so
@@ -119,6 +126,38 @@ pub struct Question {
     pub name: String,
 }
 
+/// Why the queue asks about a claim the owner corrected.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[schemars(rename = "QueueCorrectionKind")]
+pub enum CorrectionKind {
+    /// The owner retracted the claim and the lifecycle state they retracted it in has changed:
+    /// the claim reads again, with its evidence-derived status.
+    LapsedRetraction,
+    /// The owner confirmed the claim and its lifecycle state has changed since: it stays
+    /// confirmed, and what it rested on is not what the owner saw.
+    StaleConfirmation,
+}
+impl CorrectionKind {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::LapsedRetraction => "lapsed_retraction",
+            Self::StaleConfirmation => "stale_confirmation",
+        }
+    }
+}
+
+/// A claim the owner corrected whose correction no longer holds, asked about again.
+#[derive(Debug, JsonSchema, Serialize)]
+#[schemars(rename = "QueueCorrection")]
+pub struct CorrectionQuestion {
+    pub kind: CorrectionKind,
+    /// The claim as it reads now: its current status and marks.
+    pub claim: ClaimSummary,
+    /// The owner intent that retracted or confirmed it, whose correction has lapsed or gone stale.
+    pub intent: String,
+}
+
 /// One pending proposal or question.
 #[derive(Debug, JsonSchema, Serialize)]
 #[schemars(rename = "QueueItem")]
@@ -130,9 +169,14 @@ pub struct Item {
     /// The proposed commitment; present exactly when `kind` is `proposal`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub proposal: Option<Hypothesis>,
-    /// The same-person candidate; present exactly when `kind` is `question`.
+    /// The same-person candidate; present on a `question` that asks whether two accounts are one
+    /// person.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub question: Option<Question>,
+    /// The corrected claim; present on a `question` that asks about a retraction that lapsed or a
+    /// confirmation that went stale. A yes records the earlier correction again.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub correction: Option<CorrectionQuestion>,
     /// What Rastro already knows about the parties the owner mapped: their visible claims, each
     /// once. Context only — an item with claims beside it stays in the queue.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -273,6 +317,7 @@ impl Queue {
     pub fn new(
         origins: Vec<Origin>,
         questions: Vec<Question>,
+        corrections: Vec<CorrectionQuestion>,
         answered: &BTreeSet<String>,
     ) -> Self {
         let known = known_by_subject(origins.iter().flat_map(|origin| origin.known.iter()));
@@ -290,6 +335,7 @@ impl Queue {
                     source: source.clone(),
                     proposal: Some(hypothesis.clone()),
                     question: None,
+                    correction: None,
                     context: Vec::new(),
                     earlier_retracted: false,
                     run: (origin.source.results_from.as_ref()).map(|results| results.run.clone()),
@@ -324,6 +370,7 @@ impl Queue {
                 source: Source::identity(),
                 proposal: None,
                 question: Some(question),
+                correction: None,
                 context: Vec::new(),
                 earlier_retracted: false,
                 run: None,
@@ -346,6 +393,7 @@ impl Queue {
                 });
             }
         }
+        aged.extend(correction_items(corrections, &mut seen));
         aged.sort_by(|a, b| a.key().cmp(&b.key()));
         Self {
             notice: NOTICE.into(),
@@ -701,6 +749,90 @@ fn question_id(question: &Question) -> String {
     ])
 }
 
+/// The items that ask about corrected claims, keyed to sort after the same-person questions
+/// and before every proposal.
+fn correction_items(
+    corrections: Vec<CorrectionQuestion>,
+    seen: &mut BTreeSet<String>,
+) -> Vec<Aged> {
+    let mut aged = Vec::new();
+    for correction in corrections {
+        let item = Item {
+            id: correction_id(&correction),
+            kind: ItemKind::Question,
+            source: Source::identity(),
+            proposal: None,
+            question: None,
+            context: Vec::new(),
+            earlier_retracted: false,
+            run: None,
+            correction: Some(correction),
+        };
+        if seen.insert(item.id.clone()) {
+            // Computed on read like a same-person question, so it has no time: it sorts before
+            // every proposal, after the same-person questions (turn 1), by claim id.
+            let claim = (item.correction.as_ref())
+                .map(|correction| correction.claim.claim.id.clone())
+                .unwrap_or_default();
+            aged.push(Aged {
+                at: None,
+                question: true,
+                turn: 1,
+                accounts: claim,
+                item,
+            });
+        }
+    }
+    aged
+}
+
+/// The content address of a correction question: the claim, the intent that corrected it and
+/// what became of the correction, so a claim asked about again after a newer correction is a
+/// new item.
+fn correction_id(correction: &CorrectionQuestion) -> String {
+    item_id(&[
+        (b'K', ItemKind::Question.as_str().into()),
+        (b'L', correction.claim.claim.id.clone()),
+        (b'I', correction.intent.clone()),
+        (b'M', correction.kind.as_str().into()),
+    ])
+}
+
+/// One question for each claim whose retraction lapsed and each whose confirmation went stale,
+/// as `scopes` reads it (empty: every scope). The claim's own marks say so: the latest
+/// correction of a claim is the one in force, so a claim an older correction named and a newer
+/// one replaced is asked about once, by the newer.
+fn correction_questions(
+    view: &dyn crate::read_only::Snapshot,
+    scopes: &[crate::Scope],
+    resolution: &Resolution,
+) -> Result<Vec<CorrectionQuestion>> {
+    let options = crate::knowledge::WhyOptions::default();
+    let mut asks = Vec::new();
+    for (kind, corrected) in [
+        (CorrectionKind::LapsedRetraction, &resolution.retracted),
+        (CorrectionKind::StaleConfirmation, &resolution.confirmed),
+    ] {
+        for (claim, intent) in corrected {
+            let Some(explained) = view.explain_scoped(claim, &options, scopes)? else {
+                continue;
+            };
+            let marked = match kind {
+                CorrectionKind::LapsedRetraction => explained.claim.claim.earlier_retracted,
+                CorrectionKind::StaleConfirmation => explained.claim.claim.stale,
+            };
+            if marked {
+                asks.push(CorrectionQuestion {
+                    kind,
+                    claim: *explained.claim,
+                    intent: intent.clone(),
+                });
+            }
+        }
+    }
+    Ok(asks)
+}
+
 impl SourceKind {
     fn as_str(self) -> &'static str {
         match self {
@@ -728,13 +860,14 @@ pub(crate) fn read(
     let origins = view.queue_sources(scopes)?;
     // Same-person candidates are computed over every scope, so only an unscoped caller is
     // shown a question.
+    let resolution = Resolution::of(&intents);
     let questions = if scopes.is_empty() {
-        let resolution = Resolution::of(&intents);
         questions(&view.identity_accounts()?, &resolution)
     } else {
         Vec::new()
     };
-    let mut queue = Queue::new(origins, questions, &answered);
+    let corrections = correction_questions(view, scopes, &resolution)?;
+    let mut queue = Queue::new(origins, questions, corrections, &answered);
     queue.attach_context(view, scopes)?;
     Ok(queue)
 }
@@ -843,6 +976,7 @@ mod tests {
                 source,
                 known: Vec::new(),
             }],
+            Vec::new(),
             Vec::new(),
             &BTreeSet::new(),
         );
@@ -978,6 +1112,7 @@ mod tests {
         let queue = Queue::new(
             vec![origin(vec![same, narrower], vec![accepted])],
             Vec::new(),
+            Vec::new(),
             &BTreeSet::new(),
         );
         let shown: Vec<&str> = (queue.items.iter())
@@ -1045,6 +1180,7 @@ mod tests {
             let queue = Queue::new(
                 vec![origin(vec![proposal(date)], vec![known])],
                 Vec::new(),
+                Vec::new(),
                 &BTreeSet::new(),
             );
             assert_eq!(queue.already_known, 0, "{name}");
@@ -1080,6 +1216,7 @@ mod tests {
                     retracted("std:commitment/2", &[(commitments::DUE, "by Friday")]),
                 ],
             )],
+            Vec::new(),
             Vec::new(),
             &BTreeSet::new(),
         );
