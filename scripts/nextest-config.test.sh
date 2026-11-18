@@ -96,7 +96,11 @@ test_a_test_past_the_timeout_is_slow_terminated_and_named() {
 test_a_failing_test_reaches_the_junit_report_with_its_output() {
   start_test a_failing_test_reaches_the_junit_report_with_its_output
   local out status junit report
-  out=$(cd "$fixtures/suite" && cargo nextest run --color never --config-file "$config" 2>&1)
+  # One test at a time: nextest's default fail-fast stops scheduling new tests once one fails and lets
+  # the running ones finish, so with tests running side by side both failures can already be in flight
+  # before the first one lands and the report would hold them whether or not the run keeps going.
+  # Serialised, the second failure can only exist if the run scheduled it after the first one failed.
+  out=$(cd "$fixtures/suite" && cargo nextest run --color never --test-threads 1 --config-file "$config" 2>&1)
   status=$?
   if [ "$status" -eq 0 ]; then
     flunk "the run exited 0 with a failing test"
@@ -110,9 +114,12 @@ test_a_failing_test_reaches_the_junit_report_with_its_output() {
     printf '%s\n' "$out" | tail -5
   else
     report=$(cat "$junit")
+    # The run kept going after its first failure: it ran every test, and the one report holds both
+    # failures with their output. A fail-fast run cancels the tests after the first failure and holds
+    # one of them.
+    says "$out" "the run" "3 tests run: 1 passed, 2 failed"
     says "$report" "the JUnit report" 'testcase name="test_that_fails"'
     says "$report" "the JUnit report" "fixture: captured output before failing"
-    # The second failure proves the run keeps going, so one JUnit report holds every failing test.
     says "$report" "the JUnit report" 'testcase name="test_that_also_fails"'
     says "$report" "the JUnit report" "fixture: second failure output"
   fi
