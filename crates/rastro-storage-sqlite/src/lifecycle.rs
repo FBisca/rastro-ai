@@ -5,7 +5,7 @@ use anyhow::Result;
 use rastro_core::claims::{
     KnownInterval, Support, occurrence_id_with_ordinal, revision_with_links,
 };
-use rusqlite::{Connection, params};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 type Event = (String, i64);
@@ -545,6 +545,97 @@ pub(crate) fn intervals(db: &Connection, id: &str) -> Result<Vec<KnownInterval>>
         })
         .collect()
 }
+/// The links a claim shows beside its own: those it has, and the supersession it is under.
+fn visible_links(db: &Connection, id: &str) -> Result<Vec<(String, String)>> {
+    let mut found = Vec::new();
+    for sql in [
+        "SELECT kind, to_claim FROM claim_link WHERE from_claim = ?1",
+        "SELECT 'superseded_by', from_claim FROM claim_link WHERE to_claim = ?1 AND kind = 'supersedes'",
+    ] {
+        found.extend(
+            db.prepare(sql)?
+                .query_map([id], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+    }
+    Ok(found)
+}
+/// The lifecycle fingerprint of a claim and whether it is scalar (ADR 0014). Its primary live
+/// justification is the one that has held longest: an open occurrence of evidence, a live
+/// automatic link, or a live owner intent that is not itself a correction, by start and then key.
+pub(crate) fn fingerprint(db: &Connection, id: &str) -> Result<Option<(String, bool)>> {
+    let Some(scalar) = db
+        .query_row("SELECT scalar FROM claim WHERE id = ?1", [id], |r| r.get(0))
+        .optional()?
+    else {
+        return Ok(None);
+    };
+    let mut live: Vec<(String, String)> = Vec::new();
+    for sql in [
+        "SELECT o.captured_at, o.id FROM occurrence o JOIN justification j ON j.id = o.justification_id WHERE j.claim_id = ?1 AND o.end IS NULL",
+        "SELECT started_at, id FROM automatic_justification WHERE claim_id = ?1 AND ended_at IS NULL",
+        "SELECT coalesce(ij.started_at, i.issued_at), ij.id FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id WHERE ij.claim_id = ?1 AND ij.ended_at IS NULL AND i.kind <> 'confirm'",
+    ] {
+        live.extend(
+            db.prepare(sql)?
+                .query_map([id], |r| {
+                    Ok((r.get::<_, String>(0)?, r.get::<_, String>(1)?))
+                })?
+                .collect::<Result<Vec<_>, _>>()?,
+        );
+    }
+    let primary = live.into_iter().min();
+    Ok(Some((
+        rastro_core::claims::lifecycle_fingerprint(
+            id,
+            primary.as_ref().map(|(_, key)| key.as_str()),
+            &visible_links(db, id)?,
+        ),
+        scalar,
+    )))
+}
+/// Reads every claim an owner confirmation holds as `confirmed`, whatever status its evidence or
+/// its intents gave it (ADR 0014). Runs last in every path that writes a status, so an incremental
+/// write, a rebuild and a scoped replay agree. A confirmation holds while its `intent_justification`
+/// does not end.
+pub(crate) fn settle(db: &Connection) -> Result<()> {
+    let confirmed: Vec<String> = db
+        .prepare("SELECT DISTINCT ij.claim_id FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id WHERE ij.ended_at IS NULL AND i.kind = 'confirm' AND ij.claim_id IN (SELECT id FROM claim) ORDER BY ij.claim_id")?
+        .query_map([], |r| r.get(0))?
+        .collect::<Result<_, _>>()?;
+    let mut update =
+        db.prepare_cached("UPDATE claim SET status = 'confirmed', revision = ?2 WHERE id = ?1")?;
+    for id in confirmed {
+        let mut keys: BTreeSet<String> = BTreeSet::new();
+        for sql in [
+            "SELECT DISTINCT s.portable_key FROM justification j JOIN justification_span s ON s.justification_id = j.id WHERE j.claim_id = ?1 AND j.current = 1",
+            "SELECT id FROM automatic_justification WHERE claim_id = ?1 AND ended_at IS NULL",
+            "SELECT intent_id FROM intent_justification WHERE claim_id = ?1 AND ended_at IS NULL",
+        ] {
+            keys.extend(
+                db.prepare(sql)?
+                    .query_map([&id], |r| r.get::<_, String>(0))?
+                    .collect::<Result<Vec<_>, _>>()?,
+            );
+        }
+        let supports: Vec<Support> = keys
+            .into_iter()
+            .map(|key| Support {
+                portable_key: key,
+                evidence_id: 0,
+                field: String::new(),
+                start: 0,
+                end: 0,
+                extraction_rule: String::new(),
+            })
+            .collect();
+        let revision = revision_with_links("confirmed", &supports, &visible_links(db, &id)?);
+        update.execute(params![id, revision])?;
+    }
+    Ok(())
+}
 pub(crate) fn links(db: &Connection, id: &str, kind: &str, inverse: bool) -> Result<Vec<String>> {
     let sql = if inverse {
         "SELECT from_claim FROM claim_link WHERE to_claim = ?1 AND kind = ?2 ORDER BY from_claim"
@@ -671,6 +762,7 @@ pub(crate) fn finish_rebuild(db: &mut Connection, publish_projection: bool) -> R
     if publish_projection {
         crate::identity::apply(&transaction)?;
         crate::automatic::apply(&transaction)?;
+        settle(&transaction)?;
     }
     let count: i64 = transaction.query_row("SELECT count(*) FROM temp.claim", [], |r| r.get(0))?;
     if publish_projection {

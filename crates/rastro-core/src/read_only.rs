@@ -119,6 +119,11 @@ pub trait Snapshot {
         Ok(Default::default())
     }
 
+    /// The claim's lifecycle state, which a correction binds to: its fingerprint and whether its
+    /// predicate is scalar. `None` for a claim the projection doesn't hold.
+    fn claim_lifecycle(&self, _claim: &str) -> Result<Option<crate::claims::ClaimLifecycle>> {
+        anyhow::bail!("storage does not support corrections")
+    }
     /// The accepted owner intents, in acceptance order.
     fn intents(&self) -> Result<Vec<crate::identity::Intent>> {
         anyhow::bail!("storage does not support owner intents")

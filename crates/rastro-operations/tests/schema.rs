@@ -31,6 +31,30 @@ fn property_names(schema: &serde_json::Value) -> Vec<&str> {
     names
 }
 
+/// A claim's status gains `confirmed` and `retracted` (ADR 0014): every claim status enum is
+/// reduced to the two it had, after checking it holds the four.
+fn remove_correction_statuses(value: &mut serde_json::Value) {
+    match value {
+        serde_json::Value::Object(map) => {
+            if let Some(statuses) = map.get_mut("enum")
+                && *statuses
+                    == serde_json::json!(["observed", "confirmed", "retracted", "superseded"])
+            {
+                *statuses = serde_json::json!(["observed", "superseded"]);
+            }
+            for child in map.values_mut() {
+                remove_correction_statuses(child);
+            }
+        }
+        serde_json::Value::Array(items) => {
+            for item in items {
+                remove_correction_statuses(item);
+            }
+        }
+        _ => {}
+    }
+}
+
 /// Coverage gains an optional, typed list to coverage windows everywhere they appear.
 fn remove_coverage_gaps(value: &mut serde_json::Value) {
     match value {
@@ -313,6 +337,7 @@ fn about_and_why_change_only_additively_for_identity() {
         let new = ops.iter().find(|op| op["name"] == name).unwrap();
         let mut new = expanded(new, &generated["$defs"]);
         remove_coverage_gaps(&mut new);
+        remove_correction_statuses(&mut new);
         // Every claim summary of the result (`about`: each claim; `why`: the claim).
         assert_eq!(remove_labels(&mut new["result"]), 1, "{name}");
         // The descriptions gain a sentence on label text.

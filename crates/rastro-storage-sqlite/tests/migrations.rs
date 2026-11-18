@@ -50,7 +50,7 @@ fn stored_evidence_rejects_updates_and_deletes() {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 18);
+        assert_eq!(version, 19);
     }
 }
 
@@ -92,7 +92,7 @@ fn migrations_apply_once_in_timestamp_order_and_unknown_ones_are_refused() {
         .unwrap();
     connection.pragma_update(None, "user_version", 1).unwrap();
     SqliteStorage::open(&legacy).unwrap();
-    assert_eq!(names(&connection).len(), 18);
+    assert_eq!(names(&connection).len(), 19);
 }
 
 /// evidence/R5: legacy user version maps to the migrations it meant
@@ -995,4 +995,118 @@ fn S8_an_export_leaves_the_recorded_output_and_the_spans_out() {
     for derived in ["budget", "Friday", "roadmap"] {
         assert!(!text.contains(derived), "{derived} leaked: {text}");
     }
+}
+
+/// Every migration but the newest one, read from the directory, in name order.
+fn before_claim_statuses() -> Vec<(String, String)> {
+    let mut names: Vec<_> = fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/migrations"))
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|e| e == "sql"))
+        .collect();
+    names.sort();
+    names
+        .into_iter()
+        .map(|path| {
+            (
+                path.file_stem().unwrap().to_string_lossy().into_owned(),
+                fs::read_to_string(&path).unwrap(),
+            )
+        })
+        .take_while(|(name, _)| name != "202611181000_claim_statuses")
+        .collect()
+}
+
+// spec: The owner confirms a claim
+/// The claim-status migration rebuilds the claim table with foreign keys off: every claim and every
+/// row that names one survives with its status, the keys still hold, and the table now takes
+/// `confirmed` and `retracted`
+#[test]
+fn the_claim_status_migration_keeps_every_claim_and_what_names_it() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("rastro.sqlite3");
+    let before = before_claim_statuses();
+    let before: Vec<(&str, &str)> = before
+        .iter()
+        .map(|(name, sql)| (name.as_str(), sql.as_str()))
+        .collect();
+    assert_eq!(before.len(), 18);
+    drop(SqliteStorage::open_with(&path, &before).unwrap());
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "PRAGMA foreign_keys = ON;
+             INSERT INTO sources (name, connector, selector, scope, freshness_rule, window_start, keep_original) VALUES ('project', 'github', 'o/p', 'personal', 'daily', '2026-11-01T00:00:00.000Z', 0);
+             INSERT INTO runs (id, source, scope, plugin_id, plugin_version, started_at, status)
+             VALUES (1, 'project', 'personal', 'p', '1', '2026-11-01T00:00:00.000Z', 'ok');
+             INSERT INTO evidence (id, source, scope, location, field, start, end, quote, captured_at, trust_class)
+             VALUES (1, 'project', 'personal', 'l', '/login', 0, 3, 'abc', '2026-11-01T00:00:00.000Z', 'structured');
+             INSERT INTO entity (id, identifier) VALUES ('e_1', 'github:account/1'), ('e_2', 'github:account/2');
+             INSERT INTO claim (id, subject, predicate, object_value, object_datatype, scalar, status, revision, known_since)
+             VALUES ('c_1', 'e_1', 'rastro:alias', 'abc', 'login', 1, 'observed', 'r_1', '2026-11-01T00:00:00.000Z'),
+                    ('c_2', 'e_1', 'rastro:alias', 'old', 'login', 1, 'superseded', 'r_2', '2026-10-01T00:00:00.000Z');
+             INSERT INTO justification (id, claim_id, kind, extractor, extractor_version, vocabulary_version, derivation_key, extraction_rule, run_id, current)
+             VALUES ('j_1', 'c_1', 'provenance', 'x', '1', 'v', 'd', 'rule', 1, 1);
+             INSERT INTO justification_span VALUES ('j_1', 1, 'v_1', '/login', 0, 3);
+             INSERT INTO occurrence (id, justification_id, source, scope, location, field, captured_at, portable_key, evidence_id)
+             VALUES ('o_1', 'j_1', 'project', 'personal', 'l', '/login', '2026-11-01T00:00:00.000Z', 'v_1', 1);
+             INSERT INTO claim_link VALUES ('c_1', 'c_2', 'supersedes');
+             INSERT INTO intent_justification (id, claim_id, intent_id) VALUES ('ij_1', 'c_2', 'i_1');",
+        )
+        .unwrap();
+    drop(connection);
+
+    drop(SqliteStorage::open(&path).unwrap());
+    let connection = Connection::open(&path).unwrap();
+    let count = |sql: &str| -> i64 { connection.query_row(sql, [], |r| r.get(0)).unwrap() };
+    for table in [
+        "entity",
+        "justification",
+        "justification_span",
+        "occurrence",
+        "claim_link",
+        "intent_justification",
+    ] {
+        let rows = count(&format!("SELECT count(*) FROM {table}"));
+        assert!(rows >= 1, "{table} lost its rows");
+    }
+    assert_eq!(count("SELECT count(*) FROM claim"), 2);
+    assert_eq!(
+        count(
+            "SELECT count(*) FROM claim WHERE id = 'c_1' AND status = 'observed' AND revision = 'r_1'"
+        ),
+        1
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM claim WHERE id = 'c_2' AND status = 'superseded'"),
+        1
+    );
+    assert_eq!(count("SELECT count(*) FROM pragma_foreign_key_check"), 0);
+    // The new statuses are accepted, the old rule still refuses an unknown one, and the keys
+    // that name a claim still hold.
+    connection
+        .execute_batch("UPDATE claim SET status = 'confirmed' WHERE id = 'c_1'; UPDATE claim SET status = 'retracted' WHERE id = 'c_2';")
+        .unwrap();
+    assert!(
+        connection
+            .execute("UPDATE claim SET status = 'maybe' WHERE id = 'c_1'", [])
+            .is_err()
+    );
+    connection
+        .execute_batch("PRAGMA foreign_keys = ON")
+        .unwrap();
+    assert!(
+        connection
+            .execute(
+                "INSERT INTO claim_link VALUES ('c_1', 'c_gone', 'supersedes')",
+                []
+            )
+            .is_err()
+    );
+    assert_eq!(
+        count(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'index' AND tbl_name = 'claim' AND name LIKE 'claim_%'"
+        ),
+        3
+    );
 }

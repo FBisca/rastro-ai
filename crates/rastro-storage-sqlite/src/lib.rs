@@ -1,4 +1,4 @@
-use anyhow::{Result, bail};
+use anyhow::{Result, bail, ensure};
 use chrono::{DateTime, SecondsFormat, Utc};
 use rastro_core::claims::{Checkpoint, ClaimView, Entity, Object, ObservedClaim};
 use rastro_core::{
@@ -30,7 +30,10 @@ pub use scoped::{cache_len as scoped_cache_len, clear_cache as clear_scoped_cach
 /// The migration recording when an intent's contribution ended; an open that applies it replays
 /// the stored intents once all migrations are in.
 const INTENT_END: &str = "202611081000_intent_justification_end";
-const MIGRATIONS: [(&str, &str); 18] = [
+/// A migration that starts with this line rebuilds a table other tables name, so the open runs
+/// it with foreign keys off and checks them before it commits.
+const FOREIGN_KEYS_OFF: &str = "-- foreign_keys = off";
+const MIGRATIONS: [(&str, &str); 19] = [
     (
         "202611041200_initial",
         include_str!("../migrations/202611041200_initial.sql"),
@@ -103,6 +106,10 @@ const MIGRATIONS: [(&str, &str); 18] = [
         "202611141200_shown_statements",
         include_str!("../migrations/202611141200_shown_statements.sql"),
     ),
+    (
+        "202611181000_claim_statuses",
+        include_str!("../migrations/202611181000_claim_statuses.sql"),
+    ),
 ];
 
 fn stamp(time: DateTime<Utc>) -> String {
@@ -115,6 +122,47 @@ fn parse_time(text: String) -> Result<DateTime<Utc>> {
 pub struct SqliteStorage {
     connection: Connection,
 }
+/// Applies one migration in its own transaction unless it is already in; true when it applied.
+/// One that rebuilds a table other tables name runs with foreign keys off and checks them before
+/// it commits.
+fn apply_migration(connection: &mut Connection, name: &str, sql: &str) -> Result<bool> {
+    let rebuilds = sql.starts_with(FOREIGN_KEYS_OFF);
+    if rebuilds {
+        // The pragma does nothing inside a transaction, so it is set around it.
+        connection.execute_batch("PRAGMA foreign_keys = OFF")?;
+    }
+    let applied = (|| -> Result<bool> {
+        let transaction =
+            connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let done: bool = transaction.query_row(
+            "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = ?1)",
+            [name],
+            |row| row.get(0),
+        )?;
+        if !done {
+            transaction.execute_batch(sql)?;
+            if rebuilds {
+                let broken: i64 = transaction.query_row(
+                    "SELECT count(*) FROM pragma_foreign_key_check",
+                    [],
+                    |row| row.get(0),
+                )?;
+                ensure!(
+                    broken == 0,
+                    "migration {name} left {broken} rows naming a row that is gone"
+                );
+            }
+            mark(&transaction, name)?;
+        }
+        transaction.commit()?;
+        Ok(!done)
+    })();
+    if rebuilds {
+        connection.execute_batch("PRAGMA foreign_keys = ON")?;
+    }
+    applied
+}
+
 impl SqliteStorage {
     pub fn open(path: &Path) -> Result<Self> {
         Self::open_with(path, &MIGRATIONS)
@@ -180,19 +228,9 @@ impl SqliteStorage {
         transaction.commit()?;
         let mut replay = false;
         for (name, sql) in migrations {
-            let transaction =
-                connection.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-            let done: bool = transaction.query_row(
-                "SELECT EXISTS (SELECT 1 FROM schema_migrations WHERE name = ?1)",
-                [name],
-                |row| row.get(0),
-            )?;
-            if !done {
-                transaction.execute_batch(sql)?;
+            if apply_migration(&mut connection, name, sql)? {
                 replay |= name == INTENT_END;
-                mark(&transaction, name)?;
             }
-            transaction.commit()?;
         }
         if replay {
             // The intents already stored replay once, after every migration, so today's replay
@@ -208,6 +246,7 @@ impl SqliteStorage {
                     transaction.execute_batch("CREATE TEMP TABLE automatic_justification (id TEXT PRIMARY KEY, claim_id TEXT, reason TEXT, premise_a TEXT, premise_b TEXT, started_at TEXT, ended_at TEXT)")?;
                 }
                 identity::apply(&transaction)?;
+                lifecycle::settle(&transaction)?;
                 lifecycle::publish(&transaction)?;
                 if !automatic_table {
                     transaction.execute_batch("DROP TABLE temp.automatic_justification")?;
@@ -810,6 +849,7 @@ impl Storage for SqliteStorage {
         }
         if !lifecycle::staging(&transaction)? {
             automatic::apply(&transaction)?;
+            lifecycle::settle(&transaction)?;
             lifecycle::publish(&transaction)?;
         }
         transaction.commit()?;
@@ -838,6 +878,7 @@ impl Storage for SqliteStorage {
         let stored = identity::insert_all(&transaction, sees, intents)?;
         identity::apply(&transaction)?;
         automatic::apply(&transaction)?;
+        lifecycle::settle(&transaction)?;
         // An intent write changes the projection, so it publishes like any other projection write.
         lifecycle::publish(&transaction)?;
         transaction.commit()?;
@@ -1008,6 +1049,16 @@ impl Snapshot for View<'_> {
         }
         Ok(labels)
     }
+    fn claim_lifecycle(&self, claim: &str) -> Result<Option<rastro_core::claims::ClaimLifecycle>> {
+        Ok(
+            lifecycle::fingerprint(self.0, claim)?.map(|(fingerprint, scalar)| {
+                rastro_core::claims::ClaimLifecycle {
+                    fingerprint,
+                    scalar,
+                }
+            }),
+        )
+    }
     fn intents(&self) -> Result<Vec<rastro_core::identity::Intent>> {
         identity::load(self.0)
     }
@@ -1067,7 +1118,7 @@ impl Snapshot for View<'_> {
         let mut query = self.0.prepare_cached(&format!(
             "SELECT subject, predicate, object_value, known_at FROM (
                  SELECT c.subject, c.predicate, c.object_value, c.known_since AS known_at
-                 FROM claim c WHERE c.predicate LIKE 'std:%' AND c.status = 'observed'
+                 FROM claim c WHERE c.predicate LIKE 'std:%' AND c.status IN ('observed', 'confirmed')
                    AND c.object_value IS NOT NULL AND c.known_since <> ''
                    AND (?1 OR {} OR {})
                  UNION ALL
@@ -1075,7 +1126,7 @@ impl Snapshot for View<'_> {
                  FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id
                  JOIN claim c ON c.id = ij.claim_id
                  WHERE c.predicate LIKE 'std:%' AND c.object_value IS NOT NULL
-                   AND ij.ended_at IS NULL AND (?1 OR {})
+                   AND i.kind <> 'confirm' AND ij.ended_at IS NULL AND (?1 OR {})
              )",
             scoped::VISIBLE_CLAIM,
             scoped::VISIBLE_INTENT_CLAIM,

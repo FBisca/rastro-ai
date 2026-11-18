@@ -389,6 +389,12 @@ operations! {
             slot: 21, name: "meeting.export", surfaces: [Cli], read_only: true
         },
     }
+    /// Correct claims you read. Writes are CLI only.
+    Claim / ClaimRequest {
+        Confirm(ClaimConfirmRequest => ClaimWriteResult) as ClaimConfirm {
+            slot: 30, name: "claim.confirm", surfaces: [Cli], read_only: false
+        },
+    }
     /// Owner identity: Persons, links between accounts and Persons, and merges. Writes are CLI only.
     Identity / IdentityRequest {
         Me(IdentityMeRequest => IdentityPersonResult) as IdentityMe {

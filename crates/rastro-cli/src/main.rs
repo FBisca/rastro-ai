@@ -895,6 +895,15 @@ fn human(response: &Response) -> String {
         | Response::IdentityAnswer(r) => {
             intents_text(&r.intents, "Already in force; nothing recorded")
         }
+        Response::ClaimConfirm(r) => match r.intents.first() {
+            Some(intent) => format!(
+                "confirmed {} (intent {}, {})",
+                r.claim,
+                intent.id,
+                intent.issued_at.format("%Y-%m-%d %H:%M")
+            ),
+            None => format!("{} is already confirmed; nothing recorded", r.claim),
+        },
         Response::IdentityCandidates(r) => candidates_text(r),
         Response::IdentityHistory(r) => match &r.entity {
             Some(entity) => format!(
