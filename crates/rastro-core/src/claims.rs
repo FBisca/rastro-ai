@@ -250,7 +250,7 @@ pub fn intent_justification_id_with_ordinal(claim: &str, intent: &str, ordinal: 
         &[(b'C', claim), (b'I', intent), (b'N', &ordinal.to_string())],
     )
 }
-/// The lifecycle fingerprint of a claim (ADR 0013): the hash of the claim id, the key of its
+/// The lifecycle fingerprint of a claim (ADR 0014): the hash of the claim id, the key of its
 /// primary live justification (`None` when none is live) and its sorted `conflicts_with` and
 /// `supersedes` links, each as (kind, other claim). It leaves out the claim's status, its revision
 /// and every correction, so correcting a claim never changes the state the correction binds to,

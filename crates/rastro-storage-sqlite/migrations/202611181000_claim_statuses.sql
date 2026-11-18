@@ -1,5 +1,5 @@
 -- foreign_keys = off
--- A claim can read `confirmed` or `retracted` as well as `observed` or `superseded` (ADR 0013).
+-- A claim can read `confirmed` or `retracted` as well as `observed` or `superseded` (ADR 0014).
 -- SQLite can't change a CHECK in place, so the table is rebuilt the way its documentation says:
 -- the open runs this migration with foreign keys off, then checks them before it commits. Every
 -- claim and every row that names one is kept, with its status; the projection stays rebuildable.

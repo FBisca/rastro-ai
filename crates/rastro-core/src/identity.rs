@@ -139,7 +139,7 @@ impl ClaimStatement {
         claims::claim_id(&self.subject.id, &self.predicate, &self.object)
     }
 }
-/// The lifecycle state an intent binds to (ADR 0013), versioned so the definition can change.
+/// The lifecycle state an intent binds to (ADR 0014), versioned so the definition can change.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct LifecycleBinding {

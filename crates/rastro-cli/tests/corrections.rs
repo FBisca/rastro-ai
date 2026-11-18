@@ -383,6 +383,7 @@ fn rows(env: &Env) -> (Vec<String>, Vec<String>) {
 }
 
 // spec: Corrections replay at rebuild
+// Partial: S20 also names retracted and fixed claims; those are covered once reject and edit exist.
 #[test]
 fn a_rebuild_brings_every_confirmation_back_with_the_same_ids_and_statuses() {
     let env = Env::new();

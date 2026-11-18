@@ -562,7 +562,7 @@ fn visible_links(db: &Connection, id: &str) -> Result<Vec<(String, String)>> {
     }
     Ok(found)
 }
-/// The lifecycle fingerprint of a claim and whether it is scalar (ADR 0013). Its primary live
+/// The lifecycle fingerprint of a claim and whether it is scalar (ADR 0014). Its primary live
 /// justification is the one that has held longest: an open occurrence of evidence, a live
 /// automatic link, or a live owner intent that is not itself a correction, by start and then key.
 pub(crate) fn fingerprint(db: &Connection, id: &str) -> Result<Option<(String, bool)>> {
@@ -597,7 +597,7 @@ pub(crate) fn fingerprint(db: &Connection, id: &str) -> Result<Option<(String, b
     )))
 }
 /// Reads every claim an owner confirmation holds as `confirmed`, whatever status its evidence or
-/// its intents gave it (ADR 0013). Runs last in every path that writes a status, so an incremental
+/// its intents gave it (ADR 0014). Runs last in every path that writes a status, so an incremental
 /// write, a rebuild and a scoped replay agree. A confirmation holds while its `intent_justification`
 /// does not end.
 pub(crate) fn settle(db: &Connection) -> Result<()> {

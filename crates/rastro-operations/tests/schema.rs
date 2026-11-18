@@ -31,7 +31,7 @@ fn property_names(schema: &serde_json::Value) -> Vec<&str> {
     names
 }
 
-/// A claim's status gains `confirmed` and `retracted` (ADR 0013): every claim status enum is
+/// A claim's status gains `confirmed` and `retracted` (ADR 0014): every claim status enum is
 /// reduced to the two it had, after checking it holds the four.
 fn remove_correction_statuses(value: &mut serde_json::Value) {
     match value {
