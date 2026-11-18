@@ -7,6 +7,11 @@
 - Treat `Cargo.toml`, `rust-toolchain.toml`, `.config/nextest.toml`, and `.github/workflows/ci.yml` as the sources for workspace configuration, toolchain, test runner, and CI gates.
 - Report checks run, their results, and any skipped checks with the reason. A filtered run that executes zero tests is not evidence.
 
+## Specs
+
+- A spec under `docs/specs/` states its requirements only as `### Requirement: <Title>` blocks: one sentence saying what SHALL hold, then `#### Scenario:` WHEN/THEN bullets. Nothing else is a requirement.
+- A test proving a requirement carries its exact title: `// spec: <Title>` on the line above `#[test]`, or `# spec: <Title>` in a Python test. Run `python3 scripts/spec_coverage.py` after changing a requirement or a tag; CI runs it, and its own tests are `python3 scripts/test_spec_coverage.py`.
+
 ## Product and architecture
 
 - `docs/concept.md` is the north star. A change that contradicts it is either rejected or comes with an edit to the concept that the owner agreed to.

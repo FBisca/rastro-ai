@@ -5,3 +5,8 @@ checks:
   affected: scripts/affected-tests.sh {paths}
   full:
     run: cargo nextest run --workspace
+# Plan discovery and how a finished plan lands its requirements in its spec.
+plans:
+  dir: docs/plans
+archive:
+  mode: promote
