@@ -337,7 +337,8 @@ mod tests {
         }
     }
 
-    /// identity/R21: a name folds case, accents (precomposed or combining) and runs of whitespace
+    /// spec: One folded name makes a candidate
+    /// A name folds case, accents (precomposed or combining) and runs of whitespace
     #[test]
     fn a_name_folds_case_and_accents() {
         assert_eq!(fold_name("Ana SÍLVA"), "ana silva");
@@ -349,7 +350,8 @@ mod tests {
         assert_ne!(fold_name("Ana Silva"), fold_name("Ana Silveira"));
     }
 
-    /// identity/R21: names equal after case and accent folding are a `same name` signal; other names aren't
+    /// spec: One folded name makes a candidate
+    /// Names equal after case and accent folding are a `same name` signal; other names aren't
     #[test]
     fn names_equal_after_case_and_accent_folding_are_a_same_name_signal() {
         let github = facts("github:account/1", &["Ana Silva"], &["asilva"], &[]);
@@ -367,7 +369,8 @@ mod tests {
         assert!(reasons(&one, &two).is_empty());
     }
 
-    /// identity/R22: an email whose local part equals the other account's login (ASCII case-folded) is an
+    /// spec: An email matching a login makes a candidate
+    /// An email whose local part equals the other account's login (ASCII case-folded) is an
     /// `email matches login` signal, each value in its own account's place
     #[test]
     fn an_email_local_part_equal_to_a_login_is_a_signal() {
@@ -391,7 +394,8 @@ mod tests {
         assert!(reasons(&github, &other).is_empty());
     }
 
-    /// identity/R25: a pair within one namespace, or with an entity not typed only as an account (a bot),
+    /// spec: One namespace or a bot is never a candidate
+    /// A pair within one namespace, or with an entity not typed only as an account (a bot),
     /// is never a candidate; a pair across namespaces with a signal is, in identifier order
     #[test]
     fn pairs_in_one_namespace_or_with_a_bot_are_never_candidates() {
@@ -412,7 +416,8 @@ mod tests {
         assert!(candidate_pairs(&[github, twin, bot], &none).is_empty());
     }
 
-    /// identity/R23: a pair one Person holds, directly or through a merge, is no longer a candidate; with
+    /// spec: A yes holds both accounts by one Person
+    /// A pair one Person holds, directly or through a merge, is no longer a candidate; with
     /// one account held, it still is, and names its holder
     #[test]
     fn a_pair_one_person_holds_is_not_a_candidate() {
@@ -429,7 +434,8 @@ mod tests {
         assert!(candidate_pairs(&apart, &r).is_empty());
     }
 
-    /// identity/R24: a cannot-link between the two accounts, or between one and the Person holding the
+    /// spec: A no records a cannot-link
+    /// A cannot-link between the two accounts, or between one and the Person holding the
     /// other, keeps the pair out
     #[test]
     fn a_refused_pair_is_not_a_candidate() {
@@ -446,7 +452,8 @@ mod tests {
         assert!(candidate_pairs(&[held(&github, &p), linear], &r).is_empty());
     }
 
-    /// identity/R24: a no records one cannot-link between the two accounts, after which the pair is no
+    /// spec: A no records a cannot-link
+    /// A no records one cannot-link between the two accounts, after which the pair is no
     /// candidate and answering it again is refused
     #[test]
     fn a_no_records_a_cannot_link_between_the_two_accounts() {
@@ -468,7 +475,8 @@ mod tests {
         assert!(error.contains("not a candidate pair"), "{error}");
     }
 
-    /// identity/R23: a yes to a pair neither account of which is held creates a Person named from the
+    /// spec: A yes holds both accounts by one Person
+    /// A yes to a pair neither account of which is held creates a Person named from the
     /// candidate and links both; with one account held, it links only the other, to that Person
     #[test]
     fn a_yes_links_both_accounts_to_one_person() {

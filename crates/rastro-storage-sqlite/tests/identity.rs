@@ -226,7 +226,8 @@ fn count(path: &std::path::Path) -> i64 {
         .unwrap()
 }
 
-/// identity/R7: an intent issued from a context whose scopes can't see its target is refused at the
+/// spec: An issuer cannot act on what it cannot see
+/// An intent issued from a context whose scopes can't see its target is refused at the
 /// storage seam, and nothing is stored
 #[test]
 fn an_intent_whose_issuer_cannot_see_its_target_is_refused() {
@@ -265,7 +266,8 @@ fn an_intent_whose_issuer_cannot_see_its_target_is_refused() {
     assert_eq!(count(&path), 3);
 }
 
-/// identity/R32: a link whose account side no vocabulary declares an account (a pull request, a
+/// spec: Only account types may be linked
+/// A link whose account side no vocabulary declares an account (a pull request, a
 /// repository, a bot, an untyped entity) is refused at the storage seam with an error naming the
 /// reason, and nothing is stored; an account of any vocabulary links as before
 #[test]
@@ -327,7 +329,8 @@ fn a_link_whose_account_side_isnt_typed_as_an_account_is_refused() {
     assert_eq!(count(&path), 3);
 }
 
-/// identity/R32: a refusal never names a type the issuer can't see: an account another scope types a
+/// spec: Only account types may be linked
+/// A refusal never names a type the issuer can't see: an account another scope types a
 /// bot is refused for a scoped issuer without naming the bot, and for an unscoped one by name
 #[test]
 fn a_refusal_never_names_a_type_from_a_scope_the_issuer_cannot_see() {
@@ -361,7 +364,8 @@ fn a_refusal_never_names_a_type_from_a_scope_the_issuer_cannot_see() {
     assert_eq!(count(&path), 1);
 }
 
-/// identity/R8: an intent written after a scoped read was cached shows in the next scoped read
+/// spec: A write shows in the next scoped read
+/// An intent written after a scoped read was cached shows in the next scoped read
 #[test]
 fn an_intent_written_after_a_cached_scoped_read_shows_in_the_next_one() {
     let home = tempfile::tempdir().unwrap();
@@ -401,7 +405,8 @@ fn an_intent_written_after_a_cached_scoped_read_shows_in_the_next_one() {
     assert!(hidden.is_empty());
 }
 
-/// identity/R6: the intent table is insert-only: no update, no delete, no replace, and a malformed row is
+/// spec: An invalid intent is refused and stores nothing
+/// The intent table is insert-only: no update, no delete, no replace, and a malformed row is
 /// refused by the table itself
 #[test]
 fn the_intent_table_is_insert_only() {
@@ -474,7 +479,8 @@ fn a_sync_keeps_the_claims_intents_back() {
     assert_eq!(claims(&db), 3);
 }
 
-/// identity/R7: `me` is visible in every scope; a Person with no linked account in none but the unscoped read
+/// spec: An issuer cannot act on what it cannot see
+/// `me` is visible in every scope; a Person with no linked account in none but the unscoped read
 #[test]
 fn me_is_visible_in_every_scope_and_an_unlinked_person_in_none() {
     let home = tempfile::tempdir().unwrap();
@@ -524,7 +530,8 @@ fn cannot_link(id: &str, a: &EntityTarget, b: &EntityTarget, scopes: &[&str]) ->
     )
 }
 
-/// identity/R7: an issuer that sees a Person only through its one link can undo that link: the undo and
+/// spec: An issuer cannot act on what it cannot see
+/// An issuer that sees a Person only through its one link can undo that link: the undo and
 /// its cannot-link are checked against the state the issuer saw, not one the batch changed
 #[test]
 fn a_scoped_issuer_can_undo_a_persons_only_link() {
@@ -546,7 +553,8 @@ fn a_scoped_issuer_can_undo_a_persons_only_link() {
     assert_eq!(count(&path), 4);
 }
 
-/// identity/R6: storage refuses what the ADR refuses, whoever builds the intent: a link from a Person or
+/// spec: An invalid intent is refused and stores nothing
+/// Storage refuses what the ADR refuses, whoever builds the intent: a link from a Person or
 /// to an account, a merge of entities that aren't both Persons, an undo of a cannot-link, an undo
 /// or a Person's creation, a second `me`, and a second creation of one Person
 #[test]
@@ -614,7 +622,8 @@ fn storage_refuses_invalid_intents_whoever_builds_them() {
     }
 }
 
-/// identity/R8: an intent write publishes the projection, as any other projection write does
+/// spec: A write shows in the next scoped read
+/// An intent write publishes the projection, as any other projection write does
 #[test]
 fn an_intent_write_publishes_the_projection() {
     let home = tempfile::tempdir().unwrap();
@@ -654,7 +663,8 @@ fn named(id: &str, person: &EntityTarget, name: &str, minutes: i64) -> Intent {
     named
 }
 
-/// identity/R30: `about me` whose accounts' claims exceed the work budget fails with the budget error,
+/// spec: About me fails rather than answer partially
+/// `about me` whose accounts' claims exceed the work budget fails with the budget error,
 /// scoped or not, instead of answering partially; a merged Person's whole class is under the
 /// same budget
 #[test]
@@ -711,7 +721,8 @@ fn about_me_over_the_work_budget_fails_instead_of_answering_partially() {
     }
 }
 
-/// identity/R33: naming a Person again keeps the older name as a superseded alias, its interval closed at
+/// spec: An undone claim stays superseded
+/// Naming a Person again keeps the older name as a superseded alias, its interval closed at
 /// the newer name's time; the older name still resolves to the Person (historical), and so does
 /// the newer (current)
 #[test]
@@ -791,7 +802,8 @@ fn same_as(id: &str, a: &EntityTarget, b: &EntityTarget) -> Intent {
     merge
 }
 
-/// identity/R30: a merge chain through a Person the scope set can't see costs nothing past it: `about P`
+/// spec: About me fails rather than answer partially
+/// A merge chain through a Person the scope set can't see costs nothing past it: `about P`
 /// in `personal`, with P–Q–R merged and Q held only through a `work` account, replays only P's
 /// own account, so the budget P alone needs is enough
 #[test]
@@ -837,7 +849,8 @@ fn a_merge_chain_through_a_hidden_person_adds_no_work_past_it() {
     );
 }
 
-/// identity/R33: undoing a name a newer one had already replaced ends it at the replacement, not at the
+/// spec: An undone claim stays superseded
+/// Undoing a name a newer one had already replaced ends it at the replacement, not at the
 /// undo, so the two names never overlap
 #[test]
 fn undoing_an_already_replaced_name_ends_it_at_the_replacement() {
@@ -888,7 +901,8 @@ fn undoing_an_already_replaced_name_ends_it_at_the_replacement() {
     assert_eq!(intervals[0].start, time() + chrono::Duration::minutes(2));
 }
 
-/// identity/R34: undoing a newer name leaves a gap in the older one: name A at t1, B at t2, undo B at t3
+/// spec: Undoing a newer name leaves a gap
+/// Undoing a newer name leaves a gap in the older one: name A at t1, B at t2, undo B at t3
 /// gives A [t1, t2) and [t3, open), and B [t2, t3)
 #[test]
 fn undoing_a_newer_name_leaves_a_gap_in_the_older_one() {
@@ -952,7 +966,8 @@ fn undoing_a_newer_name_leaves_a_gap_in_the_older_one() {
     assert_eq!(format!("{again:?}"), format!("{claims:?}"));
 }
 
-/// identity/R29: a scoped read replays the scope's identity premises (verified emails, token owners and
+/// spec: A scoped read equals a per-scope rebuild
+/// A scoped read replays the scope's identity premises (verified emails, token owners and
 /// their subjects' type and alias claims), never every visible claim: an unknown entity costs
 /// only those
 #[test]
@@ -977,7 +992,8 @@ fn a_scoped_read_replays_only_identity_premises() {
     assert!(answer.unwrap().is_empty());
 }
 
-/// identity/R29: a scoped view of a Person replays the claims of the accounts it holds automatically, not
+/// spec: A scoped read equals a per-scope rebuild
+/// A scoped view of a Person replays the claims of the accounts it holds automatically, not
 /// only their identity premises (two phases)
 #[test]
 fn a_scoped_person_view_replays_its_automatically_held_accounts() {
@@ -1090,7 +1106,8 @@ fn viewer(
         .unwrap();
 }
 
-/// identity/R17: a Linear key that switches from its owner to an app closes the owner's token-owner link
+/// spec: The Linear key owner holds me
+/// A Linear key that switches from its owner to an app closes the owner's token-owner link
 /// at the newer viewer read, in a scoped read as in the unscoped one, though only the app's type
 /// claim cites that newer read
 #[test]
@@ -1153,7 +1170,9 @@ fn a_linear_key_switching_to_an_app_closes_the_token_link_in_scope_too() {
     assert_eq!(scoped, full);
 }
 
-/// identity/R21, identity/R25: the candidate rules read each entity's current name, login and email aliases, the
+/// spec: One folded name makes a candidate
+/// spec: One namespace or a bot is never a candidate
+/// The candidate rules read each entity's current name, login and email aliases, the
 /// Persons holding it now, and whether every current type of it is an account (a bot's isn't)
 #[test]
 fn storage_reads_the_facts_the_candidate_rules_need() {
@@ -1212,11 +1231,12 @@ fn storage_reads_the_facts_the_candidate_rules_need() {
     assert!(!bot.account);
 }
 
-/// identity/R37: scoped token windows keep the longer token interval
+/// Scoped token windows keep the longer token interval
 #[expect(
     clippy::too_many_lines,
     reason = "the scenario seeds an owner, an account and their overlapping windows and reads the scoped projection once"
 )]
+/// spec: The Linear key owner holds me
 #[test]
 fn scoped_token_windows_keep_the_longer_token_interval() {
     fn viewer(
