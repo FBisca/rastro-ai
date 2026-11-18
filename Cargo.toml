@@ -23,3 +23,12 @@ cognitive_complexity = "warn"
 too_many_arguments = "warn"
 fn_params_excessive_bools = "warn"
 struct_excessive_bools = "warn"
+
+# Dev builds keep only line tables for workspace crates and drop debug info for dependencies.
+# Full debug info is most of `target/`, and every worktree builds its own; line tables still give
+# backtraces and panics their file and line.
+[profile.dev]
+debug = "line-tables-only"
+
+[profile.dev.package."*"]
+debug = false
