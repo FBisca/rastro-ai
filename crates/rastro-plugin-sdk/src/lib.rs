@@ -973,7 +973,7 @@ evidence_requirement = "r"
     }
 
     /// claims/R20: an alias kind with `/`, `:` or whitespace is refused
-    /// spec: The core refuses a vocabulary it cannot hold
+    /// spec: Alias kinds and values are checked
     #[test]
     fn an_alias_kind_with_a_separator_or_whitespace_is_refused() {
         for kind in ["", "a/b", "a:b", "a b", "a\tb"] {
@@ -1020,7 +1020,6 @@ evidence_requirement = "r"
     }
 
     /// claims/R5: a supertype relates two types so they do not conflict
-    /// spec: A type must come from the submission that uses it
     #[test]
     fn a_supertype_relates_two_types_so_they_do_not_conflict() {
         let text = format!(
@@ -1067,7 +1066,6 @@ evidence_requirement = "r"
     }
 
     /// claims/R20: a supertype cycle is refused
-    /// spec: The core refuses a vocabulary it cannot hold
     #[test]
     fn a_supertype_cycle_is_refused() {
         let text = format!(
@@ -1079,7 +1077,6 @@ evidence_requirement = "r"
     }
 
     /// claims/R20: a range names a defined type or a known datatype
-    /// spec: The core refuses a vocabulary it cannot hold
     #[test]
     fn a_range_names_a_defined_type_or_a_known_datatype() {
         for bad in ["x:Missing", "rastro:type", "text"] {

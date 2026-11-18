@@ -228,7 +228,6 @@ fn entity_types_are_never_stored_as_a_column() {
 }
 
 /// claims/R29: temp shadow tables match the migrated projection tables
-/// spec: A failed rebuild leaves the previous projection
 #[test]
 fn temp_shadow_tables_match_the_migrated_projection_tables() {
     let home = tempfile::tempdir().unwrap();
@@ -265,7 +264,6 @@ fn temp_shadow_tables_match_the_migrated_projection_tables() {
 
 /// claims/R58: the owner-intent migration adds the insert-only intent table and leaves the projection a
 /// database already holds in place: no claim is lost to the upgrade
-/// spec: A rebuild reproduces every intent-backed claim
 #[test]
 fn the_owner_intent_migration_keeps_the_existing_projection() {
     let home = tempfile::tempdir().unwrap();

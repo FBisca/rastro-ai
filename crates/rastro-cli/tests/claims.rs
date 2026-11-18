@@ -408,7 +408,6 @@ fn claims_with_untrusted_undelivered_outside_or_nondeterministic_supports_are_re
 
 /// claims/R2: an extractor that submits more claims than the run allows fails, and nothing of the
 /// run is stored
-/// spec: A support that fails its check rejects the claim
 #[test]
 fn an_extractor_exceeding_the_claim_cap_fails_and_stores_nothing() {
     let env = Env::new(Some("test-extractor"));
@@ -647,7 +646,6 @@ const ELSEWHERE: &str = "https://github.com/o/p/pull/2";
 
 /// claims/R48: unrelated types at different locations conflict both ways, neither supersedes
 /// spec: Unrelated types at different locations conflict
-/// spec: The newer comparable observation wins its slot
 #[test]
 fn unrelated_types_at_different_locations_conflict_and_neither_supersedes() {
     let env = two_type_sources();
@@ -1669,7 +1667,6 @@ fn read_only_states(env: &Env) -> Vec<(String, String, String)> {
 }
 
 /// claims/R26: read only extraction state reads running only while a sync holds the lock
-/// spec: A failed extraction fails the sync and keeps reads whole
 #[test]
 fn read_only_extraction_state_reads_running_only_while_a_sync_holds_the_lock() {
     let env = Env::new(Some("test-extractor"));
@@ -1703,7 +1700,6 @@ fn read_only_extraction_state_reads_running_only_while_a_sync_holds_the_lock() {
 }
 
 /// claims/R26: a scoped reader sees only the extraction state of its scopes
-/// spec: A failed extraction fails the sync and keeps reads whole
 #[test]
 fn a_scoped_reader_sees_only_the_extraction_state_of_its_scopes() {
     let env = Env::new(Some("test-extractor"));
@@ -1733,7 +1729,6 @@ fn a_scoped_reader_sees_only_the_extraction_state_of_its_scopes() {
 }
 
 /// claims/R26: not installed outranks an unfinished run and a failed check still names its version
-/// spec: A failed extraction fails the sync and keeps reads whole
 #[test]
 fn not_installed_outranks_an_unfinished_run_and_a_failed_check_still_names_its_version() {
     let env = Env::new(Some("missing-extractor"));
@@ -1838,7 +1833,7 @@ fn evidence_stored_before_the_connector_failed_is_extracted_by_the_next_sync() {
 }
 
 /// claims/R26: a vocabulary version bump alone reads behind until the replay succeeds
-/// spec: A failed extraction fails the sync and keeps reads whole
+/// spec: Reads carry coverage and extraction state per pair
 #[test]
 fn a_vocabulary_version_bump_alone_reads_behind_until_the_replay_succeeds() {
     let env = Env::new(Some("test-extractor"));

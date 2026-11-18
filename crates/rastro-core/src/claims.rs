@@ -742,7 +742,6 @@ mod tests {
     }
 
     /// claims/R17: a rastro type claim names its subjects own vocabulary type
-    /// spec: A renamed account keeps its entity and both logins
     #[test]
     fn a_rastro_type_claim_names_its_subjects_own_vocabulary_type() {
         assert!(
@@ -764,7 +763,6 @@ mod tests {
     }
 
     /// claims/R17: a rastro alias is a declared kind quoted exactly by its support
-    /// spec: A renamed account keeps its entity and both logins
     #[test]
     fn a_rastro_alias_is_a_declared_kind_quoted_exactly_by_its_support() {
         let claim = check(submit(ALIAS_PREDICATE, "x:Account", "octocat", "login")).unwrap();

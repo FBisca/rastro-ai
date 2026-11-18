@@ -186,7 +186,6 @@ fn fresh_databases_with_other_local_ids_keep_revisions_and_ids() {
 }
 
 /// claims/R4: all required spans of one evidence are retained as an and bundle
-/// spec: One failing span rejects the whole claim
 #[test]
 fn all_required_spans_of_one_evidence_are_retained_as_an_and_bundle() {
     let home = tempfile::tempdir().unwrap();
