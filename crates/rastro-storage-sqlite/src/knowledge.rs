@@ -22,6 +22,37 @@ pub(super) const ALIAS_CLAIMS: &str = "SELECT c.id AS claim, c.subject, e.identi
 const NOT_LOOKED_UP: &str = "('hypothesis', 'retracted')";
 /// Statuses that mark a candidate (and an alias shown on a claim) as current.
 pub(crate) const CURRENT: &str = "('observed', 'confirmed')";
+
+/// The commitments accepted for this Person's side: the entities an `accept` or `edit` intent
+/// minted whose recorded parties include the Person, an account it holds, or a Person merged with
+/// it. Their standard statements belong to the Person's view, so `about me` shows what the owner
+/// accepted. A scoped replay's intent log holds every intent, so the claims themselves — copied
+/// only where their scope is visible — decide what a scope shows.
+fn accepted_commitments(
+    db: &rusqlite::Connection,
+    class: &BTreeSet<String>,
+    accounts: &BTreeSet<String>,
+) -> Result<BTreeSet<String>> {
+    use rastro_core::identity::{IntentKind, Targets};
+    let mut commitments = BTreeSet::new();
+    for intent in super::identity::load(db)? {
+        if !matches!(intent.kind, IntentKind::Accept | IntentKind::Edit) {
+            continue;
+        }
+        let Targets::Proposal {
+            subject: Some(subject),
+            parties,
+            ..
+        } = &intent.targets
+        else {
+            continue;
+        };
+        if (parties.iter()).any(|party| class.contains(&party.id) || accounts.contains(&party.id)) {
+            commitments.insert(subject.id.clone());
+        }
+    }
+    Ok(commitments)
+}
 impl View<'_> {
     fn aliases(&self, entity: &str) -> Result<Vec<String>> {
         let rows: Vec<(String, String, String)> = self.0.prepare(&format!("SELECT DISTINCT c.object_value, c.object_datatype, e.identifier FROM claim c JOIN entity e ON e.id = c.subject WHERE c.subject = ?1 AND c.predicate = 'rastro:alias' AND c.status IN {CURRENT} ORDER BY c.object_value"))?
@@ -354,7 +385,8 @@ impl View<'_> {
                 |r| r.get(0),
             )?
             .collect::<Result<_, _>>()?;
-        let view: BTreeSet<&String> = class.iter().chain(&accounts).collect();
+        let commitments = accepted_commitments(self.0, &class, &accounts)?;
+        let view: BTreeSet<&String> = class.iter().chain(&accounts).chain(&commitments).collect();
         let view = serde_json::to_string(&view)?;
         const TOUCHING: &str = "SELECT id FROM claim WHERE subject IN (SELECT value FROM json_each(?1)) \
              UNION SELECT id FROM claim WHERE object_entity IN (SELECT value FROM json_each(?1))";

@@ -4,14 +4,15 @@
 //! no longer holds is refused, naming the item and recording nothing. An accepted, edited or
 //! rejected proposal leaves the queue by that record; an answered question leaves because the
 //! identity graph no longer holds its pair as a candidate; a missed report leaves its item
-//! waiting. A rejection mints no claim.
+//! waiting. A rejection mints no claim; an accepted or edited proposal becomes one observed
+//! commitment, its standard terms justified by that intent alone.
 use super::{Item, read};
 use crate::identity::{
-    self, AnswerPerson, Intent, IntentKind, Payload, StatementSnapshot, Targets, plan_answer,
-    resolve,
+    self, AnswerPerson, EntityTarget, Intent, IntentKind, Payload, StandardTerm, StatementSnapshot,
+    Targets, commitment_target, plan_answer, resolve,
 };
 use crate::read_only::Snapshot;
-use crate::{Rastro, Storage};
+use crate::{Rastro, Storage, commitments};
 use anyhow::{Result, bail, ensure};
 use std::collections::BTreeSet;
 
@@ -73,33 +74,109 @@ fn statement(item: &Item) -> Result<StatementSnapshot> {
     })
 }
 
+/// The commitment an accepted proposal becomes and the Persons the item maps to parties: one
+/// `std:Commitment` of its own, named by the item's id, so each acceptance keeps its own
+/// statement set, and its parties carry it into their view, so `about me` shows what the owner
+/// accepted. A proposal whose parties name no Person can't become a claim.
+fn commitment(item: &Item) -> Result<(EntityTarget, Vec<EntityTarget>)> {
+    proposal(item)?;
+    let hypothesis = item.proposal.as_ref().expect("a proposal item carries one");
+    let parties: Vec<EntityTarget> = (hypothesis.responsible.identity.iter())
+        .chain(hypothesis.recipient.identity.iter())
+        .map(|identity| EntityTarget {
+            id: identity.id.clone(),
+            identifier: identity.identifier.clone(),
+            role: "person".into(),
+        })
+        .collect();
+    ensure!(
+        !parties.is_empty(),
+        "the queue can't accept {}: it names no party the owner mapped to a person",
+        item.id
+    );
+    Ok((commitment_target(&item.id), parties))
+}
+
+/// The standard terms an accepted proposal states, as the owner accepted them: the item's
+/// statements, with the stated date replaced by the owner's edit when they gave one. The
+/// standard vocabulary has no predicate for the promise, so an edited promise stays in the
+/// intent's snapshots rather than on a claim.
+fn accepted_terms(item: &Item, date: Option<&str>) -> Result<Vec<StandardTerm>> {
+    proposal(item)?;
+    let hypothesis = item.proposal.as_ref().expect("a proposal item carries one");
+    let mut terms: Vec<StandardTerm> = (super::statements(hypothesis))
+        .into_iter()
+        .map(|statement| StandardTerm {
+            predicate: statement.predicate,
+            value: statement.value,
+        })
+        .collect();
+    if let Some(date) = date {
+        match (terms.iter_mut()).find(|term| term.predicate == commitments::DUE) {
+            Some(term) => term.value = date.into(),
+            None => terms.push(StandardTerm {
+                predicate: commitments::DUE.into(),
+                value: date.into(),
+            }),
+        }
+    }
+    Ok(terms)
+}
+
+/// What an answer about a proposal records about the item it names: the statements the owner
+/// saw and made, the commitment an accept or an edit mints, and the item's source scope.
+#[derive(Default)]
+struct ProposalAnswer {
+    seen: Option<StatementSnapshot>,
+    edited: Option<StatementSnapshot>,
+    subject: Option<EntityTarget>,
+    parties: Vec<EntityTarget>,
+    terms: Vec<StandardTerm>,
+    scope: Option<String>,
+}
+
 /// The intent an answer about a proposal records.
 fn proposal_intent(
     kind: IntentKind,
     item: Option<String>,
     text: Option<String>,
-    seen: Option<StatementSnapshot>,
-    edited: Option<StatementSnapshot>,
+    answer: ProposalAnswer,
 ) -> Result<Intent> {
     let targets = Targets::Proposal {
         version: identity::SHAPE_VERSION,
         item,
         text,
-        seen,
-        edited,
+        seen: answer.seen,
+        edited: answer.edited,
+        subject: answer.subject,
+        parties: answer.parties,
+        terms: answer.terms,
+        scope: answer.scope,
     };
     identity::new_intent(kind, String::new(), targets, Payload::empty(), None)
 }
 
 impl<S: Storage> Rastro<S> {
-    /// Accepts a proposal unchanged: one intent, snapshotting what the owner saw.
+    /// Accepts a proposal unchanged: one intent, snapshotting what the owner saw and the
+    /// commitment it becomes.
     pub fn queue_accept(&mut self, item: &str) -> Result<Answered> {
         let id = item.to_string();
         let issued = self.issue(|view, _| {
             let pending = still_queued(view, &id)?;
-            let seen = statement(&pending)?;
-            let intent =
-                proposal_intent(IntentKind::Accept, Some(pending.id), None, Some(seen), None)?;
+            let (subject, parties) = commitment(&pending)?;
+            let intent = proposal_intent(
+                IntentKind::Accept,
+                Some(pending.id.clone()),
+                None,
+                ProposalAnswer {
+                    seen: Some(statement(&pending)?),
+                    subject: Some(subject),
+                    parties,
+                    terms: accepted_terms(&pending, None)?,
+                    scope: Some(pending.source.scope.clone()),
+                    ..ProposalAnswer::default()
+                },
+            )?;
             Ok((vec![intent], None, false))
         })?;
         Ok(Answered {
@@ -131,12 +208,19 @@ impl<S: Storage> Rastro<S> {
                 promise: promise.clone().unwrap_or_else(|| seen.promise.clone()),
                 stated_date: date.clone().or_else(|| seen.stated_date.clone()),
             };
+            let (subject, parties) = commitment(&pending)?;
             let intent = proposal_intent(
                 IntentKind::Edit,
-                Some(pending.id),
+                Some(pending.id.clone()),
                 None,
-                Some(seen),
-                Some(edited),
+                ProposalAnswer {
+                    seen: Some(seen),
+                    edited: Some(edited),
+                    subject: Some(subject),
+                    parties,
+                    terms: accepted_terms(&pending, date.as_deref())?,
+                    scope: Some(pending.source.scope.clone()),
+                },
             )?;
             Ok((vec![intent], None, false))
         })?;
@@ -157,10 +241,12 @@ impl<S: Storage> Rastro<S> {
             proposal(&pending)?;
             let intent = proposal_intent(
                 IntentKind::Reject,
-                Some(pending.id),
+                Some(pending.id.clone()),
                 Some(reason.clone()),
-                None,
-                None,
+                ProposalAnswer {
+                    scope: Some(pending.source.scope.clone()),
+                    ..ProposalAnswer::default()
+                },
             )?;
             Ok((vec![intent], None, false))
         })?;
@@ -182,11 +268,20 @@ impl<S: Storage> Rastro<S> {
         let text = text.to_string();
         let issued = self.issue(|view, _| {
             let named = match &id {
-                Some(id) => Some(still_queued(view, id)?.id),
+                Some(id) => Some(still_queued(view, id)?),
                 None => None,
             };
-            let intent =
-                proposal_intent(IntentKind::Missed, named, Some(text.clone()), None, None)?;
+            let scope = (named.as_ref()).map(|item| item.source.scope.clone());
+            let named = (named.as_ref()).map(|item| item.id.clone());
+            let intent = proposal_intent(
+                IntentKind::Missed,
+                named,
+                Some(text.clone()),
+                ProposalAnswer {
+                    scope,
+                    ..ProposalAnswer::default()
+                },
+            )?;
             Ok((vec![intent], None, false))
         })?;
         Ok(Answered {
