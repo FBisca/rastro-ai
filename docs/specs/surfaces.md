@@ -143,7 +143,7 @@ Hits SHALL carry the coverage of the `(source, scope)` pair they were read under
 - THEN no line reaches stdout
 
 ### Requirement: Reads change no row and take no exclusive config lock
-A `search` or `coverage` call through the read-only path SHALL change no row in any table, SHALL take no exclusive lock on the config, and SHALL reach the database in WAL mode, an old database included.
+A `search` or `coverage` call through the read-only path SHALL change no row in any table, SHALL take no exclusive lock on the config, and SHALL leave the database's journal mode as it found it; the writing open SHALL switch the database to WAL, an old database included.
 
 #### Scenario: a read leaves the store untouched
 - WHEN `search` and `coverage` calls run through the read-only path
@@ -152,6 +152,10 @@ A `search` or `coverage` call through the read-only path SHALL change no row in 
 #### Scenario: the writing open switches on WAL
 - WHEN the server opens a database it may write, an old database included
 - THEN the database is in WAL mode
+
+#### Scenario: a read-only call leaves the journal mode alone
+- WHEN a read-only call runs on a database left in `delete` journal mode
+- THEN the journal mode stays `delete`
 
 ### Requirement: Calls during a sync answer from one snapshot
 During a `rastro sync` in another process, each tool call SHALL answer within its deadline without a lock error, and the hits and coverage in one answer SHALL come from the same snapshot.

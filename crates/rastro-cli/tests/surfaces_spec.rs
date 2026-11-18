@@ -50,15 +50,14 @@ fn the_surfaces_spec_holds_only_titled_requirements() {
             .any(|line| line.starts_with("### Requirement: ")),
         "docs/specs/surfaces.md states no titled requirement"
     );
-    let mut scenarios = spec
-        .lines()
-        .filter(|line| line.starts_with("#### Scenario: "));
-    for title in spec
-        .lines()
-        .filter(|line| line.starts_with("### Requirement: "))
-    {
+    // One block per title, so a requirement with no scenario is named however many scenarios
+    // the rest of the spec holds.
+    for block in spec.split("### Requirement: ").skip(1) {
+        let title = block.lines().next().unwrap_or_default().trim();
         assert!(
-            scenarios.next().is_some(),
+            block
+                .lines()
+                .any(|line| line.starts_with("#### Scenario: ")),
             "docs/specs/surfaces.md: {title} states no scenario"
         );
     }
