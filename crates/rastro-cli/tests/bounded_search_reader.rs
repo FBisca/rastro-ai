@@ -90,7 +90,8 @@ fn hit(id: i64, quote: &str, matched: Option<(usize, usize)>) -> Hit {
     }
 }
 
-/// evidence/R49: when storage can't place the match, the excerpt starts at the field start
+/// spec: A search hit is cited with a bounded excerpt
+/// When storage can't place the match, the excerpt starts at the field start.
 #[test]
 fn a_hit_without_a_located_match_excerpts_from_the_start() {
     let dir = TempDir::new().unwrap();
@@ -199,7 +200,8 @@ fn the_read_only_search_returns_injected_text_verbatim_and_writes_nothing() {
     assert_eq!(fs::read(&wal).unwrap_or_default(), kept);
 }
 
-/// evidence/R49: offsets are in the span's origin, not the quote's
+/// spec: A search hit is cited with a bounded excerpt
+/// Offsets are in the span's origin, not the quote's.
 #[test]
 fn excerpt_offsets_are_in_the_spans_origin() {
     let dir = TempDir::new().unwrap();

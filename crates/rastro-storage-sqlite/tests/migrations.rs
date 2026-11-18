@@ -4,7 +4,8 @@ use rastro_storage_sqlite::SqliteStorage;
 use rusqlite::Connection;
 use std::fs;
 
-/// evidence/R4: stored evidence rejects updates and deletes
+/// spec: Stored evidence is never updated or deleted
+/// Stored evidence rejects updates and deletes.
 #[test]
 fn stored_evidence_rejects_updates_and_deletes() {
     for legacy in [false, true] {
@@ -54,7 +55,8 @@ fn stored_evidence_rejects_updates_and_deletes() {
     }
 }
 
-/// evidence/R5: migrations apply once in timestamp order and unknown ones are refused
+/// spec: Every migration applies once in timestamp order
+/// Migrations apply once in timestamp order and unknown ones are refused.
 #[test]
 fn migrations_apply_once_in_timestamp_order_and_unknown_ones_are_refused() {
     let home = tempfile::tempdir().unwrap();
@@ -95,7 +97,8 @@ fn migrations_apply_once_in_timestamp_order_and_unknown_ones_are_refused() {
     assert_eq!(names(&connection).len(), 19);
 }
 
-/// evidence/R5: legacy user version maps to the migrations it meant
+/// spec: Every migration applies once in timestamp order
+/// Legacy user version maps to the migrations it meant.
 #[test]
 fn legacy_user_version_maps_to_the_migrations_it_meant() {
     let initial = include_str!("../migrations/202611041200_initial.sql");

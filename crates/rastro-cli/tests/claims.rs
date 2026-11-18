@@ -281,8 +281,8 @@ fn a_bound_extractor_turns_its_sources_evidence_into_claims_read_through_why() {
     assert_eq!(env.count("coverage WHERE source = 'project'"), 1);
 }
 
-/// evidence/R74: a sync's run carries an `extraction` object only for a source bound to an
-/// extractor
+/// spec: A sync result carries extraction only for a bound source
+/// A sync's run carries an `extraction` object only for a source bound to an extractor.
 #[test]
 fn a_sync_result_carries_extraction_only_for_a_bound_source() {
     let env = Env::new(Some("test-extractor"));
