@@ -64,7 +64,7 @@ Live tests talk to a real service or read a copy of the owner's data, so the def
 cargo nextest run --profile live --run-ignored only
 ```
 
-Both halves are part of it, not one instead of the other: nextest reads the selection from the flag in that command, and the `live` profile gives that run its own JUnit report at `target/nextest/live/junit.xml` and a network round trip's timeouts instead of the default run's 20 and 60 seconds.
+Both halves are part of it, not one instead of the other: nextest reads the selection from the flag in that command, and the `live` profile gives that run a network round trip's timeouts instead of the default run's 20 and 60 seconds, each test's output as it lands, and a JUnit report at `target/nextest/live/junit.xml` that keeps a passing test's output too. A live test exists to print what it saw — an answer, a citation, a p95 — so the live run shows those figures where the default run keeps a passing test quiet.
 
 A bench test measures a release build, so its live run adds `--release`:
 

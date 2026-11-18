@@ -181,6 +181,16 @@ RS
   says "$out" "the live run" "test_live_that_needs_a_service"
   says_not "$out" "the live run" "test_that_runs_by_default"
 
+  # A live test exists to print what it saw: an answer, a citation, a p95. nextest hides a passing
+  # test's output by default, so the live run shows it, and its report keeps it.
+  says "$out" "the live run" "fixture: the live test ran"
+  local report=$fixture/target/nextest/live/junit.xml
+  if [ ! -f "$report" ]; then
+    flunk "no JUnit report at $report"
+  else
+    says "$(cat "$report")" "the live JUnit report" "fixture: the live test ran"
+  fi
+
   end_test the_default_run_skips_the_ignored_tests_the_live_profile_runs_them_alone
 }
 

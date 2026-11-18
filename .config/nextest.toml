@@ -28,15 +28,21 @@ store-failure-output = true
 #   cargo nextest run --profile live --run-ignored only
 #
 # nextest reads the selection from the flag, so the command carries both: the flag picks the ignored
-# tests and the profile gives that run its own JUnit report under target/nextest/live/ and a network's
-# timeouts. Neither half alone is the live run.
+# tests and the profile gives that run its own JUnit report under target/nextest/live/, a network's
+# timeouts, and each test's output shown as it runs. A live test exists to print what it saw, so this
+# profile never hides it. Neither half alone is the live run.
 [profile.live]
 # A live test waits on a network and on the owner's database before it asserts anything.
 slow-timeout = { period = "120s", terminate-after = 2 }
 fail-fast = false
 retries = 0
+# The output is the point: an answer, a citation, a p95. nextest keeps a passing test quiet by default,
+# and that default is for the suite, not for the run the owner makes to read these figures.
+success-output = "immediate"
+failure-output = "immediate"
 
 [profile.live.junit]
 path = "junit.xml"
-store-success-output = false
+# The report keeps the passing tests' output too, so what a live or bench test printed survives its run.
+store-success-output = true
 store-failure-output = true
