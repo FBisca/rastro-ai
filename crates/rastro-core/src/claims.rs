@@ -275,6 +275,93 @@ pub struct ClaimLifecycle {
     /// Whether a newer value of the claim's predicate supersedes it.
     pub scalar: bool,
 }
+/// An entity the owner's typed object names: what storage resolves it to, and its types.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct FoundEntity {
+    pub id: String,
+    pub identifier: String,
+    pub types: Vec<String>,
+}
+/// Whether `text` is a well-formed literal of one of the vocabulary's datatypes (lexical
+/// identity, vocabulary.md §18: `"01"` is not `"1"`).
+fn lexical(datatype: &str, text: &str) -> bool {
+    match datatype {
+        "string" => !text.trim().is_empty() && text.len() <= MAX_TERM_BYTES,
+        "integer" => text.parse::<i64>().is_ok_and(|n| n.to_string() == text),
+        "number" => text.parse::<f64>().is_ok_and(f64::is_finite),
+        "boolean" => matches!(text, "true" | "false"),
+        "datetime" => DateTime::parse_from_rfc3339(text).is_ok(),
+        _ => false,
+    }
+}
+/// The object an owner's edit fixes a claim to, from the words they typed: an entity when `text`
+/// names one (`entity`) of a type in the predicate's range, else a literal of a datatype in the
+/// range that `text` is well formed for. The predicate comes from `vocabularies` (the extractors'
+/// that read the claim, and the standard one); `old` is the claim's object. `Err` names the
+/// predicate and its range.
+pub fn fixed_object(
+    vocabularies: &[Vocabulary],
+    predicate: &str,
+    old: &Object,
+    text: &str,
+    entity: Option<FoundEntity>,
+) -> Result<Object, String> {
+    if predicate == ALIAS_PREDICATE {
+        let Object::Literal { datatype, .. } = old else {
+            return Err(format!("{predicate} takes a literal"));
+        };
+        return if crate::entity_form::is_alias_value(text) && text.len() <= MAX_TERM_BYTES {
+            Ok(Object::Literal {
+                value: text.into(),
+                datatype: datatype.clone(),
+            })
+        } else {
+            Err(format!(
+                "{predicate} takes a value that is non-empty, with no whitespace at either end; {text:?} is not one"
+            ))
+        };
+    }
+    if predicate.starts_with(rastro_plugin_sdk::CORE_PREFIX) {
+        return Err(format!(
+            "{predicate} can't be edited; retract it with `rastro claim reject`"
+        ));
+    }
+    let defined = vocabularies
+        .iter()
+        .flat_map(|v| &v.predicates)
+        .find(|p| p.id == predicate)
+        .ok_or_else(|| {
+            format!(
+                "can't check {predicate}'s range: the vocabulary that defines it isn't installed"
+            )
+        })?;
+    let range = &defined.range;
+    if let Some(found) = entity
+        && let Some(entity_type) = found.types.iter().find(|t| range.contains(t))
+    {
+        return Ok(Object::Entity {
+            id: found.id,
+            identifier: found.identifier,
+            entity_type: entity_type.clone(),
+        });
+    }
+    range
+        .iter()
+        .find(|datatype| {
+            rastro_plugin_sdk::DATATYPES.contains(&datatype.as_str()) && lexical(datatype, text)
+        })
+        .map(|datatype| Object::Literal {
+            value: text.into(),
+            datatype: datatype.clone(),
+        })
+        .ok_or_else(|| {
+            format!(
+                "{predicate} takes {}; {text:?} is not {}",
+                range.join(" or "),
+                if range.len() == 1 { "one" } else { "any" }
+            )
+        })
+}
 /// A group of equivalent claims: the hash of its sorted (member id, revision) pairs. Metadata
 /// only, never a claim id (knowledge §35).
 pub fn group_revision(members: &[(String, String)]) -> String {
@@ -864,5 +951,83 @@ mod tests {
             assert_eq!(kept.len(), kinds.len());
             assert!(kept.iter().all(|c| c.predicate == TYPE_PREDICATE));
         }
+    }
+
+    /// corrections: an edit's object is read against the predicate's range
+    // spec: The owner fixes a claim's object
+    #[test]
+    fn an_edit_reads_its_object_against_the_predicates_range() {
+        let predicate = |id: &str, range: &str| {
+            format!(
+                "[[predicates]]\nid = \"x:{id}\"\ndomain = [\"x:Item\"]\nrange = [{range}]\n\
+                 cardinality = \"one\"\nfreshness = \"source\"\n\
+                 authority = \"newer_comparable_observation\"\nsensitivity = \"s\"\n{WORDS}"
+            )
+        };
+        let vocabulary = Vocabulary::parse(&format!(
+            "namespace = \"x\"\nversion = \"1\"\n[[types]]\nid = \"x:Item\"\n{WORDS}\
+             [[types]]\nid = \"x:Account\"\n{WORDS}{}{}{}{}{}",
+            predicate("due", "\"datetime\""),
+            predicate("count", "\"integer\""),
+            predicate("flag", "\"boolean\""),
+            predicate("owner", "\"x:Account\""),
+            predicate("note", "\"string\""),
+        ))
+        .unwrap();
+        let old = Object::Literal {
+            value: "old".into(),
+            datatype: "string".into(),
+        };
+        let account = || {
+            Some(FoundEntity {
+                id: entity_id("x:account/1"),
+                identifier: "x:account/1".into(),
+                types: vec!["x:Account".into()],
+            })
+        };
+        let read = |predicate: &str, text: &str, found: Option<FoundEntity>| {
+            fixed_object(
+                std::slice::from_ref(&vocabulary),
+                predicate,
+                &old,
+                text,
+                found,
+            )
+        };
+        // Each literal datatype takes its own lexical form, and the refusal names the predicate
+        // and its range.
+        for (predicate, ok, bad) in [
+            ("x:due", "2026-11-20T09:00:00Z", "next-ish"),
+            ("x:count", "12", "012"),
+            ("x:flag", "true", "maybe"),
+            ("x:note", "Ana Souza", "  "),
+        ] {
+            assert!(read(predicate, ok, None).is_ok(), "{predicate} {ok}");
+            let error = read(predicate, bad, None).unwrap_err();
+            assert!(error.contains(predicate), "{error}");
+            assert!(error.contains(bad.trim()), "{error}");
+        }
+        let error = read("x:due", "next-ish", None).unwrap_err();
+        assert!(error.contains("datetime"), "{error}");
+        // An entity predicate takes an entity of a type in its range, and nothing else.
+        assert!(matches!(
+            read("x:owner", "x:account/1", account()),
+            Ok(Object::Entity { entity_type, .. }) if entity_type == "x:Account"
+        ));
+        let error = read("x:owner", "x:account/1", None).unwrap_err();
+        assert!(
+            error.contains("x:owner") && error.contains("x:Account"),
+            "{error}"
+        );
+        // A predicate no installed vocabulary defines can't be checked, so it isn't fixed; nor
+        // is one the core owns, except an alias.
+        assert!(read("y:other", "v", None).unwrap_err().contains("y:other"));
+        assert!(
+            read("rastro:held_by", "v", None)
+                .unwrap_err()
+                .contains("claim reject")
+        );
+        assert!(read(ALIAS_PREDICATE, "octo", None).is_ok());
+        assert!(read(ALIAS_PREDICATE, " octo", None).is_err());
     }
 }

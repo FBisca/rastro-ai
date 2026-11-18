@@ -3652,6 +3652,10 @@
               "additionalProperties": false,
               "description": "What a claim correction recorded.",
               "properties": {
+                "asserted": {
+                  "description": "The claim an edit asserted in place of the one it fixed; absent for any other correction.",
+                  "type": "string"
+                },
                 "claim": {
                   "description": "The claim the correction names.",
                   "type": "string"
@@ -3682,6 +3686,44 @@
               "additionalProperties": false,
               "description": "What a claim correction recorded.",
               "properties": {
+                "asserted": {
+                  "description": "The claim an edit asserted in place of the one it fixed; absent for any other correction.",
+                  "type": "string"
+                },
+                "claim": {
+                  "description": "The claim the correction names.",
+                  "type": "string"
+                },
+                "intents": {
+                  "description": "The intents accepted, in acceptance order; none when the correction was already in force.",
+                  "items": {
+                    "$ref": "#/$defs/IntentView"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "claim",
+                "intents"
+              ],
+              "title": "ClaimWriteResult",
+              "type": "object"
+            }
+          }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "claim.edit"
+            },
+            "result": {
+              "additionalProperties": false,
+              "description": "What a claim correction recorded.",
+              "properties": {
+                "asserted": {
+                  "description": "The claim an edit asserted in place of the one it fixed; absent for any other correction.",
+                  "type": "string"
+                },
                 "claim": {
                   "description": "The claim the correction names.",
                   "type": "string"
@@ -3747,7 +3789,8 @@
         "queue.missed",
         "queue.outcomes",
         "claim.confirm",
-        "claim.reject"
+        "claim.reject",
+        "claim.edit"
       ]
     },
     "result": {
@@ -5439,6 +5482,10 @@
         "additionalProperties": false,
         "description": "What a claim correction recorded.",
         "properties": {
+          "asserted": {
+            "description": "The claim an edit asserted in place of the one it fixed; absent for any other correction.",
+            "type": "string"
+          },
           "claim": {
             "description": "The claim the correction names.",
             "type": "string"
@@ -5489,6 +5536,69 @@
         "additionalProperties": false,
         "description": "What a claim correction recorded.",
         "properties": {
+          "asserted": {
+            "description": "The claim an edit asserted in place of the one it fixed; absent for any other correction.",
+            "type": "string"
+          },
+          "claim": {
+            "description": "The claim the correction names.",
+            "type": "string"
+          },
+          "intents": {
+            "description": "The intents accepted, in acceptance order; none when the correction was already in force.",
+            "items": {
+              "$ref": "#/$defs/IntentView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "claim",
+          "intents"
+        ],
+        "title": "ClaimWriteResult",
+        "type": "object"
+      },
+      "surfaces": [
+        "cli"
+      ]
+    },
+    {
+      "description": "Fix a claim's object: the claim you read is retracted and a claim with the same subject and predicate and the new object is asserted on your word alone. Name the revision you read; a claim that changed since is refused, and nothing is recorded. An object the predicate's range does not take is refused too, naming the predicate and its range. A claim your own `identity link` made is refused: undo that link with `rastro identity undo`.",
+      "input": {
+        "additionalProperties": false,
+        "description": "Fix a claim's object: the claim you read is retracted and a claim with the same subject and predicate and the new object is asserted on your word alone. Name the revision you read; a claim that changed since is refused, and nothing is recorded. An object the predicate's range does not take is refused too, naming the predicate and its range. A claim your own `identity link` made is refused: undo that link with `rastro identity undo`.",
+        "properties": {
+          "claim": {
+            "description": "The claim's id, as `about` and `why` show it.",
+            "type": "string"
+          },
+          "object": {
+            "description": "The new object: an entity's identifier or alias when the predicate takes entities, or the value when it takes a literal.",
+            "type": "string"
+          },
+          "seen": {
+            "description": "The claim's revision as you read it, as `about` and `why` show it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "claim",
+          "seen",
+          "object"
+        ],
+        "title": "ClaimEditRequest",
+        "type": "object"
+      },
+      "name": "claim.edit",
+      "result": {
+        "additionalProperties": false,
+        "description": "What a claim correction recorded.",
+        "properties": {
+          "asserted": {
+            "description": "The claim an edit asserted in place of the one it fixed; absent for any other correction.",
+            "type": "string"
+          },
           "claim": {
             "description": "The claim the correction names.",
             "type": "string"
