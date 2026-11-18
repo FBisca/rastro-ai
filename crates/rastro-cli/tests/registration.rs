@@ -173,8 +173,8 @@ fn locations_follow_rastro_xdg_and_home() {
     }
 }
 
-/// spec: Adding a source saves it and listing shows it
-/// Concurrent registrations persist and reject duplicates.
+/// Twenty `source add` runs land at once and all persist, and one of two duplicate registrations
+/// succeeds.
 #[test]
 fn concurrent_registrations_persist_and_reject_duplicates() {
     let home = TempDir::new().unwrap();
@@ -277,8 +277,9 @@ fn private_files_under_permissive_umask() {
     connection.execute_batch("ROLLBACK;").unwrap();
 }
 
-/// spec: Adding a source saves it and listing shows it
-/// Freshness rejects signed duration and outputs match schema.
+/// spec: Every json answer validates against its operation schema
+/// A signed freshness duration is refused, and `source add`, `source list` and `coverage` answer
+/// schema-valid json.
 #[test]
 fn freshness_rejects_signed_duration_and_outputs_match_schema() {
     let home = TempDir::new().unwrap();

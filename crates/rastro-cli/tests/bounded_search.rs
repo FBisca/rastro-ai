@@ -322,8 +322,8 @@ fn limit_bounds_the_hits_and_truncated_says_more_exist() {
     assert_eq!(exact["result"]["truncated"], false);
 }
 
-/// spec: A search hit is cited with a bounded excerpt
-/// The human form says when the answer was cut.
+/// The human form says when the answer was cut: the notice names the limit, and a search that
+/// shows every match says nothing.
 #[test]
 fn the_human_form_notes_a_truncated_answer() {
     let env = Env::new();
