@@ -964,13 +964,13 @@ impl Resolution {
                 // The latest valid correction of a claim is the one in force.
                 IntentKind::Confirm => {
                     if let Some(claim) = intent.targets.claim() {
-                        r.retracted.remove(&claim.id);
+                        r.supersede_correction(&claim.id, &id);
                         r.confirmed.insert(claim.id.clone(), id);
                     }
                 }
                 IntentKind::Reject => {
                     if let Some(claim) = intent.targets.claim() {
-                        r.confirmed.remove(&claim.id);
+                        r.supersede_correction(&claim.id, &id);
                         r.retracted.insert(claim.id.clone(), id);
                     }
                 }
@@ -978,6 +978,18 @@ impl Resolution {
             }
         }
         r
+    }
+    /// A newer correction of a claim takes the place of the one in force: that one is superseded
+    /// by it, so what it held ends where the newer one begins.
+    fn supersede_correction(&mut self, claim: &str, by: &str) {
+        let older = self
+            .confirmed
+            .remove(claim)
+            .or_else(|| self.retracted.remove(claim));
+        if let Some(older) = older {
+            self.status
+                .insert(older, (IntentStatus::Superseded, Some(by.into())));
+        }
     }
     /// An explicit link or merge clears the cannot-link of its own pair, and only that one.
     fn clear(&mut self, pair: &(String, String), by: &str) {
@@ -1210,8 +1222,14 @@ impl Resolution {
         // A link or merge holds from its intent until its undo, if any.
         for id in &self.order {
             let intent = &self.intents[id];
+            // A correction a newer one replaced ends where the newer one was issued.
             let ended = match self.status.get(id) {
                 Some((IntentStatus::Undone, Some(by))) => Some(self.issued[by]),
+                Some((IntentStatus::Superseded, Some(by)))
+                    if matches!(intent.kind, IntentKind::Confirm | IntentKind::Reject) =>
+                {
+                    Some(self.issued[by])
+                }
                 _ => None,
             };
             let stretch = (intent.issued_at, ended);

@@ -638,3 +638,34 @@ fn rejecting_a_claim_an_owner_link_made_is_sent_to_identity_undo() {
         "observed"
     );
 }
+
+// spec: The owner retracts a claim
+#[test]
+fn a_later_confirmation_ends_the_retraction_it_overrides() {
+    let env = Env::new();
+    env.account(7, "octocat");
+    let seen = env.claim("github:account/7", "rastro:alias", "octocat");
+    let id = seen["id"].as_str().unwrap();
+    let rejected = env.reject(&seen)["intents"][0]["id"].clone();
+    // The retracted claim is read again at its new revision, and confirmed.
+    let why = env.ok(&["why", id]);
+    let confirmed = env.confirm(&why["claim"])["intents"][0]["id"].clone();
+
+    let why = env.ok(&["why", id]);
+    assert_eq!(why["claim"]["status"], "confirmed", "{why}");
+    let current = |intent: &Value| {
+        why["supports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|s| s["intent"]["id"] == *intent)
+            .unwrap_or_else(|| panic!("no support by {intent}: {why}"))["current"]
+            .clone()
+    };
+    assert_eq!(current(&confirmed), true, "{why}");
+    assert_eq!(
+        current(&rejected),
+        false,
+        "the overridden retraction still holds: {why}"
+    );
+}
