@@ -75,9 +75,10 @@ test_ci_and_the_full_tier_run_the_suite_under_nextest() {
 test_a_test_past_the_timeout_is_slow_terminated_and_named() {
   start_test a_test_past_the_timeout_is_slow_terminated_and_named
   local out status
-  # The fixture sleeps past 90 seconds, so a config that never terminates it fails here instead of
-  # passing by accident.
-  out=$(cd "$fixtures/hang" && timeout 200 cargo nextest run --color never --config-file "$config" 2>&1)
+  # The fixture sleeps 90 seconds, past the 60-second kill, so a config that never terminates it fails
+  # here instead of passing by accident, and the run still ends on its own. No `timeout` wrapper:
+  # macOS runners don't ship one.
+  out=$(cd "$fixtures/hang" && cargo nextest run --color never --config-file "$config" 2>&1)
   status=$?
   if [ "$status" -eq 0 ]; then
     flunk "the run exited 0 with a hung test"
