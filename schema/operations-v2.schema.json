@@ -1825,10 +1825,6 @@
           },
           "type": "array"
         },
-        "earlier_retracted": {
-          "description": "Set on a proposal whose statements are exactly those an observed commitment held until the\nowner retracted them: new evidence proposes the statement again, and the owner decides\nagain. Never set on a question.",
-          "type": "boolean"
-        },
         "id": {
           "description": "The content address of the item's canonical encoding.",
           "type": "string"
