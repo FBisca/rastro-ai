@@ -118,7 +118,8 @@ fn a_hit_without_a_located_match_excerpts_from_the_start() {
     assert!(value["results"][0].get("quote").is_none());
 }
 
-/// surfaces/R24: the read-only path returns instruction-like text verbatim and writes nothing
+/// spec: Instruction-like evidence comes back verbatim and untrusted
+/// the read-only path returns instruction-like text verbatim and writes nothing
 #[test]
 fn the_read_only_search_returns_injected_text_verbatim_and_writes_nothing() {
     let home = TempDir::new().unwrap();

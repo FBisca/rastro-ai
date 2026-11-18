@@ -1587,7 +1587,8 @@ fn about_an_account_shows_the_person_holding_it() {
     }
 }
 
-/// surfaces/R36: `about` says whether the identifier resolved: `true` for an entity, a Person and `me`,
+/// spec: About says whether its identifier resolved
+/// `about` says whether the identifier resolved: `true` for an entity, a Person and `me`,
 /// `false` for a well-formed identifier that names nothing
 #[test]
 fn about_says_whether_the_identifier_resolved() {

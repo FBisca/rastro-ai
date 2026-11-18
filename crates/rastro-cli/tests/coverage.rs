@@ -938,7 +938,8 @@ fn all_coverage(env: &Env, now: Option<&str>) -> Vec<Value> {
     value["result"]["coverage"].as_array().unwrap().clone()
 }
 
-/// surfaces/R7: a removed source's hits and entry carry its stored coverage, registered false
+/// spec: A removed source keeps its stored coverage
+/// a removed source's hits and entry carry its stored coverage, registered false
 #[test]
 fn a_removed_source_keeps_its_stored_coverage_marked_unregistered_until_it_goes_unknown() {
     let env = Env::new();
@@ -973,7 +974,8 @@ fn a_removed_source_keeps_its_stored_coverage_marked_unregistered_until_it_goes_
     );
 }
 
-/// surfaces/R8: a removed source that never synced is listed as never looked, unregistered
+/// spec: A removed source that never synced is never looked
+/// a removed source that never synced is listed as never looked, unregistered
 #[test]
 fn a_removed_source_that_never_synced_is_never_looked_and_unregistered() {
     let env = Env::new();
@@ -997,7 +999,8 @@ fn a_removed_source_that_never_synced_is_never_looked_and_unregistered() {
     assert_eq!(by_name("project")["windows_total"], 0);
 }
 
-/// surfaces/R9: a changed scope leaves the old pair's coverage on its hits, unregistered
+/// spec: A scope change leaves old hits on the old pair
+/// a changed scope leaves the old pair's coverage on its hits, unregistered
 #[test]
 fn hits_under_the_old_scope_carry_the_old_pairs_coverage_and_new_ones_the_new() {
     let env = Env::with_manifest(|manifest| {

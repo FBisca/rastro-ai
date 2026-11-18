@@ -112,7 +112,8 @@ fn hypothesis_and_retracted_aliases_are_not_candidates() {
     assert_eq!(about(&db, "github:login/shared").unwrap(), json!([]));
 }
 
-/// surfaces/R32: hidden alias claims never spend a scoped read's work budget
+/// spec: Hidden alias claims never spend a scoped read's work budget
+/// hidden alias claims never spend a scoped read's work budget
 #[test]
 fn hidden_alias_claims_over_budget_answer_like_an_unknown_entity() {
     let home = tempfile::tempdir().unwrap();
@@ -140,7 +141,8 @@ fn hidden_alias_claims_over_budget_answer_like_an_unknown_entity() {
     assert_eq!(run(&mut db, "github:login/shared"), unknown);
 }
 
-/// surfaces/R32: a hidden incoming edge never changes a scoped read's budget outcome
+/// spec: Hidden alias claims never spend a scoped read's work budget
+/// a hidden incoming edge never changes a scoped read's budget outcome
 #[test]
 fn a_hidden_incoming_edge_does_not_change_the_budget_outcome() {
     let scopes = [Scope("personal".into())];
@@ -252,7 +254,8 @@ fn store_edge(db: &mut SqliteStorage, scope: &str, location: &str, predicate: &s
     .unwrap();
 }
 
-/// surfaces/R32: a hidden claim in a visible slot never pulls its object's claims into a replay
+/// spec: Hidden alias claims never spend a scoped read's work budget
+/// a hidden claim in a visible slot never pulls its object's claims into a replay
 #[test]
 fn a_hidden_claim_in_a_visible_slot_does_not_pull_in_its_object() {
     let scopes = [Scope("personal".into())];

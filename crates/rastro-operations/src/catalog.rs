@@ -528,7 +528,8 @@ mod tests {
     use super::*;
     use clap::Subcommand;
 
-    /// surfaces/R2: the CLI tree and the catalog name the same operations
+    /// spec: Help and the catalog name the same operations
+    /// the CLI tree and the catalog name the same operations
     #[test]
     #[allow(non_snake_case)]
     fn the_clap_tree_names_exactly_the_cataloged_operations() {

@@ -532,7 +532,8 @@ fn unknown_claim_is_an_operation_error_on_catalog_and_cli() {
     );
 }
 
-/// surfaces/R30: claim reads leave rows unchanged and missing database uncreated
+/// spec: Claim reads change no row and create no database
+/// claim reads leave rows unchanged and missing database uncreated
 #[test]
 fn claim_reads_leave_rows_unchanged_and_missing_database_uncreated() {
     let env = Env::new();

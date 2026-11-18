@@ -1,7 +1,8 @@
 #![allow(non_snake_case)]
 //! The committed v2 schema is the catalog's output, byte for byte.
 
-/// surfaces/R1: the generator's output equals the committed file; any difference fails
+/// spec: The generated schema equals the committed file
+/// the generator's output equals the committed file; any difference fails
 #[test]
 fn generated_schema_equals_the_committed_file() {
     let generated = rastro_operations::schema::generate();
@@ -84,7 +85,8 @@ fn remove_coverage_gaps(value: &mut serde_json::Value) {
     }
 }
 
-/// surfaces/R1: about and why are additive v2, `sync.extraction` and `claims.rebuild.pairs` are recorded
+/// spec: The generated schema equals the committed file
+/// about and why are additive v2, `sync.extraction` and `claims.rebuild.pairs` are recorded
 /// additions, and existing schemas are unchanged
 #[test]
 #[expect(
@@ -220,7 +222,8 @@ fn about_and_why_are_additive_v2_and_existing_schemas_are_unchanged() {
     );
 }
 
-/// surfaces/R30: catalog declares claim cli read paths without changing existing routes
+/// spec: Claim reads change no row and create no database
+/// catalog declares claim cli read paths without changing existing routes
 #[test]
 fn catalog_declares_claim_cli_read_paths_without_changing_existing_routes() {
     use rastro_operations::catalog::CATALOG;
@@ -316,7 +319,9 @@ fn remove_labels(value: &mut serde_json::Value) -> usize {
     found
 }
 
-/// surfaces/R1, surfaces/R36: identity changes `about` and `why` only additively: `about` gains an optional
+/// spec: The generated schema equals the committed file
+/// spec: About says whether its identifier resolved
+/// identity changes `about` and `why` only additively: `about` gains an optional
 /// `groups`, a `resolved` flag (S32), an optional Person view and an optional `account` on each
 /// claim (S28), and accepts `me`; a justification gains an optional `intent`; each claim summary
 /// gains a `subject_label` and an `object_label`, and the descriptions say a label is untrusted
@@ -453,7 +458,8 @@ fn about_and_why_change_only_additively_for_identity() {
     }
 }
 
-/// surfaces/R2: identity operations are CLI only; MCP stays read-only (surfaces §37)
+/// spec: Help and the catalog name the same operations
+/// identity operations are CLI only; MCP stays read-only (surfaces §37)
 #[test]
 fn identity_operations_are_cli_only() {
     use rastro_operations::catalog::CATALOG;

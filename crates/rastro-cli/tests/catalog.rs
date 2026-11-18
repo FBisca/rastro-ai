@@ -13,7 +13,8 @@ fn run(home: &std::path::Path, args: &[&str]) -> std::process::Output {
         .unwrap()
 }
 
-/// surfaces/R2: `--help` lists exactly the inputs, defaults and descriptions the catalog defines
+/// spec: Help and the catalog name the same operations
+/// `--help` lists exactly the inputs, defaults and descriptions the catalog defines
 #[test]
 fn help_lists_exactly_what_the_catalog_defines() {
     let home = tempfile::tempdir().unwrap();
@@ -95,7 +96,8 @@ fn help_lists_exactly_what_the_catalog_defines() {
     }
 }
 
-/// surfaces/R6: every command's `--json` envelope is version 2, valid against the v2 schema; v1 is frozen
+/// spec: Every envelope is schema version 2 and validates
+/// every command's `--json` envelope is version 2, valid against the v2 schema; v1 is frozen
 #[test]
 #[expect(
     clippy::too_many_lines,

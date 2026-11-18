@@ -269,7 +269,8 @@ fn tool<'a>(tools: &'a [Value], name: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("no tool {name}"))
 }
 
-/// surfaces/R3: each tool's name, description and input schema equal the catalog entry
+/// spec: Each MCP tool equals its catalog entry
+/// each tool's name, description and input schema equal the catalog entry
 #[test]
 fn listed_tools_equal_the_catalog_entries() {
     let env = Env::new();
@@ -285,7 +286,8 @@ fn listed_tools_equal_the_catalog_entries() {
     }
 }
 
-/// surfaces/R4: exactly search, coverage, about, why, commitments, meeting_commitments and queue, read-only; any other tool is a JSON-RPC error and runs nothing
+/// spec: Only the read-only operations are tools
+/// exactly search, coverage, about, why, commitments, meeting_commitments and queue, read-only; any other tool is a JSON-RPC error and runs nothing
 #[test]
 fn exactly_seven_read_only_tools_and_writes_are_protocol_errors() {
     let env = seeded();
@@ -349,7 +351,8 @@ fn last_migration(db: &Connection) -> String {
         .unwrap()
 }
 
-/// surfaces/R12: launch applies the pending migration, recovers the crashed run and switches on WAL
+/// spec: Launch migrates, recovers and switches on WAL before answering
+/// launch applies the pending migration, recovers the crashed run and switches on WAL
 #[test]
 fn launch_migrates_recovers_and_turns_on_wal_before_the_first_answer() {
     let env = Env::new();
@@ -415,7 +418,8 @@ fn launch_migrates_recovers_and_turns_on_wal_before_the_first_answer() {
     assert_eq!(coverage["reason"], "interrupted", "{answer}");
 }
 
-/// surfaces/R13: an unknown newer migration stops the launch: non-zero, refusal on stderr, stdout empty
+/// spec: An unknown newer migration refuses to start
+/// an unknown newer migration stops the launch: non-zero, refusal on stderr, stdout empty
 #[test]
 fn an_unknown_newer_migration_refuses_to_start() {
     let env = Env::new();
@@ -433,7 +437,8 @@ fn an_unknown_newer_migration_refuses_to_start() {
     assert!(stderr.contains("299912312359_future"), "{stderr}");
 }
 
-/// surfaces/R13: nothing reaches stdout
+/// spec: An unknown newer migration refuses to start
+/// nothing reaches stdout
 #[test]
 fn the_refused_launch_prints_nothing_on_stdout() {
     let env = Env::new();
@@ -451,7 +456,8 @@ fn the_refused_launch_prints_nothing_on_stdout() {
     assert!(stderr.contains("299912312359_future"), "{stderr}");
 }
 
-/// surfaces/R22: an operation error is a tool result with the error envelope; bad arguments are a protocol error
+/// spec: An operation failure is a tool error and a bad request is a protocol error
+/// an operation error is a tool result with the error envelope; bad arguments are a protocol error
 #[test]
 fn operation_errors_are_tool_results_and_bad_arguments_are_protocol_errors() {
     let env = seeded();
@@ -487,7 +493,8 @@ fn seeded() -> Env {
     env
 }
 
-/// surfaces/R20: every stdout line is JSON-RPC; results carry structuredContent and the same text;
+/// spec: Every stdout line is a JSON-RPC message with its result twice
+/// every stdout line is JSON-RPC; results carry structuredContent and the same text;
 /// descriptions label results as data
 #[test]
 fn a_scripted_client_gets_protocol_only_stdout_and_matching_structured_and_text_results() {
@@ -530,7 +537,8 @@ fn a_scripted_client_gets_protocol_only_stdout_and_matching_structured_and_text_
     assert!(status.success());
 }
 
-/// surfaces/R20: every line the server printed is a JSON-RPC 2.0 message
+/// spec: Every stdout line is a JSON-RPC message with its result twice
+/// every line the server printed is a JSON-RPC 2.0 message
 #[test]
 fn every_stdout_line_is_a_json_rpc_message() {
     let env = seeded();
@@ -554,7 +562,8 @@ fn every_stdout_line_is_a_json_rpc_message() {
     }
 }
 
-/// surfaces/R21: an unsupported revision gets the pinned one back, and the session proceeds
+/// spec: An unsupported revision is answered with the pinned revision
+/// an unsupported revision gets the pinned one back, and the session proceeds
 #[test]
 fn an_unsupported_revision_is_answered_with_the_pinned_revision() {
     let env = seeded();
@@ -569,7 +578,8 @@ fn an_unsupported_revision_is_answered_with_the_pinned_revision() {
     }
 }
 
-/// surfaces/R23: closing stdin ends the server with 0, no child left; stderr stays small
+/// spec: Closing stdin exits zero with bounded diagnostics on stderr
+/// closing stdin ends the server with 0, no child left; stderr stays small
 #[test]
 fn closing_stdin_exits_zero_and_diagnostics_stay_on_stderr_within_a_bound() {
     let env = seeded();
@@ -603,7 +613,8 @@ fn closing_stdin_exits_zero_and_diagnostics_stay_on_stderr_within_a_bound() {
     assert!(left.is_empty(), "left behind: {left:?}");
 }
 
-/// surfaces/R21: a client that starts with `server/discover` (Claude Code's v2 flow) keeps its session
+/// spec: An unsupported revision is answered with the pinned revision
+/// a client that starts with `server/discover` (Claude Code's v2 flow) keeps its session
 #[test]
 fn server_discover_first_does_not_end_the_session_and_initialize_then_works() {
     let env = seeded();
@@ -619,7 +630,8 @@ fn server_discover_first_does_not_end_the_session_and_initialize_then_works() {
     assert_eq!(session.list_tools().len(), 7);
 }
 
-/// surfaces/R25: two clients with different clientInfo get identical results; no name is stored
+/// spec: A client's name changes no result and is stored nowhere
+/// two clients with different clientInfo get identical results; no name is stored
 #[test]
 fn client_info_changes_no_result_and_is_stored_nowhere() {
     let env = seeded();
@@ -685,7 +697,8 @@ fn parity_env() -> Env {
     env
 }
 
-/// surfaces/R5: the same request as `rastro … --json` and as a tool call gives equal envelopes
+/// spec: One request gives one envelope on the CLI and over MCP
+/// the same request as `rastro … --json` and as a tool call gives equal envelopes
 #[test]
 fn a_cli_envelope_equals_the_tool_result_for_the_same_request() {
     let env = parity_env();
@@ -812,7 +825,8 @@ fn a_bad_limit_is_a_protocol_error_over_mcp() {
     }
 }
 
-/// surfaces/R19: a migration that appears after the server started is a tool error, and it keeps serving
+/// spec: A migration that appears after launch is a tool error
+/// a migration that appears after the server started is a tool error, and it keeps serving
 #[test]
 fn a_pending_or_unknown_migration_after_start_is_a_tool_error_and_the_server_keeps_serving() {
     let env = seeded();
@@ -860,7 +874,8 @@ fn a_pending_or_unknown_migration_after_start_is_a_tool_error_and_the_server_kee
     assert!(status.success());
 }
 
-/// surfaces/R22: a store that can't be read (no write access to create the WAL side files) is a tool error
+/// spec: An operation failure is a tool error and a bad request is a protocol error
+/// a store that can't be read (no write access to create the WAL side files) is a tool error
 #[test]
 fn an_unavailable_store_is_a_tool_error_and_the_server_keeps_serving() {
     let env = seeded();
@@ -959,7 +974,8 @@ fn tables(env: &Env) -> Vec<(String, Vec<Vec<String>>)> {
         .collect()
 }
 
-/// surfaces/R24: `full` over the injection fixture returns the body verbatim, untrusted;
+/// spec: Instruction-like evidence comes back verbatim and untrusted
+/// `full` over the injection fixture returns the body verbatim, untrusted;
 /// the server runs no process and writes nothing
 #[test]
 fn an_injection_body_comes_back_verbatim_and_nothing_runs_or_changes() {
@@ -1040,7 +1056,8 @@ fn an_injection_body_comes_back_verbatim_and_nothing_runs_or_changes() {
     assert!(left.is_empty(), "left behind: {left:?}");
 }
 
-/// surfaces/R26: the scripted half of the owner's check, against the owner's real data. Run by hand:
+/// spec: The owner's real clients get cited answers
+/// the scripted half of the owner's check, against the owner's real data. Run by hand:
 ///
 /// ```text
 /// RASTRO_MCP_LIVE_PHRASE="a phrase your synced sources contain" \
@@ -1143,7 +1160,8 @@ fn a_scripted_client_gets_a_cited_answer_a_true_no_match_and_stale_reads_unknown
     assert!(status.success());
 }
 
-/// surfaces/R10: excluded matches cannot consume the limit or leak through coverage.
+/// spec: A scoped server answers from its scopes only
+/// excluded matches cannot consume the limit or leak through coverage.
 #[test]
 fn personal_search_filters_before_the_limit_and_hides_other_coverage() {
     let env = Env::new();
@@ -1199,7 +1217,8 @@ fn personal_search_filters_before_the_limit_and_hides_other_coverage() {
     }
 }
 
-/// surfaces/R10: filter configured and historical pairs before answering coverage or resolving names.
+/// spec: A scoped server answers from its scopes only
+/// filter configured and historical pairs before answering coverage or resolving names.
 #[test]
 fn coverage_filters_pairs_counts_reasons_and_hidden_only_names() {
     let env = seeded();
@@ -1269,7 +1288,8 @@ fn coverage_filters_pairs_counts_reasons_and_hidden_only_names() {
     assert_eq!(result["truncated"], false);
 }
 
-/// surfaces/R11: launch scopes form a union; omission allows every scope.
+/// spec: A scope is launch configuration, never a tool argument
+/// launch scopes form a union; omission allows every scope.
 #[test]
 fn no_flag_allows_every_scope_and_repeatable_flags_allow_the_union() {
     let env = seeded();
@@ -1304,7 +1324,8 @@ fn no_flag_allows_every_scope_and_repeatable_flags_allow_the_union() {
     }
 }
 
-/// surfaces/R11: scope is launch configuration, never a tool argument or a CLI read flag.
+/// spec: A scope is launch configuration, never a tool argument
+/// scope is launch configuration, never a tool argument or a CLI read flag.
 #[test]
 fn scope_tool_arguments_return_exact_invalid_params_code() {
     let env = seeded();
@@ -1330,7 +1351,8 @@ fn scope_tool_arguments_return_exact_invalid_params_code() {
     }
 }
 
-/// surfaces/R10: a hidden invalid source cannot leak through scoped config diagnostics.
+/// spec: A scoped server answers from its scopes only
+/// a hidden invalid source cannot leak through scoped config diagnostics.
 #[test]
 fn scoped_config_errors_hide_names_in_both_tools() {
     let env = seeded();
@@ -1362,7 +1384,8 @@ fn scoped_config_errors_hide_names_in_both_tools() {
     assert!(String::from_utf8_lossy(&cli.stderr).contains("duplicate source: office-secret"));
 }
 
-/// surfaces/R10: only the allowed pair of a source with old and current scopes covers its hits.
+/// spec: A scoped server answers from its scopes only
+/// only the allowed pair of a source with old and current scopes covers its hits.
 #[test]
 fn search_pairs_each_hit_with_only_its_allowed_scope_coverage() {
     let env = seeded();
@@ -1415,7 +1438,8 @@ fn search_pairs_each_hit_with_only_its_allowed_scope_coverage() {
     }
 }
 
-/// surfaces/R10: hidden unfinished runs never add interrupted windows to scoped coverage.
+/// spec: A scoped server answers from its scopes only
+/// hidden unfinished runs never add interrupted windows to scoped coverage.
 #[test]
 fn hidden_unfinished_runs_are_neither_loaded_nor_counted() {
     let env = seeded();
@@ -1705,7 +1729,8 @@ fn unknown_and_hidden_only_claim_are_the_same_scoped_operation_error() {
         );
     }
 }
-/// surfaces/R5: about and why cli mcp envelopes are equal
+/// spec: One request gives one envelope on the CLI and over MCP
+/// about and why cli mcp envelopes are equal
 #[test]
 fn about_and_why_cli_mcp_envelopes_are_equal() {
     let env = Env::new();
@@ -1739,7 +1764,8 @@ fn about_and_why_cli_mcp_envelopes_are_equal() {
         assert_eq!(ok_result(&mcp["result"]), &cli);
     }
 }
-/// surfaces/R27: scoped replay filters metadata and hidden replacements before limit
+/// spec: A scoped about or why computes from visible supports only
+/// scoped replay filters metadata and hidden replacements before limit
 #[test]
 fn scoped_replay_filters_metadata_and_hidden_replacements_before_limit() {
     let env = Env::new();
@@ -1842,7 +1868,8 @@ fn scoped_about_resolves_a_canonical_alias_only_through_visible_claims() {
     assert!(!all["claims"].as_array().unwrap().is_empty());
 }
 
-/// surfaces/R35: one location observed in two scopes with different types; a scoped read's type
+/// spec: Type conflicts and the displayed type come from the visible scope
+/// one location observed in two scopes with different types; a scoped read's type
 /// conflicts and displayed type come only from the visible scope's justifications
 #[test]
 fn a_scoped_read_takes_type_conflicts_and_displayed_type_from_visible_scopes_only() {
@@ -1904,7 +1931,8 @@ fn portable_answer(mut value: Value) -> Value {
     clean(&mut value);
     value
 }
-/// surfaces/R28: random scope sets equal visible rebuild and ignore hidden inputs
+/// spec: A scoped answer equals a rebuild over the same scopes
+/// random scope sets equal visible rebuild and ignore hidden inputs
 #[test]
 fn random_scope_sets_equal_visible_rebuild_and_ignore_hidden_inputs() {
     let scopes = ["personal", "work", "health"];
@@ -1998,7 +2026,8 @@ fn about_text(session: &mut Session, entity: &str) -> Value {
     portable_answer(ok_result(&response["result"])["result"].clone())
 }
 
-/// surfaces/R31: a hidden-scope read of the same location never supersedes a visible alias
+/// spec: A hidden supersession never drops a visible alias
+/// a hidden-scope read of the same location never supersedes a visible alias
 #[test]
 fn a_hidden_supersession_does_not_drop_a_visible_alias() {
     let env = Env::new();
@@ -2049,7 +2078,8 @@ fn a_hidden_supersession_does_not_drop_a_visible_alias() {
     assert!(!expected.to_string().contains("new"));
 }
 
-/// surfaces/R34: one location read in two scopes with different logins; the visible one decides
+/// spec: Alias roots, marks and resolution come from the visible scope
+/// one location read in two scopes with different logins; the visible one decides
 #[test]
 fn one_location_in_two_scopes_resolves_only_through_the_visible_scope() {
     let env = Env::new();
@@ -2121,7 +2151,8 @@ fn one_location_in_two_scopes_resolves_only_through_the_visible_scope() {
     );
 }
 
-/// surfaces/R33: the random scope-set oracle also queries by alias
+/// spec: A scoped alias query equals its per-scope rebuild
+/// the random scope-set oracle also queries by alias
 #[test]
 fn random_scope_sets_equal_visible_rebuild_when_queried_by_alias() {
     let scopes = ["personal", "work", "health"];
@@ -2388,7 +2419,8 @@ fn about_me_over_mcp_answers_one_morning_from_both_accounts() {
     );
 }
 
-/// surfaces/R36: over MCP, `about` says `resolved: false` for a hidden-only entity and for an unknown one,
+/// spec: About says whether its identifier resolved
+/// over MCP, `about` says `resolved: false` for a hidden-only entity and for an unknown one,
 /// and `resolved: true` where the entity is visible
 #[test]
 fn mcp_about_says_whether_the_identifier_resolved() {
