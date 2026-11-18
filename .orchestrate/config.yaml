@@ -1,6 +1,7 @@
-# The check tiers: a worker runs the cheap two, verify and CI run the whole suite once.
+# The check tiers: a worker runs the fast suite and the affected selector, verify and CI run the
+# whole suite once. The fast tier is the fast profile: the unit tests alone, no `tests/` binary.
 checks:
-  fast: cargo check --workspace --all-targets
+  fast: cargo nextest run --workspace --profile fast
   affected: scripts/affected-tests.sh {paths}
   full:
     run: cargo nextest run --workspace
