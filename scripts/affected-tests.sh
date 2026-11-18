@@ -1,13 +1,17 @@
 #!/usr/bin/env bash
-# Runs `cargo test` for the workspace crates that contain the given paths and every crate that
+# Runs `cargo nextest run` for the workspace crates that contain the given paths and every crate that
 # depends on them, directly or transitively. Used as the orchestrator's `affected` check tier.
 #
 #   scripts/affected-tests.sh [--dry-run] <path>...
 #
 # --dry-run prints the selection (crate names, sorted, space-separated; "workspace"; or
-# "nothing selected") instead of running cargo. Cargo.toml, Cargo.lock, rust-toolchain.toml and
+# "nothing selected") instead of running nextest. Cargo.toml, Cargo.lock, rust-toolchain.toml and
 # .cargo/ at the repo root affect every crate, so they select the whole workspace.
 set -euo pipefail
+
+# The cargo to ask and to run; scripts/affected-tests.test.sh points it at a stand-in that records the
+# invocation instead of running the tests.
+cargo_bin=${CARGO:-cargo}
 
 dry_run=0
 if [ "${1:-}" = "--dry-run" ]; then
@@ -30,7 +34,7 @@ done
 
 # Only path dependencies between workspace members form the graph; dev-dependencies count, since
 # their tests build against the dependency too.
-selection=$(cargo metadata --format-version 1 --no-deps | jq -r \
+selection=$("$cargo_bin" metadata --format-version 1 --no-deps | jq -r \
   --arg root "$root" --argjson paths "$(printf '%s\n' "${paths[@]+"${paths[@]}"}" | jq -R . | jq -s .)" '
   def dir: .manifest_path | sub("/Cargo.toml$"; "");
   [.packages[] | {name, dir: dir, deps: [.dependencies[] | select(.path != null) | .name]}] as $crates
@@ -52,10 +56,10 @@ fi
 
 case $selection in
   "nothing selected") echo "affected-tests: nothing selected" ;;
-  workspace) cargo test --workspace ;;
+  workspace) "$cargo_bin" nextest run --workspace ;;
   *)
     args=()
     for c in $selection; do args+=(-p "$c"); done
-    cargo test "${args[@]}"
+    "$cargo_bin" nextest run "${args[@]}"
     ;;
 esac

@@ -1,0 +1,10 @@
+#!/usr/bin/env bash
+# A stand-in for cargo, used by scripts/affected-tests.test.sh: it records the command the selector
+# runs for tests and forwards everything else (the metadata query) to the real cargo in
+# NEXTEST_FIXTURE_REAL_CARGO.
+set -euo pipefail
+
+if [ "${1:-}" = "metadata" ]; then
+  exec "${NEXTEST_FIXTURE_REAL_CARGO:?set NEXTEST_FIXTURE_REAL_CARGO}" "$@"
+fi
+printf '%s\n' "$*" >> "${NEXTEST_FIXTURE_LOG:?set NEXTEST_FIXTURE_LOG}"
