@@ -63,6 +63,10 @@ fn remove_coverage_gaps(value: &mut serde_json::Value) {
 /// surfaces/R1: about and why are additive v2, `sync.extraction` and `claims.rebuild.pairs` are recorded
 /// additions, and existing schemas are unchanged
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the recorded additions are asserted one by one against the generated schema"
+)]
 fn about_and_why_are_additive_v2_and_existing_schemas_are_unchanged() {
     use serde_json::{Value, json};
     let generated: Value = serde_json::from_str(&rastro_operations::schema::generate()).unwrap();
@@ -294,6 +298,10 @@ fn remove_labels(value: &mut serde_json::Value) -> usize {
 /// gains a `subject_label` and an `object_label`, and the descriptions say a label is untrusted
 /// data; nothing else differs
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "each additive change is asserted against the fixture beside the others it ships with"
+)]
 fn about_and_why_change_only_additively_for_identity() {
     use serde_json::{Value, json};
     let generated: Value = serde_json::from_str(&rastro_operations::schema::generate()).unwrap();

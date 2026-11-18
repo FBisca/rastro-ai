@@ -167,6 +167,10 @@ impl<S: Storage + StoredTwins> Rastro<S> {
 
     /// `sync_with_reread`, telling `observer` what each source does as it does it. The
     /// observer can't change a run: it is told, and nothing it does fails or delays one.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "each source's run is recorded, told and counted in one pass over the config"
+    )]
     pub fn sync_observed(
         &mut self,
         name: Option<&str>,

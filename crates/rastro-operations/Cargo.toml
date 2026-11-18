@@ -14,3 +14,6 @@ rastro-core = { path = "../rastro-core" }
 schemars.workspace = true
 serde.workspace = true
 serde_json.workspace = true
+
+[lints]
+workspace = true
