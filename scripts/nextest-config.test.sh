@@ -23,35 +23,39 @@ export NEXTEST_HIDE_PROGRESS_BAR=1
 rm -rf "$NEXTEST_STATE_DIR" "$fixtures/hang/target" "$fixtures/suite/target"
 
 fail=0
-before=$fail
+failures=0
+before=0
 
 start_test() {
   echo "test: $1"
-  before=$fail
+  before=$failures
 }
 
+# end_test compares the failure count, so a test that fails is never reported ok because an earlier
+# test already failed.
 end_test() {
-  if [ "$fail" -eq "$before" ]; then echo "ok: $1"; else echo "FAIL: $1"; fi
+  if [ "$failures" -eq "$before" ]; then echo "ok: $1"; else echo "FAIL: $1"; fi
+}
+
+# flunk <message>: notes a failure of the current test.
+flunk() {
+  echo "  $1"
+  fail=1
+  failures=$((failures + 1))
 }
 
 # says <haystack> <what it is> <needle>: notes a missing needle and fails.
 says() {
   case $1 in
     *"$3"*) ;;
-    *)
-      echo "  $2 does not hold '$3'"
-      fail=1
-      ;;
+    *) flunk "$2 does not hold '$3'" ;;
   esac
 }
 
 # says_not <haystack> <what it is> <needle>: notes an unexpected needle and fails.
 says_not() {
   case $1 in
-    *"$3"*)
-      echo "  $2 holds '$3'"
-      fail=1
-      ;;
+    *"$3"*) flunk "$2 holds '$3'" ;;
   esac
 }
 
@@ -76,16 +80,14 @@ test_a_test_past_the_timeout_is_slow_terminated_and_named() {
   out=$(cd "$fixtures/hang" && timeout 200 cargo nextest run --color never --config-file "$config" 2>&1)
   status=$?
   if [ "$status" -eq 0 ]; then
-    echo "  the run exited 0 with a hung test"
-    fail=1
+    flunk "the run exited 0 with a hung test"
   fi
   says "$out" "the run" "SLOW"
   says "$out" "the run" "TERMINATING"
   # The summary line reads e.g. "TIMEOUT [  60.012s] nextest-hang-fixture::hang test_outlives_the_timeout".
   if ! printf '%s\n' "$out" | grep -q -E 'TIMEOUT \[ *60\.[0-9]+s\] .*test_outlives_the_timeout'; then
-    echo "  no 60-second timeout naming the test; the run ended with:"
+    flunk "no 60-second timeout naming the test; the run ended with:"
     printf '%s\n' "$out" | tail -5
-    fail=1
   fi
   end_test a_test_past_the_timeout_is_slow_terminated_and_named
 }
@@ -97,17 +99,15 @@ test_a_failing_test_reaches_the_junit_report_with_its_output() {
   out=$(cd "$fixtures/suite" && cargo nextest run --color never --config-file "$config" 2>&1)
   status=$?
   if [ "$status" -eq 0 ]; then
-    echo "  the run exited 0 with a failing test"
-    fail=1
+    flunk "the run exited 0 with a failing test"
   fi
   # nextest writes a relative JUnit path under the workspace's target directory: under this fixture's
   # own target that is <workspace>/target/nextest/default/junit.xml, and for the repository's
   # workspace it is target/nextest/default/junit.xml.
   junit=$fixtures/suite/target/nextest/default/junit.xml
   if [ ! -f "$junit" ]; then
-    echo "  no JUnit report at $junit; the run ended with:"
+    flunk "no JUnit report at $junit; the run ended with:"
     printf '%s\n' "$out" | tail -5
-    fail=1
   else
     report=$(cat "$junit")
     says "$report" "the JUnit report" 'testcase name="test_that_fails"'
