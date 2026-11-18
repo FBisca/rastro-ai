@@ -2,11 +2,13 @@
 """Hold every titled requirement to a tagged test, and every Rust tag to a title.
 
 The gate reads every spec under `docs/specs/` (subfolders included) for `### Requirement: <Title>`
-blocks, and every source file in the workspace for a `spec:` tag. It fails in two cases:
+blocks, and every source file in the workspace for a `spec:` tag. It fails in three cases:
 
 - a title no tag on a test covers (`// spec:` or `/// spec:` above `#[test]`, `# spec:` above a test
   function or an `expect_… test_…` case in a script test), naming the spec file;
-- a `spec:` tag in a Rust file that names no title, naming the file, line and title.
+- a `spec:` tag in a Rust file that names no title, naming the file, line and title;
+- a spec that still holds a legacy requirement form, an `- **R<n>**` bullet or a `## Coverage` heading,
+  naming the file and line.
 
 Rust tags are checked whether they sit on a test or on production code, so a stale one cannot hide.
 A tag may name a title an open plan under `docs/plans/` holds, so a plan's tests can carry their tags
@@ -21,6 +23,10 @@ import sys
 from pathlib import Path
 
 TITLE = re.compile(r"^###\s+Requirement:\s*(.+?)\s*$")
+# A spec states its requirements only as titled blocks: a numbered bullet or a coverage table is a
+# requirement the titled form replaced.
+LEGACY_BULLET = re.compile(r"^\s*-\s+\*\*R\d+\*\*")
+LEGACY_HEADING = re.compile(r"^##\s+Coverage\b")
 # A plan states the requirements its archive will write as `- title: <Title>` under requirements.added.
 PLAN_TITLE = re.compile(r"^\s*-\s+title:\s*(.+?)\s*$")
 PLAN_SUFFIXES = {".yaml", ".yml"}
@@ -56,6 +62,16 @@ def requirements(spec_root):
             match = TITLE.match(line)
             if match:
                 yield match.group(1), path, number
+
+
+def legacy_forms(spec_root):
+    """Every legacy requirement form a spec still holds, as (spec path, line, the form named)."""
+    for path in sorted(spec_root.rglob("*.md")):
+        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            if LEGACY_BULLET.match(line):
+                yield path, number, "- **R<n>** bullet"
+            elif LEGACY_HEADING.match(line):
+                yield path, number, "## Coverage heading"
 
 
 def plan_titles(plans_root):
@@ -147,6 +163,13 @@ def main() -> int:
                 file=sys.stderr,
             )
             failures += 1
+    for path, line, form in legacy_forms(root / "docs" / "specs"):
+        print(
+            f"{relative(path, root)}:{line}: a {form} is a legacy requirement form;"
+            " a spec states its requirements only as `### Requirement:` blocks",
+            file=sys.stderr,
+        )
+        failures += 1
     return 1 if failures else 0
 
 

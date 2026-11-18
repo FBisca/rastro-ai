@@ -147,6 +147,25 @@ class SpecCoverageGate(unittest.TestCase):
 
         self.assertEqual(gate.returncode, 0, gate.stderr)
 
+    # spec: Specs hold only titled requirements
+    def test_a_legacy_requirement_bullet_or_coverage_table_is_named_with_its_file_and_line(self):
+        cases = {
+            "an R bullet": "- **R1** The product does the thing.\n",
+            "a Coverage heading": "## Coverage\n\n| Requirement | Test |\n",
+        }
+        for name, legacy in cases.items():
+            with self.subTest(name):
+                tmp = tempfile.TemporaryDirectory()
+                self.addCleanup(tmp.cleanup)
+                self.root = Path(tmp.name)
+                self.write("docs/specs/alpha.md", requirement("A titled requirement") + legacy)
+                self.write("crates/alpha/src/lib.rs", tagged_test("A titled requirement"))
+
+                gate = self.run_gate()
+
+                self.assertNotEqual(gate.returncode, 0, f"the gate accepted {name}:\n{gate.stdout}")
+                self.assertRegex(gate.stderr, r"docs/specs/alpha\.md:\d+\b")
+
     # spec: Every requirement names its tests
     def test_a_tag_may_name_a_title_an_open_plan_holds_before_its_archive_writes_the_spec(self):
         self.write("docs/specs/alpha.md", requirement("A covered requirement"))
