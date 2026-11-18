@@ -509,7 +509,8 @@ fn a_verified_email_cites_only_its_own_address_span() {
     }
 }
 
-/// evidence/R34: only owner involved items become evidence
+/// spec: Only owner involved items become evidence
+/// Only owner involved items become evidence.
 #[test]
 fn only_owner_involved_items_become_evidence() {
     let fixture = Fixture::start(standard);
@@ -540,7 +541,8 @@ fn only_owner_involved_items_become_evidence() {
     );
 }
 
-/// evidence/R37: each field is its own cited observation
+/// spec: Each field is its own observation
+/// Each field is its own cited observation.
 #[test]
 fn each_field_is_its_own_cited_observation() {
     let fixture = Fixture::start(standard);
@@ -586,7 +588,8 @@ fn each_field_is_its_own_cited_observation() {
     assert_eq!(result["end"], 10);
 }
 
-/// evidence/R40: rate limit mid run keeps completed pages and is not found
+/// spec: A rate limit mid-run keeps the finished pages
+/// A rate limit mid-run keeps the completed pages and is not found.
 #[test]
 fn rate_limit_mid_run_keeps_completed_pages_and_is_not_found() {
     let reset = Utc::now().timestamp() + 600;
@@ -632,7 +635,8 @@ fn rate_limit_mid_run_keeps_completed_pages_and_is_not_found() {
     assert_eq!(covered["result"]["coverage"][0]["reason"], "rate_limited");
 }
 
-/// evidence/R44: instruction like content never changes the requests
+/// spec: Instruction-like content changes no request
+/// Instruction-like content never changes the requests.
 #[test]
 fn instruction_like_content_never_changes_the_requests() {
     let fixture = Fixture::start(standard);
@@ -656,7 +660,8 @@ fn instruction_like_content_never_changes_the_requests() {
     }
 }
 
-/// evidence/R46: missing token is auth and no token is stored
+/// spec: A missing or rejected token is auth and never stored
+/// Missing token is auth and no token is stored.
 #[test]
 fn missing_token_is_auth_and_no_token_is_stored() {
     let fixture = Fixture::start(standard);
@@ -671,7 +676,8 @@ fn missing_token_is_auth_and_no_token_is_stored() {
     assert!(!env.leaks("gh: not logged in", &[output]));
 }
 
-/// evidence/R46: rejected token is auth and never appears anywhere
+/// spec: A missing or rejected token is auth and never stored
+/// Rejected token is auth and never appears anywhere.
 #[test]
 fn rejected_token_is_auth_and_never_appears_anywhere() {
     let fixture = Fixture::start(|req, _| match req.path.as_str() {
@@ -690,7 +696,8 @@ fn rejected_token_is_auth_and_never_appears_anywhere() {
     assert!(!env.leaks(TOKEN, &[sync, coverage]));
 }
 
-/// evidence/R40: search result cap is incomplete not found
+/// spec: A rate limit mid-run keeps the finished pages
+/// A search result cap is incomplete, not found.
 #[test]
 fn search_result_cap_is_incomplete_not_found() {
     let fixture = Fixture::start(|req, base| {
@@ -710,7 +717,8 @@ fn search_result_cap_is_incomplete_not_found() {
     );
 }
 
-/// evidence/R40: http failures map to typed reasons
+/// spec: A rate limit mid-run keeps the finished pages
+/// HTTP failures map to typed reasons.
 #[test]
 fn http_failures_map_to_typed_reasons() {
     for (status, reason) in [
@@ -748,7 +756,8 @@ fn comment(number: u64, id: u64, body: &str, updated_at: String) -> Value {
            "body": body, "updated_at": updated_at})
 }
 
-/// evidence/R35: only comments updated within the window become evidence
+/// spec: Only comments updated in the window become evidence
+/// Only comments updated within the window become evidence.
 #[test]
 fn only_comments_updated_within_the_window_become_evidence() {
     // The window is whatever the search query asked for, so comments are placed on its edges.
@@ -788,7 +797,8 @@ fn only_comments_updated_within_the_window_become_evidence() {
     );
 }
 
-/// evidence/R36: search queries name the repo and the window
+/// spec: Search queries name the repo and the window
+/// Search queries name the repo and the window.
 #[test]
 fn search_queries_name_the_repo_and_the_window() {
     let fixture = Fixture::start(standard);
@@ -814,7 +824,8 @@ fn search_queries_name_the_repo_and_the_window() {
     assert_eq!(queries, expected);
 }
 
-/// evidence/R38: labels and assignees quote the value at their own path
+/// spec: Labels and assignees quote their own path
+/// Labels and assignees quote the value at their own path.
 #[test]
 fn labels_and_assignees_quote_the_value_at_their_own_path() {
     let fixture = Fixture::start(with_route(|req, _| {
@@ -843,7 +854,8 @@ fn labels_and_assignees_quote_the_value_at_their_own_path() {
     }
 }
 
-/// evidence/R39: spans are utf8 bytes and the quote equals them
+/// spec: Spans are UTF-8 bytes and the quote equals them
+/// Spans are UTF-8 bytes and the quote equals them.
 #[test]
 fn spans_are_utf8_bytes_and_the_quote_equals_them() {
     let text = "héllo wörld 日本語 😀";
@@ -906,7 +918,8 @@ fn big_search(items: u64, reported: u64, incomplete: bool) -> impl Fn(&Req, &str
     }
 }
 
-/// evidence/R41: more than 1000 results or incomplete results is result cap
+/// spec: A capped or incomplete search is never found
+/// More than 1000 results or incomplete results is a result cap.
 #[test]
 fn more_than_1000_results_or_incomplete_results_is_result_cap() {
     // (items served, total reported, incomplete_results, expected coverage reason)
@@ -948,7 +961,8 @@ enum Retry {
     After(i64),
 }
 
-/// evidence/R42: only primary or secondary limit signals make a 403 rate limited
+/// spec: A 403 is rate limited only on a limit signal
+/// Only a primary or a secondary limit signal makes a 403 rate limited.
 #[test]
 fn only_primary_or_secondary_limit_signals_make_a_403_rate_limited() {
     let reset = Utc::now().timestamp() + 600;
@@ -1012,7 +1026,8 @@ fn only_primary_or_secondary_limit_signals_make_a_403_rate_limited() {
     }
 }
 
-/// evidence/R43: every page of an items comments is read
+/// spec: Every page of an items comments is read
+/// Every page of an item's comments is read.
 #[test]
 fn every_page_of_an_items_comments_is_read() {
     let fixture = Fixture::start(with_route(|req, base| {
@@ -1048,7 +1063,8 @@ fn every_page_of_an_items_comments_is_read() {
     );
 }
 
-/// evidence/R45: links and redirects away from the api host are not followed
+/// spec: Links and redirects away from the API host are refused
+/// Links and redirects away from the API host are not followed.
 #[test]
 fn links_and_redirects_away_from_the_api_host_are_not_followed() {
     let foreign = Fixture::start(|_, _| Reply::ok(json!({"login": "me"})));
@@ -1103,7 +1119,8 @@ fn links_and_redirects_away_from_the_api_host_are_not_followed() {
 }
 
 /// S25: a source added with --keep-original stores each item or comment as read, and search returns it
-/// evidence/R60: keep original stores the item or comment as read
+/// spec: A kept original is stored beside its quote
+/// `--keep-original` stores the item or comment as read.
 #[test]
 fn keep_original_stores_the_item_or_comment_as_read() {
     let fixture = Fixture::start(standard);
@@ -1143,7 +1160,8 @@ fn keep_original_stores_the_item_or_comment_as_read() {
 }
 
 /// S25: a source without the flag stores no original and search has no such field
-/// evidence/R60: without the flag nothing is stored
+/// spec: A kept original is stored beside its quote
+/// Without the flag nothing is stored.
 #[test]
 fn without_the_flag_nothing_is_stored() {
     let fixture = Fixture::start(standard);
@@ -1159,7 +1177,8 @@ fn without_the_flag_nothing_is_stored() {
 }
 
 /// S25: the connector attaches originals only when the host says the source keeps them
-/// evidence/R60: connector sends originals only when told
+/// spec: A kept original is stored beside its quote
+/// Connector sends originals only when told.
 #[test]
 fn connector_sends_originals_only_when_told() {
     let fixture = Fixture::start(standard);
@@ -1207,7 +1226,8 @@ fn connector_sends_originals_only_when_told() {
     assert!(not_told.iter().all(|e| e.get("original").is_none()));
 }
 
-/// evidence/R70: a non loopback api base url sends no request and is couldnt look protocol
+/// spec: A non-loopback API base URL sends no request
+/// A non-loopback API base URL sends no request and is couldn't look: protocol.
 #[test]
 fn a_non_loopback_api_base_url_sends_no_request_and_is_couldnt_look_protocol() {
     let fixture = Fixture::start(standard);
@@ -1249,7 +1269,8 @@ fn a_non_loopback_api_base_url_sends_no_request_and_is_couldnt_look_protocol() {
     }
 }
 
-/// evidence/R72, identity/R9: authors are structured evidence at each item and comment location
+/// spec: Authors are structured evidence at each location
+/// Authors are structured evidence at each item and comment location.
 #[test]
 fn authors_are_structured_evidence_at_each_item_and_comment_location() {
     let fixture = Fixture::start(|req, base| {

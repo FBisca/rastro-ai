@@ -144,7 +144,8 @@ fn run_script(messages: Vec<Value>) -> Vec<Value> {
     steps
 }
 
-/// evidence/R6: sync stores evidence and found coverage
+/// spec: A complete sync stores evidence and reports found
+/// Sync stores evidence and found coverage.
 #[test]
 fn sync_stores_evidence_and_found_coverage() {
     let env = Env::new();
@@ -190,7 +191,8 @@ fn sync_stores_evidence_and_found_coverage() {
     );
 }
 
-/// evidence/R7: complete sync without evidence records empty
+/// spec: A complete sync that finds nothing records empty
+/// A complete sync without evidence records empty.
 #[test]
 fn complete_sync_without_evidence_records_empty() {
     let env = Env::new();
@@ -205,7 +207,8 @@ fn complete_sync_without_evidence_records_empty() {
     assert_eq!(covered["result"]["coverage"][0]["state"], "empty");
 }
 
-/// evidence/R8: evidence without location span quote or trust class is rejected
+/// spec: Incomplete evidence is rejected and counted
+/// Evidence without a location, span, quote or trust class is rejected.
 #[test]
 fn evidence_without_location_span_quote_or_trust_class_is_rejected() {
     let env = Env::new();
@@ -245,7 +248,8 @@ fn evidence_without_location_span_quote_or_trust_class_is_rejected() {
     assert!(human.contains("rejected 8"), "{human}");
 }
 
-/// evidence/R9: forbidden kind or forged source or scope is rejected
+/// spec: Evidence outside the source's grant is rejected
+/// Forbidden kind or forged source or scope is rejected.
 #[test]
 fn forbidden_kind_or_forged_source_or_scope_is_rejected() {
     let env = Env::new();
@@ -278,7 +282,8 @@ fn synced_env() -> Env {
     env
 }
 
-/// evidence/R49: search results carry the citation and coverage
+/// spec: A search hit is cited with a bounded excerpt
+/// Search results carry the citation and coverage.
 #[test]
 fn search_results_carry_the_citation_and_coverage() {
     let env = synced_env();
@@ -317,7 +322,8 @@ fn search_results_carry_the_citation_and_coverage() {
     assert!(hit["coverage"]["fresh_until"].is_string());
 }
 
-/// evidence/R50: search without a match states the coverage of each source
+/// spec: A search that matches nothing returns no hits and the coverage
+/// Search without a match states the coverage of each source.
 #[test]
 fn search_without_a_match_states_the_coverage_of_each_source() {
     let env = synced_env();
@@ -340,7 +346,8 @@ fn search_without_a_match_states_the_coverage_of_each_source() {
     assert_eq!(coverage[1]["state"], "never looked");
 }
 
-/// evidence/R6: sync without manifest records couldnt look
+/// spec: A complete sync stores evidence and reports found
+/// A sync without a manifest records couldn't look.
 #[test]
 fn sync_without_manifest_records_couldnt_look() {
     let env = Env::new();
@@ -383,7 +390,8 @@ fn set_permission(manifest: &mut toml::Table, key: &str, values: &[&str]) {
         .insert(key.into(), values.into());
 }
 
-/// evidence/R10: source scope outside the manifest scopes is refused
+/// spec: A source or window outside the manifest is refused
+/// Source scope outside the manifest scopes is refused.
 #[test]
 fn source_scope_outside_the_manifest_scopes_is_refused() {
     let env = Env::with_manifest(|m| set_permission(m, "scopes", &["work"]));
@@ -409,7 +417,8 @@ fn source_scope_outside_the_manifest_scopes_is_refused() {
     assert!(!env.rastro(&["sync", "project"]).status.success());
 }
 
-/// evidence/R10: a window other than the bound one is rejected
+/// spec: A source or window outside the manifest is refused
+/// A window other than the bound one is rejected.
 #[test]
 fn a_window_other_than_the_bound_one_is_rejected() {
     let env = Env::new();
@@ -437,7 +446,8 @@ fn a_window_other_than_the_bound_one_is_rejected() {
     assert_eq!(env.sql::<i64>("SELECT count(*) FROM evidence"), 0);
 }
 
-/// evidence/R11: connector sees only allowed and declared environment
+/// spec: A connector sees only its declared environment
+/// Connector sees only allowed and declared environment.
 #[test]
 fn connector_sees_only_allowed_and_declared_environment() {
     let env = Env::with_manifest(|m| {
@@ -465,7 +475,8 @@ fn connector_sees_only_allowed_and_declared_environment() {
     assert!(!seen.contains("RASTRO_HOME"), "{seen}");
 }
 
-/// evidence/R12: control characters from connectors are escaped in human output
+/// spec: Connector text is escaped on the terminal
+/// Control characters from connectors are escaped in human output.
 #[test]
 fn control_characters_from_connectors_are_escaped_in_human_output() {
     let env = Env::new();
@@ -494,7 +505,8 @@ fn control_characters_from_connectors_are_escaped_in_human_output() {
 }
 
 /// S25: the core keeps an original only for a source with the flag, whatever the connector sends
-/// evidence/R60: core drops an original from a source without the flag
+/// spec: A kept original is stored beside its quote
+/// Core drops an original from a source without the flag.
 #[test]
 fn core_drops_an_original_from_a_source_without_the_flag() {
     let original = json!({"id": 7, "body": "hello world", "extra": [1, 2]});
@@ -526,7 +538,8 @@ fn core_drops_an_original_from_a_source_without_the_flag() {
 }
 
 /// S25a: an original that isn't a JSON object is rejected, nothing is stored, search stays schema-valid
-/// evidence/R61: a non object original is rejected for a source that keeps originals
+/// spec: A non-object original is rejected
+/// A non-object original is rejected for a source that keeps originals.
 #[test]
 fn a_non_object_original_is_rejected_for_a_source_that_keeps_originals() {
     for bad in [json!("not-an-object"), json!([1, 2]), json!(7), json!(true)] {
@@ -553,7 +566,8 @@ fn a_non_object_original_is_rejected_for_a_source_that_keeps_originals() {
 }
 
 /// S25b: an explicit null original is rejected for a source that keeps originals; omitted is fine
-/// evidence/R62: a null original is rejected but an omitted one is accepted
+/// spec: A null original is rejected and an omission accepted
+/// A null original is rejected but an omitted one is accepted.
 #[test]
 fn a_null_original_is_rejected_but_an_omitted_one_is_accepted() {
     let message = || valid("https://github.com/o/p/issues/1", "hello world");

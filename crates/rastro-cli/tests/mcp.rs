@@ -772,7 +772,8 @@ fn a_cli_envelope_equals_the_tool_result_for_the_same_request() {
     );
 }
 
-/// evidence/R49: a limit outside 1..=50, or not a whole number, is invalid params
+/// spec: A search hit is cited with a bounded excerpt
+/// A limit outside 1..=50, or not a whole number, is invalid params.
 #[test]
 fn a_bad_limit_is_a_protocol_error_over_mcp() {
     let env = seeded();

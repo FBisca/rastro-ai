@@ -31,7 +31,8 @@ const ADD: &[&str] = &[
     "personal",
 ];
 
-/// evidence/R1: source add then list shows the source
+/// spec: Adding a source saves it and listing shows it
+/// Source add then list shows the source.
 #[test]
 fn source_add_then_list_shows_the_source() {
     let home = TempDir::new().unwrap();
@@ -87,7 +88,8 @@ fn source_add_then_list_shows_the_source() {
     assert_eq!(saved["keep_original"].as_bool(), Some(false));
 }
 
-/// evidence/R2: registered source has never looked coverage
+/// spec: A source that never synced reports never looked
+/// A registered source has never looked.
 #[test]
 fn registered_source_has_never_looked_coverage() {
     let home = TempDir::new().unwrap();
@@ -112,7 +114,8 @@ fn registered_source_has_never_looked_coverage() {
     assert!(error["error"].as_str().unwrap().contains("unknown source"));
 }
 
-/// evidence/R3: locations follow rastro xdg and home
+/// spec: Data and config live where the environment says
+/// Locations follow `RASTRO_HOME`, the XDG variables and home.
 #[test]
 fn locations_follow_rastro_xdg_and_home() {
     for mode in 0..3 {
@@ -170,7 +173,8 @@ fn locations_follow_rastro_xdg_and_home() {
     }
 }
 
-/// evidence/R1: concurrent registrations persist and reject duplicates
+/// spec: Adding a source saves it and listing shows it
+/// Concurrent registrations persist and reject duplicates.
 #[test]
 fn concurrent_registrations_persist_and_reject_duplicates() {
     let home = TempDir::new().unwrap();
@@ -202,7 +206,8 @@ fn concurrent_registrations_persist_and_reject_duplicates() {
     assert_eq!(successes, 1, "exactly one duplicate registration succeeds");
 }
 
-/// evidence/R3: private files under permissive umask
+/// spec: Data and config live where the environment says
+/// Private files under permissive umask.
 #[cfg(unix)]
 #[test]
 fn private_files_under_permissive_umask() {
@@ -273,7 +278,8 @@ fn private_files_under_permissive_umask() {
     connection.execute_batch("ROLLBACK;").unwrap();
 }
 
-/// evidence/R1: freshness rejects signed duration and outputs match schema
+/// spec: Adding a source saves it and listing shows it
+/// Freshness rejects signed duration and outputs match schema.
 #[test]
 fn freshness_rejects_signed_duration_and_outputs_match_schema() {
     let home = TempDir::new().unwrap();
@@ -299,7 +305,8 @@ fn freshness_rejects_signed_duration_and_outputs_match_schema() {
     }
 }
 
-/// evidence/R3: empty and relative location overrides
+/// spec: Data and config live where the environment says
+/// Empty and relative location overrides.
 #[test]
 fn empty_and_relative_location_overrides() {
     for (rastro, xdg, succeeds) in [
@@ -344,7 +351,8 @@ fn empty_and_relative_location_overrides() {
     }
 }
 
-/// evidence/R75: declared options are required and unknown options are refused
+/// spec: An undeclared or missing option is refused
+/// Declared options are required and unknown options are refused.
 #[test]
 fn declared_options_are_required_and_unknown_options_are_refused() {
     let home = TempDir::new().unwrap();
@@ -381,7 +389,8 @@ fn declared_options_are_required_and_unknown_options_are_refused() {
     }
 }
 
-/// evidence/R76: github repo shorthand uses the manifest pattern
+/// spec: The declared repo pattern checks the repo
+/// GitHub repo shorthand uses the manifest pattern.
 #[test]
 fn github_repo_shorthand_uses_the_manifest_pattern() {
     let home = TempDir::new().unwrap();
@@ -417,7 +426,8 @@ fn github_repo_shorthand_uses_the_manifest_pattern() {
     );
 }
 
-/// evidence/R75: a declared option is saved listed and survives reload
+/// spec: An undeclared or missing option is refused
+/// A declared option is saved listed and survives reload.
 #[test]
 fn a_declared_option_is_saved_listed_and_survives_reload() {
     let home = TempDir::new().unwrap();
@@ -459,7 +469,8 @@ fn a_declared_option_is_saved_listed_and_survives_reload() {
     }
 }
 
-/// evidence/R75: a manifest declaring no options refuses any option and an empty name
+/// spec: An undeclared or missing option is refused
+/// A manifest declaring no options refuses any option and an empty name.
 #[test]
 fn a_manifest_declaring_no_options_refuses_any_option_and_an_empty_name() {
     let home = TempDir::new().unwrap();
@@ -496,7 +507,8 @@ fn a_manifest_declaring_no_options_refuses_any_option_and_an_empty_name() {
     assert!(listed["result"]["sources"].as_array().unwrap().is_empty());
 }
 
-/// evidence/R76: the bundled github declaration checks the repo when no plugin is installed
+/// spec: The declared repo pattern checks the repo
+/// The bundled github declaration checks the repo when no plugin is installed.
 #[test]
 fn the_bundled_github_declaration_checks_the_repo_when_no_plugin_is_installed() {
     let home = TempDir::new().unwrap();
@@ -526,9 +538,10 @@ fn the_bundled_github_declaration_checks_the_repo_when_no_plugin_is_installed() 
     run(&mut command(home.path()), ADD);
 }
 
-/// evidence/R77: a connector whose manifest declares `single_source` refuses a second source with an
-/// error naming the existing one, in any scope, and nothing is saved; a connector that doesn't
-/// declare it takes several
+/// spec: A single-source connector refuses a second source
+/// A connector whose manifest declares `single_source` refuses a second source with an error naming
+/// the existing one, in any scope, and nothing is saved; a connector that doesn't declare it takes
+/// several.
 #[test]
 fn a_single_source_connector_refuses_a_second_source_naming_the_first() {
     let manifest = include_str!("../../rastro-test-connector/rastro-plugin.toml")

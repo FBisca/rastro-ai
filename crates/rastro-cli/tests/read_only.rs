@@ -624,8 +624,9 @@ fn a_pending_or_unknown_migration_is_refused_with_a_typed_error() {
     assert!(matches!(refusal(&env), Refusal::UnknownMigration(n) if n == "299912312359_future"));
 }
 
-/// evidence/R30: a sync that takes sync.lock marks a never-finished run interrupted before its own,
-/// even when a reader blocked the startup recovery
+/// spec: A run that never finished is marked interrupted
+/// A sync that takes `sync.lock` marks a never-finished run interrupted before its own, even when a
+/// reader blocked the startup recovery.
 #[test]
 fn a_sync_starting_beside_a_reader_still_recovers_the_crashed_run_before_its_own() {
     let env = synced();
@@ -710,7 +711,8 @@ fn found_then_quiet(quiet: usize) -> Env {
     env
 }
 
-/// evidence/R63: a source with more than ten windows lists the ten newest, newest first
+/// spec: Coverage lists each source's newest windows
+/// A source with more than ten windows lists the ten newest, newest first.
 #[test]
 fn the_reader_lists_the_ten_newest_windows_newest_first_or_all_on_request() {
     let env = found_then_quiet(11);
@@ -731,7 +733,8 @@ fn the_reader_lists_the_ten_newest_windows_newest_first_or_all_on_request() {
     assert_eq!(all.windows[0].from, capped.windows[0].from);
 }
 
-/// evidence/R64: the only found window being outside the newest ten keeps the source found
+/// spec: A quiet window does not erase what an earlier one found
+/// The only found window being outside the newest ten keeps the source found.
 #[test]
 fn the_reader_answers_found_when_the_only_found_window_is_outside_the_newest_ten() {
     let env = found_then_quiet(11);
@@ -749,7 +752,8 @@ fn the_reader_answers_found_when_the_only_found_window_is_outside_the_newest_ten
     );
 }
 
-/// evidence/R63: an interrupted run beside more than ten windows is the newest, counted, capped
+/// spec: Coverage lists each source's newest windows
+/// An interrupted run beside more than ten windows is the newest, counted, capped.
 #[test]
 fn an_interrupted_run_is_the_newest_window_counted_and_capped_like_its_recovery() {
     let env = found_then_quiet(11);
