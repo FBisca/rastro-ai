@@ -498,6 +498,31 @@ impl ClaimRejectRequest {
     }
 }
 
+/// Fix a claim's object: the claim you read is retracted and a claim with the same subject and predicate and the new object is asserted on your word alone. Name the revision you read; a claim that changed since is refused, and nothing is recorded. An object the predicate's range does not take is refused too, naming the predicate and its range. A claim your own `identity link` made is refused: undo that link with `rastro identity undo`.
+#[derive(Args, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ClaimEditRequest {
+    /// The claim's id, as `about` and `why` show it.
+    pub claim: String,
+    /// The claim's revision as you read it, as `about` and `why` show it.
+    #[arg(long)]
+    pub seen: String,
+    /// The new object: an entity's identifier or alias when the predicate takes entities, or the value when it takes a literal.
+    #[arg(long)]
+    pub object: String,
+}
+impl ClaimEditRequest {
+    pub(crate) fn run<S: Storage + StoredTwins>(
+        self,
+        rastro: &mut Rastro<S>,
+    ) -> Result<ClaimWriteResult> {
+        Ok(ClaimWriteResult::of(
+            &self.claim,
+            rastro.edit_claim(&self.claim, &self.seen, &self.object)?,
+        ))
+    }
+}
+
 /// Undo one earlier intent. Undoing a link or a merge also records a cannot-link for its pair.
 #[derive(Args, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

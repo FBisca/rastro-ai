@@ -132,7 +132,7 @@ pub(crate) fn insert_all(
         }
         // A correction names a claim the issuer sees, as it stands now: the revision the owner
         // read is the revision the projection holds, or the owner corrects what they never saw.
-        if matches!(intent.kind, IntentKind::Confirm | IntentKind::Reject)
+        if intent.corrects().is_some()
             && let Some(claim) = intent.targets.claim()
         {
             let current: Option<(String, String)> = db
@@ -414,11 +414,12 @@ pub(crate) fn copy_visible(db: &Connection, target: &Connection, scopes: &[Scope
         }
     };
     let claims: Vec<(String, String, String, Option<String>, String)> = db
-        .prepare(
+        .prepare(&format!(
             "SELECT c.id, c.predicate, c.subject, c.object_entity, ij.intent_id FROM claim c
              JOIN intent_justification ij ON ij.claim_id = c.id
-             JOIN intent i ON i.id = ij.intent_id WHERE i.kind NOT IN ('confirm', 'reject')",
-        )?
+             JOIN intent i ON i.id = ij.intent_id WHERE NOT {}",
+            crate::lifecycle::CORRECTION
+        ))?
         .query_map([], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
         })?
@@ -430,9 +431,25 @@ pub(crate) fn copy_visible(db: &Connection, target: &Connection, scopes: &[Scope
         // a merge only where both its ends are, since an effective link makes its Person visible
         // but an undone one doesn't.
         let commitment = (intents.iter()).any(|known| {
-            known.id == intent && matches!(known.kind, IntentKind::Accept | IntentKind::Edit)
+            known.id == intent
+                && match known.kind {
+                    IntentKind::Accept => true,
+                    IntentKind::Edit => known.targets.claim().is_none(),
+                    _ => false,
+                }
         });
-        let seen = if commitment {
+        // A claim an edit asserted is seen where the claim it fixed is, on the evidence a scope
+        // reads: the owner's words go where the reading they replace went.
+        let fixed = (intents.iter())
+            .find(|known| known.id == intent && known.kind == IntentKind::Edit)
+            .and_then(|known| known.corrects());
+        let seen = if let Some(fixed) = fixed {
+            target.query_row(
+                "SELECT EXISTS (SELECT 1 FROM claim WHERE id = ?1)",
+                [fixed],
+                |r| r.get(0),
+            )?
+        } else if commitment {
             in_scope(&intent)
         } else {
             let visible = match (predicate.as_str(), object) {
@@ -464,13 +481,14 @@ pub(crate) fn copy_visible(db: &Connection, target: &Connection, scopes: &[Scope
     }
     type Stretch = (String, String, String, Option<String>, Option<String>);
     let justifications: Vec<Stretch> = db
-        .prepare("SELECT ij.id, ij.claim_id, ij.intent_id, ij.started_at, ij.ended_at FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id WHERE ij.claim_id IN (SELECT value FROM json_each(?1)) AND i.kind NOT IN ('confirm', 'reject') UNION ALL SELECT ij.id, ij.claim_id, ij.intent_id, ij.started_at, ij.ended_at FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id WHERE i.kind IN ('confirm', 'reject')")?
+        .prepare(&format!("SELECT ij.id, ij.claim_id, ij.intent_id, ij.started_at, ij.ended_at FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id WHERE ij.claim_id IN (SELECT value FROM json_each(?1)) AND NOT {0} UNION ALL SELECT ij.id, ij.claim_id, ij.intent_id, ij.started_at, ij.ended_at FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id WHERE {0}", crate::lifecycle::CORRECTION))?
         .query_map([&shown], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
         .collect::<Result<_, _>>()?;
-    let corrections: BTreeSet<&str> = intents
+    // The claim each correction reviews, by intent: a fix also asserts a claim of its own, which is
+    // not a correction.
+    let corrections: BTreeMap<&str, &str> = intents
         .iter()
-        .filter(|intent| matches!(intent.kind, IntentKind::Confirm | IntentKind::Reject))
-        .map(|intent| intent.id.as_str())
+        .filter_map(|intent| Some((intent.id.as_str(), intent.corrects()?)))
         .collect();
     let mut needed: BTreeSet<String> = resolution
         .me
@@ -490,7 +508,7 @@ pub(crate) fn copy_visible(db: &Connection, target: &Connection, scopes: &[Scope
         // A correction applies where the claim it reviews is seen on other grounds: it never
         // makes a claim visible. Its claim is in the replay only when a visible justification or
         // another intent put it there.
-        if corrections.contains(intent.as_str()) {
+        if corrections.get(intent.as_str()) == Some(&claim.as_str()) {
             let held: bool = target.query_row(
                 "SELECT EXISTS (SELECT 1 FROM claim WHERE id = ?1)",
                 [claim],

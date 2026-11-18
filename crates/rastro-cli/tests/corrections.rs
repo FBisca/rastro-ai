@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
-//! The owner confirms or retracts a claim end to end: `rastro claim confirm` and `rastro claim
-//! reject` record one intent bound to the revision the owner saw. A confirmed claim reads
+//! The owner confirms, retracts or fixes a claim end to end: `rastro claim confirm`, `reject` and
+//! `edit` record one intent bound to the revision the owner saw. A confirmed claim reads
 //! `confirmed` in `about`, `why`, a merged Person's group and a scoped replay; a retracted claim
 //! leaves every current read, in every scope that sees it; a rebuild brings both back unchanged.
 mod support;
@@ -27,17 +27,34 @@ fn time() -> DateTime<Utc> {
 }
 struct Env {
     home: TempDir,
+    /// The extractor the fixture claims are bound to, and the directory its manifest is found in.
+    extractor: &'static str,
+    plugins: std::path::PathBuf,
 }
 impl Env {
     fn new() -> Self {
+        let home = tempfile::tempdir().unwrap();
+        let plugins = home.path().join("no-plugins");
         Self {
-            home: tempfile::tempdir().unwrap(),
+            home,
+            extractor: MISSING,
+            plugins,
+        }
+    }
+    /// An environment whose claims come from the installed test extractor, so the vocabulary
+    /// that defines their predicates is there to check an edit against.
+    fn with_vocabulary() -> Self {
+        Self {
+            extractor: "test-extractor",
+            plugins: std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../rastro-test-extractor"),
+            ..Self::new()
         }
     }
     fn run(&self, args: &[&str]) -> (bool, Value) {
         let out = Command::new(support::rastro())
             .env("RASTRO_HOME", self.home.path())
-            .env("RASTRO_PLUGIN_PATH", self.home.path().join("no-plugins"))
+            .env("RASTRO_PLUGIN_PATH", &self.plugins)
             .args(args)
             .arg("--json")
             .output()
@@ -87,9 +104,10 @@ impl Env {
         let source = Source::github("project".into(), "o/p".into(), Scope("personal".into()));
         let mut db = self.db();
         db.project_sources(std::slice::from_ref(&source)).unwrap();
-        db.bind_extractor(&source.name, Some(MISSING)).unwrap();
+        db.bind_extractor(&source.name, Some(self.extractor))
+            .unwrap();
         let run = db
-            .start_run(&source, (MISSING, "1"), time(), (time(), time()))
+            .start_run(&source, (self.extractor, "1"), time(), (time(), time()))
             .unwrap();
         let quote = match &object {
             Object::Literal { value, .. } => value.clone(),
@@ -110,7 +128,7 @@ impl Env {
         };
         db.append_evidence(run, &e).unwrap();
         let (evidence_id, _) = db
-            .pending_evidence((MISSING, "1"), &source)
+            .pending_evidence((self.extractor, "1"), &source)
             .unwrap()
             .into_iter()
             .rev()
@@ -138,7 +156,7 @@ impl Env {
                 extraction_rule: "fixture-rule".into(),
             }]),
         };
-        db.record_claims(run, (MISSING, "1"), &[observed], None)
+        db.record_claims(run, (self.extractor, "1"), &[observed], None)
             .unwrap();
     }
     /// A GitHub-shaped account `github:account/<n>`, typed `code:Account`, with a login alias.
@@ -205,6 +223,35 @@ impl Env {
             "--seen",
             claim["revision"].as_str().unwrap(),
         ])
+    }
+    fn edit(&self, claim: &Value, object: &str) -> Value {
+        self.ok(&[
+            "claim",
+            "edit",
+            claim["id"].as_str().unwrap(),
+            "--seen",
+            claim["revision"].as_str().unwrap(),
+            "--object",
+            object,
+        ])
+    }
+    /// Pull request `github:pr/o/p/1`, which the installed test extractor's vocabulary says is
+    /// `open` and in repository `github:repo/o/p`.
+    fn pull_request(&self) -> &'static str {
+        let pr = Entity::new("github:pr/o/p/1".into(), "code:PullRequest".into());
+        let location = "https://api.github.com/repos/o/p/pulls/1";
+        let state = Object::Literal {
+            value: "open".into(),
+            datatype: "string".into(),
+        };
+        self.record(&pr, "code:state", state, (location, "/state"));
+        let repository = Object::Entity {
+            id: claims::entity_id("github:repo/o/p"),
+            identifier: "github:repo/o/p".into(),
+            entity_type: "code:Repository".into(),
+        };
+        self.record(&pr, "code:in_repository", repository, (location, "/repo"));
+        "github:pr/o/p/1"
     }
     fn confirm(&self, claim: &Value) -> Value {
         self.ok(&[
@@ -397,9 +444,8 @@ fn rows(env: &Env) -> (Vec<String>, Vec<String>) {
 }
 
 // spec: Corrections replay at rebuild
-// Partial: S20 also names fixed claims; those are covered once edit exists.
 #[test]
-fn a_rebuild_brings_every_confirmation_and_retraction_back_with_the_same_ids_and_statuses() {
+fn a_rebuild_brings_every_confirmation_retraction_and_fix_back_with_the_same_ids_and_statuses() {
     let env = Env::new();
     let octocat = env.account(7, "octocat");
     let ana = env.person("Ana");
@@ -413,6 +459,16 @@ fn a_rebuild_brings_every_confirmation_and_retraction_back_with_the_same_ids_and
     env.login(7, "octo-alias", "https://example.test/alias/7");
     let wrong = env.claim("github:account/7", "rastro:alias", "octo-alias");
     env.reject(&wrong);
+    // One fix, on a claim of the standard vocabulary the core bundles.
+    let promise = Entity::new("std:commitment/c1".into(), "std:Commitment".into());
+    let owes = Object::Literal {
+        value: "Ana".into(),
+        datatype: "string".into(),
+    };
+    env.record(&promise, "std:owes", owes, ("meeting:m/1", "/owes"));
+    let promised = env.claim("std:commitment/c1", "std:owes", "Ana");
+    env.edit(&promised, "Bea");
+    let fixed = env.claim("std:commitment/c1", "std:owes", "Bea");
 
     let before = rows(&env);
     let read = |entity: &str, claim: &Value| {
@@ -423,8 +479,13 @@ fn a_rebuild_brings_every_confirmation_and_retraction_back_with_the_same_ids_and
     };
     let (about_before, why_before) = read(&ana, &link);
     let (account_about, account_why) = read("github:account/7", &observed);
+    let (promise_about, fixed_why) = read("std:commitment/c1", &fixed);
     assert_eq!(
         env.ok(&["why", wrong["id"].as_str().unwrap()])["claim"]["status"],
+        "retracted"
+    );
+    assert_eq!(
+        env.ok(&["why", promised["id"].as_str().unwrap()])["claim"]["status"],
         "retracted"
     );
     assert!(
@@ -439,6 +500,14 @@ fn a_rebuild_brings_every_confirmation_and_retraction_back_with_the_same_ids_and
     assert_eq!(
         read("github:account/7", &observed),
         (account_about, account_why)
+    );
+    assert_eq!(
+        read("std:commitment/c1", &fixed),
+        (promise_about, fixed_why)
+    );
+    assert_eq!(
+        env.ok(&["why", promised["id"].as_str().unwrap()])["claim"]["status"],
+        "retracted"
     );
     env.ok(&["claims", "rebuild"]);
     assert_eq!(rows(&env), before);
@@ -479,7 +548,7 @@ impl Mcp {
     fn start(env: &Env) -> Self {
         let mut child = Command::new(support::rastro())
             .env("RASTRO_HOME", env.home.path())
-            .env("RASTRO_PLUGIN_PATH", env.home.path().join("no-plugins"))
+            .env("RASTRO_PLUGIN_PATH", &env.plugins)
             .args(["mcp", "--scope", "personal"])
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -667,5 +736,161 @@ fn a_later_confirmation_ends_the_retraction_it_overrides() {
         current(&rejected),
         false,
         "the overridden retraction still holds: {why}"
+    );
+}
+
+/// The claims `entity`'s `about` lists for `predicate`, as (object text, status).
+fn listed(env: &Env, entity: &str, predicate: &str) -> Vec<(String, String)> {
+    env.about(entity)["claims"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["predicate"] == predicate)
+        .map(|c| {
+            let object = &c["object"];
+            let text = object["value"].as_str().or(object["identifier"].as_str());
+            (
+                text.unwrap().to_string(),
+                c["status"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
+}
+
+// spec: The owner fixes a claim's object
+#[test]
+fn an_edited_claim_replaces_the_old_one_and_why_cites_the_edit_alone() {
+    let env = Env::with_vocabulary();
+    let pr = env.pull_request();
+    let seen = env.claim(pr, "code:state", "open");
+    let written = env.edit(&seen, "closed");
+    let intent = &written["intents"][0];
+    assert_eq!(intent["kind"], "edit", "{written}");
+    assert_eq!(written["intents"].as_array().unwrap().len(), 1);
+    assert_eq!(env.intents(), 1);
+
+    assert_eq!(
+        listed(&env, pr, "code:state"),
+        [("closed".to_string(), "observed".to_string())],
+        "{}",
+        env.about(pr)
+    );
+    let fixed = env.claim(pr, "code:state", "closed");
+    let why = env.ok(&["why", fixed["id"].as_str().unwrap()]);
+    let supports = why["supports"].as_array().unwrap();
+    assert_eq!(supports.len(), 1, "{why}");
+    assert_eq!(supports[0]["intent"]["id"], intent["id"], "{why}");
+    assert_eq!(supports[0]["justification_kind"], "owner_intent", "{why}");
+    assert_eq!(supports[0]["current"], true);
+    // The claim it replaced says it is retracted, by the same intent.
+    let old = env.ok(&["why", seen["id"].as_str().unwrap()]);
+    assert_eq!(old["claim"]["status"], "retracted", "{old}");
+}
+
+// spec: The owner fixes a claim's object
+#[test]
+fn an_object_outside_the_predicates_range_is_refused_naming_both_and_records_nothing() {
+    let env = Env::with_vocabulary();
+    let pr = env.pull_request();
+    let seen = env.claim(pr, "code:in_repository", "github:repo/o/p");
+    let before = env.about(pr)["claims"].clone();
+
+    let error = env.refused(&[
+        "claim",
+        "edit",
+        seen["id"].as_str().unwrap(),
+        "--seen",
+        seen["revision"].as_str().unwrap(),
+        "--object",
+        "next-ish",
+    ]);
+    assert!(error.contains("code:in_repository"), "{error}");
+    assert!(error.contains("code:Repository"), "{error}");
+    assert_eq!(env.intents(), 0);
+    assert_eq!(env.about(pr)["claims"], before);
+}
+
+// spec: The owner fixes a claim's object
+#[test]
+fn an_entity_in_the_predicates_range_fixes_an_entity_object() {
+    let env = Env::with_vocabulary();
+    let pr = env.pull_request();
+    // A second repository the evidence knows, typed as one.
+    let other = Entity::new("github:repo/o/q".into(), "code:Repository".into());
+    let typed = Object::Literal {
+        value: "code:Repository".into(),
+        datatype: claims::TYPE_DATATYPE.into(),
+    };
+    let at = "https://api.github.com/repos/o/q";
+    env.record(&other, claims::TYPE_PREDICATE, typed, (at, "/type"));
+    let seen = env.claim(pr, "code:in_repository", "github:repo/o/p");
+
+    env.edit(&seen, "github:repo/o/q");
+    assert_eq!(
+        listed(&env, pr, "code:in_repository"),
+        [("github:repo/o/q".to_string(), "observed".to_string())],
+    );
+}
+
+// spec: The owner fixes a claim's object
+#[test]
+fn a_scoped_mcp_read_shows_the_fixed_claim_and_not_the_one_it_replaced() {
+    let env = Env::with_vocabulary();
+    let pr = env.pull_request();
+    let seen = env.claim(pr, "code:state", "open");
+    let mut mcp = Mcp::start(&env);
+    assert!(
+        mcp.about(pr)
+            .iter()
+            .any(|c| c == seen["id"].as_str().unwrap())
+    );
+
+    env.edit(&seen, "closed");
+    let fixed = env.claim(pr, "code:state", "closed");
+    let listed = mcp.about(pr);
+    assert!(
+        listed.iter().any(|c| c == fixed["id"].as_str().unwrap()),
+        "{listed:?}"
+    );
+    assert!(
+        !listed.iter().any(|c| c == seen["id"].as_str().unwrap()),
+        "{listed:?}"
+    );
+}
+
+// spec: The owner fixes a claim's object
+#[test]
+fn the_owner_can_fix_a_claim_an_earlier_edit_asserted() {
+    let env = Env::with_vocabulary();
+    let pr = env.pull_request();
+    let seen = env.claim(pr, "code:state", "open");
+    env.edit(&seen, "closd");
+    let typo = env.claim(pr, "code:state", "closd");
+
+    env.edit(&typo, "closed");
+    assert_eq!(
+        listed(&env, pr, "code:state"),
+        [("closed".to_string(), "observed".to_string())],
+        "{}",
+        env.about(pr)
+    );
+}
+
+// spec: The owner fixes a claim's object
+#[test]
+fn a_second_fix_of_the_same_claim_replaces_the_first_fix() {
+    let env = Env::with_vocabulary();
+    let pr = env.pull_request();
+    let seen = env.claim(pr, "code:state", "open");
+    env.edit(&seen, "closed");
+    // The owner reads the retracted claim again and fixes it to something else.
+    let again = env.ok(&["why", seen["id"].as_str().unwrap()]);
+    env.edit(&again["claim"], "merged");
+
+    assert_eq!(
+        listed(&env, pr, "code:state"),
+        [("merged".to_string(), "observed".to_string())],
+        "{}",
+        env.about(pr)
     );
 }
