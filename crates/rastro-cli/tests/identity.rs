@@ -1379,6 +1379,10 @@ fn intent_id(written: &Value) -> String {
 /// account; equivalent claims (under a merge) group and count once toward `limit`. The second
 /// kind is a Linear-shaped account recorded through the scripted seam (Linear isn't merged yet).
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one seeded history reads back the person, each linked account and their claims, so every expectation shares the run that produced it"
+)]
 fn about_me_lists_the_person_its_linked_accounts_and_their_claims() {
     let env = Env::new();
     let octocat = env.account(7, "octocat");
