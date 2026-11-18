@@ -78,7 +78,8 @@ fn fixture(path: &std::path::Path, total: usize, hub: usize) {
     );
 }
 
-/// surfaces/R29: scoped about hub cold and warm p95 under 200ms
+/// spec: A scoped hub read stays under its p95 and work budget
+/// scoped about hub cold and warm p95 under 200ms
 #[test]
 #[ignore = "bench: release build only; cargo nextest run --profile live --release --run-ignored only"]
 fn scoped_about_hub_cold_and_warm_p95_under_200ms() {
@@ -148,6 +149,7 @@ fn small(dir: &tempfile::TempDir) -> std::path::PathBuf {
 }
 
 /// claims/R33: hidden claims over the work budget answer like an unknown entity
+/// spec: An unknown entity reads as empty with coverage
 #[test]
 fn hidden_claims_over_the_work_budget_answer_like_an_unknown_entity() {
     let _serial = exclusive_cache();
@@ -161,7 +163,8 @@ fn hidden_claims_over_the_work_budget_answer_like_an_unknown_entity() {
     assert_eq!(hidden, unknown);
 }
 
-/// surfaces/R29: work budget counts visible spans and fails without counts
+/// spec: A scoped hub read stays under its p95 and work budget
+/// work budget counts visible spans and fails without counts
 #[test]
 fn work_budget_counts_visible_spans_and_fails_without_counts() {
     let _serial = exclusive_cache();
@@ -175,7 +178,8 @@ fn work_budget_counts_visible_spans_and_fails_without_counts() {
     assert!(!error.contains("unscoped"), "{error}");
 }
 
-/// surfaces/R29: cache follows visible changes and keeps one entry per scope set
+/// spec: A scoped hub read stays under its p95 and work budget
+/// cache follows visible changes and keeps one entry per scope set
 #[test]
 fn cache_follows_visible_changes_and_keeps_one_entry_per_scope_set() {
     let _serial = exclusive_cache();

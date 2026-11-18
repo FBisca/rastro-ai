@@ -3,7 +3,8 @@ use rastro_core::{ReadStorage, Refusal};
 use rastro_storage_sqlite::SqliteStorage;
 use std::{fs, os::unix::fs::PermissionsExt};
 
-/// surfaces/R18: a store that can't be read without writing is a typed refusal
+/// spec: A missing database answers from the config and creates no file
+/// a store that can't be read without writing is a typed refusal
 #[test]
 fn an_unreadable_store_is_a_typed_refusal() {
     let directory = tempfile::tempdir().unwrap();

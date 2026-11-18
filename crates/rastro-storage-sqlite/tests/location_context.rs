@@ -74,6 +74,7 @@ fn quotes(found: Vec<(i64, Evidence)>) -> Vec<(String, String, String)> {
 }
 
 /// claims/R21: a changed field arrives with the companion fields no newer than the high water mark
+/// spec: A changed field arrives with its companion fields
 #[test]
 fn a_changed_field_arrives_with_the_companion_fields_no_newer_than_the_high_water_mark() {
     let (storage, source, _home) = store(0, &[0, 1, 2, 3, 4, 5]);
@@ -103,6 +104,7 @@ fn a_changed_field_arrives_with_the_companion_fields_no_newer_than_the_high_wate
 }
 
 /// claims/R21: a rebuild delivers the same context whatever the ids
+/// spec: A changed field arrives with its companion fields
 #[test]
 fn a_rebuild_delivers_the_same_context_whatever_the_ids() {
     let (one, source, _a) = store(0, &[0, 1, 2, 3, 4, 5]);
@@ -120,6 +122,7 @@ fn a_rebuild_delivers_the_same_context_whatever_the_ids() {
 }
 
 /// claims/R21: context never crosses scopes
+/// spec: A changed field arrives with its companion fields
 #[test]
 fn context_never_crosses_scopes() {
     let (mut storage, source, _home) = store(0, &[0, 1]);

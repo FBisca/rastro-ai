@@ -18,6 +18,7 @@ mod tests {
 
     /// S5: the standard vocabulary defines the commitment type and its four predicates, each with
     /// its definition, what it is not, examples, counter-examples and the evidence it needs.
+    // spec: The standard vocabulary defines the commitment terms
     #[test]
     #[allow(non_snake_case, reason = "the test is named by its scenario id")]
     fn S5_the_standard_vocabulary_defines_the_commitment_terms() {

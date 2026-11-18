@@ -162,7 +162,8 @@ fn sync_with(env: &Env, bodies: &[(&str, &str)]) -> Value {
     env.json(&["sync", "project"])["result"]["runs"][0].clone()
 }
 
-/// evidence/R47: syncing again with nothing changed writes no evidence and links the run
+/// spec: A sync that changes nothing writes no evidence
+/// Syncing again with nothing changed writes no evidence and links the run.
 #[test]
 fn syncing_again_with_nothing_changed_writes_no_evidence_and_links_the_run() {
     let env = Env::new();
@@ -194,7 +195,8 @@ fn syncing_again_with_nothing_changed_writes_no_evidence_and_links_the_run() {
     assert!(human.contains("unchanged 2"), "{human}");
 }
 
-/// evidence/R48: a body changing and changing back leaves three observations
+/// spec: A body that changes and returns keeps three observations
+/// A body changing and changing back leaves three observations.
 #[test]
 fn a_body_changing_and_changing_back_leaves_three_observations() {
     let env = Env::new();
@@ -242,7 +244,8 @@ fn a_body_changing_and_changing_back_leaves_three_observations() {
     assert!(human.contains("beta body"), "{human}");
 }
 
-/// evidence/R73: reread starts at registration and appends only new fields
+/// spec: A reread starts at the registered window
+/// Reread starts at registration and appends only new fields.
 #[test]
 fn reread_starts_at_registration_and_appends_only_new_fields() {
     let env = Env::new();
@@ -361,6 +364,7 @@ fn at(stderr: &str, what: &str, test: impl Fn(&str) -> bool) -> usize {
 }
 
 /// sync-progress/S13: before the read, stderr names the source and why it reads what it reads
+/// spec: Stderr names the source and its read reason
 #[test]
 fn S13_stderr_names_the_source_and_its_read_reason_before_the_read() {
     let env = Env::new();
@@ -391,6 +395,7 @@ fn S13_stderr_names_the_source_and_its_read_reason_before_the_read() {
 }
 
 /// sync-progress/S14: read, extract and project show in order, and a replay says so
+/// spec: Stderr shows the stages in order
 #[test]
 fn S14_stderr_shows_read_extract_and_project_in_order_and_a_replay_says_so() {
     let env = Env::with_extractor();
@@ -445,6 +450,7 @@ fn S14_stderr_shows_read_extract_and_project_in_order_and_a_replay_says_so() {
 }
 
 /// sync-progress/S15: a read over 2 s shows a running count, and no more than one per 2 s
+/// spec: A slow read shows running counts at most every two seconds
 #[test]
 fn S15_a_slow_read_shows_running_counts_at_most_one_per_two_seconds() {
     let env = Env::new();
@@ -473,6 +479,7 @@ fn S15_a_slow_read_shows_running_counts_at_most_one_per_two_seconds() {
 }
 
 /// sync-progress/S15: a read that goes quiet past 2 s still shows a count
+/// spec: A slow read shows running counts at most every two seconds
 #[test]
 fn S15_a_read_that_goes_quiet_still_shows_a_running_count() {
     let env = Env::new();
@@ -491,6 +498,7 @@ fn S15_a_read_that_goes_quiet_still_shows_a_running_count() {
 }
 
 /// sync-progress/S16: the result line has counts, and a rate-limited one has its retry time
+/// spec: The result line gives counts and the retry time
 #[test]
 fn S16_stderr_result_line_gives_counts_and_the_rate_limit_retry_time() {
     let env = Env::new();
@@ -553,6 +561,7 @@ fn sync_json(env: &Env, how: &str) -> Output {
 }
 
 /// sync-progress/S17: stdout holds one envelope; a broken or closed stderr changes nothing
+/// spec: A broken stderr changes nothing
 #[test]
 fn S17_a_broken_or_closed_stderr_changes_neither_the_result_nor_the_exit_code() {
     let bodies = [("https://x/1", "first body")];

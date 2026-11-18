@@ -195,7 +195,8 @@ pub fn loopback(base: &str) -> bool {
 mod tests {
     use super::loopback;
 
-    /// evidence/R70: only loopback hosts are accepted
+    /// spec: A non-loopback API base URL sends no request
+    /// Only loopback hosts are accepted.
     #[test]
     #[allow(non_snake_case)]
     fn only_loopback_hosts_are_accepted() {

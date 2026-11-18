@@ -83,7 +83,8 @@ mod tests {
         }
     }
 
-    /// surfaces/R2: catalog requests dispatch to supported reader operations or reject explicitly.
+    /// spec: Help and the catalog name the same operations
+    /// catalog requests dispatch to supported reader operations or reject explicitly.
     #[test]
     fn read_dispatch_accepts_only_supported_catalog_operations() {
         // A missing home exercises the real Reader without files or a storage dependency.

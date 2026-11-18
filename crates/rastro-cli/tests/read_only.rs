@@ -204,7 +204,8 @@ fn only(coverage: Vec<Coverage>) -> Coverage {
     coverage.into_iter().next().unwrap()
 }
 
-/// surfaces/R14: no row changes and no exclusive config lock
+/// spec: Reads change no row and take no exclusive config lock
+/// no row changes and no exclusive config lock
 #[test]
 fn search_and_coverage_change_no_row_and_take_no_exclusive_config_lock() {
     let env = synced();
@@ -226,7 +227,8 @@ fn search_and_coverage_change_no_row_and_take_no_exclusive_config_lock() {
     assert_eq!(dump(&env.db()), before);
 }
 
-/// surfaces/R14: the writing open puts the database in WAL mode, an old database included
+/// spec: Reads change no row and take no exclusive config lock
+/// the writing open puts the database in WAL mode, an old database included
 #[test]
 fn the_writing_open_switches_the_database_to_wal_mode() {
     let env = synced();
@@ -253,7 +255,8 @@ fn the_writing_open_switches_the_database_to_wal_mode() {
     assert_eq!(mode(&env).unwrap(), "delete");
 }
 
-/// surfaces/R15: calls during a sync in another process answer, with no lock error
+/// spec: Calls during a sync answer from one snapshot
+/// calls during a sync in another process answer, with no lock error
 #[test]
 fn calls_during_a_sync_in_another_process_answer_without_a_lock_error() {
     let env = synced();
@@ -378,7 +381,8 @@ impl ReadStorage for Interleaved {
     }
 }
 
-/// surfaces/R15: the hits and the coverage in one answer come from the same snapshot
+/// spec: Calls during a sync answer from one snapshot
+/// the hits and the coverage in one answer come from the same snapshot
 #[test]
 fn hits_and_coverage_in_one_answer_come_from_the_same_snapshot() {
     let env = synced();
@@ -467,7 +471,8 @@ fn hits_and_coverage_in_one_answer_come_from_the_same_snapshot() {
     assert_ne!(only(next.coverage).last_checked, old);
 }
 
-/// surfaces/R16: a source added after the reader's previous call shows up in the next one
+/// spec: A source added after launch appears in the next call
+/// a source added after the reader's previous call shows up in the next one
 #[test]
 fn a_source_added_after_the_last_call_appears_in_the_next() {
     let env = synced();
@@ -501,7 +506,8 @@ fn unfinished_run(env: &Env) {
         .unwrap();
 }
 
-/// surfaces/R17: an unfinished run no sync holds reads "unknown: interrupted", unwritten
+/// spec: An unfinished run no sync holds reads unknown interrupted
+/// an unfinished run no sync holds reads "unknown: interrupted", unwritten
 #[test]
 fn an_unfinished_run_with_no_live_sync_reads_unknown_interrupted_without_writing() {
     let env = Env::new();
@@ -535,7 +541,8 @@ fn an_unfinished_run_with_no_live_sync_reads_unknown_interrupted_without_writing
     assert_eq!(recovered.reason.as_deref(), Some("interrupted"));
 }
 
-/// surfaces/R18: no database file: every source never looked, no hits, no file created
+/// spec: A missing database answers from the config and creates no file
+/// no database file: every source never looked, no hits, no file created
 #[test]
 fn a_missing_database_answers_from_config_and_creates_no_file() {
     let env = Env::new();
@@ -566,7 +573,8 @@ fn a_missing_database_answers_from_config_and_creates_no_file() {
     );
 }
 
-/// surfaces/R18: with nothing configured and nothing on disk, a read creates nothing
+/// spec: A missing database answers from the config and creates no file
+/// with nothing configured and nothing on disk, a read creates nothing
 #[test]
 fn a_read_with_no_config_and_no_database_creates_nothing() {
     let home = TempDir::new().unwrap();
@@ -586,7 +594,8 @@ fn a_read_with_no_config_and_no_database_creates_nothing() {
     assert_eq!(fs::read_dir(home.path()).unwrap().count(), 0);
 }
 
-/// surfaces/R19: a pending or unknown newer migration is a typed refusal, not a migration
+/// spec: A migration that appears after launch is a tool error
+/// a pending or unknown newer migration is a typed refusal, not a migration
 #[test]
 fn a_pending_or_unknown_migration_is_refused_with_a_typed_error() {
     let env = synced();
@@ -624,8 +633,9 @@ fn a_pending_or_unknown_migration_is_refused_with_a_typed_error() {
     assert!(matches!(refusal(&env), Refusal::UnknownMigration(n) if n == "299912312359_future"));
 }
 
-/// evidence/R30: a sync that takes sync.lock marks a never-finished run interrupted before its own,
-/// even when a reader blocked the startup recovery
+/// spec: A run that never finished is marked interrupted
+/// A sync that takes `sync.lock` marks a never-finished run interrupted before its own, even when a
+/// reader blocked the startup recovery.
 #[test]
 fn a_sync_starting_beside_a_reader_still_recovers_the_crashed_run_before_its_own() {
     let env = synced();
@@ -710,7 +720,8 @@ fn found_then_quiet(quiet: usize) -> Env {
     env
 }
 
-/// evidence/R63: a source with more than ten windows lists the ten newest, newest first
+/// spec: Coverage lists each source's newest windows
+/// A source with more than ten windows lists the ten newest, newest first.
 #[test]
 fn the_reader_lists_the_ten_newest_windows_newest_first_or_all_on_request() {
     let env = found_then_quiet(11);
@@ -731,7 +742,8 @@ fn the_reader_lists_the_ten_newest_windows_newest_first_or_all_on_request() {
     assert_eq!(all.windows[0].from, capped.windows[0].from);
 }
 
-/// evidence/R64: the only found window being outside the newest ten keeps the source found
+/// spec: A quiet window does not erase what an earlier one found
+/// The only found window being outside the newest ten keeps the source found.
 #[test]
 fn the_reader_answers_found_when_the_only_found_window_is_outside_the_newest_ten() {
     let env = found_then_quiet(11);
@@ -749,7 +761,8 @@ fn the_reader_answers_found_when_the_only_found_window_is_outside_the_newest_ten
     );
 }
 
-/// evidence/R63: an interrupted run beside more than ten windows is the newest, counted, capped
+/// spec: Coverage lists each source's newest windows
+/// An interrupted run beside more than ten windows is the newest, counted, capped.
 #[test]
 fn an_interrupted_run_is_the_newest_window_counted_and_capped_like_its_recovery() {
     let env = found_then_quiet(11);
@@ -794,7 +807,8 @@ fn edit_sources(env: &Env, edit: impl FnOnce(&mut Vec<toml::Value>)) {
     fs::write(path, config.to_string()).unwrap();
 }
 
-/// surfaces/R7: the reader keeps a removed source's coverage, unregistered
+/// spec: A removed source keeps its stored coverage
+/// the reader keeps a removed source's coverage, unregistered
 #[test]
 fn the_reader_answers_a_removed_source_from_its_stored_windows_unregistered() {
     let env = synced();
@@ -842,7 +856,8 @@ fn the_reader_answers_a_removed_source_from_its_stored_windows_unregistered() {
     }
 }
 
-/// surfaces/R7: a removed source's unfinished run is its newest, counted window
+/// spec: A removed source keeps its stored coverage
+/// a removed source's unfinished run is its newest, counted window
 #[test]
 fn the_reader_counts_a_removed_sources_interrupted_run_as_a_window() {
     let env = synced();
@@ -856,7 +871,8 @@ fn the_reader_counts_a_removed_sources_interrupted_run_as_a_window() {
     assert_eq!(entry.state, CoverageState::Unknown);
 }
 
-/// surfaces/R7: a name in neither config nor storage is unknown, however many pairs storage has
+/// spec: A removed source keeps its stored coverage
+/// a name in neither config nor storage is unknown, however many pairs storage has
 #[test]
 fn a_name_in_neither_config_nor_storage_is_an_unknown_source() {
     let env = synced();
@@ -868,7 +884,8 @@ fn a_name_in_neither_config_nor_storage_is_an_unknown_source() {
     assert!(env.rastro(&["coverage", "project"]).status.success());
 }
 
-/// surfaces/R8: a removed source that never synced reads never looked, unregistered
+/// spec: A removed source that never synced is never looked
+/// a removed source that never synced reads never looked, unregistered
 #[test]
 fn the_reader_lists_a_removed_source_that_never_synced_as_never_looked() {
     let env = Env::new();
@@ -882,7 +899,8 @@ fn the_reader_lists_a_removed_source_that_never_synced_as_never_looked() {
     );
 }
 
-/// surfaces/R9: after a scope change, old-scope hits carry the old pair, unregistered
+/// spec: A scope change leaves old hits on the old pair
+/// after a scope change, old-scope hits carry the old pair, unregistered
 #[test]
 fn the_reader_gives_old_scope_hits_the_old_pairs_coverage() {
     let env = synced();

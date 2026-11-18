@@ -4,7 +4,8 @@ use rastro_storage_sqlite::SqliteStorage;
 use rusqlite::Connection;
 use std::fs;
 
-/// evidence/R4: stored evidence rejects updates and deletes
+/// spec: Stored evidence is never updated or deleted
+/// Stored evidence rejects updates and deletes.
 #[test]
 fn stored_evidence_rejects_updates_and_deletes() {
     for legacy in [false, true] {
@@ -54,7 +55,8 @@ fn stored_evidence_rejects_updates_and_deletes() {
     }
 }
 
-/// evidence/R5: migrations apply once in timestamp order and unknown ones are refused
+/// spec: Every migration applies once in timestamp order
+/// Migrations apply once in timestamp order and unknown ones are refused.
 #[test]
 fn migrations_apply_once_in_timestamp_order_and_unknown_ones_are_refused() {
     let home = tempfile::tempdir().unwrap();
@@ -95,7 +97,8 @@ fn migrations_apply_once_in_timestamp_order_and_unknown_ones_are_refused() {
     assert_eq!(names(&connection).len(), 19);
 }
 
-/// evidence/R5: legacy user version maps to the migrations it meant
+/// spec: Every migration applies once in timestamp order
+/// Legacy user version maps to the migrations it meant.
 #[test]
 fn legacy_user_version_maps_to_the_migrations_it_meant() {
     let initial = include_str!("../migrations/202611041200_initial.sql");
@@ -126,6 +129,7 @@ fn legacy_user_version_maps_to_the_migrations_it_meant() {
 
 /// claims/R1: evidence appended while the clock reads earlier than an extracted observation is still
 /// pending for the extractor: capture times never go backwards within a (source, scope)
+/// spec: A bound extractor runs over its source's pending evidence
 #[test]
 fn evidence_captured_with_an_earlier_clock_is_still_extracted() {
     use chrono::{DateTime, Utc};
@@ -186,6 +190,7 @@ fn evidence_captured_with_an_earlier_clock_is_still_extracted() {
 }
 
 /// claims/R24: projection publication receipts reject updates and deletes
+/// spec: Every publication records its receipt
 #[test]
 fn projection_publication_receipts_reject_updates_and_deletes() {
     let home = tempfile::tempdir().unwrap();
@@ -207,6 +212,7 @@ fn projection_publication_receipts_reject_updates_and_deletes() {
 }
 
 /// claims/R17: entity types are never stored as a column
+/// spec: A renamed account keeps its entity and both logins
 #[test]
 fn entity_types_are_never_stored_as_a_column() {
     let home = tempfile::tempdir().unwrap();
@@ -544,7 +550,8 @@ fn intent_rows(path: &std::path::Path) -> Vec<String> {
     rows
 }
 
-/// identity/R33: opening a database that holds intents applies the intent-end migration, then replays
+/// spec: An undone claim stays superseded
+/// Opening a database that holds intents applies the intent-end migration, then replays
 /// the intents once, after every migration: a link undone before the upgrade is a superseded
 /// claim at once; the justification ids main wrote stay; an evidence claim and a claim no intent
 /// ever backed stay; the projection is published once, and a second open publishes nothing. The
@@ -639,7 +646,7 @@ fn the_intent_end_migration_replays_existing_intents() {
     assert_eq!(intent_rows(&path), intent_rows(&fresh));
 }
 
-/// identity/R33: a database without intents upgrades without a replay: nothing is published
+/// A database without intents upgrades without a replay: nothing is published
 #[test]
 fn the_intent_end_migration_publishes_nothing_without_intents() {
     let home = tempfile::tempdir().unwrap();
@@ -656,7 +663,8 @@ fn the_intent_end_migration_publishes_nothing_without_intents() {
     assert_eq!(count("SELECT count(*) FROM claim"), 2);
 }
 
-/// identity/R33: the replay runs after every migration of the open, so it meets the final schema: a later
+/// spec: An undone claim stays superseded
+/// The replay runs after every migration of the open, so it meets the final schema: a later
 /// migration that resets intent-backed projection rows doesn't undo it
 #[test]
 fn the_intent_replay_runs_after_every_migration() {
@@ -851,6 +859,7 @@ done
 
 /// commitments/S8: a successful run records the interpretation with the spans it cites, and
 /// nothing beyond them.
+// spec: The interpretation is recorded, replayed without a model and kept out of exports
 #[test]
 fn S8_the_interpretation_is_recorded_with_the_spans_it_cites() {
     let env = recorded::Env::new();
@@ -886,6 +895,7 @@ fn S8_the_interpretation_is_recorded_with_the_spans_it_cites() {
 
 /// commitments/S8: a replay checks the record again with no model call, and a replay of a record
 /// that no longer validates fails and marks the results stale.
+// spec: The interpretation is recorded, replayed without a model and kept out of exports
 #[test]
 fn S8_a_replay_checks_the_record_with_no_model_call_and_a_broken_record_fails_stale() {
     use rastro_core::{
@@ -944,6 +954,7 @@ fn S8_a_replay_checks_the_record_with_no_model_call_and_a_broken_record_fails_st
 
 /// commitments/S8: a rebuild never calls a model: the claims rebuild leaves the hypotheses and
 /// their record as they were, and re-deriving the hypotheses reads the record only.
+// spec: The interpretation is recorded, replayed without a model and kept out of exports
 #[test]
 fn S8_a_rebuild_never_calls_a_model() {
     let env = recorded::Env::new();
@@ -977,6 +988,7 @@ fn S8_a_rebuild_never_calls_a_model() {
 }
 
 /// commitments/S8: an export leaves the recorded output and the spans out.
+// spec: The interpretation is recorded, replayed without a model and kept out of exports
 #[test]
 fn S8_an_export_leaves_the_recorded_output_and_the_spans_out() {
     let env = recorded::Env::new();

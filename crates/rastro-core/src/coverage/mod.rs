@@ -65,7 +65,8 @@ impl Coverage {
 mod tests {
     use super::*;
 
-    /// evidence/R71: rastro now is ignored unless this is a debug build
+    /// spec: A release build ignores the test-only overrides
+    /// `RASTRO_NOW` is ignored unless this is a debug build.
     #[test]
     fn rastro_now_is_ignored_unless_this_is_a_debug_build() {
         let knob = || Some("2001-02-03T04:05:06Z".to_string());
