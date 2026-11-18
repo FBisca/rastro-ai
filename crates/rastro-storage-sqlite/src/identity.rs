@@ -235,6 +235,27 @@ pub(crate) fn types(db: &Connection, id: &str, scopes: &[Scope]) -> Result<Vec<S
     Ok(found)
 }
 
+/// Reads again, from its evidence, every claim that carries a status only an owner correction
+/// gave (`confirmed`, `retracted`) and that no correction holds any more: an undo ended the
+/// correction, and the claim reads as its evidence does. Returns whether it read any. A claim
+/// only intents or an automatic link hold takes its status from them instead. Runs after the
+/// intents are applied, which end the corrections an undo took back, and is followed by another
+/// application of them, since a reading of a component rewrites every claim in it.
+pub(crate) fn release(db: &Connection) -> Result<bool> {
+    let released: BTreeSet<(String, String)> = db
+        .prepare(&format!(
+            "SELECT DISTINCT c.subject, c.predicate FROM claim c
+             WHERE c.status IN ('confirmed', 'retracted')
+               AND EXISTS (SELECT 1 FROM justification j WHERE j.claim_id = c.id)
+               AND NOT EXISTS (SELECT 1 FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id
+                               WHERE ij.claim_id = c.id AND ij.ended_at IS NULL AND {})",
+            crate::lifecycle::CORRECTION
+        ))?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    crate::lifecycle::refresh(db, &released)?;
+    Ok(!released.is_empty())
+}
 /// Recomputes every intent-backed claim of the projection the connection writes (the active one,
 /// or a staged rebuild) from the intent table. A pure function of the intents, so a rebuild and
 /// an incremental write give the same rows.
