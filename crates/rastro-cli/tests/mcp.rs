@@ -2330,6 +2330,62 @@ fn a_person_is_visible_only_where_one_of_its_linked_accounts_is() {
     assert_eq!(linked(&all), [ACCOUNT, "linear:user/u-1"], "{all}");
 }
 
+/// claims/R78: one morning's standup comes from a single `about me` over MCP — both linked accounts and
+/// their own claims arrive in that one read, and the server offers only its seven read-only tools, so
+/// the read reaches neither GitHub nor Linear
+/// spec: The owner preps a standup from about me
+#[test]
+fn about_me_over_mcp_answers_one_morning_from_both_accounts() {
+    let env = Env::new();
+    env.account_in("personal", ACCOUNT, "code:Account", "octocat", 0);
+    env.account_in(
+        "work",
+        "linear:user/u-1",
+        "tracker:Account",
+        "ana-at-work",
+        0,
+    );
+    env.json(&["identity", "me"]);
+    env.json(&["identity", "link", ACCOUNT, "me"]);
+    env.json(&["identity", "link", "linear:user/u-1", "me"]);
+    let mut everywhere = env.scoped(&[]);
+
+    // The morning's one read: the owner's Person with both accounts, each carrying its claims.
+    let about = about_text(&mut everywhere, "me");
+    assert_eq!(about["resolved"], true, "{about}");
+    let mut held = linked(&about);
+    held.sort();
+    assert_eq!(held, [ACCOUNT, "linear:user/u-1"], "{about}");
+    let accounts = about["person"]["accounts"].as_array().unwrap();
+    assert_eq!(accounts[0]["type"], "code:Account", "{about}");
+    assert_eq!(accounts[1]["type"], "tracker:Account", "{about}");
+    let shown = about.to_string();
+    for login in ["octocat", "ana-at-work"] {
+        assert!(shown.contains(login), "{login} missing: {about}");
+    }
+
+    // Nothing on this server could reach GitHub or Linear: seven read-only tools and no write.
+    let mut names: Vec<String> = everywhere
+        .list_tools()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap().to_string())
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "about",
+            "commitments",
+            "coverage",
+            "meeting_commitments",
+            "queue",
+            "search",
+            "why"
+        ],
+        "a morning's read opens neither GitHub nor Linear"
+    );
+}
+
 /// surfaces/R36: over MCP, `about` says `resolved: false` for a hidden-only entity and for an unknown one,
 /// and `resolved: true` where the entity is visible
 #[test]

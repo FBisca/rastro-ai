@@ -365,8 +365,8 @@ fn corroboration_keeps_the_start_of_the_claim_union_interval() {
     assert_eq!(since.parse::<DateTime<Utc>>().unwrap(), first.captured_at);
 }
 
-/// claims/R14: related types do not conflict but unrelated types and replacement do
-/// spec: The newer comparable observation wins its slot
+/// claims/R48: related types do not conflict but unrelated types and replacement do
+/// spec: Unrelated types at different locations conflict
 #[test]
 fn related_types_do_not_conflict_but_unrelated_types_and_replacement_do() {
     let home = tempfile::tempdir().unwrap();

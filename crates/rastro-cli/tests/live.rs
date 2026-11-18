@@ -419,7 +419,6 @@ fn half_configured_or_malformed_live_variables_fail_naming_them() {
 /// `sqlite3 ~/.local/share/rastro/rastro.sqlite3 ".backup /tmp/rastro-copy.sqlite3"`). The test
 /// copies it again into a temporary home, so the file it is given is never written. Run with
 /// `cargo nextest run --profile live --run-ignored only`.
-/// spec: The owner preps a standup from about me
 #[test]
 #[ignore = "live: reads a copy of the owner's database; set RASTRO_LIVE_DB"]
 fn the_owners_copy_lists_github_and_linear_accounts_and_runs_candidates() {

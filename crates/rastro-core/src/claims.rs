@@ -674,9 +674,9 @@ mod tests {
         );
     }
 
-    /// claims/R8: ids are stable across builds. The canonical encoding is fixed: these ids (checked against an independent SHA-256 of
+    /// claims/R10: ids are stable across builds. The canonical encoding is fixed: these ids (checked against an independent SHA-256 of
     /// the encoding) must never change within version 1.
-    /// spec: Two sources that see the same state share one claim
+    /// spec: A claim's id and revision survive replay
     #[test]
     fn ids_are_stable_across_builds() {
         let pr = entity_id("https://github.com/o/p/pull/1");

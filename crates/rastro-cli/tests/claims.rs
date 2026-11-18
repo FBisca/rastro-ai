@@ -647,6 +647,7 @@ const ELSEWHERE: &str = "https://github.com/o/p/pull/2";
 
 /// claims/R48: unrelated types at different locations conflict both ways, neither supersedes
 /// spec: Unrelated types at different locations conflict
+/// spec: The newer comparable observation wins its slot
 #[test]
 fn unrelated_types_at_different_locations_conflict_and_neither_supersedes() {
     let env = two_type_sources();

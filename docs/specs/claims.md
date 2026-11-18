@@ -94,7 +94,7 @@ A later observation that lacks a field, has it null, or isn't returned at all SH
 - WHEN a later observation lacks a field, has it null, or the item wasn't returned, THEN no claim is superseded
 
 ### Requirement: The newer comparable observation wins its slot
-The newer and comparable of two sources' disagreeing observations of the same PR state SHALL be current and the older `superseded`; a tie or an incomparable pair SHALL leave both `observed` with `conflicts_with`. Dominance and supersession SHALL be per (location, field), and only `rastro:type` conflicts SHALL be entity-wide.
+The newer and comparable of two sources' disagreeing observations of the same PR state SHALL be current and the older `superseded`, a tie or an incomparable pair SHALL leave both `observed` with `conflicts_with`, and dominance and supersession SHALL hold per (location, field) with only `rastro:type` conflicts entity-wide.
 
 #### Scenario: the newer comparable observation is current
 - WHEN two sources' current observations of the same PR state disagree and one is newer and comparable, THEN the newer is current and the older is `superseded`
@@ -223,10 +223,13 @@ A rebuild that fails partway, or an extractor that starts and then fails, SHALL 
 - WHEN `about` is called with any other form, THEN it returns an operation error naming the accepted forms
 
 ### Requirement: A login resolves through its alias claim
-`about` called with `github:login/<login>` for a login recorded as a `rastro:alias` claim of one account, whose status is anything but `hypothesis` or `retracted`, SHALL return that account's claims exactly as for `github:account/<id>`, and a namespace or kind that doesn't match the stored alias SHALL return the empty result with coverage.
+`about` called with `github:login/<login>` for a login recorded as a `rastro:alias` claim of one account, whose status is anything but `hypothesis` or `retracted` (today `observed` or `superseded`), SHALL return that account's claims exactly as for `github:account/<id>`, a namespace or kind that doesn't match the stored alias SHALL return the empty result with coverage, and a login several entities hold SHALL answer as the ambiguous-alias requirement says.
 
 #### Scenario: the login answers as its account does
-- WHEN `about` is called with `github:login/<login>` for a login recorded as a `rastro:alias` claim of one account, whose status is anything but `hypothesis` or `retracted`, THEN it returns that account's claims exactly as for `github:account/<id>`
+- WHEN `about` is called with `github:login/<login>` for a login recorded as a `rastro:alias` claim of one account, whose status is anything but `hypothesis` or `retracted` (today `observed` or `superseded`), THEN it returns that account's claims exactly as for `github:account/<id>`
+
+#### Scenario: several entities holding the login answer as ambiguous
+- WHEN several entities hold the login, THEN `about` on it answers as the ambiguous-alias requirement says, naming every candidate
 
 #### Scenario: a mismatched namespace or kind is empty with coverage
 - WHEN the namespace or kind doesn't match the stored alias, THEN it returns the empty result with coverage
@@ -334,7 +337,7 @@ A claim justified by both a carried-over pair and a rebuilt pair SHALL have the 
 `claims rebuild` on a copy of the owner's real database with the extractor plugin hidden SHALL keep all of the copy's claims.
 
 #### Scenario: the owner's copy loses nothing
-- WHEN `claims rebuild` runs on a copy of the owner's real database with the extractor plugin hidden, THEN all of the copy's claims remain
+- WHEN `claims rebuild` runs on a copy of the owner's real database with the extractor plugin hidden, THEN all of the copy's claims remain (an ignored test, given the copy's path)
 
 ### Requirement: Unrelated types at different locations conflict
 An entity with live `rastro:type` claims of unrelated types at different locations SHALL carry `conflicts_with` on both, neither superseding the other; only `rastro:type` conflicts SHALL be entity-wide, and aliases and other predicates SHALL stay per (location, field).
@@ -352,10 +355,13 @@ A type and one of its supertypes at different locations SHALL not conflict, and 
 - WHEN the types at different locations are a type and one of its supertypes, THEN there's no conflict, and `about` and `why` display the most specific type
 
 ### Requirement: A conflicted entity displays one type
-When an entity's types conflict, `about` and `why` SHALL display one type: live types grouped into compatible families, each headed by a most specific type and holding the live ancestors it carries, with a family ranked by its newest member's known time, ties going to the lowest claim id of the family's head, and the newest family's head type displayed; a scoped read SHALL compute it from visible justifications only.
+When an entity's types conflict, `about` and `why` SHALL display one type: live types (observed or confirmed) grouped into compatible families, each headed by a most specific type (one no other live type descends from) and holding the live ancestors it carries, a family ranked by its newest member's known time with ties going to the lowest claim id of the family's head, the newest family's head type displayed, and branching subtypes of one supertype counting as separate families that each count the supertype's time (Draft on day 1 under PullRequest on day 3, against Repository on day 2, displays Draft); a scoped read SHALL compute it from visible justifications only.
 
 #### Scenario: the newest family's head is the displayed type
-- WHEN an entity's types conflict, THEN `about` and `why` display one type, ranked as the head of the newest compatible family, and a scoped read computes it from visible justifications only
+- WHEN an entity's types conflict, THEN `about` and `why` display one type: live types (observed or confirmed) grouped into compatible families, each headed by a most specific type (one no other live type descends from) and holding the live ancestors it carries, the newest family's head type displayed, ties going to the lowest claim id of the family's head, branching subtypes of one supertype counting as separate families that each count the supertype's time (Draft on day 1 under PullRequest on day 3, against Repository on day 2, displays Draft)
+
+#### Scenario: a scoped read ranks only what it can see
+- WHEN a scoped read displays a conflicted entity's type, THEN it computes the families and the displayed type from visible justifications only
 
 ### Requirement: A type changed at one location supersedes the old one
 A change of the same location's type SHALL have the new type claim supersede the old one.
@@ -520,7 +526,7 @@ No warning SHALL be given and `warnings` SHALL be empty when the configured sour
 - WHEN the configured source already has a complete check, or no stored-only source shares its connector and selector, THEN no warning is given and `warnings` is empty
 
 ### Requirement: The owner preps a standup from about me
-Once the slice has landed, the owner SHALL be able to prep one morning's standup with `about me` over MCP, without opening Linear or GitHub.
+Once the slice has landed, the owner SHALL prep one morning's standup with `about me` over MCP, without opening Linear or GitHub.
 
 #### Scenario: one read answers across sources
 - WHEN the slice has landed, THEN the owner preps one morning's standup with `about me` over MCP without opening Linear or GitHub
