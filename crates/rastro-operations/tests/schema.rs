@@ -204,7 +204,8 @@ fn catalog_declares_claim_cli_read_paths_without_changing_existing_routes() {
                 "why",
                 "commitments",
                 "meeting.commitments",
-                "queue"
+                "queue",
+                "queue.outcomes"
             ]
             .contains(&spec.name)
         );
@@ -445,7 +446,8 @@ fn identity_operations_are_cli_only() {
 }
 
 /// One catalog entry per queue operation: the read is on the CLI and MCP, its five answers are
-/// CLI only, MCP offers seven tools, and the queue read's result is a v2 envelope.
+/// CLI only, `queue outcomes` is a CLI-only read, MCP offers seven tools, and the queue read's
+/// result is a v2 envelope.
 #[test]
 fn the_queue_read_and_its_five_answers_are_cataloged_on_their_surfaces() {
     use rastro_operations::Surface;
@@ -481,6 +483,7 @@ fn the_queue_read_and_its_five_answers_are_cataloged_on_their_surfaces() {
             "queue.answer",
             "queue.edit",
             "queue.missed",
+            "queue.outcomes",
             "queue.reject"
         ]
     );
@@ -495,6 +498,14 @@ fn the_queue_read_and_its_five_answers_are_cataloged_on_their_surfaces() {
             assert!(
                 operation["result"]["properties"].get("items").is_some(),
                 "{name}"
+            );
+        } else if name == "queue.outcomes" {
+            assert_eq!(surfaces, ["cli"], "{name}");
+            let spec = find(name).unwrap_or_else(|| panic!("no catalog entry {name}"));
+            assert!(!spec.exposed_on(Surface::Mcp), "{name}");
+            assert!(
+                spec.read_only,
+                "{name}: what happened is read, never recorded"
             );
         } else {
             assert_eq!(surfaces, ["cli"], "{name}: an agent cannot answer");

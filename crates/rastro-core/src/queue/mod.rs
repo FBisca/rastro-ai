@@ -26,6 +26,8 @@
 
 mod answers;
 pub use answers::{Answered, answered_items};
+mod outcomes;
+pub use outcomes::{NOTICE as OUTCOMES_NOTICE, Outcome, OutcomeKind, Outcomes, Totals};
 
 use crate::commitments::{self, Hypothesis};
 use crate::identity::{
@@ -135,6 +137,11 @@ pub struct Item {
     /// once. Context only — an item with claims beside it stays in the queue.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub context: Vec<ClaimSummary>,
+    /// The source run the item's content came from, when it came from one: what a shown report
+    /// records, so an outcome can date the item's departure. Never printed or published.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub(crate) run: Option<String>,
 }
 
 /// What a source's gap is.
@@ -169,7 +176,7 @@ pub struct Gap {
 /// A standard statement a hypothesis expresses: one `std:` predicate with the literal it
 /// carries, as the source said it. This is what an observed claim must hold for the item to be
 /// already known.
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Statement {
     pub predicate: String,
     pub value: String,
@@ -183,6 +190,35 @@ pub struct Statement {
 pub struct KnownCommitment {
     pub subject: String,
     pub statements: BTreeSet<Statement>,
+}
+
+/// One item a terminal read printed, when it printed it, and the source run that carried it.
+/// Insert-only, outside the claims projection: it is what the owner saw, not what Rastro knows.
+#[derive(Clone, Debug)]
+pub struct ShownReport {
+    pub item: String,
+    /// The source's name, as the item's source carried it.
+    pub source: String,
+    /// The run the item's content came from; empty for a question, which is computed on read.
+    pub run: String,
+    /// The standard statements the item expressed, kept because an outcome has to tell an item
+    /// the queue settled for being already known from one a run dropped, and the item itself is
+    /// gone by then. Empty for a question.
+    pub statements: Vec<Statement>,
+    pub at: DateTime<Utc>,
+}
+
+/// One shown report per item a terminal read printed.
+pub fn shown(queue: &Queue, at: DateTime<Utc>) -> Vec<ShownReport> {
+    (queue.items.iter())
+        .map(|item| ShownReport {
+            item: item.id.clone(),
+            source: item.source.name.clone(),
+            run: item.run.clone().unwrap_or_default(),
+            statements: (item.proposal.as_ref()).map(statements).unwrap_or_default(),
+            at,
+        })
+        .collect()
 }
 
 /// A source of proposals and the time its content belongs to.
@@ -230,13 +266,7 @@ impl Queue {
         questions: Vec<Question>,
         answered: &BTreeSet<String>,
     ) -> Self {
-        let mut known: BTreeMap<String, BTreeSet<Statement>> = BTreeMap::new();
-        for commitment in origins.iter().flat_map(|origin| origin.known.iter()) {
-            known
-                .entry(commitment.subject.clone())
-                .or_default()
-                .extend(commitment.statements.iter().cloned());
-        }
+        let known = known_by_subject(origins.iter().flat_map(|origin| origin.known.iter()));
         let mut aged = Vec::new();
         let mut gaps = Vec::new();
         let mut seen = BTreeSet::new();
@@ -251,6 +281,7 @@ impl Queue {
                     proposal: Some(hypothesis.clone()),
                     question: None,
                     context: Vec::new(),
+                    run: (origin.source.results_from.as_ref()).map(|results| results.run.clone()),
                 };
                 if answered.contains(&item.id) {
                     continue;
@@ -258,7 +289,7 @@ impl Queue {
                 if !seen.insert(item.id.clone()) {
                     continue;
                 }
-                if held(&known, hypothesis) {
+                if held(&known, &statements(hypothesis)) {
                     already_known += 1;
                     continue;
                 }
@@ -282,6 +313,7 @@ impl Queue {
                 proposal: None,
                 question: Some(question),
                 context: Vec::new(),
+                run: None,
             };
             if seen.insert(item.id.clone()) {
                 // Computed on read, so a question has no time: it is older than every proposal
@@ -365,13 +397,68 @@ pub(super) fn statements(hypothesis: &Hypothesis) -> Vec<Statement> {
     statements
 }
 
-/// Whether an observed commitment already holds the statements a hypothesis expresses: the
-/// same set, on one subject. A commitment carrying more statements than the proposal, or claims
-/// spread over several commitments, never adds up to a match; the queue hides an item on an
-/// exact statement match only, never on a name or a text match.
-fn held(known: &BTreeMap<String, BTreeSet<Statement>>, hypothesis: &Hypothesis) -> bool {
-    let statements: BTreeSet<Statement> = statements(hypothesis).into_iter().collect();
-    !statements.is_empty() && (known.values()).any(|held| *held == statements)
+/// The statements observed claims hold, keyed by the commitment they are about. A hypothesis or
+/// a shown item matches when one commitment holds exactly its statements.
+pub(crate) fn known_by_subject<'a>(
+    known: impl IntoIterator<Item = &'a KnownCommitment>,
+) -> BTreeMap<String, BTreeSet<Statement>> {
+    let mut by_subject: BTreeMap<String, BTreeSet<Statement>> = BTreeMap::new();
+    for commitment in known {
+        by_subject
+            .entry(commitment.subject.clone())
+            .or_default()
+            .extend(commitment.statements.iter().cloned());
+    }
+    by_subject
+}
+
+/// Whether an observed commitment already holds the statements `expressed`: the same set, on one
+/// subject. A commitment carrying more statements than the item, or claims spread over several
+/// commitments, never adds up to a match; the queue hides an item on an exact statement match
+/// only, never on a name or a text match, and an item stating nothing is never already known.
+fn held(known: &BTreeMap<String, BTreeSet<Statement>>, expressed: &[Statement]) -> bool {
+    let expressed: BTreeSet<Statement> = expressed.iter().cloned().collect();
+    !expressed.is_empty() && (known.values()).any(|held| *held == expressed)
+}
+
+/// The first moment one observed commitment held exactly the statements `expressed`, from when
+/// each of its claims was known: the moment the last of them arrived, unless that commitment
+/// already carried a statement the item does not express, in which case its set was never the
+/// item's. `None` when no commitment ever held them, and for an item that expresses nothing.
+pub(crate) fn held_since(
+    history: &[(String, Statement, DateTime<Utc>)],
+    expressed: &[Statement],
+) -> Option<DateTime<Utc>> {
+    let wanted: BTreeSet<&Statement> = expressed.iter().collect();
+    if wanted.is_empty() {
+        return None;
+    }
+    let mut by_subject: BTreeMap<&str, BTreeMap<&Statement, DateTime<Utc>>> = BTreeMap::new();
+    for (subject, statement, known_at) in history {
+        (by_subject.entry(subject).or_default().entry(statement))
+            .and_modify(|known| *known = (*known).min(*known_at))
+            .or_insert(*known_at);
+    }
+    let mut held: Option<DateTime<Utc>> = None;
+    for known in by_subject.values() {
+        let Some(complete) = wanted
+            .iter()
+            .map(|statement| known.get(statement).copied())
+            .collect::<Option<Vec<_>>>()
+        else {
+            continue;
+        };
+        let at = complete
+            .into_iter()
+            .max()
+            .expect("one moment per statement");
+        let extra = (known.iter())
+            .any(|(statement, known_at)| *known_at <= at && !wanted.contains(statement));
+        if !extra {
+            held = Some(held.map_or(at, |held| held.min(at)));
+        }
+    }
+    held
 }
 
 /// An item with the key the queue's order sorts by.
@@ -524,6 +611,25 @@ fn proposal_id(source: &Source, hypothesis: &Hypothesis) -> String {
     ])
 }
 
+/// The ids of the proposals a meeting's content carries, one per hypothesis as the queue would
+/// show it: the content a successful run proposes. Storage records them beside the run, because
+/// only the latest good run keeps its hypotheses, and an outcome still has to name the run that
+/// dropped an item.
+pub fn proposed_ids(
+    meeting: &str,
+    scope: &str,
+    hypotheses: &[crate::meeting::Hypothesis],
+) -> Vec<String> {
+    let source = Source {
+        kind: SourceKind::Meeting,
+        name: meeting.into(),
+        scope: scope.into(),
+    };
+    (hypotheses.iter())
+        .map(|hypothesis| proposal_id(&source, &Hypothesis::from(hypothesis)))
+        .collect()
+}
+
 /// The content address of a question: its two accounts and the signals that produced it.
 fn question_id(question: &Question) -> String {
     let reasons: Vec<String> = (question.reasons.iter())
@@ -588,6 +694,13 @@ impl<S: Storage> Rastro<S> {
     /// The queue over every scope, on a writing open.
     pub fn queue(&mut self) -> Result<Queue> {
         self.storage.snapshot(|view| read(view, &[]))
+    }
+
+    /// Records one shown report per item a terminal read printed, at the time it printed them.
+    /// Only the terminal read calls it: a machine read records nothing.
+    pub fn queue_shown(&mut self, queue: &Queue) -> Result<usize> {
+        let at = crate::coverage::now()?;
+        self.storage.record_shown_reports(&shown(queue, at))
     }
 }
 

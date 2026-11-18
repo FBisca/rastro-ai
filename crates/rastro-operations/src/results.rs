@@ -62,6 +62,8 @@ pub type CommitmentsResult = rastro_core::commitments::Commitments;
 pub type MeetingResult = rastro_core::meeting::MeetingCommitments;
 /// Every pending proposal and question, oldest first, with each source's gap.
 pub type QueueResult = rastro_core::queue::Queue;
+/// Every outcome of the queue, newest first, with what was shown and what was acted on.
+pub type OutcomesResult = rastro_core::queue::Outcomes;
 /// What a queue answer recorded: the item it named and the owner intents it accepted.
 #[derive(Debug, JsonSchema, Serialize)]
 pub struct QueueAnswerResult {
@@ -334,6 +336,7 @@ mod tests {
                 item: None,
                 intents: vec![],
             }),
+            Response::QueueOutcomes(OutcomesResult::empty()),
         ];
         let arguments = |name: &str| match name {
             "source.add" => {

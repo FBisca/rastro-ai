@@ -123,6 +123,37 @@ pub trait Snapshot {
     fn intents(&self) -> Result<Vec<crate::identity::Intent>> {
         anyhow::bail!("storage does not support owner intents")
     }
+    /// The claim ids each owner intent backs, the first in id order: an intent may mint several
+    /// claims (a question's yes holds and names), and an accepted proposal's outcome names one.
+    fn intent_claims(&self) -> Result<std::collections::BTreeMap<String, String>> {
+        Ok(Default::default())
+    }
+    /// Every shown report the terminal read recorded, in the order it recorded them.
+    fn shown_reports(&self) -> Result<Vec<crate::queue::ShownReport>> {
+        Ok(Default::default())
+    }
+    /// Every standard statement an observed commitment holds, by the commitment's id and with the
+    /// first moment the record shows it known, visible to `scopes` (empty: every scope): what says
+    /// when an item's statements began to be held, and so when the queue began leaving it out.
+    fn statement_history(
+        &self,
+        _scopes: &[Scope],
+    ) -> Result<Vec<(String, crate::queue::Statement, DateTime<Utc>)>> {
+        Ok(Default::default())
+    }
+    /// When the first run of `source` that succeeded after the last one still carrying `item`
+    /// finished without it: the run that replaced the content the item came from, and so the
+    /// moment the unanswered item left the queue. A run that kept the item's content — a replay,
+    /// or a re-import of the same content — never dates it. `None` when no later run dropped it,
+    /// or when the source keeps no run at all.
+    fn departed_run(
+        &self,
+        _source: &str,
+        _run: &str,
+        _item: &str,
+    ) -> Result<Option<DateTime<Utc>>> {
+        Ok(None)
+    }
     /// The entity (id, canonical identifier) a form names, resolved unscoped as `about` resolves
     /// it: an exact id or identifier, else a canonical alias. An ambiguous alias is an error.
     /// Whether the evidence says the entity `id` is a bot: one of its current types is a
