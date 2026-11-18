@@ -640,7 +640,6 @@ fn the_intent_end_migration_replays_existing_intents() {
     assert_eq!(intent_rows(&path), intent_rows(&fresh));
 }
 
-/// spec: An undone claim stays superseded
 /// A database without intents upgrades without a replay: nothing is published
 #[test]
 fn the_intent_end_migration_publishes_nothing_without_intents() {

@@ -1634,7 +1634,6 @@ fn claim_result(session: &mut Session, tool: &str, args: Value) -> Value {
     ok_result(&response["result"])["result"].clone()
 }
 
-/// spec: Unreadable emails are a coverage gap
 /// Coverage gaps are scoped and visible in mcp
 #[test]
 fn coverage_gaps_are_scoped_and_visible_in_mcp() {

@@ -165,7 +165,6 @@ pub fn loopback(base: &str) -> bool {
 mod tests {
     use super::loopback;
 
-    /// spec: A missing Linear key is an auth failure
     /// Only loopback hosts are accepted as the API override
     #[test]
     fn only_loopback_hosts_are_accepted_so_the_key_stays_local() {
