@@ -35,6 +35,8 @@ jobs:
       - run: scripts/ignored-tests.sh
       - run: scripts/ignored-tests.test.sh
       - run: scripts/nextest-config.test.sh
+      - run: python3 scripts/test_spec_coverage.py
+      - run: python3 scripts/spec_coverage.py
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
       - run: cargo nextest run --workspace

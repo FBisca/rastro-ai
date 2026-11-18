@@ -492,6 +492,7 @@ fn identity_operations_are_cli_only() {
     }
 }
 
+/// spec: The queue's operations are in the catalog
 /// One catalog entry per queue operation: the read is on the CLI and MCP, its five answers are
 /// CLI only, `queue outcomes` is a CLI-only read, MCP offers seven tools, and the queue read's
 /// result is a v2 envelope.
