@@ -3,4 +3,4 @@ checks:
   fast: cargo check --workspace --all-targets
   affected: scripts/affected-tests.sh {paths}
   full:
-    run: cargo test --workspace
+    run: cargo nextest run --workspace
