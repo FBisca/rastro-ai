@@ -164,8 +164,9 @@ pub struct AboutClaims {
 #[derive(Debug, JsonSchema, Serialize)]
 pub struct ClaimGroup {
     pub members: Vec<GroupMember>,
-    /// `observed` when any member is.
-    #[schemars(extend("enum" = ["observed", "superseded"]))]
+    /// The strongest status of its members: `confirmed` when any member is, else `observed` when
+    /// any member is, else `superseded`.
+    #[schemars(extend("enum" = ["confirmed", "observed", "superseded"]))]
     pub status: String,
     /// The hash of the sorted (member id, revision) pairs. Never a claim id.
     pub revision: String,
@@ -173,7 +174,7 @@ pub struct ClaimGroup {
 #[derive(Debug, JsonSchema, Serialize)]
 pub struct GroupMember {
     pub claim: String,
-    #[schemars(extend("enum" = ["observed", "superseded"]))]
+    #[schemars(extend("enum" = ["observed", "confirmed", "retracted", "superseded"]))]
     pub status: String,
     pub revision: String,
 }
@@ -253,6 +254,22 @@ fn label_about(view: &dyn Snapshot, scopes: &[Scope], about: &mut About) -> Resu
 fn validate_entity(entity: &str) -> Result<()> {
     crate::entity_form::check_reference(entity).map_err(anyhow::Error::msg)
 }
+/// Where a status stands in a group: the owner's confirmation, then evidence, then the rest.
+fn status_rank(status: &str) -> u8 {
+    match status {
+        "confirmed" => 0,
+        "observed" => 1,
+        _ => 2,
+    }
+}
+/// A group reads the strongest status among its members.
+fn group_status(members: &[GroupMember]) -> &'static str {
+    match members.iter().map(|m| status_rank(&m.status)).min() {
+        Some(0) => "confirmed",
+        Some(1) => "observed",
+        _ => "superseded",
+    }
+}
 /// Claims ordered newest first become the answer: claims equivalent under the observed merges
 /// among them group, an item (a lone claim or a group, placed at its newest member) counts once
 /// toward `limit`, and every member of a kept item is listed.
@@ -278,7 +295,7 @@ fn answer(
         id
     }
     for c in claims.iter().map(|s| &s.summary.claim) {
-        if let (crate::identity::SAME_AS, "observed", Object::Entity { id, .. }) =
+        if let (crate::identity::SAME_AS, "observed" | "confirmed", Object::Entity { id, .. }) =
             (c.predicate.as_str(), c.status.as_str(), &c.object)
         {
             let (a, b) = (root(&parent, &c.subject.id), root(&parent, id));
@@ -320,6 +337,11 @@ fn answer(
             }
         }
     }
+    // Inside a group the owner's word leads: members rank confirmed, then observed, then the
+    // rest, each rank keeping its newest-first order.
+    for members in &mut items {
+        members.sort_by_key(|m| status_rank(&m.summary.claim.status));
+    }
     let truncated = items.len() > limit;
     items.truncate(limit);
     let groups = items
@@ -339,11 +361,7 @@ fn answer(
                 .map(|m| (m.claim.clone(), m.revision.clone()))
                 .collect();
             ClaimGroup {
-                status: if members.iter().any(|m| m.status == "observed") {
-                    "observed".into()
-                } else {
-                    "superseded".into()
-                },
+                status: group_status(&members).into(),
                 revision: crate::claims::group_revision(&pairs),
                 members,
             }
