@@ -111,6 +111,14 @@ fn cite(location: &str, field: &str, quote: &str, rule: &str) -> [String; 4] {
 /// `linear:user/<uuid>` entities typed `tracker:Account` with `email` and `name` aliases and
 /// their active state, the viewer's involved issues become `tracker:Issue` entities with
 /// creator and assignee claims, and `rastro search` finds issue text with citations
+#[expect(
+    clippy::too_many_lines,
+    reason = "one sync's identities, claims and search hits are asserted in the order the run produces them"
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "each entity kind and its claims branch once, so the scenario reads as the shapes it proves"
+)]
 #[test]
 fn users_and_involved_issues_become_tracker_entities_and_search_cites_issue_text() {
     let fixture = Fixture::start(world());

@@ -93,6 +93,10 @@ fn fill(value: Value, items: &[BatchItem]) -> Value {
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the script's steps are the stand-in extractor's whole behaviour, read in one pass"
+)]
 fn main() -> Result<()> {
     let mut transport = Transport::new(io::stdin().lock(), io::stdout().lock());
     let mut items: Vec<BatchItem> = Vec::new();
