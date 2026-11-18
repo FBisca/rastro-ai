@@ -1,9 +1,10 @@
 # Rastro's nextest configuration: the suite runs one process per test, a hung test fails its run
-# instead of holding it, every failure of a run is kept, and the live tests run alone on request. See
-# docs/adr/0013-cargo-nextest-runs-the-tests.md and docs/development.md.
+# instead of holding it, every failure of a run is kept, the live tests run alone on request, and the
+# unit tests run alone as the fast suite. See docs/adr/0013-cargo-nextest-runs-the-tests.md and
+# docs/development.md.
 #
 # The checks, CI and the selector run the default profile; scripts/nextest-config.test.sh proves it.
-# scripts/ignored-tests.test.sh proves the live profile and the ignore-reason gate.
+# scripts/ignored-tests.test.sh proves the live profile, scripts/fast-suite.test.sh the fast one.
 
 [profile.default]
 # A test running past 20 seconds is reported SLOW, and three periods in a row terminate it at 60
@@ -20,6 +21,19 @@ retries = 0
 path = "junit.xml"
 store-success-output = false
 store-failure-output = true
+
+# The fast suite: the unit tests alone, which is what a test in a `src/` `#[cfg(test)]` module is; a
+# test under `tests/` is an integration test and belongs to the default run. The orchestrator's fast
+# check tier runs this command on every hand-in, and scripts/fast-suite.test.sh proves the selection:
+# every lib and bin target's tests, no `tests/` binary's.
+#
+#   cargo nextest run --workspace --profile fast
+#
+# A custom profile inherits the default profile's settings, so the timeout, the failure report
+# and the retries are the default run's: a hung unit test fails the fast run just as it does the
+# default one, and its report lands at target/nextest/fast/junit.xml.
+[profile.fast]
+default-filter = "kind(lib) + kind(bin)"
 
 # The live tests: the ignored ones, which talk to a real service or read a copy of the owner's data, so
 # only the owner's machine can run them, one run at a time, with a network's patience. The live run is
