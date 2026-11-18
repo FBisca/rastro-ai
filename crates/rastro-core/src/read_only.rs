@@ -132,9 +132,17 @@ pub trait Snapshot {
     fn shown_reports(&self) -> Result<Vec<crate::queue::ShownReport>> {
         Ok(Default::default())
     }
-    /// When the first run of `source` that succeeded after `run` finished: the moment the run's
-    /// content was replaced, and so the moment its unanswered items left the queue.
-    fn successor_run(&self, _source: &str, _run: &str) -> Result<Option<DateTime<Utc>>> {
+    /// When the first run of `source` that succeeded after the last one still carrying `item`
+    /// finished without it: the run that replaced the content the item came from, and so the
+    /// moment the unanswered item left the queue. A run that kept the item's content — a replay,
+    /// or a re-import of the same content — never dates it. `None` when no later run dropped it,
+    /// or when the source keeps no run at all.
+    fn departed_run(
+        &self,
+        _source: &str,
+        _run: &str,
+        _item: &str,
+    ) -> Result<Option<DateTime<Utc>>> {
         Ok(None)
     }
     /// The entity (id, canonical identifier) a form names, resolved unscoped as `about` resolves

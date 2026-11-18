@@ -1866,7 +1866,7 @@
       "description": "What happened to one item.",
       "properties": {
         "at": {
-          "description": "When it happened: the intent's time, or, for an ignored item, when it left the queue.",
+          "description": "When it happened: the intent's time; for an ignored item, the run that dropped it; for an\nitem that became moot, the last terminal read that showed it waiting, since nothing\nrecords when it left.",
           "format": "date-time",
           "type": "string"
         },
@@ -1918,8 +1918,13 @@
           "type": "string"
         },
         {
+          "const": "became_moot",
+          "description": "Shown, never answered, and gone from the queue without a later run dropping it: the queue\nhad already settled it elsewhere, its accounts were linked, or its meeting was forgotten.",
+          "type": "string"
+        },
+        {
           "const": "ignored",
-          "description": "Shown, never answered, and gone from the queue.",
+          "description": "Shown, never answered, and gone because a later run of its source dropped its content.",
           "type": "string"
         }
       ]

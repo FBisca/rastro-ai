@@ -30,7 +30,7 @@ pub use scoped::{cache_len as scoped_cache_len, clear_cache as clear_scoped_cach
 /// The migration recording when an intent's contribution ended; an open that applies it replays
 /// the stored intents once all migrations are in.
 const INTENT_END: &str = "202611081000_intent_justification_end";
-const MIGRATIONS: [(&str, &str); 16] = [
+const MIGRATIONS: [(&str, &str); 17] = [
     (
         "202611041200_initial",
         include_str!("../migrations/202611041200_initial.sql"),
@@ -94,6 +94,10 @@ const MIGRATIONS: [(&str, &str); 16] = [
     (
         "202611141000_shown_reports",
         include_str!("../migrations/202611141000_shown_reports.sql"),
+    ),
+    (
+        "202611141100_run_items",
+        include_str!("../migrations/202611141100_run_items.sql"),
     ),
 ];
 
@@ -1027,22 +1031,37 @@ impl Snapshot for View<'_> {
             })
             .collect()
     }
-    fn successor_run(
+    fn departed_run(
         &self,
         source: &str,
         run: &str,
+        item: &str,
     ) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
         // A run id the item no longer has a numeric form for names no run this build knows.
         let Ok(run) = run.parse::<i64>() else {
             return Ok(None);
         };
+        // A run that kept the item's content (a replay, or a re-import that produced the same
+        // content) never removed it, so it never dates its departure: the answer is the first
+        // successful run after the last one that still carried the item. A run recorded before
+        // its content was summarized has no answer either way and counts as having dropped it.
+        let carried = "items IS NOT NULL
+             AND EXISTS (SELECT 1 FROM json_each(items) WHERE value = ?3)";
+        let dropped =
+            "items IS NULL OR NOT EXISTS (SELECT 1 FROM json_each(items) WHERE value = ?3)";
         let finished: Option<String> = self
             .0
             .query_row(
-                "SELECT finished_at FROM meeting_run
-                 WHERE meeting_id = ?1 AND id > ?2 AND state = 'succeeded'
-                 ORDER BY id LIMIT 1",
-                params![source, run],
+                &format!(
+                    "SELECT finished_at FROM meeting_run
+                     WHERE meeting_id = ?1 AND state = 'succeeded'
+                       AND id > coalesce((SELECT max(id) FROM meeting_run
+                                          WHERE meeting_id = ?1 AND state = 'succeeded'
+                                            AND id > ?2 AND {carried}), ?2)
+                       AND ({dropped})
+                     ORDER BY id LIMIT 1"
+                ),
+                params![source, run, item],
                 |row| row.get(0),
             )
             .optional()?;

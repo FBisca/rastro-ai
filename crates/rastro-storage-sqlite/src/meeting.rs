@@ -337,10 +337,23 @@ pub(crate) fn record(connection: &mut Connection, run: &RunRecord) -> Result<i64
             )?;
         }
     }
+    // What the run's content proposes, by content address: the only trace left once the next
+    // good run replaces its hypotheses, and what an outcome dates a departure by.
+    let items = (run.state == RunState::Succeeded).then(|| {
+        serde_json::to_string(&rastro_core::queue::proposed_ids(
+            &run.meeting.id,
+            &run.meeting.scope,
+            &run.hypotheses,
+        ))
+    });
+    let items = match items {
+        Some(items) => Some(items?),
+        None => None,
+    };
     transaction.execute(
         "INSERT INTO meeting_run (meeting_id, started_at, finished_at, state, cause, reason,
-         extractor, owner_speaker, turns_total, turns_read, excluded, replay_of)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+         extractor, owner_speaker, turns_total, turns_read, excluded, replay_of, items)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13)",
         params![
             id,
             stamp(run.started_at),
@@ -353,7 +366,8 @@ pub(crate) fn record(connection: &mut Connection, run: &RunRecord) -> Result<i64
             run.turns_total as i64,
             run.turns_read as i64,
             run.excluded as i64,
-            run.replay_of
+            run.replay_of,
+            items
         ],
     )?;
     let run_id = transaction.last_insert_rowid();

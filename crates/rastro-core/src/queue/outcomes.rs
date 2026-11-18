@@ -5,8 +5,12 @@
 //! record, and the terminal read records what it printed. A proposal or question the owner
 //! accepted, accepted with edits, rejected or answered carries that intent's kind and time, and
 //! the claim the intent backs when there is one. An item with no answering intent that the queue
-//! no longer holds was ignored: it was shown, never answered, and left. Its outcome names the
-//! time it waited, from its first shown report to the run that replaced its source's content.
+//! no longer holds was shown and never answered; it left one of two ways. A later run of its
+//! source dropped its content, and it was ignored: its outcome names the time it waited, from
+//! its first shown report to that run. Or the queue settled it another way — it was already
+//! known, its accounts were linked, or its meeting was forgotten — and it became moot. Nothing
+//! records when a moot item left, so it is dated at its last shown report and measures no wait:
+//! dating it at the read would move it on every read.
 use super::{ShownReport, read};
 use crate::identity::{Intent, IntentKind};
 use crate::read_only::Snapshot;
@@ -34,8 +38,22 @@ pub enum OutcomeKind {
     Rejected,
     /// A question answered yes or no.
     Answered,
-    /// Shown, never answered, and gone from the queue.
+    /// Shown, never answered, and gone from the queue without a later run dropping it: the queue
+    /// had already settled it elsewhere, its accounts were linked, or its meeting was forgotten.
+    BecameMoot,
+    /// Shown, never answered, and gone because a later run of its source dropped its content.
     Ignored,
+}
+
+impl OutcomeKind {
+    /// Whether an owner intent recorded this kind: the four answers. What was ignored or became
+    /// moot is what no answer left behind, and never counts as acted on.
+    fn answered(self) -> bool {
+        matches!(
+            self,
+            Self::Accepted | Self::AcceptedWithEdits | Self::Rejected | Self::Answered
+        )
+    }
 }
 
 /// What happened to one item.
@@ -45,7 +63,9 @@ pub struct Outcome {
     /// The item's id as the queue read gave it.
     pub item: String,
     pub kind: OutcomeKind,
-    /// When it happened: the intent's time, or, for an ignored item, when it left the queue.
+    /// When it happened: the intent's time; for an ignored item, the run that dropped it; for an
+    /// item that became moot, the last terminal read that showed it waiting, since nothing
+    /// records when it left.
     pub at: DateTime<Utc>,
     /// The claim an accepted item became; absent when no claim holds it. One accept mints one
     /// claim per standard term of the item, so an outcome names the first of them in id order.
@@ -108,7 +128,6 @@ pub(crate) fn outcomes(view: &dyn Snapshot, scopes: &[Scope]) -> Result<Outcomes
         .map(|item| item.id)
         .collect();
     let claims = view.intent_claims()?;
-    let now = crate::coverage::now()?;
     let mut outcomes = Vec::new();
     let mut answered_items = BTreeSet::new();
     for intent in &intents {
@@ -136,24 +155,33 @@ pub(crate) fn outcomes(view: &dyn Snapshot, scopes: &[Scope]) -> Result<Outcomes
         }
         let first = reports.first().expect("by_item groups at least one report");
         let last = reports.last().expect("by_item groups at least one report");
-        let left = if last.run.is_empty() {
-            now
-        } else {
-            (view.successor_run(&last.source, &last.run)?).unwrap_or(now)
+        // A question has no source run, and a proposal that left with no later run dropping it
+        // did not leave because its content was replaced: the queue settled it elsewhere.
+        let dropped = match last.run.is_empty() {
+            true => None,
+            false => view.departed_run(&last.source, &last.run, &item)?,
+        };
+        let (kind, at, waited_seconds) = match dropped {
+            Some(at) => (
+                OutcomeKind::Ignored,
+                at,
+                Some((at - first.at).num_seconds()),
+            ),
+            None => (OutcomeKind::BecameMoot, last.at, None),
         };
         outcomes.push(Outcome {
             item: item.clone(),
-            kind: OutcomeKind::Ignored,
-            at: left,
+            kind,
+            at,
             claim: None,
-            waited_seconds: Some((left - first.at).num_seconds()),
+            waited_seconds,
         });
     }
     // Newest first; two outcomes of one instant keep a stable order by item.
     outcomes.sort_by(|a, b| b.at.cmp(&a.at).then_with(|| a.item.cmp(&b.item)));
     let shown = by_item(&shown).len();
     let acted_on = (outcomes.iter())
-        .filter(|outcome| outcome.kind != OutcomeKind::Ignored)
+        .filter(|outcome| outcome.kind.answered())
         .map(|outcome| outcome.item.as_str())
         .collect::<BTreeSet<_>>()
         .len();

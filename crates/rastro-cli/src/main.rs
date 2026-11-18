@@ -780,6 +780,7 @@ fn outcomes_text(outcomes: &rastro_core::queue::Outcomes) -> String {
             rastro_core::queue::OutcomeKind::AcceptedWithEdits => "accepted with edits",
             rastro_core::queue::OutcomeKind::Rejected => "rejected",
             rastro_core::queue::OutcomeKind::Answered => "answered",
+            rastro_core::queue::OutcomeKind::BecameMoot => "became moot",
             rastro_core::queue::OutcomeKind::Ignored => "ignored",
         };
         let mut line = format!(

@@ -557,6 +557,25 @@ fn proposal_id(source: &Source, hypothesis: &Hypothesis) -> String {
     ])
 }
 
+/// The ids of the proposals a meeting's content carries, one per hypothesis as the queue would
+/// show it: the content a successful run proposes. Storage records them beside the run, because
+/// only the latest good run keeps its hypotheses, and an outcome still has to name the run that
+/// dropped an item.
+pub fn proposed_ids(
+    meeting: &str,
+    scope: &str,
+    hypotheses: &[crate::meeting::Hypothesis],
+) -> Vec<String> {
+    let source = Source {
+        kind: SourceKind::Meeting,
+        name: meeting.into(),
+        scope: scope.into(),
+    };
+    (hypotheses.iter())
+        .map(|hypothesis| proposal_id(&source, &Hypothesis::from(hypothesis)))
+        .collect()
+}
+
 /// The content address of a question: its two accounts and the signals that produced it.
 fn question_id(question: &Question) -> String {
     let reasons: Vec<String> = (question.reasons.iter())

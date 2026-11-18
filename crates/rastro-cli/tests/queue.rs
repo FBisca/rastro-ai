@@ -1882,6 +1882,30 @@ fn S12_an_item_shown_then_replaced_unanswered_reads_ignored_with_its_wait() {
     env.print_queue_at("2026-11-10T11:00:00Z");
     env.print_queue_at("2026-11-10T11:30:00Z");
 
+    // A replay and a re-import that carry the same content leave both items waiting under the
+    // same ids: neither replaced the source's content, so neither dates their departure.
+    let replayed = env.ok_at(
+        &["meeting", "replay", "weekly-1"],
+        Some("2026-11-10T11:45:00Z"),
+    );
+    assert_eq!(
+        replayed["hypotheses"].as_array().unwrap().len(),
+        2,
+        "{replayed}"
+    );
+    env.import_ok_at(
+        "weekly-1",
+        "work",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+        "2026-11-10T11:50:00Z",
+    );
+    assert_eq!(
+        ids(&env.queue()),
+        old,
+        "the same content keeps the same ids"
+    );
+
     // A re-import replaces the hypotheses: both earlier items leave unanswered.
     env.candidates(&revised());
     env.import_ok_at(
@@ -2054,6 +2078,126 @@ fn S14_every_outcome_carries_its_item_kind_time_and_claim_and_the_totals_count_s
         json!({"shown": 3, "acted_on": 3}),
         "{outcomes}"
     );
+}
+
+/// S14: an item the queue settled elsewhere — the owner accepted the identical proposal from
+/// another meeting, so this one was already known and left unanswered — reads became moot, not
+/// ignored, and no read and no rebuild moves its outcome.
+#[test]
+fn S14_an_item_settled_elsewhere_reads_became_moot_and_no_read_moves_it() {
+    let env = Env::new();
+    env.candidates(&good());
+    for meeting in ["weekly-1", "weekly-2"] {
+        env.import_ok(
+            meeting,
+            "work",
+            "2026-11-10T10:00:00Z",
+            &["--owner-speaker", "Alice"],
+        );
+    }
+    let queue = env.queue();
+    assert_eq!(queue["items"].as_array().unwrap().len(), 4, "{queue}");
+    let promised = |queue: &Value, meeting: &str| -> String {
+        (queue["items"].as_array().unwrap().iter())
+            .find(|item| {
+                item["source"]["name"] == meeting
+                    && item["proposal"]["promise"] == "send Bob the budget"
+            })
+            .unwrap_or_else(|| panic!("no promise from {meeting}: {queue}"))["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let accepted = promised(&queue, "weekly-1");
+    let settled = promised(&queue, "weekly-2");
+
+    // The owner prints the queue, then accepts the promise from one meeting: the identical
+    // proposal from the other is already known and leaves the queue with no answer.
+    env.print_queue_at("2026-11-10T11:00:00Z");
+    env.ok_at(
+        &["queue", "accept", &accepted],
+        Some("2026-11-10T12:00:00Z"),
+    );
+    let after = env.queue();
+    assert_eq!(after["already_known"], 1, "{after}");
+    assert!(!ids(&after).contains(&settled), "{after}");
+
+    // It reads became moot, dated at the last time a terminal read showed it waiting — not the
+    // read's own time, with no wait it never measured — and it is not counted as acted on.
+    let outcomes = env.outcomes_at("2026-11-10T13:00:00Z");
+    let listed = outcomes["outcomes"].as_array().unwrap();
+    assert_eq!(listed.len(), 2, "{outcomes}");
+    let moot = (listed.iter())
+        .find(|outcome| outcome["item"] == settled.as_str())
+        .unwrap_or_else(|| panic!("no outcome for the settled item: {outcomes}"));
+    assert_eq!(moot["kind"], "became_moot", "{outcomes}");
+    assert_eq!(moot["at"], "2026-11-10T11:00:00Z", "{outcomes}");
+    assert!(
+        moot.get("waited_seconds").is_none(),
+        "a moot item measures no wait: {outcomes}"
+    );
+    assert_eq!(
+        outcomes["totals"],
+        json!({"shown": 4, "acted_on": 1}),
+        "{outcomes}"
+    );
+
+    // Nothing moves it: not a later read, not a rebuild.
+    let later = env.outcomes_at("2026-11-10T20:00:00Z");
+    assert_eq!(later["outcomes"], outcomes["outcomes"], "{later}");
+    env.ok_at(&["claims", "rebuild"], Some("2026-11-10T21:00:00Z"));
+    let rebuilt = env.outcomes_at("2026-11-10T22:00:00Z");
+    assert_eq!(rebuilt["outcomes"], outcomes["outcomes"], "{rebuilt}");
+    assert_eq!(rebuilt["totals"], outcomes["totals"], "{rebuilt}");
+}
+
+/// S14: a question that goes away when the owner links its two accounts to one Person reads
+/// became moot at its last showing: a question carries no source run, so no run dates it.
+#[test]
+fn S14_a_question_settled_by_a_link_reads_became_moot_at_its_last_showing() {
+    let env = Env::new();
+    let person = env.ok(&["identity", "me"]);
+    let person = person["person"]["identifier"].as_str().unwrap().to_string();
+    env.typed_account(
+        "github:account/1",
+        "code:Account",
+        ("name", "Ana Silva"),
+        "https://api.github.com/users/1",
+    );
+    env.typed_account(
+        "linear:user/u-1",
+        "tracker:Account",
+        ("name", "ana silva"),
+        "https://linear.app/rastro/profiles/u-1",
+    );
+    let queue = env.queue();
+    assert_eq!(queue["items"].as_array().unwrap().len(), 1, "{queue}");
+    let question = ids(&queue)[0].clone();
+
+    env.print_queue_at("2026-11-10T11:00:00Z");
+    env.ok_at(
+        &["identity", "link", "github:account/1", &person],
+        Some("2026-11-10T12:00:00Z"),
+    );
+    env.ok_at(
+        &["identity", "link", "linear:user/u-1", &person],
+        Some("2026-11-10T12:30:00Z"),
+    );
+    assert_eq!(env.queue()["items"], json!([]), "the question is settled");
+
+    let outcomes = env.outcomes_at("2026-11-10T13:00:00Z");
+    let listed = outcomes["outcomes"].as_array().unwrap();
+    assert_eq!(listed.len(), 1, "{outcomes}");
+    assert_eq!(listed[0]["item"], question.as_str(), "{outcomes}");
+    assert_eq!(listed[0]["kind"], "became_moot", "{outcomes}");
+    assert_eq!(listed[0]["at"], "2026-11-10T11:00:00Z", "{outcomes}");
+    assert_eq!(
+        outcomes["totals"],
+        json!({"shown": 1, "acted_on": 0}),
+        "{outcomes}"
+    );
+    let later = env.outcomes_at("2026-11-10T20:00:00Z");
+    assert_eq!(later["outcomes"], outcomes["outcomes"], "{later}");
 }
 
 /// S15: a claims rebuild returns every accepted claim with the same id and reproduces every

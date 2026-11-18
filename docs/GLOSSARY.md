@@ -35,8 +35,8 @@ The core's own language. Code, docs, plugins and the interface all use these wor
 | **Cell** | One action × context pair, with its level and the trust behind it | |
 | **Proposal / Question** | One pending Propose or Ask | |
 | **Intent** | A typed input from the owner: `confirm`, `accept`, `edit`, `reject`, `answer`, `undo`, `stop`, `promote`, `missed`; identity adds `create_person`, `name`, `link`, `cannot_link`, `same_as` | |
-| **Outcome** | What happened to a proposal, question, action run or notification. A queue item's is accepted, accepted with edits, rejected, answered or ignored, derived from the intents and the shown reports (`decisions/learning.md` §16–18) | |
-| **Shown report** | The record that a terminal queue read printed one item, and when. An item no intent answered that left the queue is ignored; an item still waiting is never ignored. Only the terminal read records one, never `--json` or an MCP call | Outcome |
+| **Outcome** | What happened to a proposal, question, action run or notification. A queue item's is accepted, accepted with edits, rejected, answered, ignored or became moot, derived from the intents and the shown reports (`decisions/learning.md` §16–19) | |
+| **Shown report** | The record that a terminal queue read printed one item, and when. An item no intent answered that left the queue reads ignored when a later run of its source dropped its content, and became moot when the queue settled it another way; an item still waiting is never ignored. Only the terminal read records one, never `--json` or an MCP call | Outcome |
 | **Missed** | The owner reports something Rastro should have caught | |
 | **Trust** | Should it act alone? Derived from outcomes, per cell | Usefulness |
 | **Usefulness** | Should it do this at all? Derived from outcomes, per plugin, workflow, view or notification type | Trust |
