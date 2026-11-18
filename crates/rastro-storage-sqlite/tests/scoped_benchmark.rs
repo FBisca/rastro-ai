@@ -80,7 +80,7 @@ fn fixture(path: &std::path::Path, total: usize, hub: usize) {
 
 /// surfaces/R29: scoped about hub cold and warm p95 under 200ms
 #[test]
-#[ignore = "release benchmark: cargo test --release -p rastro-storage-sqlite --test scoped_benchmark -- --ignored --nocapture"]
+#[ignore = "bench: release build only; cargo nextest run --profile live --release --run-ignored only"]
 fn scoped_about_hub_cold_and_warm_p95_under_200ms() {
     let _serial = exclusive_cache();
     let home = tempfile::tempdir().unwrap();

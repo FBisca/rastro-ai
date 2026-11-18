@@ -32,6 +32,8 @@ jobs:
       - run: scripts/affected-tests.test.sh
       - run: scripts/crate-gate.sh
       - run: scripts/crate-gate.test.sh
+      - run: scripts/ignored-tests.sh
+      - run: scripts/ignored-tests.test.sh
       - run: scripts/nextest-config.test.sh
       - run: cargo fmt --all --check
       - run: cargo clippy --workspace --all-targets -- -D warnings
