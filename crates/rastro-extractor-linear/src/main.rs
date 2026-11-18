@@ -207,6 +207,10 @@ fn actor_flags(items: &[BatchItem]) -> BTreeMap<usize, &BatchItem> {
 
 /// The claims a location supports, given the latest observation of each field there; at a
 /// user, the latest `/app` flag the run delivers there; at an issue, each actor id's flag.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one walk over the field map yields every claim a location supports, so their spans are cited from one place"
+)]
 fn claims_at(
     location: &str,
     fields: &Fields,
