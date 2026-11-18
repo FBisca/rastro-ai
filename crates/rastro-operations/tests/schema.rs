@@ -316,7 +316,7 @@ fn remove_labels(value: &mut serde_json::Value) -> usize {
     found
 }
 
-/// surfaces/R1, identity/R3, surfaces/R36: identity changes `about` and `why` only additively: `about` gains an optional
+/// surfaces/R1, surfaces/R36: identity changes `about` and `why` only additively: `about` gains an optional
 /// `groups`, a `resolved` flag (S32), an optional Person view and an optional `account` on each
 /// claim (S28), and accepts `me`; a justification gains an optional `intent`; each claim summary
 /// gains a `subject_label` and an `object_label`, and the descriptions say a label is untrusted
@@ -439,7 +439,7 @@ fn about_and_why_change_only_additively_for_identity() {
     }
 }
 
-/// surfaces/R2, identity/R1: identity operations are CLI only; MCP stays read-only (surfaces §37)
+/// surfaces/R2: identity operations are CLI only; MCP stays read-only (surfaces §37)
 #[test]
 fn identity_operations_are_cli_only() {
     use rastro_operations::catalog::CATALOG;

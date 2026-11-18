@@ -1634,7 +1634,8 @@ fn claim_result(session: &mut Session, tool: &str, args: Value) -> Value {
     ok_result(&response["result"])["result"].clone()
 }
 
-/// identity/R10: coverage gaps are scoped and visible in mcp
+/// spec: Unreadable emails are a coverage gap
+/// Coverage gaps are scoped and visible in mcp
 #[test]
 fn coverage_gaps_are_scoped_and_visible_in_mcp() {
     let env = Env::new();
@@ -2274,7 +2275,8 @@ fn refuse_accounts(env: &Env, id: &str, a: &str, b: &str) {
     env.issue(vec![refusal]);
 }
 
-/// identity/R28: a scoped read that can't see any of a Person's linked accounts answers for it exactly as
+/// spec: A Person is visible only with a visible account
+/// A scoped read that can't see any of a Person's linked accounts answers for it exactly as
 /// for an unknown entity; `about me` in any scope shows only the visible accounts and claims
 #[test]
 fn a_person_is_visible_only_where_one_of_its_linked_accounts_is() {
@@ -2363,7 +2365,7 @@ fn why_text(session: &mut Session, claim: &str) -> Value {
     portable_answer(ok_result(&response["result"])["result"].clone())
 }
 
-/// identity/R29: the scope-set oracle with owner intents, over every scope set: Persons, names (one named
+/// The scope-set oracle with owner intents, over every scope set: Persons, names (one named
 /// again; one renamed and the rename undone, leaving a gap), links (one undone, with its cannot-link), and a merge chain P1–P2–P3 whose accounts
 /// sit in three scopes, so every scope set meets a merge with one end hidden and, without
 /// `work`, a chain through a hidden middle Person. A seed places a fourth account and extra
@@ -2373,6 +2375,7 @@ fn why_text(session: &mut Session, claim: &str) -> Value {
 /// Hidden data may suppress an automatic link but never create one: the oracle refuses, by
 /// a cannot-link, each automatic link the full projection doesn't hold. Both link sets are
 /// written out by hand from the seeded log, never read back from the code under test.
+/// spec: A scoped read equals a per-scope rebuild
 #[test]
 #[expect(
     clippy::too_many_lines,
@@ -2819,7 +2822,8 @@ fn random_scope_sets_with_intents_and_automatic_links_equal_a_per_scope_rebuild(
     assert!(suppressed, "no scope set needed a suppression");
 }
 
-/// identity/R15: a cannot-link through a merge with a Person the scope can't see still vetoes the
+/// spec: A cannot-link blocks the automatic link
+/// A cannot-link through a merge with a Person the scope can't see still vetoes the
 /// automatic link there
 #[test]
 fn a_cannot_link_through_a_hidden_merge_vetoes_in_every_scope() {
@@ -2871,7 +2875,8 @@ fn a_cannot_link_through_a_hidden_merge_vetoes_in_every_scope() {
     assert_eq!(linked(&seen), ["github:account/1"], "{seen}");
 }
 
-/// identity/R15: a cannot-link with an account an owner link holds in the class, hidden from the scope,
+/// spec: A cannot-link blocks the automatic link
+/// A cannot-link with an account an owner link holds in the class, hidden from the scope,
 /// still vetoes the automatic link there
 #[test]
 fn a_cannot_link_with_a_hidden_held_account_vetoes_in_every_scope() {
@@ -2928,7 +2933,8 @@ fn a_cannot_link_with_a_hidden_held_account_vetoes_in_every_scope() {
     assert_eq!(linked(&seen), ["github:account/1"], "{seen}");
 }
 
-/// identity/R15: B (visible) and D (hidden) both qualify for P and are refused to each other, so neither
+/// spec: A cannot-link blocks the automatic link
+/// B (visible) and D (hidden) both qualify for P and are refused to each other, so neither
 /// joins; B stays unlinked in a scope that can't see D
 #[test]
 fn a_hidden_conflict_partner_keeps_the_visible_account_unlinked_in_every_scope() {
@@ -2981,7 +2987,8 @@ fn a_hidden_conflict_partner_keeps_the_visible_account_unlinked_in_every_scope()
     );
 }
 
-/// identity/R37: B (visible) and D (hidden) are refused to each other; D qualifies for P only from a later
+/// spec: Cannot-linked accounts hold only their own intervals
+/// B (visible) and D (hidden) are refused to each other; D qualifies for P only from a later
 /// day, so B holds P only until then, and a scope that can't see D shows B no longer
 #[test]
 fn a_hidden_overlap_keeps_the_visible_account_unlinked_over_it_in_every_scope() {
@@ -3026,7 +3033,8 @@ fn a_hidden_overlap_keeps_the_visible_account_unlinked_over_it_in_every_scope() 
     assert_eq!(linked(&seen), ["github:account/1"], "{seen}");
 }
 
-/// identity/R29: no scoped read (about, with history, or why) surfaces a hidden Person or an intent
+/// spec: A scoped read equals a per-scope rebuild
+/// No scoped read (about, with history, or why) surfaces a hidden Person or an intent
 /// naming it, though every intent is replayed so hidden cannot-links still veto
 #[test]
 fn no_scoped_read_surfaces_a_hidden_intent_or_person() {
@@ -3103,7 +3111,8 @@ fn no_scoped_read_surfaces_a_hidden_intent_or_person() {
     }
 }
 
-/// identity/R35: a scoped `why` on an intent-backed claim lists only the issuer scopes the session can
+/// spec: An intent records its issuer's scopes
+/// A scoped `why` on an intent-backed claim lists only the issuer scopes the session can
 /// see; a scope the session can't see is never named
 #[test]
 fn a_scoped_why_never_names_an_issuer_scope_the_session_cant_see() {

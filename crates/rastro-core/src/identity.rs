@@ -2241,7 +2241,8 @@ mod tests {
         assert_eq!(held, ["github:account/1", "linear:user/u-1"]);
     }
 
-    /// identity/R4: an undo removes only its intents contribution and a link clears a cannot link
+    /// spec: Undoing a link removes it and records a cannot-link
+    /// An undo removes only its intents contribution and a link clears a cannot link
     #[test]
     fn an_undo_removes_only_its_intents_contribution_and_a_link_clears_a_cannot_link() {
         let p = target("rastro:person/1", "person");
@@ -2289,7 +2290,8 @@ mod tests {
         }
     }
 
-    /// identity/R6: rows are checked on their own
+    /// spec: An invalid intent is refused and stores nothing
+    /// Rows are checked on their own
     #[test]
     fn rows_are_checked_on_their_own() {
         let p = target("rastro:person/1", "person");
@@ -2386,7 +2388,8 @@ mod tests {
         }
     }
 
-    /// identity/R32: only an entity whose current types are all accounts may be held; an untyped one, a
+    /// spec: Only account types may be linked
+    /// Only an entity whose current types are all accounts may be held; an untyped one, a
     /// pull request, a repository or a bot may not, and the refusal names why
     #[test]
     fn only_an_entity_typed_as_an_account_may_be_held() {
@@ -2458,7 +2461,8 @@ mod tests {
         }
     }
 
-    /// identity/R2: the newest name wins and undoing it restores the older
+    /// spec: An undone claim stays superseded
+    /// The newest name wins and undoing it restores the older
     #[test]
     fn the_newest_name_wins_and_undoing_it_restores_the_older() {
         let p = target("rastro:person/1", "person");
