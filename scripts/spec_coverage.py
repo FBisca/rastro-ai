@@ -4,9 +4,9 @@
 The gate reads every spec under `docs/specs/` (subfolders included) for `### Requirement: <Title>`
 blocks, and every source file in the workspace for a `spec:` tag. It fails in two cases:
 
-- a title no tag on a test covers (`// spec: <Title>` above `#[test]`, `# spec: <Title>` above a test
-  function in a script test), naming the spec file;
-- a `// spec:` tag in a Rust file that names no title, naming the file, line and title.
+- a title no tag on a test covers (`// spec:` or `/// spec:` above `#[test]`, `# spec:` above a test
+  function or an `expect_… test_…` case in a script test), naming the spec file;
+- a `spec:` tag in a Rust file that names no title, naming the file, line and title.
 
 Rust tags are checked whether they sit on a test or on production code, so a stale one cannot hide.
 A tag may name a title an open plan under `docs/plans/` holds, so a plan's tests can carry their tags
@@ -24,9 +24,10 @@ TITLE = re.compile(r"^###\s+Requirement:\s*(.+?)\s*$")
 # A plan states the requirements its archive will write as `- title: <Title>` under requirements.added.
 PLAN_TITLE = re.compile(r"^\s*-\s+title:\s*(.+?)\s*$")
 PLAN_SUFFIXES = {".yaml", ".yml"}
-# A tag is a comment of its own, so a string that mentions one is not a tag.
+# A tag is a comment of its own, so a string that mentions one is not a tag. A Rust tag may be a
+# line comment or a rustdoc comment on the test.
 TAGS = {
-    ".rs": re.compile(r"^\s*//\s*spec:\s*(.+?)\s*$"),
+    ".rs": re.compile(r"^\s*///?\s*spec:\s*(.+?)\s*$"),
     ".py": re.compile(r"^\s*#\s*spec:\s*(.+?)\s*$"),
     ".sh": re.compile(r"^\s*#\s*spec:\s*(.+?)\s*$"),
 }
@@ -39,6 +40,9 @@ ATTRIBUTE = re.compile(r"^#\[\s*([A-Za-z0-9_]+(?:::[A-Za-z0-9_]+)*)\s*(?:\(.*\))
 TEST_ATTRIBUTES = {"test", "rstest", "test_case"}
 PY_TEST = re.compile(r"^\s*(?:async\s+)?def\s+test\w*\s*\(")
 SH_TEST = re.compile(r"^\s*(?:function\s+)?test[\w]*\s*(?:\(\))?\s*\{?\s*$")
+# A script case is either a `test_...` function or a call to one through an `expect_...` wrapper,
+# such as `expect_failure test_a_case_is_refused <fixture> "fragment"`.
+SH_CASE = re.compile(r"^\s*expect[\w]*\s+test[\w]*\b")
 
 
 def relative(path, root):
@@ -92,7 +96,7 @@ def marks_a_test(suffix, lines, index):
             return any(is_test_attribute(attribute) for attribute in attributes)
         if suffix == ".py":
             return bool(PY_TEST.match(line))
-        return bool(SH_TEST.match(line))
+        return bool(SH_TEST.match(line) or SH_CASE.match(line))
     return False
 
 

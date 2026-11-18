@@ -42,10 +42,10 @@ run their consumers yourself.
 2. Write the test first, and watch it fail for the behaviour you expect rather than for a missing
    symbol.
 3. Make the smallest change that passes it, then run the affected selection.
-4. Tag the test with its requirement's exact title: `// spec: <Title>` on the line above `#[test]`, or
-   `# spec: <Title>` above a test function in a script test. Only a tag on a test covers a title, and
-   every Rust `// spec:` tag must name one a spec or an open plan holds. Run the spec gate after
-   changing a requirement or a tag.
+4. Tag the test with its requirement's exact title: `// spec: <Title>` or `/// spec: <Title>` on the
+   line above `#[test]`, or `# spec: <Title>` above a test function — or above an `expect_… test_…`
+   case — in a script test. Only a tag on a test covers a title, and every Rust `spec:` tag must name
+   one a spec or an open plan holds. Run the spec gate after changing a requirement or a tag.
 5. Commit as a Conventional Commit (`feat(core): ...`, `fix(cli): ...`) and open a pull request
    against `main`.
 

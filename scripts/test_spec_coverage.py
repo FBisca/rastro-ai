@@ -168,6 +168,62 @@ class SpecCoverageGate(unittest.TestCase):
 
         self.assertEqual(gate.returncode, 0, gate.stderr)
 
+    # spec: Every requirement names its tests
+    def test_a_rustdoc_tag_above_a_test_covers_its_requirement(self):
+        self.write("docs/specs/alpha.md", requirement("A requirement a rustdoc tag names"))
+        self.write(
+            "crates/alpha/src/lib.rs",
+            "pub fn add(a: i32, b: i32) -> i32 { a + b }\n"
+            "\n"
+            "#[cfg(test)]\n"
+            "mod tests {\n"
+            "    use super::*;\n"
+            "\n"
+            "    /// spec: A requirement a rustdoc tag names\n"
+            "    #[test]\n"
+            "    fn adds() {\n"
+            "        assert_eq!(add(1, 2), 3);\n"
+            "    }\n"
+            "}\n",
+        )
+
+        gate = self.run_gate()
+
+        self.assertEqual(gate.returncode, 0, gate.stderr)
+
+    # spec: Every requirement names its tests
+    def test_a_rustdoc_tag_naming_no_requirement_is_named_with_its_file_line_and_title(self):
+        self.write("docs/specs/alpha.md", requirement("A covered requirement"))
+        self.write("crates/alpha/src/lib.rs", tagged_test("A covered requirement"))
+        self.write(
+            "crates/alpha/src/stale.rs",
+            "fn helper() {}\n\n/// spec: A rustdoc title no spec holds\n#[test]\nfn stale() {}\n",
+        )
+
+        gate = self.run_gate()
+
+        self.assertNotEqual(gate.returncode, 0, f"the gate accepted it:\n{gate.stdout}")
+        self.assertIn("A rustdoc title no spec holds", gate.stderr)
+        self.assertRegex(gate.stderr, r"crates/alpha/src/stale\.rs[:\s]+3\b")
+
+    # spec: Every requirement names its tests
+    def test_a_tag_above_a_script_case_that_invokes_a_test_covers_its_requirement(self):
+        self.write("docs/specs/alpha.md", requirement("A requirement a script case covers"))
+        self.write(
+            "scripts/case.test.sh",
+            "#!/usr/bin/env bash\n"
+            ". \"$(dirname \"$0\")/helpers.sh\"\n"
+            "\n"
+            "# spec: A requirement a script case covers\n"
+            "# The case's fixture is refused by name.\n"
+            "expect_failure test_a_case_is_refused scripts/fixtures/case \\\n"
+            "  \"fixture-thing\" \"declares no role\"\n",
+        )
+
+        gate = self.run_gate()
+
+        self.assertEqual(gate.returncode, 0, gate.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
