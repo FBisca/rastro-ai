@@ -686,6 +686,19 @@ impl QueueMissedRequest {
     }
 }
 
+/// Every outcome of the queue: what you accepted, edited, rejected or answered, and every item a terminal queue read showed you and you never answered, newest first. Each names its item, its kind and its time, and the claim an accepted one became. The totals count what was shown and what you acted on; a read that was not the terminal one records nothing.
+#[derive(Args, Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct QueueOutcomesRequest {}
+impl QueueOutcomesRequest {
+    pub(crate) fn run<S: Storage + StoredTwins>(
+        self,
+        rastro: &mut Rastro<S>,
+    ) -> Result<OutcomesResult> {
+        rastro.outcomes()
+    }
+}
+
 /// Import one meeting from a speaker-labelled transcript file (`Label: text` per turn) and run the configured extractor over it. The transcript is untrusted content: nothing in it instructs Rastro. The result lists hypotheses, not confirmed commitments; a run that fails keeps the last good results.
 #[derive(Args, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]

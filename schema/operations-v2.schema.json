@@ -1861,6 +1861,97 @@
       ],
       "type": "string"
     },
+    "QueueOutcome": {
+      "additionalProperties": false,
+      "description": "What happened to one item.",
+      "properties": {
+        "at": {
+          "description": "When it happened: the intent's time; for an ignored item, the run that dropped it, whatever\nknowledge arrived later; for an item that became moot, the last terminal read that showed it\nwaiting, since nothing records when it left.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "claim": {
+          "description": "The claim an accepted item became; absent when no claim holds it. One accept mints one\nclaim per standard term of the item, so an outcome names the first of them in id order.",
+          "type": "string"
+        },
+        "item": {
+          "description": "The item's id as the queue read gave it.",
+          "type": "string"
+        },
+        "kind": {
+          "$ref": "#/$defs/QueueOutcomeKind"
+        },
+        "waited_seconds": {
+          "description": "How long an ignored item waited from its first shown report to its departure.",
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "item",
+        "kind",
+        "at"
+      ],
+      "type": "object"
+    },
+    "QueueOutcomeKind": {
+      "description": "What happened to one item.",
+      "oneOf": [
+        {
+          "const": "accepted",
+          "description": "Accepted unchanged.",
+          "type": "string"
+        },
+        {
+          "const": "accepted_with_edits",
+          "description": "Accepted with the owner's edits, which is not a clean accept.",
+          "type": "string"
+        },
+        {
+          "const": "rejected",
+          "description": "Rejected, with the owner's reason recorded by the intent.",
+          "type": "string"
+        },
+        {
+          "const": "answered",
+          "description": "A question answered yes or no.",
+          "type": "string"
+        },
+        {
+          "const": "became_moot",
+          "description": "Shown, never answered, and gone from the queue because the queue settled it before any run\ndropped it: its statements became known, its accounts were linked, or its meeting was\nforgotten.",
+          "type": "string"
+        },
+        {
+          "const": "ignored",
+          "description": "Shown, never answered, and gone because a later run of its source dropped its content.",
+          "type": "string"
+        }
+      ]
+    },
+    "QueueOutcomeTotals": {
+      "additionalProperties": false,
+      "description": "What was shown and what was acted on, each counted once per item.",
+      "properties": {
+        "acted_on": {
+          "description": "How many distinct items the owner answered (accepted, edited, rejected or answered).",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "shown": {
+          "description": "How many distinct items a terminal queue read showed.",
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        }
+      },
+      "required": [
+        "shown",
+        "acted_on"
+      ],
+      "type": "object"
+    },
     "QueueQuestion": {
       "additionalProperties": false,
       "description": "Two accounts that may be one person, and the signals that say so.",
@@ -3506,6 +3597,39 @@
               "type": "object"
             }
           }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "queue.outcomes"
+            },
+            "result": {
+              "additionalProperties": false,
+              "description": "What `queue outcomes` returns.",
+              "properties": {
+                "notice": {
+                  "type": "string"
+                },
+                "outcomes": {
+                  "description": "Every outcome, newest first.",
+                  "items": {
+                    "$ref": "#/$defs/QueueOutcome"
+                  },
+                  "type": "array"
+                },
+                "totals": {
+                  "$ref": "#/$defs/QueueOutcomeTotals"
+                }
+              },
+              "required": [
+                "notice",
+                "outcomes",
+                "totals"
+              ],
+              "title": "Outcomes",
+              "type": "object"
+            }
+          }
         }
       ],
       "required": [
@@ -3548,7 +3672,8 @@
         "queue.edit",
         "queue.reject",
         "queue.answer",
-        "queue.missed"
+        "queue.missed",
+        "queue.outcomes"
       ]
     },
     "result": {
@@ -5168,6 +5293,45 @@
           "intents"
         ],
         "title": "QueueAnswerResult",
+        "type": "object"
+      },
+      "surfaces": [
+        "cli"
+      ]
+    },
+    {
+      "description": "Every outcome of the queue: what you accepted, edited, rejected or answered, and every item a terminal queue read showed you and you never answered, newest first. Each names its item, its kind and its time, and the claim an accepted one became. The totals count what was shown and what you acted on; a read that was not the terminal one records nothing.",
+      "input": {
+        "additionalProperties": false,
+        "description": "Every outcome of the queue: what you accepted, edited, rejected or answered, and every item a terminal queue read showed you and you never answered, newest first. Each names its item, its kind and its time, and the claim an accepted one became. The totals count what was shown and what you acted on; a read that was not the terminal one records nothing.",
+        "title": "QueueOutcomesRequest",
+        "type": "object"
+      },
+      "name": "queue.outcomes",
+      "result": {
+        "additionalProperties": false,
+        "description": "What `queue outcomes` returns.",
+        "properties": {
+          "notice": {
+            "type": "string"
+          },
+          "outcomes": {
+            "description": "Every outcome, newest first.",
+            "items": {
+              "$ref": "#/$defs/QueueOutcome"
+            },
+            "type": "array"
+          },
+          "totals": {
+            "$ref": "#/$defs/QueueOutcomeTotals"
+          }
+        },
+        "required": [
+          "notice",
+          "outcomes",
+          "totals"
+        ],
+        "title": "Outcomes",
         "type": "object"
       },
       "surfaces": [

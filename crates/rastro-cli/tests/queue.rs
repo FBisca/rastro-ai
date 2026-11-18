@@ -149,7 +149,16 @@ impl Env {
     }
 
     fn run(&self, args: &[&str]) -> (bool, Value) {
-        let out = self.command(args).arg("--json").output().unwrap();
+        self.run_at(args, None)
+    }
+
+    /// Runs `args` with the core's clock at `at`, so a test can date what it shows.
+    fn run_at(&self, args: &[&str], at: Option<&str>) -> (bool, Value) {
+        let mut command = self.command(args);
+        if let Some(at) = at {
+            command.env("RASTRO_NOW", at);
+        }
+        let out = command.arg("--json").output().unwrap();
         let value: Value = serde_json::from_slice(&out.stdout).unwrap_or_else(|_| {
             panic!(
                 "{args:?}: {}{}",
@@ -168,9 +177,33 @@ impl Env {
     }
 
     fn ok(&self, args: &[&str]) -> Value {
-        let (ok, value) = self.run(args);
+        self.ok_at(args, None)
+    }
+
+    fn ok_at(&self, args: &[&str], at: Option<&str>) -> Value {
+        let (ok, value) = self.run_at(args, at);
         assert!(ok, "{args:?}: {value}");
         value["result"].clone()
+    }
+
+    /// The human queue read the owner prints: what it prints is what it showed.
+    fn print_queue_at(&self, at: &str) -> String {
+        let out = self
+            .command(&["queue"])
+            .env("RASTRO_NOW", at)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).to_string()
+    }
+
+    /// Every outcome the owner reads, newest first.
+    fn outcomes_at(&self, at: &str) -> Value {
+        self.ok_at(&["queue", "outcomes"], Some(at))
     }
 
     /// Imports `meeting` from `file`, with the usual arguments plus `extra`.
@@ -181,6 +214,19 @@ impl Env {
         scope: &str,
         captured_at: &str,
         extra: &[&str],
+    ) -> (bool, Value) {
+        self.import_from_at(meeting, file, scope, captured_at, extra, None)
+    }
+
+    /// Imports `meeting`, reading the clock at `at` so its run is dated.
+    fn import_from_at(
+        &self,
+        meeting: &str,
+        file: &str,
+        scope: &str,
+        captured_at: &str,
+        extra: &[&str],
+        at: Option<&str>,
     ) -> (bool, Value) {
         let file = self.path(file);
         let mut args = vec![
@@ -195,7 +241,7 @@ impl Env {
             captured_at,
         ];
         args.extend_from_slice(extra);
-        let (ok, value) = self.run(&args);
+        let (ok, value) = self.run_at(&args, at);
         (ok, value["result"].clone())
     }
 
@@ -211,6 +257,27 @@ impl Env {
 
     fn import_ok(&self, meeting: &str, scope: &str, captured_at: &str, extra: &[&str]) -> Value {
         let (ok, result) = self.import(meeting, scope, captured_at, extra);
+        assert!(ok, "{result}");
+        result
+    }
+
+    /// Imports `meeting`, reading the clock at `at` as its run's finish.
+    fn import_ok_at(
+        &self,
+        meeting: &str,
+        scope: &str,
+        captured_at: &str,
+        extra: &[&str],
+        at: &str,
+    ) -> Value {
+        let (ok, result) = self.import_from_at(
+            meeting,
+            "transcript.txt",
+            scope,
+            captured_at,
+            extra,
+            Some(at),
+        );
         assert!(ok, "{result}");
         result
     }
@@ -264,6 +331,19 @@ impl Env {
     /// How many owner intents are recorded.
     fn intents(&self) -> i64 {
         self.sql("SELECT count(*) FROM intent")
+    }
+
+    /// Every claim the owner intent backs in the projection, in id order: an accept mints one
+    /// claim per standard term of the item it accepted.
+    fn claims_of_intent(&self, intent: &str) -> Vec<String> {
+        let connection = rusqlite::Connection::open(self.database()).unwrap();
+        let mut statement = connection
+            .prepare(
+                "SELECT claim_id FROM intent_justification WHERE intent_id = ?1 ORDER BY claim_id",
+            )
+            .unwrap();
+        let rows = statement.query_map([intent], |row| row.get(0)).unwrap();
+        rows.collect::<Result<_, _>>().unwrap()
     }
 
     /// How many claims the projection holds.
@@ -1765,4 +1845,531 @@ fn a_scoped_read_never_explains_a_hidden_accept() {
         !intents.contains(&personal_accept.as_str()),
         "the personal accept stays hidden: {why}"
     );
+}
+
+/// What a re-import of `TRANSCRIPT` proposes instead: the second turn's waiting-on, with a
+/// different promise, so no earlier item's content survives it.
+fn revised() -> Vec<Value> {
+    vec![candidate(
+        2,
+        "waiting_on",
+        Some("Bob"),
+        Some("Alice"),
+        "review the final numbers",
+        Some("next week"),
+        "I'll review it next week for you if the numbers are final.",
+    )]
+}
+
+/// The id of `meeting`'s proposal promising to send Bob the budget.
+fn promised(queue: &Value, meeting: &str) -> String {
+    (queue["items"].as_array().unwrap().iter())
+        .find(|item| {
+            item["source"]["name"] == meeting
+                && item["proposal"]["promise"] == "send Bob the budget"
+        })
+        .unwrap_or_else(|| panic!("no promise from {meeting}: {queue}"))["id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+/// S12: an item the owner printed and a re-import later replaced, left unanswered, reads
+/// ignored with the time it waited since its first shown report; an item still pending is never
+/// ignored however often it was shown.
+#[test]
+fn S12_an_item_shown_then_replaced_unanswered_reads_ignored_with_its_wait() {
+    let env = Env::new();
+    env.candidates(&good());
+    env.import_ok(
+        "weekly-1",
+        "work",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+    );
+    let queue = env.queue();
+    let old = ids(&queue);
+    assert_eq!(old.len(), 2, "{queue}");
+
+    // The owner prints the queue twice: the first print starts each item's wait.
+    env.print_queue_at("2026-11-10T11:00:00Z");
+    env.print_queue_at("2026-11-10T11:30:00Z");
+
+    // A replay and a re-import that carry the same content leave both items waiting under the
+    // same ids: neither replaced the source's content, so neither dates their departure.
+    let replayed = env.ok_at(
+        &["meeting", "replay", "weekly-1"],
+        Some("2026-11-10T11:45:00Z"),
+    );
+    assert_eq!(
+        replayed["hypotheses"].as_array().unwrap().len(),
+        2,
+        "{replayed}"
+    );
+    env.import_ok_at(
+        "weekly-1",
+        "work",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+        "2026-11-10T11:50:00Z",
+    );
+    assert_eq!(
+        ids(&env.queue()),
+        old,
+        "the same content keeps the same ids"
+    );
+
+    // A re-import replaces the hypotheses: both earlier items leave unanswered.
+    env.candidates(&revised());
+    env.import_ok_at(
+        "weekly-1",
+        "work",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+        "2026-11-10T12:00:00Z",
+    );
+    let replaced = env.queue();
+    assert_eq!(replaced["items"].as_array().unwrap().len(), 1, "{replaced}");
+
+    // Each earlier item reads ignored, dated when its source replaced it, having waited since
+    // the first time it was printed.
+    let outcomes = env.outcomes_at("2026-11-10T13:00:00Z");
+    let ignored = outcomes["outcomes"].as_array().unwrap();
+    assert_eq!(ignored.len(), 2, "{outcomes}");
+    let mut seen: Vec<&str> = (ignored.iter())
+        .map(|outcome| outcome["item"].as_str().unwrap())
+        .collect();
+    seen.sort();
+    let mut expected: Vec<&str> = (old.iter()).map(String::as_str).collect();
+    expected.sort();
+    assert_eq!(seen, expected, "{outcomes}");
+    for outcome in ignored {
+        assert_eq!(outcome["kind"], "ignored", "{outcomes}");
+        assert_eq!(outcome["at"], "2026-11-10T12:00:00Z", "{outcomes}");
+        assert_eq!(outcome["waited_seconds"], 3600, "{outcomes}");
+    }
+
+    // The item still pending is shown twice more and never reads ignored.
+    env.print_queue_at("2026-11-10T13:00:00Z");
+    env.print_queue_at("2026-11-10T14:00:00Z");
+    let later = env.outcomes_at("2026-11-10T15:00:00Z");
+    assert_eq!(later["outcomes"], outcomes["outcomes"], "{later}");
+}
+
+/// S13: the queue read as `--json` or over MCP records no shown report, so automation cannot
+/// make an item look ignored.
+#[test]
+fn S13_a_machine_read_records_no_shown_report() {
+    let env = Env::new();
+    env.candidates(&good());
+    env.import_ok(
+        "weekly-1",
+        "work",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+    );
+    // Two machine reads: the JSON one the owner pipes elsewhere, and an MCP tool call.
+    assert_eq!(ids(&env.queue()).len(), 2);
+    let read = env.mcp(&[], "queue", json!({}));
+    assert_eq!(
+        read["structuredContent"]["result"]["items"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2,
+        "{read}"
+    );
+
+    // A re-import replaces both items. Nothing was shown on a terminal, so nothing is ignored.
+    env.candidates(&revised());
+    env.import_ok_at(
+        "weekly-1",
+        "work",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+        "2026-11-10T12:00:00Z",
+    );
+    let outcomes = env.outcomes_at("2026-11-10T13:00:00Z");
+    assert_eq!(outcomes["outcomes"], json!([]), "{outcomes}");
+}
+
+/// S14: every outcome carries its item id, its kind, its time and, for an accepted item, the
+/// claim it became; the totals count what was shown and what was acted on.
+#[test]
+fn S14_every_outcome_carries_its_item_kind_time_and_claim_and_the_totals_count_shown_and_acted_on()
+{
+    let env = Env::new();
+    env.candidates(&good());
+    env.import_ok(
+        "weekly-1",
+        "work",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+    );
+    env.typed_account(
+        "github:account/1",
+        "code:Account",
+        ("name", "Ana Silva"),
+        "https://api.github.com/users/1",
+    );
+    env.typed_account(
+        "linear:user/u-1",
+        "tracker:Account",
+        ("name", "ana silva"),
+        "https://linear.app/rastro/profiles/u-1",
+    );
+
+    let queue = env.queue();
+    assert_eq!(queue["items"].as_array().unwrap().len(), 3, "{queue}");
+    let question = question(&queue, "github:account/1")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let proposals: Vec<String> = (ids(&queue).into_iter())
+        .filter(|id| *id != question)
+        .collect();
+    let (first, second) = (&proposals[0], &proposals[1]);
+
+    // What the owner saw: one terminal print of all three items.
+    env.print_queue_at("2026-11-10T10:30:00Z");
+
+    let accepted = env.ok_at(&["queue", "accept", first], Some("2026-11-10T11:00:00Z"));
+    let accepted_intent = accepted["intents"][0]["id"].as_str().unwrap().to_string();
+    env.ok_at(
+        &[
+            "queue",
+            "reject",
+            second,
+            "--reason",
+            "Alice never promised that",
+        ],
+        Some("2026-11-10T12:00:00Z"),
+    );
+    env.ok_at(
+        &["queue", "answer", &question, "yes"],
+        Some("2026-11-10T13:00:00Z"),
+    );
+
+    let outcomes = env.outcomes_at("2026-11-10T14:00:00Z");
+    let listed = outcomes["outcomes"].as_array().unwrap();
+    assert_eq!(listed.len(), 3, "{outcomes}");
+    let kinds: Vec<&str> = (listed.iter())
+        .map(|outcome| outcome["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["answered", "rejected", "accepted"], "{outcomes}");
+    assert_eq!(listed[0]["item"], question.as_str(), "{outcomes}");
+    assert_eq!(listed[0]["at"], "2026-11-10T13:00:00Z", "{outcomes}");
+    assert_eq!(listed[1]["item"], second.as_str(), "{outcomes}");
+    assert_eq!(listed[1]["at"], "2026-11-10T12:00:00Z", "{outcomes}");
+    assert_eq!(listed[2]["item"], first.as_str(), "{outcomes}");
+    assert_eq!(listed[2]["at"], "2026-11-10T11:00:00Z", "{outcomes}");
+    // The accepted one names a claim it became: one the accept intent backs, about the
+    // commitment the item minted.
+    let claim = listed[2]
+        .get("claim")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("an accept mints a claim: {outcomes}"))
+        .to_string();
+    let backed = env.claims_of_intent(&accepted_intent);
+    assert!(
+        backed.contains(&claim),
+        "the outcome names a claim the accept backs: {claim} not in {backed:?}"
+    );
+    let commitment = claims::entity_id(&format!("std:commitment/{first}"));
+    let about = env.ok(&["about", "me"]);
+    let minted: BTreeSet<&str> = (about["claims"].as_array().into_iter().flatten())
+        .filter(|claim| claim["subject"]["id"] == commitment)
+        .filter_map(|claim| claim["id"].as_str())
+        .collect();
+    assert!(
+        minted.contains(claim.as_str()),
+        "the outcome names a claim about the commitment the item became: {claim} not in {minted:?}"
+    );
+    // The totals count what was shown and what was acted on, each item once.
+    assert_eq!(
+        outcomes["totals"],
+        json!({"shown": 3, "acted_on": 3}),
+        "{outcomes}"
+    );
+}
+
+/// S14: an item the queue settled elsewhere — the owner accepted the identical proposal from
+/// another meeting, so this one was already known and left unanswered — reads became moot, not
+/// ignored, and no read and no rebuild moves its outcome.
+#[test]
+fn S14_an_item_settled_elsewhere_reads_became_moot_and_no_read_moves_it() {
+    let env = Env::new();
+    env.candidates(&good());
+    for meeting in ["weekly-1", "weekly-2"] {
+        env.import_ok(
+            meeting,
+            "work",
+            "2026-11-10T10:00:00Z",
+            &["--owner-speaker", "Alice"],
+        );
+    }
+    let queue = env.queue();
+    assert_eq!(queue["items"].as_array().unwrap().len(), 4, "{queue}");
+    let accepted = promised(&queue, "weekly-1");
+    let settled = promised(&queue, "weekly-2");
+
+    // The owner prints the queue, then accepts the promise from one meeting: the identical
+    // proposal from the other is already known and leaves the queue with no answer.
+    env.print_queue_at("2026-11-10T11:00:00Z");
+    env.ok_at(
+        &["queue", "accept", &accepted],
+        Some("2026-11-10T12:00:00Z"),
+    );
+    let after = env.queue();
+    assert_eq!(after["already_known"], 1, "{after}");
+    assert!(!ids(&after).contains(&settled), "{after}");
+
+    // It reads became moot, dated at the last time a terminal read showed it waiting — not the
+    // read's own time, with no wait it never measured — and it is not counted as acted on.
+    let outcomes = env.outcomes_at("2026-11-10T13:00:00Z");
+    let listed = outcomes["outcomes"].as_array().unwrap();
+    assert_eq!(listed.len(), 2, "{outcomes}");
+    let moot = (listed.iter())
+        .find(|outcome| outcome["item"] == settled.as_str())
+        .unwrap_or_else(|| panic!("no outcome for the settled item: {outcomes}"));
+    assert_eq!(moot["kind"], "became_moot", "{outcomes}");
+    assert_eq!(moot["at"], "2026-11-10T11:00:00Z", "{outcomes}");
+    assert!(
+        moot.get("waited_seconds").is_none(),
+        "a moot item measures no wait: {outcomes}"
+    );
+    assert_eq!(
+        outcomes["totals"],
+        json!({"shown": 4, "acted_on": 1}),
+        "{outcomes}"
+    );
+
+    // A later re-import replaces that meeting's content, so a run now lacks the settled item.
+    // It still reads became moot at the same time: the queue settled it before any run could
+    // have dropped it, and a run that merely lacks it never turns that into ignored.
+    env.candidates(&revised());
+    env.import_ok_at(
+        "weekly-2",
+        "work",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+        "2026-11-10T14:00:00Z",
+    );
+    let replaced = env.outcomes_at("2026-11-10T15:00:00Z");
+    let listed = replaced["outcomes"].as_array().unwrap();
+    let still = (listed.iter())
+        .find(|outcome| outcome["item"] == settled.as_str())
+        .unwrap_or_else(|| panic!("no outcome for the settled item: {replaced}"));
+    assert_eq!(still["kind"], "became_moot", "{replaced}");
+    assert_eq!(still["at"], "2026-11-10T11:00:00Z", "{replaced}");
+    assert!(
+        still.get("waited_seconds").is_none(),
+        "a moot item measures no wait: {replaced}"
+    );
+    // The item that re-import did replace reads ignored, dated at that run: the read still
+    // tells a run's departure from a settled one.
+    let dropped = (listed.iter())
+        .find(|outcome| outcome["item"] != settled.as_str() && outcome["kind"] == "ignored")
+        .unwrap_or_else(|| panic!("the re-import dropped an unanswered item: {replaced}"));
+    assert_eq!(dropped["at"], "2026-11-10T14:00:00Z", "{replaced}");
+    assert_eq!(
+        replaced["totals"],
+        json!({"shown": 4, "acted_on": 1}),
+        "{replaced}"
+    );
+
+    // Nothing moves it: not a later read, not a rebuild.
+    let later = env.outcomes_at("2026-11-10T20:00:00Z");
+    assert_eq!(later["outcomes"], replaced["outcomes"], "{later}");
+    env.ok_at(&["claims", "rebuild"], Some("2026-11-10T21:00:00Z"));
+    let rebuilt = env.outcomes_at("2026-11-10T22:00:00Z");
+    assert_eq!(rebuilt["outcomes"], replaced["outcomes"], "{rebuilt}");
+    assert_eq!(rebuilt["totals"], replaced["totals"], "{rebuilt}");
+}
+
+/// S14: an item a run really dropped stays ignored, dated at that run, even when later knowledge
+/// holds the statements it expressed: which came first — the run or the knowledge — fixes the
+/// kind and the time, in either order.
+#[test]
+fn S14_an_item_a_run_dropped_stays_ignored_when_later_knowledge_holds_it() {
+    let env = Env::new();
+    env.candidates(&good());
+    for meeting in ["weekly-1", "weekly-2"] {
+        env.import_ok(
+            meeting,
+            "work",
+            "2026-11-10T10:00:00Z",
+            &["--owner-speaker", "Alice"],
+        );
+    }
+    let queue = env.queue();
+    let accepted = promised(&queue, "weekly-1");
+    let dropped = promised(&queue, "weekly-2");
+
+    // The owner prints the queue, then a re-import replaces weekly-2's content: its promise
+    // leaves unanswered, and nothing had settled it.
+    env.print_queue_at("2026-11-10T11:00:00Z");
+    env.candidates(&revised());
+    env.import_ok_at(
+        "weekly-2",
+        "work",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+        "2026-11-10T12:00:00Z",
+    );
+    let before = env.outcomes_at("2026-11-10T12:30:00Z");
+    let ignored = (before["outcomes"].as_array().unwrap().iter())
+        .find(|outcome| outcome["item"] == dropped.as_str())
+        .unwrap_or_else(|| panic!("no outcome for the dropped item: {before}"));
+    assert_eq!(ignored["kind"], "ignored", "{before}");
+    assert_eq!(ignored["at"], "2026-11-10T12:00:00Z", "{before}");
+    assert_eq!(ignored["waited_seconds"], 3600, "{before}");
+
+    // The owner then accepts the identical promise from the other meeting, so knowledge now holds
+    // the statements the dropped item expressed. The run came first, and it stays ignored.
+    env.ok_at(
+        &["queue", "accept", &accepted],
+        Some("2026-11-10T13:00:00Z"),
+    );
+    let after = env.outcomes_at("2026-11-10T13:30:00Z");
+    let still = (after["outcomes"].as_array().unwrap().iter())
+        .find(|outcome| outcome["item"] == dropped.as_str())
+        .unwrap_or_else(|| panic!("no outcome for the dropped item: {after}"));
+    assert_eq!(still["kind"], "ignored", "{after}");
+    assert_eq!(still["at"], "2026-11-10T12:00:00Z", "{after}");
+    assert_eq!(still["waited_seconds"], 3600, "{after}");
+    assert_eq!(
+        after["totals"],
+        json!({"shown": 4, "acted_on": 1}),
+        "{after}"
+    );
+
+    // No later read and no rebuild derives it again.
+    let later = env.outcomes_at("2026-11-10T13:45:00Z");
+    assert_eq!(later["outcomes"], after["outcomes"], "{later}");
+    env.ok_at(&["claims", "rebuild"], Some("2026-11-10T14:00:00Z"));
+    let rebuilt = env.outcomes_at("2026-11-10T14:30:00Z");
+    assert_eq!(rebuilt["outcomes"], after["outcomes"], "{rebuilt}");
+}
+
+/// S14: a question that goes away when the owner links its two accounts to one Person reads
+/// became moot at its last showing: a question carries no source run, so no run dates it.
+#[test]
+fn S14_a_question_settled_by_a_link_reads_became_moot_at_its_last_showing() {
+    let env = Env::new();
+    let person = env.ok(&["identity", "me"]);
+    let person = person["person"]["identifier"].as_str().unwrap().to_string();
+    env.typed_account(
+        "github:account/1",
+        "code:Account",
+        ("name", "Ana Silva"),
+        "https://api.github.com/users/1",
+    );
+    env.typed_account(
+        "linear:user/u-1",
+        "tracker:Account",
+        ("name", "ana silva"),
+        "https://linear.app/rastro/profiles/u-1",
+    );
+    let queue = env.queue();
+    assert_eq!(queue["items"].as_array().unwrap().len(), 1, "{queue}");
+    let question = ids(&queue)[0].clone();
+
+    env.print_queue_at("2026-11-10T11:00:00Z");
+    env.ok_at(
+        &["identity", "link", "github:account/1", &person],
+        Some("2026-11-10T12:00:00Z"),
+    );
+    env.ok_at(
+        &["identity", "link", "linear:user/u-1", &person],
+        Some("2026-11-10T12:30:00Z"),
+    );
+    assert_eq!(env.queue()["items"], json!([]), "the question is settled");
+
+    let outcomes = env.outcomes_at("2026-11-10T13:00:00Z");
+    let listed = outcomes["outcomes"].as_array().unwrap();
+    assert_eq!(listed.len(), 1, "{outcomes}");
+    assert_eq!(listed[0]["item"], question.as_str(), "{outcomes}");
+    assert_eq!(listed[0]["kind"], "became_moot", "{outcomes}");
+    assert_eq!(listed[0]["at"], "2026-11-10T11:00:00Z", "{outcomes}");
+    assert_eq!(
+        outcomes["totals"],
+        json!({"shown": 1, "acted_on": 0}),
+        "{outcomes}"
+    );
+    let later = env.outcomes_at("2026-11-10T20:00:00Z");
+    assert_eq!(later["outcomes"], outcomes["outcomes"], "{later}");
+}
+
+/// S15: a claims rebuild returns every accepted claim with the same id and reproduces every
+/// outcome and shown report, calling no adapter.
+#[test]
+fn S15_a_rebuild_reproduces_the_accepted_claim_and_every_outcome_with_no_adapter_call() {
+    let env = Env::new();
+    env.candidates(&good());
+    env.import_ok(
+        "weekly-1",
+        "work",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+    );
+    let proposals = ids(&env.queue());
+    assert_eq!(proposals.len(), 2, "{proposals:?}");
+    let accepted = proposals[0].clone();
+
+    env.print_queue_at("2026-11-10T10:30:00Z");
+    let answer = env.ok_at(
+        &["queue", "accept", &accepted],
+        Some("2026-11-10T11:00:00Z"),
+    );
+    let accepted_intent = answer["intents"][0]["id"].as_str().unwrap().to_string();
+
+    // The other item leaves unanswered when a re-import replaces it, so there is an ignored
+    // outcome and a shown report to reproduce too.
+    env.candidates(&revised());
+    env.import_ok_at(
+        "weekly-1",
+        "work",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+        "2026-11-10T12:00:00Z",
+    );
+
+    let before = env.outcomes_at("2026-11-10T13:00:00Z");
+    let claims = env.claims_of_intent(&accepted_intent);
+    assert!(!claims.is_empty(), "an accept mints a claim: {before}");
+    let accepted_outcome = (before["outcomes"].as_array().unwrap().iter())
+        .find(|outcome| outcome["item"] == accepted.as_str())
+        .unwrap();
+    let named = accepted_outcome["claim"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the accepted outcome names a claim: {before}"))
+        .to_string();
+    assert!(
+        claims.contains(&named),
+        "the accepted outcome names a claim its intent backs: {named} not in {claims:?}"
+    );
+
+    // An adapter that would be called now fails and leaves a mark.
+    let marker = env.path("adapter-was-called");
+    let adapter = env.path("config/plugins/test-adapter/adapter");
+    fs::write(
+        &adapter,
+        format!("#!/bin/sh\ntouch {}\nexit 1\n", marker.display()),
+    )
+    .unwrap();
+    fs::set_permissions(&adapter, fs::Permissions::from_mode(0o755)).unwrap();
+    env.ok_at(&["claims", "rebuild"], Some("2026-11-10T14:00:00Z"));
+    assert!(!marker.exists(), "the rebuild called no adapter");
+
+    // Every claim the accept minted returns with the same id, and every outcome and shown
+    // report with it.
+    assert_eq!(
+        env.claims_of_intent(&accepted_intent),
+        claims,
+        "every accepted claim returns with the same id"
+    );
+    let after = env.outcomes_at("2026-11-10T15:00:00Z");
+    assert_eq!(after["outcomes"], before["outcomes"], "{after}");
+    assert_eq!(after["totals"], before["totals"], "{after}");
 }

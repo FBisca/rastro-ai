@@ -30,7 +30,7 @@ pub use scoped::{cache_len as scoped_cache_len, clear_cache as clear_scoped_cach
 /// The migration recording when an intent's contribution ended; an open that applies it replays
 /// the stored intents once all migrations are in.
 const INTENT_END: &str = "202611081000_intent_justification_end";
-const MIGRATIONS: [(&str, &str); 15] = [
+const MIGRATIONS: [(&str, &str); 18] = [
     (
         "202611041200_initial",
         include_str!("../migrations/202611041200_initial.sql"),
@@ -90,6 +90,18 @@ const MIGRATIONS: [(&str, &str); 15] = [
     (
         "202611131100_meeting_retention",
         include_str!("../migrations/202611131100_meeting_retention.sql"),
+    ),
+    (
+        "202611141000_shown_reports",
+        include_str!("../migrations/202611141000_shown_reports.sql"),
+    ),
+    (
+        "202611141100_run_items",
+        include_str!("../migrations/202611141100_run_items.sql"),
+    ),
+    (
+        "202611141200_shown_statements",
+        include_str!("../migrations/202611141200_shown_statements.sql"),
     ),
 ];
 
@@ -354,6 +366,29 @@ impl Storage for SqliteStorage {
     }
     fn forget_meeting(&mut self, meeting: &str) -> Result<Option<rastro_core::meeting::Removed>> {
         meeting::forget(&mut self.connection, meeting)
+    }
+    fn record_shown_reports(
+        &mut self,
+        reports: &[rastro_core::queue::ShownReport],
+    ) -> Result<usize> {
+        let transaction = self.connection.transaction()?;
+        let mut recorded = 0;
+        for report in reports {
+            transaction.execute(
+                "INSERT INTO shown_report (item, source, run, statements, shown_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    report.item,
+                    report.source,
+                    report.run,
+                    serde_json::to_string(&report.statements)?,
+                    stamp(report.at)
+                ],
+            )?;
+            recorded += 1;
+        }
+        transaction.commit()?;
+        Ok(recorded)
     }
     fn project_sources(&mut self, sources: &[Source]) -> Result<()> {
         let transaction = self.connection.transaction()?;
@@ -971,6 +1006,133 @@ impl Snapshot for View<'_> {
     }
     fn intents(&self) -> Result<Vec<rastro_core::identity::Intent>> {
         identity::load(self.0)
+    }
+    fn intent_claims(&self) -> Result<std::collections::BTreeMap<String, String>> {
+        let mut statement = self.0.prepare(
+            "SELECT intent_id, claim_id FROM intent_justification ORDER BY intent_id, claim_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut claims: std::collections::BTreeMap<String, String> =
+            std::collections::BTreeMap::new();
+        for row in rows {
+            let (intent, claim) = row?;
+            claims.entry(intent).or_insert(claim);
+        }
+        Ok(claims)
+    }
+    fn shown_reports(&self) -> Result<Vec<rastro_core::queue::ShownReport>> {
+        let mut statement = self.0.prepare(
+            "SELECT item, source, run, statements, shown_at FROM shown_report ORDER BY append_seq",
+        )?;
+        let rows: Vec<(String, String, String, Option<String>, String)> = statement
+            .query_map([], |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
+            })?
+            .collect::<Result<_, _>>()?;
+        (rows.into_iter())
+            .map(|(item, source, run, statements, at)| {
+                Ok(rastro_core::queue::ShownReport {
+                    item,
+                    source,
+                    run,
+                    statements: match statements {
+                        Some(statements) => serde_json::from_str(&statements)?,
+                        None => Vec::new(),
+                    },
+                    at: parse_time(at)?,
+                })
+            })
+            .collect()
+    }
+    fn statement_history(
+        &self,
+        scopes: &[Scope],
+    ) -> Result<Vec<(String, rastro_core::queue::Statement, DateTime<Utc>)>> {
+        // When each statement was known: an observed claim from the evidence it was read from, an
+        // owner intent's claim from the moment the intent held it, even after that claim stops
+        // being observed, so a settled item stays settled. `known_since` is the start of a claim's
+        // last known stretch, so a claim undone and held again reads from its restoration.
+        let mut query = self.0.prepare_cached(&format!(
+            "SELECT subject, predicate, object_value, known_at FROM (
+                 SELECT c.subject, c.predicate, c.object_value, c.known_since AS known_at
+                 FROM claim c WHERE c.predicate LIKE 'std:%' AND c.status = 'observed'
+                   AND c.object_value IS NOT NULL AND c.known_since <> ''
+                   AND (?1 OR {} OR {})
+                 UNION ALL
+                 SELECT c.subject, c.predicate, c.object_value, coalesce(ij.started_at, i.issued_at)
+                 FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id
+                 JOIN claim c ON c.id = ij.claim_id
+                 WHERE c.predicate LIKE 'std:%' AND c.object_value IS NOT NULL
+                   AND ij.ended_at IS NULL AND (?1 OR {})
+             )",
+            scoped::VISIBLE_CLAIM,
+            scoped::VISIBLE_INTENT_CLAIM,
+            scoped::VISIBLE_INTENT_CLAIM
+        ))?;
+        let every = scopes.is_empty();
+        let scopes = serde_json::to_string(scopes)?;
+        let rows = query.query_map(params![every, scopes], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?;
+        let mut history = Vec::new();
+        for row in rows {
+            let (subject, predicate, value, known_at) = row?;
+            history.push((
+                subject,
+                rastro_core::queue::Statement { predicate, value },
+                parse_time(known_at)?,
+            ));
+        }
+        Ok(history)
+    }
+    fn departed_run(
+        &self,
+        source: &str,
+        run: &str,
+        item: &str,
+    ) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+        // A run id the item no longer has a numeric form for names no run this build knows.
+        let Ok(run) = run.parse::<i64>() else {
+            return Ok(None);
+        };
+        // A run that kept the item's content (a replay, or a re-import that produced the same
+        // content) never removed it, so it never dates its departure: the answer is the first
+        // successful run after the last one that still carried the item. A run recorded before
+        // its content was summarized has no answer either way and counts as having dropped it.
+        let carried = "items IS NOT NULL
+             AND EXISTS (SELECT 1 FROM json_each(items) WHERE value = ?3)";
+        let dropped =
+            "items IS NULL OR NOT EXISTS (SELECT 1 FROM json_each(items) WHERE value = ?3)";
+        let finished: Option<String> = self
+            .0
+            .query_row(
+                &format!(
+                    "SELECT finished_at FROM meeting_run
+                     WHERE meeting_id = ?1 AND state = 'succeeded'
+                       AND id > coalesce((SELECT max(id) FROM meeting_run
+                                          WHERE meeting_id = ?1 AND state = 'succeeded'
+                                            AND id > ?2 AND {carried}), ?2)
+                       AND ({dropped})
+                     ORDER BY id LIMIT 1"
+                ),
+                params![source, run, item],
+                |row| row.get(0),
+            )
+            .optional()?;
+        finished.map(parse_time).transpose()
     }
     fn identity_accounts(&self) -> Result<Vec<rastro_core::identity::AccountFacts>> {
         identity::accounts(self.0)
