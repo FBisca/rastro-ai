@@ -635,6 +635,16 @@ pub struct ClaimView {
     pub conflicts_with: Vec<String>,
     pub supersedes: Vec<String>,
     pub superseded_by: Vec<String>,
+    /// Set on a claim whose retraction lapsed: the lifecycle state the owner rejected it in has
+    /// changed, so the claim reads again with its evidence-derived status. Never set while the
+    /// retraction holds, since a retracted claim leaves every current read.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub earlier_retracted: bool,
+    /// Set on a confirmed claim whose lifecycle state has changed since the owner confirmed it
+    /// (its evidence ended or another took its place): it stays `confirmed`, and its `why`
+    /// history shows what changed.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub stale: bool,
 }
 /// When evidence established and replaced current support for a claim.
 #[derive(Clone, Debug, JsonSchema, Serialize)]

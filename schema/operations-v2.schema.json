@@ -14,6 +14,10 @@
           },
           "type": "array"
         },
+        "earlier_retracted": {
+          "description": "Set on a claim whose retraction lapsed: the lifecycle state the owner rejected it in has\nchanged, so the claim reads again with its evidence-derived status. Never set while the\nretraction holds, since a retracted claim leaves every current read.",
+          "type": "boolean"
+        },
         "id": {
           "type": "string"
         },
@@ -48,6 +52,10 @@
         },
         "revision": {
           "type": "string"
+        },
+        "stale": {
+          "description": "Set on a confirmed claim whose lifecycle state has changed since the owner confirmed it\n(its evidence ended or another took its place): it stays `confirmed`, and its `why`\nhistory shows what changed.",
+          "type": "boolean"
         },
         "status": {
           "enum": [
@@ -398,6 +406,10 @@
           },
           "type": "array"
         },
+        "earlier_retracted": {
+          "description": "Set on a claim whose retraction lapsed: the lifecycle state the owner rejected it in has\nchanged, so the claim reads again with its evidence-derived status. Never set while the\nretraction holds, since a retracted claim leaves every current read.",
+          "type": "boolean"
+        },
         "id": {
           "type": "string"
         },
@@ -432,6 +444,10 @@
         },
         "revision": {
           "type": "string"
+        },
+        "stale": {
+          "description": "Set on a confirmed claim whose lifecycle state has changed since the owner confirmed it\n(its evidence ended or another took its place): it stays `confirmed`, and its `why`\nhistory shows what changed.",
+          "type": "boolean"
         },
         "status": {
           "enum": [
