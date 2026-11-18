@@ -137,6 +137,11 @@ pub struct Item {
     /// once. Context only — an item with claims beside it stays in the queue.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub context: Vec<ClaimSummary>,
+    /// Set on a proposal whose statements are exactly those an observed commitment held until the
+    /// owner retracted them: new evidence proposes the statement again, and the owner decides
+    /// again. Never set on a question.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub earlier_retracted: bool,
     /// The source run the item's content came from, when it came from one: what a shown report
     /// records, so an outcome can date the item's departure. Never printed or published.
     #[serde(skip)]
@@ -190,6 +195,10 @@ pub struct Statement {
 pub struct KnownCommitment {
     pub subject: String,
     pub statements: BTreeSet<Statement>,
+    /// The statements the owner retracted from this commitment, or that a retracted anchor took
+    /// with it. They are not known: they only let the queue say a proposal returns what the owner
+    /// once retracted.
+    pub retracted: BTreeSet<Statement>,
 }
 
 /// One item a terminal read printed, when it printed it, and the source run that carried it.
@@ -267,6 +276,7 @@ impl Queue {
         answered: &BTreeSet<String>,
     ) -> Self {
         let known = known_by_subject(origins.iter().flat_map(|origin| origin.known.iter()));
+        let retracted = retracted_by_subject(origins.iter().flat_map(|origin| origin.known.iter()));
         let mut aged = Vec::new();
         let mut gaps = Vec::new();
         let mut seen = BTreeSet::new();
@@ -274,13 +284,14 @@ impl Queue {
         for origin in origins {
             let source = Source::of(&origin.source);
             for hypothesis in &origin.source.hypotheses {
-                let item = Item {
+                let mut item = Item {
                     id: proposal_id(&source, hypothesis),
                     kind: ItemKind::Proposal,
                     source: source.clone(),
                     proposal: Some(hypothesis.clone()),
                     question: None,
                     context: Vec::new(),
+                    earlier_retracted: false,
                     run: (origin.source.results_from.as_ref()).map(|results| results.run.clone()),
                 };
                 if answered.contains(&item.id) {
@@ -293,6 +304,7 @@ impl Queue {
                     already_known += 1;
                     continue;
                 }
+                item.earlier_retracted = returns(&known, &retracted, &statements(hypothesis));
                 aged.push(Aged {
                     at: Some(origin.at),
                     question: false,
@@ -313,6 +325,7 @@ impl Queue {
                 proposal: None,
                 question: Some(question),
                 context: Vec::new(),
+                earlier_retracted: false,
                 run: None,
             };
             if seen.insert(item.id.clone()) {
@@ -410,6 +423,39 @@ pub(crate) fn known_by_subject<'a>(
             .extend(commitment.statements.iter().cloned());
     }
     by_subject
+}
+
+/// The statements the owner retracted, keyed by the commitment they were about.
+fn retracted_by_subject<'a>(
+    known: impl IntoIterator<Item = &'a KnownCommitment>,
+) -> BTreeMap<String, BTreeSet<Statement>> {
+    let mut by_subject: BTreeMap<String, BTreeSet<Statement>> = BTreeMap::new();
+    for commitment in known {
+        if !commitment.retracted.is_empty() {
+            by_subject
+                .entry(commitment.subject.clone())
+                .or_default()
+                .extend(commitment.retracted.iter().cloned());
+        }
+    }
+    by_subject
+}
+
+/// Whether one commitment held exactly the statements `expressed` before the owner retracted some
+/// of them: what it still holds and what was retracted make up the item's statements. A retracted
+/// statement is not known, so this never hides an item; it only marks one.
+fn returns(
+    known: &BTreeMap<String, BTreeSet<Statement>>,
+    retracted: &BTreeMap<String, BTreeSet<Statement>>,
+    expressed: &[Statement],
+) -> bool {
+    let expressed: BTreeSet<Statement> = expressed.iter().cloned().collect();
+    !expressed.is_empty()
+        && retracted.iter().any(|(subject, gone)| {
+            let mut before = known.get(subject).cloned().unwrap_or_default();
+            before.extend(gone.iter().cloned());
+            before == expressed
+        })
 }
 
 /// Whether an observed commitment already holds the statements `expressed`: the same set, on one
@@ -882,13 +928,18 @@ mod tests {
     fn commitment(subject: &str, statements: &[(&str, &str)]) -> KnownCommitment {
         KnownCommitment {
             subject: subject.into(),
-            statements: (statements.iter())
-                .map(|(predicate, value)| Statement {
-                    predicate: (*predicate).into(),
-                    value: (*value).into(),
-                })
-                .collect(),
+            statements: statement_set(statements),
+            retracted: BTreeSet::new(),
         }
+    }
+
+    fn statement_set(statements: &[(&str, &str)]) -> BTreeSet<Statement> {
+        (statements.iter())
+            .map(|(predicate, value)| Statement {
+                predicate: (*predicate).into(),
+                value: (*value).into(),
+            })
+            .collect()
     }
 
     /// A commitment hides a proposal only when it holds that proposal's own statements, as one
@@ -931,5 +982,49 @@ mod tests {
             .collect();
         assert_eq!(shown, ["keep the budget"]);
         assert_eq!(queue.already_known, 1);
+    }
+    /// A retracted statement is not known: the proposal that expresses what one commitment held
+    /// before a retraction stays, marked, whether the whole commitment or only part of it was
+    /// retracted; a proposal that expresses something else is not marked.
+    #[test]
+    fn a_retracted_commitment_no_longer_hides_a_proposal_but_marks_it() {
+        let terms = [
+            (commitments::OWES, "Alice"),
+            (commitments::OWED_TO, "Bob"),
+            (commitments::DUE, "by Friday"),
+        ];
+        let proposal = |date: &str| {
+            hypothesis(
+                commitments::Kind::Promise,
+                "Alice",
+                Some("Bob"),
+                Some(date),
+                "send Bob the budget",
+            )
+        };
+        let whole = KnownCommitment {
+            subject: "std:commitment/1".into(),
+            statements: BTreeSet::new(),
+            retracted: statement_set(&terms),
+        };
+        let partial = KnownCommitment {
+            subject: "std:commitment/2".into(),
+            statements: statement_set(&terms[..2]),
+            retracted: statement_set(&terms[2..]),
+        };
+        for (known, date, marked) in [
+            (whole.clone(), "by Friday", true),
+            (partial, "by Friday", true),
+            (whole, "by Monday", false),
+        ] {
+            let queue = Queue::new(
+                vec![origin(vec![proposal(date)], vec![known])],
+                Vec::new(),
+                &BTreeSet::new(),
+            );
+            assert_eq!(queue.already_known, 0);
+            assert_eq!(queue.items.len(), 1);
+            assert_eq!(queue.items[0].earlier_retracted, marked, "{date}");
+        }
     }
 }

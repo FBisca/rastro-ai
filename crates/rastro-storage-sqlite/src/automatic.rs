@@ -5,7 +5,7 @@ use chrono::{DateTime, Utc};
 use rastro_core::claims::{self, Object, Support, revision_with_links};
 use rastro_core::identity::{self as core, Resolution, admit_account};
 use rusqlite::{Connection, params};
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 /// A stretch of time: from its start, until its end or with no end.
 type Window = (DateTime<Utc>, Option<DateTime<Utc>>);
@@ -130,6 +130,47 @@ fn conflicts(resolution: &Resolution, qualifying: &BTreeSet<Held>) -> BTreeSet<H
     blocked
 }
 
+/// The claims an owner correction holds retracted, each with the time of the intent that retracts
+/// it: the latest correction that still holds wins, and a rejection or a fix retracts while a
+/// confirmation does not. Read from the intents, not the claims' stored status, because this runs
+/// before the status is settled (ADR 0014).
+fn retracted(db: &Connection) -> Result<BTreeMap<String, String>> {
+    let mut latest: BTreeMap<String, Option<String>> = BTreeMap::new();
+    let rows: Vec<(String, String, String)> = db
+        .prepare(&format!("SELECT ij.claim_id, i.kind, i.issued_at FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id WHERE ij.ended_at IS NULL AND {} ORDER BY i.append_seq", lifecycle::CORRECTION))?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<Result<_, _>>()?;
+    for (claim, kind, issued_at) in rows {
+        latest.insert(claim, (kind != "confirm").then_some(issued_at));
+    }
+    Ok(latest
+        .into_iter()
+        .filter_map(|(claim, at)| at.map(|at| (claim, at)))
+        .collect())
+}
+
+/// Ends the owner's acceptance as a justification of the slots of a commitment whose anchor is
+/// retracted: an accepted commitment's `std:` claims rest on its type claim, the anchor, and a
+/// slot an observation also justifies keeps that justification and stays. Returns the slots
+/// that lost their acceptance.
+fn end_slots(db: &Connection, retracted: &BTreeMap<String, String>) -> Result<BTreeSet<String>> {
+    let mut ended = BTreeSet::new();
+    for (anchor, at) in retracted {
+        let slots: Vec<(String, String)> = db
+            .prepare("SELECT ij.id, ij.claim_id FROM claim a JOIN claim c ON c.subject = a.subject JOIN intent_justification ij ON ij.claim_id = c.id JOIN intent i ON i.id = ij.intent_id WHERE a.id = ?1 AND a.predicate = ?2 AND c.predicate LIKE 'std:%' AND ij.ended_at IS NULL AND i.kind IN ('accept', 'edit') AND json_extract(i.targets_json, '$.shape') = 'proposal' AND json_extract(i.targets_json, '$.subject.id') = a.subject")?
+            .query_map(params![anchor, claims::TYPE_PREDICATE], |r| Ok((r.get(0)?, r.get(1)?)))?
+            .collect::<Result<_, _>>()?;
+        for (justification, claim) in slots {
+            db.execute(
+                "UPDATE intent_justification SET ended_at = max(?2, started_at) WHERE id = ?1",
+                params![justification, at],
+            )?;
+            ended.insert(claim);
+        }
+    }
+    Ok(ended)
+}
+
 pub(crate) fn apply(db: &Connection) -> Result<()> {
     apply_within(db, None)
 }
@@ -199,6 +240,9 @@ fn permitted(
 )]
 pub(crate) fn apply_within(db: &Connection, allowed: Option<&BTreeSet<Held>>) -> Result<()> {
     let resolution = Resolution::of(&identity::load(db)?);
+    // A retracted claim ends every link resting on it, as a premise: the link stays only where
+    // another justification of it, an owner's `link`, holds.
+    let retracted = retracted(db)?;
     let mut affected: BTreeSet<String> = db
         .prepare("SELECT DISTINCT claim_id FROM automatic_justification")?
         .query_map([], |r| r.get(0))?
@@ -225,6 +269,9 @@ pub(crate) fn apply_within(db: &Connection, allowed: Option<&BTreeSet<Held>>) ->
             "SELECT c.id, c.subject, e.identifier FROM claim c JOIN entity e ON e.id = c.subject WHERE c.predicate = ?1"
         )?.query_map([core::TOKEN_OWNER], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?.collect::<Result<_, _>>()?;
             for (premise, account, identifier) in rows {
+                if retracted.contains_key(&premise) {
+                    continue;
+                }
                 if vetoed(&resolution, &account, me)
                     || admit_account(&identifier, &identity::types(db, &account, &[])?).is_err()
                 {
@@ -264,12 +311,19 @@ pub(crate) fn apply_within(db: &Connection, allowed: Option<&BTreeSet<Held>>) ->
         let emails: Vec<(String, String, String, String)> = db.prepare(
         "SELECT c.id, c.subject, e.identifier, c.object_value FROM claim c JOIN entity e ON e.id = c.subject WHERE c.predicate = ?1 AND c.object_value IS NOT NULL"
     )?.query_map([core::VERIFIED_EMAIL], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<Result<_, _>>()?;
+        let emails: Vec<_> = emails
+            .into_iter()
+            .filter(|(id, ..)| !retracted.contains_key(id))
+            .collect();
         loop {
             let mut added = false;
             let links: Vec<(String, String, String, String)> = db.prepare(
             "SELECT c.id, c.subject, c.object_entity, e.identifier FROM claim c JOIN entity e ON e.id = c.object_entity WHERE c.predicate = ?1"
         )?.query_map([core::HELD_BY], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?.collect::<Result<_, _>>()?;
             for (seed, anchor, person, person_identifier) in links {
+                if retracted.contains_key(&seed) {
+                    continue;
+                }
                 for (left_id, left_account, _, left_email) in &emails {
                     if *left_account != anchor {
                         continue;
@@ -360,6 +414,7 @@ pub(crate) fn apply_within(db: &Connection, allowed: Option<&BTreeSet<Held>>) ->
             None => tried.push(std::mem::replace(&mut blocked, next)),
         }
     }
+    affected.extend(end_slots(db, &retracted)?);
     for id in affected {
         let mut keys: Vec<String> = db.prepare("SELECT id FROM automatic_justification WHERE claim_id = ?1 AND ended_at IS NULL UNION SELECT intent_id FROM intent_justification WHERE claim_id = ?1 AND ended_at IS NULL")?
             .query_map([&id], |r| r.get(0))?.collect::<Result<_, _>>()?;

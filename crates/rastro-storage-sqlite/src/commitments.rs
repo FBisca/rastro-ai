@@ -48,35 +48,47 @@ fn loaded(view: &View, scopes: &[Scope]) -> Result<Vec<StoredMeeting>> {
 /// with the statements its claims carry. Claims are grouped by their subject, so the queue only
 /// ever matches a hypothesis against one commitment; a name or a text match drops nothing. An
 /// accepted proposal's claims count too, in the scopes that see the item's source: what the owner
-/// accepted is knowledge the queue never proposes again.
+/// accepted is knowledge the queue never proposes again. A statement the owner retracted, or a
+/// slot a retracted anchor took, is no longer known: it is listed beside, so the queue can mark a
+/// proposal that returns it.
 fn known(view: &View, scopes: &[Scope]) -> Result<Vec<KnownCommitment>> {
-    let mut statement = view.0.prepare_cached(&format!(
-        "SELECT subject, predicate, object_value FROM claim c
-         WHERE predicate LIKE 'std:%' AND status IN ('observed', 'confirmed') AND object_value IS NOT NULL
-         AND (?1 OR {} OR {})",
-        scoped::VISIBLE_CLAIM,
-        scoped::VISIBLE_INTENT_CLAIM
-    ))?;
     let every = scopes.is_empty();
     let scopes = serde_json::to_string(scopes)?;
-    let rows = statement.query_map(rusqlite::params![every, scopes], |row| {
-        Ok((
-            row.get::<_, String>(0)?,
-            Statement {
-                predicate: row.get(1)?,
-                value: row.get(2)?,
-            },
-        ))
-    })?;
-    let mut held: BTreeMap<String, BTreeSet<Statement>> = BTreeMap::new();
-    for row in rows {
-        let (subject, statement) = row?;
-        held.entry(subject).or_default().insert(statement);
+    let mut held: BTreeMap<String, (BTreeSet<Statement>, BTreeSet<Statement>)> = BTreeMap::new();
+    for (current, status) in [
+        (true, "status IN ('observed', 'confirmed')"),
+        (
+            false,
+            "(status = 'retracted' OR (status = 'superseded' AND EXISTS (SELECT 1 FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id WHERE ij.claim_id = c.id AND ij.ended_at IS NOT NULL AND i.kind IN ('accept', 'edit') AND json_extract(i.targets_json, '$.shape') = 'proposal')))",
+        ),
+    ] {
+        let mut statement = view.0.prepare_cached(&format!(
+            "SELECT subject, predicate, object_value FROM claim c
+             WHERE predicate LIKE 'std:%' AND {status} AND object_value IS NOT NULL
+             AND (?1 OR {} OR {})",
+            scoped::VISIBLE_CLAIM,
+            scoped::VISIBLE_INTENT_CLAIM
+        ))?;
+        let rows = statement.query_map(rusqlite::params![every, scopes], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                Statement {
+                    predicate: row.get(1)?,
+                    value: row.get(2)?,
+                },
+            ))
+        })?;
+        for row in rows {
+            let (subject, statement) = row?;
+            let (known, retracted) = held.entry(subject).or_default();
+            if current { known } else { retracted }.insert(statement);
+        }
     }
     Ok((held.into_iter())
-        .map(|(subject, statements)| KnownCommitment {
+        .map(|(subject, (statements, retracted))| KnownCommitment {
             subject,
             statements,
+            retracted,
         })
         .collect())
 }
