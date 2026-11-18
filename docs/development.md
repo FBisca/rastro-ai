@@ -127,15 +127,15 @@ One sentence saying what SHALL hold.
 - **THEN** what holds afterwards
 ```
 
-A test that proves a requirement carries its exact title as a tag on the line above `#[test]`:
-`// spec: <Title>`. A Python test uses `# spec: <Title>`, and one test may carry several tags. A tag
-is a comment of its own line, so a string that mentions one is not a tag, and only a tag on a test
-counts: one above production code, or above a module rather than a test function, covers nothing.
+A test that proves a requirement carries its exact title as a tag on the line above the test: `// spec:
+<Title>` above `#[test]` in Rust, `# spec: <Title>` above a test function in a script test (`scripts/test_*.py`, `scripts/*.test.sh`). One test may carry several tags. A tag is a comment of its own line, so a string that mentions one is not a tag, and only a tag on a test counts: one above production code, or above a module rather than a test, covers nothing.
 
-`python3 scripts/spec_coverage.py` holds both directions together: it fails naming the spec file for a
-title no test tags, and naming the file, line and title for a tag no requirement holds. It reads every
-`.rs` and `.py` file in the workspace (a `#[cfg(test)]` module in `src/` counts) and every spec under
-`docs/specs/`, subfolders included, and skips `target/` and tool caches. `--root` points it at another
+`python3 scripts/spec_coverage.py` makes two checks. **Coverage**: it fails, naming the spec file, for
+a title no tag on a test covers; it reads every `.rs` file (a `#[cfg(test)]` module in `src/` counts),
+every `.py` and `.sh` script test, and every spec under `docs/specs/`, subfolders included, and skips
+`target/` and tool caches. **Name check**: every `// spec:` tag in a Rust file, on a test or on
+production code, must name a title some spec holds, and the failure names the file, line and title.
+Tags in script tests are counted for coverage but not name-checked. `--root` points the gate at another
 tree; its own tests run with `python3 scripts/test_spec_coverage.py`. Run both after adding, renaming
 or removing a requirement or a tag; CI runs them too.
 

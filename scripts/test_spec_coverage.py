@@ -89,10 +89,39 @@ class SpecCoverageGate(unittest.TestCase):
         self.assertIn("docs/specs/alpha.md", gate.stderr)
 
     # spec: Every requirement names its tests
+    def test_a_stray_tag_above_a_function_that_tests_nothing_is_named_with_its_file_line_and_title(self):
+        self.write("docs/specs/alpha.md", requirement("A covered requirement"))
+        self.write("crates/alpha/src/lib.rs", tagged_test("A covered requirement"))
+        self.write(
+            "crates/alpha/src/helpers.rs",
+            "pub fn add(a: i32, b: i32) -> i32 { a + b }\n"
+            "\n"
+            "// spec: A title no spec holds\n"
+            "pub fn subtract(a: i32, b: i32) -> i32 { a - b }\n",
+        )
+
+        gate = self.run_gate()
+
+        self.assertNotEqual(gate.returncode, 0, f"the gate accepted it:\n{gate.stdout}")
+        self.assertIn("A title no spec holds", gate.stderr)
+        self.assertRegex(gate.stderr, r"crates/alpha/src/helpers\.rs[:\s]+3\b")
+
+    # spec: Every requirement names its tests
     def test_a_src_unit_test_covers_a_requirement_in_a_spec_subfolder_and_build_output_is_ignored(self):
         self.write(
             "docs/specs/workspace/specs.md",
-            requirement("A requirement read from a spec subfolder"),
+            requirement("A requirement read from a spec subfolder")
+            + requirement("A requirement a script test covers"),
+        )
+        self.write(
+            "scripts/gate.test.sh",
+            "#!/usr/bin/env bash\n"
+            ". \"$(dirname \"$0\")/helpers.sh\"\n"
+            "\n"
+            "# spec: A requirement a script test covers\n"
+            "test_a_script_case() {\n"
+            "  run_gate\n"
+            "}\n",
         )
         self.write(
             "crates/alpha/src/lib.rs",

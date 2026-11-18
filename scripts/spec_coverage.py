@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
-"""Hold every titled requirement to a tagged test, and every tag to a title.
+"""Hold every titled requirement to a tagged test, and every Rust tag to a title.
 
-The gate reads every spec under `docs/specs/` (subfolders included) for
-`### Requirement: <Title>` blocks and every source file in the workspace for a `// spec: <Title>`
-tag that sits on a test. It fails when a title has no tagged test, and when a tag names no title.
-A tag above production code, or above a module rather than a test, covers nothing.
+The gate reads every spec under `docs/specs/` (subfolders included) for `### Requirement: <Title>`
+blocks, and every source file in the workspace for a `spec:` tag. It fails in two cases:
+
+- a title no tag on a test covers (`// spec: <Title>` above `#[test]`, `# spec: <Title>` above a test
+  function in a script test), naming the spec file;
+- a `// spec:` tag in a Rust file that names no title, naming the file, line and title.
+
+Rust tags are checked whether they sit on a test or on production code, so a stale one cannot hide.
+Tags in script tests (`.py`, `.sh`) are only counted for coverage: a requirement proven there is
+covered, but a script tag that names nothing yet is not an error.
 """
 
 import argparse
@@ -17,13 +23,17 @@ TITLE = re.compile(r"^###\s+Requirement:\s*(.+?)\s*$")
 TAGS = {
     ".rs": re.compile(r"^\s*//\s*spec:\s*(.+?)\s*$"),
     ".py": re.compile(r"^\s*#\s*spec:\s*(.+?)\s*$"),
+    ".sh": re.compile(r"^\s*#\s*spec:\s*(.+?)\s*$"),
 }
+COVERAGE = set(TAGS)
+NAME_CHECKED = {".rs"}
 # Build output and tool caches hold copies of sources whose tags are not the workspace's.
 SKIP_DIRS = {"target", "node_modules", "__pycache__", ".venv"}
 # A test attribute is `#[test]` or its crate-qualified form, such as `#[tokio::test]`.
 ATTRIBUTE = re.compile(r"^#\[\s*([A-Za-z0-9_]+(?:::[A-Za-z0-9_]+)*)\s*(?:\(.*\))?\s*\]$")
 TEST_ATTRIBUTES = {"test", "rstest", "test_case"}
 PY_TEST = re.compile(r"^\s*(?:async\s+)?def\s+test\w*\s*\(")
+SH_TEST = re.compile(r"^\s*(?:function\s+)?test[\w]*\s*(?:\(\))?\s*\{?\s*$")
 
 
 def relative(path, root):
@@ -44,12 +54,12 @@ def is_test_attribute(attribute):
     return bool(match) and match.group(1).split("::")[-1] in TEST_ATTRIBUTES
 
 
-def tag_marks_a_test(suffix, lines, index):
-    """Whether the tag on line `index` (0-based) heads a test, not a function or a module.
+def marks_a_test(suffix, lines, index):
+    """Whether the tag on line `index` (0-based) heads a test rather than production code.
 
-    Only a tag on a test counts as coverage: a comment above production code vouches for nothing.
     Blank lines, further comments, Python decorators and Rust attributes are read through, so a test
-    may carry several tags and its other attributes.
+    may carry several tags along with its other attributes. Only a tag on a test covers a title: a
+    comment above a function vouches for nothing.
     """
     attributes = []
     for line in lines[index + 1 :]:
@@ -64,14 +74,16 @@ def tag_marks_a_test(suffix, lines, index):
             continue
         if suffix == ".rs":
             return any(is_test_attribute(attribute) for attribute in attributes)
-        return bool(PY_TEST.match(line))
+        if suffix == ".py":
+            return bool(PY_TEST.match(line))
+        return bool(SH_TEST.match(line))
     return False
 
 
 def tags(root):
-    """Every spec tag that sits on a test, as (title, file path, line)."""
+    """Every spec tag, as (title, file path, line, whether it heads a test)."""
     for path in sorted(root.rglob("*")):
-        if not path.is_file() or path.suffix not in TAGS:
+        if not path.is_file() or path.suffix not in COVERAGE:
             continue
         if SKIP_DIRS.intersection(path.relative_to(root).parts):
             continue
@@ -79,8 +91,8 @@ def tags(root):
         lines = path.read_text(encoding="utf-8").splitlines()
         for index, line in enumerate(lines):
             match = pattern.match(line)
-            if match and tag_marks_a_test(path.suffix, lines, index):
-                yield match.group(1), path, index + 1
+            if match:
+                yield match.group(1), path, index + 1, marks_a_test(path.suffix, lines, index)
 
 
 def main() -> int:
@@ -94,11 +106,11 @@ def main() -> int:
     root = Path(args.root).resolve()
 
     required = list(requirements(root / "docs" / "specs"))
-    tagged = list(tags(root))
+    found = list(tags(root))
     titles = {title for title, _, _ in required}
+    covered = {title for title, _, _, on_test in found if on_test}
 
     failures = 0
-    covered = {title for title, _, _ in tagged}
     for title, spec, _ in required:
         if title not in covered:
             print(
@@ -106,8 +118,8 @@ def main() -> int:
                 file=sys.stderr,
             )
             failures += 1
-    for title, path, line in tagged:
-        if title not in titles:
+    for title, path, line, _ in found:
+        if path.suffix in NAME_CHECKED and title not in titles:
             print(
                 f'{relative(path, root)}:{line}: tag "{title}" names no requirement in docs/specs/',
                 file=sys.stderr,
