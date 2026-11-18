@@ -84,6 +84,14 @@ fn cite(field: &str, quote: &str, rule: &str) -> (String, u64, u64, String, Stri
 /// claims/R19: the GitHub extractor emits `code:state`, `code:author` and `code:in_repository` claims
 /// with their type claims, each cited at the right field and span, and the core loads its
 /// `code` vocabulary, which has every required definition field
+#[expect(
+    clippy::too_many_lines,
+    reason = "one sync's claims are asserted in the order they are read, each citation checked where it is cited"
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "the assertions branch per claim kind, so the scenario reads as the claim grammar it proves"
+)]
 #[test]
 fn the_github_extractor_emits_cited_code_claims_from_a_complete_vocabulary() {
     let fixture = Fixture::start(world("Add cache", "adds a cache"));
