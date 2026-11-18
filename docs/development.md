@@ -112,6 +112,34 @@ Use this loop for behavior changes and bug fixes. When `/tdd` is available, use 
 3. Run one focused test and observe the intended behavioral failure. A compiler error or zero matched tests is not red. Implement the smallest change that makes that test green, then repeat for the next behavior.
 4. After the behavior is green, review the implementation and run the affected selection below. Add a regression test only for an uncovered, plausible failure; documentation-only edits need document checks rather than new tests.
 
+## Specs and their tests
+
+[`docs/specs/`](specs/) states what the product does, one requirement per block:
+
+```md
+### Requirement: <Title>
+
+One sentence saying what SHALL hold.
+
+#### Scenario: <a case>
+
+- **WHEN** something happens
+- **THEN** what holds afterwards
+```
+
+A test that proves a requirement carries its exact title as a tag on the line above the test: `// spec:
+<Title>` or `/// spec: <Title>` above `#[test]` in Rust, `# spec: <Title>` above a test function — or above an `expect_… test_…` case — in a script test (`scripts/test_*.py`, `scripts/*.test.sh`). One test may carry several tags. A tag is a comment of its own line, so a string that mentions one is not a tag, and only a tag on a test counts: one above production code, or above a module rather than a test, covers nothing.
+
+`python3 scripts/spec_coverage.py` makes two checks. **Coverage**: it fails, naming the spec file, for
+a title no tag on a test covers; it reads every `.rs` file (a `#[cfg(test)]` module in `src/` counts),
+every `.py` and `.sh` script test, and every spec under `docs/specs/`, subfolders included, and skips
+`target/` and tool caches. **Name check**: every `spec:` tag in a Rust file, on a test or on
+production code, must name a title some spec or an open plan under `docs/plans/` holds (an archived plan
+leaves that directory), and the failure names the file, line and title.
+Tags in script tests are counted for coverage but not name-checked. `--root` points the gate at another
+tree; its own tests run with `python3 scripts/test_spec_coverage.py`. Run both after adding, renaming
+or removing a requirement or a tag; CI runs them too.
+
 ## Tight feedback
 
 Run from the workspace root. Replace placeholders with names from the crate and its test targets:
@@ -159,5 +187,6 @@ The NUL-delimited list preserves spaces; disabling rename detection includes bot
 - During iteration, run the focused test. Once green, run the affected selection once; rerun only after further relevant changes or a failure.
 - For Rust changes, run `cargo fmt --all --check` and Clippy for the selected packages (`cargo clippy -p <package> --all-targets -- -D warnings`, repeat `-p` for dependents). Use workspace scope for global configuration or uncertain impact.
 - For documentation-only changes, check links, examples, and `git diff --check`; skip Rust compilation unless executable examples or behavior changed.
+- For spec or spec-tag changes, run `python3 scripts/spec_coverage.py` and `python3 scripts/test_spec_coverage.py`.
 - For selector changes, run `scripts/affected-tests.test.sh`. For role, manifest, or gate changes, run `scripts/crate-gate.sh` and `scripts/crate-gate.test.sh`. For changes to a test's location, an `#[ignore]`, [.config/nextest.toml](../.config/nextest.toml), [.config/nextest-user.toml](../.config/nextest-user.toml), the check tiers or the CI workflow, run `scripts/fast-suite.test.sh`, `scripts/ignored-tests.sh`, `scripts/ignored-tests.test.sh` and `scripts/nextest-config.test.sh`. For toolchain, dependency, shared build, or cross-workspace changes, run the full CI commands from [.github/workflows/ci.yml](../.github/workflows/ci.yml). CI remains the full workspace gate for every PR.
 - Report exact commands and outcomes, including the red/green observation for behavior changes. Separate focused or affected evidence from a full workspace pass; state anything left to CI.

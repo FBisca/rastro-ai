@@ -557,6 +557,7 @@ fn gap<'a>(queue: &'a Value, name: &str) -> &'a Value {
         .unwrap_or_else(|| panic!("no gap for {name}: {queue}"))
 }
 
+/// spec: One queue of proposals and questions
 /// S1: a meeting's hypotheses are the queue's proposals, each with a content-addressed id, its
 /// source, kind, promise, parties, stated date, quote and terms, oldest first, and reading twice
 /// returns the same ids in the same order.
@@ -654,6 +655,7 @@ fn S1_a_meetings_hypotheses_are_proposals_with_stable_ids_oldest_first() {
     );
 }
 
+/// spec: One queue of proposals and questions
 /// S2: identity's same-person candidates are the queue's questions, each with the same kind of
 /// content-addressed id, its two accounts with their labels and the signals that produced it,
 /// and no candidate appears twice.
@@ -752,6 +754,7 @@ fn S2_identity_candidates_are_questions_with_labels_and_no_duplicate() {
     assert_eq!(ids(&queue), ids(&env.queue()));
 }
 
+/// spec: One queue of proposals and questions
 /// S3: a source that found nothing, a failed run and a source that couldn't look are named with
 /// their gap, a source hidden by a launch scope leaves the list, and the read still succeeds.
 #[test]
@@ -865,6 +868,7 @@ fn literal(value: &str) -> Object {
     }
 }
 
+/// spec: Everything is checked against what is known
 /// S4: an item whose standard statement an observed claim already holds is absent from the queue
 /// and the result counts it as already known; a claim matching only a name or the promise's text
 /// drops nothing.
@@ -955,6 +959,7 @@ fn S4_an_item_an_observed_claim_already_holds_is_omitted_and_counted() {
     assert_eq!(queue["already_known"], 1, "{queue}");
 }
 
+/// spec: Everything is checked against what is known
 /// S5: a proposal naming a party the owner mapped to an entity that has visible claims carries
 /// those claims as context and stays in the queue.
 #[test]
@@ -1006,6 +1011,7 @@ fn S5_a_mapped_partys_visible_claims_are_the_items_context() {
     assert_eq!(ids.len(), context.len(), "{promise}");
 }
 
+/// spec: One intent per answer, recorded once
 /// S6: a rejection with a reason and a yes or no answer each record one owner intent, the item
 /// leaves the queue on the CLI and on an MCP read, a rejection mints no claim, and a yes still
 /// creates and names the Person that holds a pair nobody held.
@@ -1342,6 +1348,7 @@ fn an_answer_that_created_a_person_is_kept_while_a_later_name_targets_it() {
     );
 }
 
+/// spec: One intent per answer, recorded once
 /// S7: a missed report records its text and, when one was named, the item; the named item stays
 /// pending and the report is recorded as missed.
 #[test]
@@ -1385,6 +1392,7 @@ fn S7_a_missed_report_records_its_text_and_keeps_the_named_item_pending() {
     assert!(ids(&env.queue()).contains(&item), "the item stays pending");
 }
 
+/// spec: One intent per answer, recorded once
 /// S8: an answer naming an item the queue no longer holds, or the same item a second time, is
 /// refused with a reason naming the item; nothing is recorded and the queue reads the same.
 #[test]
@@ -1486,6 +1494,7 @@ fn an_accept_and_an_edit_record_one_intent_each_and_leave_the_queue() {
     assert!(!ids(&env.queue()).contains(&second), "still queued");
 }
 
+/// spec: An accepted proposal becomes an observed claim
 /// S9: accepting a proposal unchanged records one owner intent and mints one observed commitment
 /// on the owner's Person, holding the item's statements — each standard predicate carrying the
 /// party name or the stated date as a literal — and justified by that intent alone; `why` names
@@ -1576,6 +1585,7 @@ fn S9_accepting_a_proposal_mints_its_standard_terms_justified_by_the_intent() {
     );
 }
 
+/// spec: An accepted proposal becomes an observed claim
 /// S10: editing a proposal's promise or stated date and accepting it mints the claim from the
 /// owner's edited statement, and the one intent snapshots both what the owner saw and what they
 /// made, so the record reads as an accept with edits rather than a clean accept.
@@ -1653,6 +1663,7 @@ fn S10_accepting_with_edits_mints_the_edited_statement_and_snapshots_both() {
     );
 }
 
+/// spec: An accepted proposal becomes an observed claim
 /// S11: an accepted claim keeps its item's source's scope. A work-scoped read of the queue and of
 /// `about me` succeeds with neither the item nor the claim, while a read without a scope shows
 /// the claim in `about me` and `why` names the intent.
@@ -1711,6 +1722,7 @@ fn S11_an_accepted_claim_is_visible_only_in_the_scopes_that_see_its_source() {
     );
 }
 
+/// spec: An accepted proposal becomes an observed claim
 /// An accepted item keeps its own standard terms: each acceptance is one commitment of its own,
 /// so two accepted proposals never merge into one statement set, and the same statements proposed
 /// again are known one commitment at a time.
@@ -1757,6 +1769,7 @@ fn an_accepted_commitment_keeps_its_own_standard_terms() {
     assert!(queue["items"].as_array().unwrap().is_empty(), "{queue}");
 }
 
+/// spec: An accepted proposal becomes an observed claim
 /// A scoped read never explains a hidden acceptance: a claim visible in work cites only the
 /// intents that scope sees, never a personal item's accept.
 #[test]
@@ -1878,6 +1891,7 @@ fn promised(queue: &Value, meeting: &str) -> String {
         .to_string()
 }
 
+/// spec: The renderer reports what it showed
 /// S12: an item the owner printed and a re-import later replaced, left unanswered, reads
 /// ignored with the time it waited since its first shown report; an item still pending is never
 /// ignored however often it was shown.
@@ -1960,6 +1974,7 @@ fn S12_an_item_shown_then_replaced_unanswered_reads_ignored_with_its_wait() {
     assert_eq!(later["outcomes"], outcomes["outcomes"], "{later}");
 }
 
+/// spec: The renderer reports what it showed
 /// S13: the queue read as `--json` or over MCP records no shown report, so automation cannot
 /// make an item look ignored.
 #[test]
@@ -1997,6 +2012,7 @@ fn S13_a_machine_read_records_no_shown_report() {
     assert_eq!(outcomes["outcomes"], json!([]), "{outcomes}");
 }
 
+/// spec: Outcomes are derived and rebuilt
 /// S14: every outcome carries its item id, its kind, its time and, for an accepted item, the
 /// claim it became; the totals count what was shown and what was acted on.
 #[test]
@@ -2097,6 +2113,7 @@ fn S14_every_outcome_carries_its_item_kind_time_and_claim_and_the_totals_count_s
     );
 }
 
+/// spec: Outcomes are derived and rebuilt
 /// S14: an item the queue settled elsewhere — the owner accepted the identical proposal from
 /// another meeting, so this one was already known and left unanswered — reads became moot, not
 /// ignored, and no read and no rebuild moves its outcome.
@@ -2191,6 +2208,7 @@ fn S14_an_item_settled_elsewhere_reads_became_moot_and_no_read_moves_it() {
     assert_eq!(rebuilt["totals"], replaced["totals"], "{rebuilt}");
 }
 
+/// spec: Outcomes are derived and rebuilt
 /// S14: an item a run really dropped stays ignored, dated at that run, even when later knowledge
 /// holds the statements it expressed: which came first — the run or the knowledge — fixes the
 /// kind and the time, in either order.
@@ -2256,6 +2274,7 @@ fn S14_an_item_a_run_dropped_stays_ignored_when_later_knowledge_holds_it() {
     assert_eq!(rebuilt["outcomes"], after["outcomes"], "{rebuilt}");
 }
 
+/// spec: Outcomes are derived and rebuilt
 /// S14: a question that goes away when the owner links its two accounts to one Person reads
 /// became moot at its last showing: a question carries no source run, so no run dates it.
 #[test]
@@ -2305,6 +2324,7 @@ fn S14_a_question_settled_by_a_link_reads_became_moot_at_its_last_showing() {
     assert_eq!(later["outcomes"], outcomes["outcomes"], "{later}");
 }
 
+/// spec: Outcomes are derived and rebuilt
 /// S15: a claims rebuild returns every accepted claim with the same id and reproduces every
 /// outcome and shown report, calling no adapter.
 #[test]
@@ -2376,4 +2396,128 @@ fn S15_a_rebuild_reproduces_the_accepted_claim_and_every_outcome_with_no_adapter
     let after = env.outcomes_at("2026-11-10T15:00:00Z");
     assert_eq!(after["outcomes"], before["outcomes"], "{after}");
     assert_eq!(after["totals"], before["totals"], "{after}");
+}
+
+/// The morning the owner works: two meetings' proposals — the second proposing another promise,
+/// so no item of the first already holds it — and one identity question.
+fn the_morning() -> Env {
+    let env = Env::new();
+    env.candidates(&good());
+    env.import_ok(
+        "weekly-1",
+        "work",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+    );
+    env.candidates(&revised());
+    env.import_ok(
+        "later-1",
+        "work",
+        "2026-11-11T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+    );
+    env.typed_account(
+        "github:account/1",
+        "code:Account",
+        ("name", "Ana Silva"),
+        "https://api.github.com/users/1",
+    );
+    env.typed_account(
+        "linear:user/u-1",
+        "tracker:Account",
+        ("name", "ana silva"),
+        "https://linear.app/rastro/profiles/u-1",
+    );
+    env
+}
+
+/// spec: The queue serves a real morning
+/// One seated morning, worked from the terminal: the owner prints the queue once, then accepts a
+/// proposal, edits and accepts another, rejects a third, answers the question and files a missed
+/// report — one sitting — and reads the outcomes afterwards.
+#[test]
+fn the_owner_works_one_queue_end_to_end_in_one_sitting() {
+    let env = the_morning();
+
+    // One print of the morning: every item the owner is about to work.
+    let printed = env.print_queue_at("2026-11-10T10:30:00Z");
+    for text in ["send Bob the budget", "review the numbers", "Ana Silva"] {
+        assert!(printed.contains(text), "{printed}");
+    }
+
+    let queue = env.queue();
+    let question = question(&queue, "github:account/1")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let budget = promised(&queue, "weekly-1");
+    let proposal = |promise: &str| {
+        (queue["items"].as_array().unwrap().iter())
+            .find(|item| item["proposal"]["promise"] == promise)
+            .unwrap_or_else(|| panic!("no {promise}: {queue}"))["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let review = proposal("review the numbers");
+    let later = proposal("review the final numbers");
+
+    env.ok_at(&["queue", "accept", &budget], Some("2026-11-10T11:00:00Z"));
+    env.ok_at(
+        &[
+            "queue",
+            "edit",
+            &review,
+            "--promise",
+            "review the numbers on Friday",
+            "--date",
+            "next Friday",
+        ],
+        Some("2026-11-10T11:15:00Z"),
+    );
+    env.ok_at(
+        &[
+            "queue",
+            "reject",
+            &later,
+            "--reason",
+            "Bob and I did this already",
+        ],
+        Some("2026-11-10T11:30:00Z"),
+    );
+    env.ok_at(
+        &["queue", "answer", &question, "yes"],
+        Some("2026-11-10T11:45:00Z"),
+    );
+    let missed = env.ok_at(
+        &["queue", "missed", "The owner will book the room himself"],
+        Some("2026-11-10T12:00:00Z"),
+    );
+    assert_eq!(missed["intents"][0]["kind"], "missed", "{missed}");
+
+    // One sitting worked every item: nothing waits afterwards, and the outcomes read afterwards
+    // hold one per item, newest first, and none for the report that named no item.
+    assert_eq!(env.queue()["items"], json!([]), "still waiting");
+    let outcomes = env.outcomes_at("2026-11-10T12:30:00Z");
+    let listed = outcomes["outcomes"].as_array().unwrap();
+    let column = |field: &str| -> Vec<String> {
+        (listed.iter())
+            .map(|outcome| outcome[field].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(
+        column("kind"),
+        ["answered", "rejected", "accepted_with_edits", "accepted"].map(String::from),
+        "{outcomes}"
+    );
+    assert_eq!(
+        column("item"),
+        [question, later, review, budget],
+        "{outcomes}"
+    );
+    assert_eq!(
+        outcomes["totals"],
+        json!({"shown": 4, "acted_on": 4}),
+        "{outcomes}"
+    );
 }

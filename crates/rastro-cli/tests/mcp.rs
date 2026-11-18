@@ -3303,6 +3303,7 @@ fn S11_the_about_and_why_descriptions_say_label_text_is_untrusted_data() {
     }
 }
 
+/// spec: The queue's operations are in the catalog
 /// S17: an MCP client can't answer a queue item: every queue write is a protocol error and
 /// nothing is recorded.
 #[test]

@@ -71,6 +71,8 @@ fast_status=$?
 run_output=$(cargo nextest run --workspace --color never --profile "$profile" 2>&1)
 run_status=$?
 
+# spec: A test's location is its level
+# Every unit test the workspace holds runs under the fast profile, and the run starts them all.
 test_the_fast_profile_runs_every_unit_test() {
   start_test the_fast_profile_runs_every_unit_test
   local expected actual
@@ -121,6 +123,9 @@ test_the_fast_profile_runs_every_unit_test() {
   end_test the_fast_profile_runs_every_unit_test
 }
 
+# spec: A test's location is its level
+# No test from a `tests/` binary is selected, and the workspace has one, so the check proves
+# something.
 test_the_fast_profile_runs_no_test_from_a_tests_binary() {
   start_test the_fast_profile_runs_no_test_from_a_tests_binary
   if [ "$fast_status" -ne 0 ]; then
