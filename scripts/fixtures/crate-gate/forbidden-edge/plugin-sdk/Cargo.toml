@@ -12,3 +12,6 @@ fixture-core = { path = "../core" }
 
 [dev-dependencies]
 fixture-tool = { path = "../tool" }
+
+[lints]
+workspace = true

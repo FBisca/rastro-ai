@@ -6,3 +6,6 @@ publish = false
 
 [package.metadata]
 rastro = "core"
+
+[lints]
+workspace = true

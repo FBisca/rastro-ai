@@ -6,3 +6,6 @@ publish = false
 
 [package.metadata.rastro]
 role = "core"
+
+[lints]
+workspace = true

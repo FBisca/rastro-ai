@@ -20,7 +20,9 @@ if [ "${1:-}" = "--root" ]; then
 fi
 cd "$root"
 
-violations=$(cargo metadata --format-version 1 --no-deps | jq -r '
+metadata=$(cargo metadata --format-version 1 --no-deps)
+
+violations=$(jq -r '
   def table: {
     "sdk": [],
     "core": ["sdk"],
@@ -56,11 +58,32 @@ violations=$(cargo metadata --format-version 1 --no-deps | jq -r '
           | "crate-gate: \($p.name) (role \($role)) depends on \($dep) (role \($role_of[$dep] // "none")), which role \($role) does not allow"
         end
     ]
-  | .[]')
+  | .[]' <<<"$metadata")
+
+# Cargo metadata does not report lints, so each member's manifest is read directly. `[lints] workspace
+# = true` is the only way a member inherits the workspace table; without it the crate silently skips
+# every size and complexity lint.
+unlinted=$(
+  jq -r '.packages[] | "\(.name)\t\(.manifest_path)"' <<<"$metadata" \
+    | while IFS=$'\t' read -r name manifest; do
+        if ! awk '
+          /^[[:space:]]*\[lints\][[:space:]]*(#.*)?$/ { in_lints = 1; next }
+          /^[[:space:]]*\[/ { in_lints = 0 }
+          in_lints && /^[[:space:]]*workspace[[:space:]]*=[[:space:]]*true[[:space:]]*(#.*)?$/ { found = 1 }
+          !in_lints && /^[[:space:]]*lints\.workspace[[:space:]]*=[[:space:]]*true[[:space:]]*(#.*)?$/ { found = 1 }
+          END { exit !found }
+        ' "$manifest"; then
+          echo "crate-gate: $name does not inherit the workspace lints; add [lints] workspace = true"
+        fi
+      done
+)
+if [ -n "$unlinted" ]; then
+  violations+=$'\n'"$unlinted"
+fi
 
 if [ -n "$violations" ]; then
   echo "$violations"
   exit 1
 fi
 
-echo "crate-gate: every member declares a role, and every member dependency is one its role allows"
+echo "crate-gate: every member declares a role, every member dependency is one its role allows, and every member inherits the workspace lints"
