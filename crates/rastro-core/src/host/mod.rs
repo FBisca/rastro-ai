@@ -777,7 +777,8 @@ fn converse<S: Storage>(
 mod tests {
     use super::*;
 
-    /// evidence/R71: host limit overrides are ignored unless this is a debug build
+    /// spec: A release build ignores the test-only overrides
+    /// Host limit overrides are ignored unless this is a debug build.
     #[test]
     #[allow(non_snake_case)]
     fn host_limit_overrides_are_ignored_unless_this_is_a_debug_build() {

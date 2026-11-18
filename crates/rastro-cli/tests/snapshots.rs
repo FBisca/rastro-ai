@@ -23,8 +23,8 @@ const STABLE: Duration = Duration::from_millis(75);
 /// A child stops when the stop file appears; this bounds it if that file never comes.
 const MAX_ROUNDS: usize = 200;
 
-/// evidence/R45: a snapshot of a binary is the current build
-// spec: A test runs its own binary snapshot
+/// spec: A test runs its own binary snapshot
+/// A snapshot of a binary is the build that was published when the test started.
 #[test]
 fn snapshot_is_the_current_build() {
     let dir = tempfile::tempdir().unwrap();

@@ -158,7 +158,8 @@ fn coverage_of(env: &Env, now: Option<&str>) -> Value {
     value["result"]["coverage"][0].clone()
 }
 
-/// evidence/R51: past freshness or after a failed attempt coverage is unknown with its evidence
+/// spec: Stale coverage reads unknown with its last check
+/// Past freshness or after a failed attempt coverage is unknown with its evidence.
 #[test]
 fn past_freshness_or_after_a_failed_attempt_coverage_is_unknown_with_its_evidence() {
     let env = Env::new();
@@ -198,7 +199,8 @@ fn past_freshness_or_after_a_failed_attempt_coverage_is_unknown_with_its_evidenc
     assert_eq!(found["result"]["coverage"][0]["state"], "unknown");
 }
 
-/// evidence/R52: rebuilding the dropped index returns the same results with citations
+/// spec: A rebuilt index returns the same results
+/// Rebuilding the dropped index returns the same results with citations.
 #[test]
 fn rebuilding_the_dropped_index_returns_the_same_results_with_citations() {
     let env = Env::new();
@@ -225,7 +227,8 @@ fn rebuilding_the_dropped_index_returns_the_same_results_with_citations() {
     assert!(env.ok(&["index", "rebuild"]).contains("2"));
 }
 
-/// evidence/R54: every command validates against the operation schema on success and failure
+/// spec: Every json answer validates against its operation schema
+/// Every command validates against the operation schema on success and failure.
 #[test]
 fn every_command_validates_against_the_operation_schema_on_success_and_failure() {
     let env = Env::new();
@@ -330,7 +333,8 @@ fn every_command_validates_against_the_operation_schema_on_success_and_failure()
     }
 }
 
-/// evidence/R55: arguments that do not parse give a schema valid error with json
+/// spec: Arguments that do not parse give a schema valid error
+/// Arguments that do not parse give a schema valid error with json.
 #[test]
 fn arguments_that_do_not_parse_give_a_schema_valid_error_with_json() {
     let env = Env::new();
@@ -389,7 +393,8 @@ fn arguments_that_do_not_parse_give_a_schema_valid_error_with_json() {
     assert!(env.rastro(&["--version"]).status.success());
 }
 
-/// evidence/R53: a rebuilt index behaves like a freshly migrated one
+/// spec: A rebuilt index behaves like a freshly migrated one
+/// A rebuilt index behaves like a freshly migrated one.
 #[test]
 fn a_rebuilt_index_behaves_like_a_freshly_migrated_one() {
     let bodies: [&[(&str, &str)]; 3] = [
@@ -453,7 +458,8 @@ fn a_rebuilt_index_behaves_like_a_freshly_migrated_one() {
     assert_eq!(cited(&rebuilt, &["search", "naive", "--full"]).len(), 0);
 }
 
-/// evidence/R56: an argument that is not utf8 never panics
+/// spec: A non UTF-8 argument never panics
+/// An argument that is not UTF-8 never panics.
 #[cfg(unix)]
 #[test]
 fn an_argument_that_is_not_utf8_never_panics() {
@@ -512,7 +518,8 @@ fn windows(env: &Env) -> Vec<Value> {
         .clone()
 }
 
-/// evidence/R63: coverage lists each window with its state selection and retry time
+/// spec: Coverage lists each source's newest windows
+/// Coverage lists each window with its state, selection and retry time.
 #[test]
 fn coverage_lists_each_window_with_its_state_selection_and_retry_time() {
     let env = Env::new();
@@ -552,7 +559,8 @@ fn coverage_lists_each_window_with_its_state_selection_and_retry_time() {
     same_instant(&next["window"]["from"], &listed[1]["to"], "");
 }
 
-/// evidence/R64: a quiet later window is empty in its row and the source stays found
+/// spec: A quiet window does not erase what an earlier one found
+/// A quiet later window is empty in its row and the source stays found.
 #[test]
 fn a_quiet_later_window_is_empty_in_its_row_and_the_source_stays_found() {
     let env = Env::new();
@@ -589,7 +597,8 @@ fn a_quiet_later_window_is_empty_in_its_row_and_the_source_stays_found() {
     assert_eq!(coverage_of(&fresh, None)["state"], "empty");
 }
 
-/// evidence/R65: a run whose submissions are all rejected is couldnt look protocol never empty
+/// spec: A run whose submissions were all rejected is never empty
+/// A run whose submissions are all rejected is couldn't look: protocol, never empty.
 #[test]
 fn a_run_whose_submissions_are_all_rejected_is_couldnt_look_protocol_never_empty() {
     let env = Env::new();
@@ -613,7 +622,8 @@ fn a_run_whose_submissions_are_all_rejected_is_couldnt_look_protocol_never_empty
     assert_eq!(coverage_of(&env, None)["state"], "unknown");
 }
 
-/// evidence/R66: some rejected submissions keep the accepted evidence but the window is couldnt look
+/// spec: Some rejected submissions make the window couldnt look
+/// Some rejected submissions keep the accepted evidence but the window is couldn't look.
 #[test]
 fn some_rejected_submissions_keep_the_accepted_evidence_but_the_window_is_couldnt_look() {
     let env = Env::new();
@@ -640,7 +650,8 @@ fn some_rejected_submissions_keep_the_accepted_evidence_but_the_window_is_couldn
     same_instant(&again["window"]["from"], &listed[0]["from"], "");
 }
 
-/// evidence/R68: a connector that isnt installed is couldnt look not installed a published reason
+/// spec: A missing connector is couldnt look not installed
+/// A connector that isn't installed is couldn't look: not_installed, a published reason.
 #[test]
 fn a_connector_that_isnt_installed_is_couldnt_look_not_installed_a_published_reason() {
     let env = Env::new();
@@ -671,7 +682,8 @@ fn a_connector_that_isnt_installed_is_couldnt_look_not_installed_a_published_rea
     assert_eq!(run["reason"], "not_installed", "{run}");
 }
 
-/// evidence/R69: a manifest that fails its check is a failed run and other sources still run
+/// spec: A manifest that fails its check is one failed run
+/// A manifest that fails its check is a failed run and other sources still run.
 #[test]
 fn a_manifest_that_fails_its_check_is_a_failed_run_and_other_sources_still_run() {
     type Edit = fn(&mut toml::Table);
@@ -751,7 +763,8 @@ fn a_manifest_that_fails_its_check_is_a_failed_run_and_other_sources_still_run()
     }
 }
 
-/// evidence/R67: a rejected submission wins over a reported failure or a failed finish
+/// spec: A rejected submission outranks a reported failure
+/// A rejected submission wins over a reported failure or a failed finish.
 #[test]
 fn a_rejected_submission_wins_over_a_reported_failure_or_a_failed_finish() {
     let bad = json!({"jsonrpc": "2.0", "method": "evidence.submit", "params": {"kind": "issue"}});
@@ -792,7 +805,7 @@ fn a_rejected_submission_wins_over_a_reported_failure_or_a_failed_finish() {
     }
 }
 
-/// evidence/R70: manifest parse diagnostics name the position and never echo values
+/// Manifest parse diagnostics name the position and never echo values.
 #[test]
 fn manifest_parse_diagnostics_name_the_position_and_never_echo_values() {
     let env = Env::new();
@@ -814,7 +827,8 @@ fn manifest_parse_diagnostics_name_the_position_and_never_echo_values() {
 }
 
 /// S21a: a last-checked time on a whole second is the same instant in human output and --json
-/// evidence/R58: a whole second last checked is the same instant in human and json
+/// spec: A last check on a whole second is one instant
+/// A whole-second last check is the same instant in human and json.
 #[test]
 fn a_whole_second_last_checked_is_the_same_instant_in_human_and_json() {
     let env = Env::new();
@@ -853,7 +867,8 @@ fn found_then_quiet(env: &Env, quiet: usize) {
     }
 }
 
-/// evidence/R63: a source with more than ten windows lists its ten newest, newest first
+/// spec: Coverage lists each source's newest windows
+/// A source with more than ten windows lists its ten newest, newest first.
 #[test]
 fn a_source_with_more_than_ten_windows_lists_the_ten_newest_newest_first() {
     let env = Env::new();
@@ -883,7 +898,8 @@ fn a_source_with_more_than_ten_windows_lists_the_ten_newest_newest_first() {
     assert!(!human.contains("showing"), "{human}");
 }
 
-/// evidence/R64: the only window that found evidence being outside the newest ten keeps "found"
+/// spec: A quiet window does not erase what an earlier one found
+/// The only window that found evidence being outside the newest ten keeps "found".
 #[test]
 fn the_only_found_window_older_than_the_newest_ten_still_answers_found() {
     let env = Env::new();

@@ -45,7 +45,8 @@ fn a_connector_sees_none_of_the_owners_environment() {
     );
 }
 
-/// evidence/R26: teardown kills the process group and releases every helper thread
+/// spec: The process group is killed and its pipes released
+/// Teardown kills the process group and releases every helper thread.
 #[test]
 fn teardown_kills_the_process_group_and_releases_every_helper_thread() {
     for finished in [false, true] {
@@ -67,7 +68,8 @@ fn teardown_kills_the_process_group_and_releases_every_helper_thread() {
     }
 }
 
-/// evidence/R27: the group is signalled while the exited leader is still unreaped
+/// spec: The group is signalled before the leader is reaped
+/// The group is signalled while the exited leader is still unreaped.
 #[test]
 fn the_group_is_signalled_while_the_exited_leader_is_still_unreaped() {
     let mut command = Command::new("/bin/sh");

@@ -162,7 +162,8 @@ fn sync_with(env: &Env, bodies: &[(&str, &str)]) -> Value {
     env.json(&["sync", "project"])["result"]["runs"][0].clone()
 }
 
-/// evidence/R47: syncing again with nothing changed writes no evidence and links the run
+/// spec: A sync that changes nothing writes no evidence
+/// Syncing again with nothing changed writes no evidence and links the run.
 #[test]
 fn syncing_again_with_nothing_changed_writes_no_evidence_and_links_the_run() {
     let env = Env::new();
@@ -194,7 +195,8 @@ fn syncing_again_with_nothing_changed_writes_no_evidence_and_links_the_run() {
     assert!(human.contains("unchanged 2"), "{human}");
 }
 
-/// evidence/R48: a body changing and changing back leaves three observations
+/// spec: A body that changes and returns keeps three observations
+/// A body changing and changing back leaves three observations.
 #[test]
 fn a_body_changing_and_changing_back_leaves_three_observations() {
     let env = Env::new();
@@ -242,7 +244,8 @@ fn a_body_changing_and_changing_back_leaves_three_observations() {
     assert!(human.contains("beta body"), "{human}");
 }
 
-/// evidence/R73: reread starts at registration and appends only new fields
+/// spec: A reread starts at the registered window
+/// Reread starts at registration and appends only new fields.
 #[test]
 fn reread_starts_at_registration_and_appends_only_new_fields() {
     let env = Env::new();

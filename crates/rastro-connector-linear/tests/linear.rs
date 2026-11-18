@@ -544,8 +544,9 @@ fn the_connector_records_each_users_and_each_issue_actors_app_flag() {
     }
 }
 
-/// evidence/R77: WHEN `rastro source add --connector linear` runs while a Linear source exists, THEN it
-/// is refused with an error naming the existing source, and nothing is saved
+/// spec: A single-source connector refuses a second source
+/// `rastro source add --connector linear` is refused with an error naming the source that already
+/// exists, and nothing is saved.
 #[test]
 fn a_second_linear_source_is_refused_naming_the_existing_one() {
     let fixture = Fixture::start(world());
@@ -576,10 +577,11 @@ fn a_second_linear_source_is_refused_naming_the_existing_one() {
     assert_eq!(listed["sources"].as_array().unwrap().len(), 1, "{listed}");
 }
 
-/// evidence/R78: WHEN the config already holds a second source for a single-source connector (written
-/// before the refusal existed, or while the connector wasn't installed), THEN at sync that pair
-/// fails as `protocol` with a message naming the other source, before the connector runs, and
-/// the first source still syncs
+/// spec: A second source in the config fails its own sync
+/// A config that already holds a second source for a single-source connector, written before the
+/// refusal existed or while the connector wasn't installed, makes that source's sync fail as
+/// `protocol` with a message naming the other source, before the connector runs, and the first
+/// source still syncs.
 #[test]
 fn a_second_single_source_connector_source_fails_at_sync() {
     let fixture = Fixture::start(world());

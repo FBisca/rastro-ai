@@ -259,7 +259,8 @@ mod tests {
         }
     }
 
-    /// evidence/R18: reader stops reading when the inbox is full
+    /// spec: Fast stdout waits in bounded memory
+    /// Reader stops reading when the inbox is full.
     #[test]
     fn reader_stops_reading_when_the_inbox_is_full() {
         let consumed = Arc::new(AtomicUsize::new(0));
@@ -305,7 +306,8 @@ mod tests {
         }
     }
 
-    /// evidence/R29: one printer and a bounded queue serve many runs on a blocked sink
+    /// spec: One host process keeps printing bounded across runs
+    /// One printer and a bounded queue serve many runs on a blocked sink.
     #[test]
     fn one_printer_and_a_bounded_queue_serve_many_runs_on_a_blocked_sink() {
         let (release, blocked) = channel();

@@ -40,7 +40,8 @@ fn live_config(
     )))
 }
 
-/// evidence/R57: a real repository syncs and a remembered phrase is found with a working link
+/// spec: The owners real repository syncs and a remembered phrase is found
+/// A real repository syncs and a remembered phrase is found with a working link.
 ///
 /// Needs `RASTRO_LIVE_REPO` (owner/name), `RASTRO_LIVE_PHRASE` and a GitHub token (`GH_TOKEN` or
 /// `gh auth login`); run with `cargo nextest run --profile live --run-ignored only`.
@@ -375,7 +376,8 @@ fn not_utf8() -> std::ffi::OsString {
     std::ffi::OsString::from_vec(vec![0xff, 0xfe])
 }
 
-/// evidence/R59: half configured or malformed live variables fail naming them
+/// spec: A half-configured live check fails naming what is missing
+/// Half configured or malformed live variables fail naming them.
 #[test]
 fn half_configured_or_malformed_live_variables_fail_naming_them() {
     let os = |s: &str| Some(std::ffi::OsString::from(s));
