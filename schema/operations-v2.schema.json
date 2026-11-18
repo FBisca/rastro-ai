@@ -2131,6 +2131,63 @@
       ],
       "type": "object"
     },
+    "Reconstruction": {
+      "additionalProperties": false,
+      "description": "What an answer as of a past time says about itself: it is a reconstruction under today's rules,\nnot what was shown then (corrections §Reads as of a past time).",
+      "properties": {
+        "as_of": {
+          "description": "The time read as of.",
+          "format": "date-time",
+          "type": "string"
+        },
+        "extractors": {
+          "description": "The extractor and vocabulary versions the evidence captured by then was read with.",
+          "items": {
+            "$ref": "#/$defs/ReconstructionVersions"
+          },
+          "type": "array"
+        },
+        "not_read_yet": {
+          "description": "Sources the entity has claims from that held no evidence yet at that time, instead of a\nsilent absence of claims.",
+          "items": {
+            "$ref": "#/$defs/UnreadSource"
+          },
+          "type": "array"
+        },
+        "statement": {
+          "description": "The sentence that says so, naming the versions used.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "as_of",
+        "statement",
+        "extractors",
+        "not_read_yet"
+      ],
+      "type": "object"
+    },
+    "ReconstructionVersions": {
+      "additionalProperties": false,
+      "description": "The extractor and vocabulary versions a reconstruction used.",
+      "properties": {
+        "extractor": {
+          "type": "string"
+        },
+        "extractor_version": {
+          "type": "string"
+        },
+        "vocabulary_version": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "extractor",
+        "extractor_version",
+        "vocabulary_version"
+      ],
+      "type": "object"
+    },
     "Removed": {
       "additionalProperties": false,
       "description": "What forgetting a meeting removed.",
@@ -2579,6 +2636,23 @@
       ],
       "type": "string"
     },
+    "UnreadSource": {
+      "additionalProperties": false,
+      "description": "A source the entity has claims from whose evidence had not been captured yet at the time read.",
+      "properties": {
+        "scope": {
+          "$ref": "#/$defs/Scope"
+        },
+        "source": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "source",
+        "scope"
+      ],
+      "type": "object"
+    },
     "ValidTime": {
       "description": "Item update times do not establish when individual fields changed in the world.",
       "enum": [
@@ -2824,6 +2898,17 @@
                   },
                   "type": "array"
                 },
+                "reconstruction": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Reconstruction"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Present when the read was as of a past time: the answer is rebuilt, not remembered."
+                },
                 "supports": {
                   "items": {
                     "$ref": "#/$defs/JustificationView"
@@ -2919,6 +3004,17 @@
                     }
                   ],
                   "description": "When the identifier names a Person: the Person and each account it holds. The claims of\nthose accounts are among `claims`, each naming its account."
+                },
+                "reconstruction": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/Reconstruction"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "Present when the read was as of a past time: the answer is rebuilt, not remembered."
                 },
                 "resolved": {
                   "description": "Whether the identifier named an entity this read can see. A well-formed identifier that\nnames nothing visible (unknown, or hidden-only) is `false`, with the unknown-entity answer.",
@@ -4176,7 +4272,7 @@
         "properties": {
           "as_of": {
             "default": null,
-            "description": "Read as of this RFC 3339 time. Not answered yet: a request that sets it is refused rather than answered with today's claims.",
+            "description": "Read as of this RFC 3339 time: the answer is reconstructed from the evidence captured and the intents issued by then, under today's rules, and says so in `reconstruction`.",
             "format": "date-time",
             "type": [
               "string",
@@ -4225,6 +4321,17 @@
               "$ref": "#/$defs/ExtractionPair"
             },
             "type": "array"
+          },
+          "reconstruction": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Reconstruction"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present when the read was as of a past time: the answer is rebuilt, not remembered."
           },
           "supports": {
             "items": {
@@ -4295,7 +4402,7 @@
         "properties": {
           "as_of": {
             "default": null,
-            "description": "Read as of this RFC 3339 time. Not answered yet: a request that sets it is refused rather than answered with today's claims.",
+            "description": "Read as of this RFC 3339 time: the answer is reconstructed from the evidence captured and the intents issued by then, under today's rules, and says so in `reconstruction`. A source with no evidence yet at that time is named there.",
             "format": "date-time",
             "type": [
               "string",
@@ -4382,6 +4489,17 @@
               }
             ],
             "description": "When the identifier names a Person: the Person and each account it holds. The claims of\nthose accounts are among `claims`, each naming its account."
+          },
+          "reconstruction": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/Reconstruction"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "Present when the read was as of a past time: the answer is rebuilt, not remembered."
           },
           "resolved": {
             "description": "Whether the identifier named an entity this read can see. A well-formed identifier that\nnames nothing visible (unknown, or hidden-only) is `false`, with the unknown-entity answer.",

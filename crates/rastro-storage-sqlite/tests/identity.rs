@@ -1146,6 +1146,7 @@ fn a_linear_key_switching_to_an_app_closes_the_token_link_in_scope_too() {
         limit: 50,
         since: None,
         state: Vec::new(),
+        as_of: None,
     };
     let held = |claims: Vec<rastro_core::knowledge::ClaimSummary>| -> Vec<String> {
         claims
@@ -1362,6 +1363,7 @@ fn scoped_token_windows_keep_the_longer_token_interval() {
         limit: 50,
         since: None,
         state: Vec::new(),
+        as_of: None,
     };
     let held = |claims: Vec<rastro_core::knowledge::ClaimSummary>| -> Vec<String> {
         claims

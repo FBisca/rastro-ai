@@ -3,9 +3,153 @@ use super::*;
 use anyhow::ensure;
 use rastro_core::knowledge::{
     AboutClaim, AboutClaims, AboutOptions, Citation, ClaimSummary, Explanation, JustificationView,
-    Label, LinkReason, LinkReasonKind, LinkedAccount, PersonView, WhyOptions,
+    Label, LinkReason, LinkReasonKind, LinkedAccount, PersonView, Reconstruction,
+    ReconstructionVersions, UnreadSource, WhyOptions,
 };
 use std::collections::BTreeSet;
+
+/// The store as it stood at a past time, rebuilt in private memory by the same steps a claims
+/// rebuild takes: the evidence captured by then is replayed through the lifecycle, then the intents
+/// issued by then, the automatic links and the corrections settle on top. Nothing is written to
+/// the store, and no stored status, occurrence, link or revision is copied: the answer is today's
+/// rules over what existed then, never a memory of what was shown.
+struct Past {
+    db: Connection,
+    versions: Vec<ReconstructionVersions>,
+}
+/// Copies the rows `sql` selects from `source` into `table` of `target`.
+fn copy(
+    source: &Connection,
+    target: &Connection,
+    table: &str,
+    sql: &str,
+    arguments: &[&dyn rusqlite::ToSql],
+) -> Result<()> {
+    let mut rows = source.prepare(sql)?;
+    let columns = rows.column_count();
+    let placeholders = vec!["?"; columns].join(",");
+    let mut insert = target.prepare(&format!("INSERT INTO {table} VALUES ({placeholders})"))?;
+    let mut found = rows.query(rusqlite::params_from_iter(arguments.iter().copied()))?;
+    while let Some(row) = found.next()? {
+        insert.execute(rusqlite::params_from_iter(
+            (0..columns)
+                .map(|i| row.get_ref(i).map(rusqlite::types::ToSqlOutput::Borrowed))
+                .collect::<Result<Vec<_>, _>>()?,
+        ))?;
+    }
+    Ok(())
+}
+/// The ids a query over `db` selects, as a JSON array to pass to another connection's query.
+fn id_list(db: &Connection, sql: &str) -> Result<String> {
+    let ids = db
+        .prepare(sql)?
+        .query_map([], |r| r.get::<_, rusqlite::types::Value>(0))?
+        .map(|id| {
+            Ok(match id? {
+                rusqlite::types::Value::Integer(n) => serde_json::Value::from(n),
+                rusqlite::types::Value::Text(text) => serde_json::Value::from(text),
+                other => anyhow::bail!("unexpected id {other:?}"),
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(serde_json::to_string(&ids)?)
+}
+/// A justification of `j` whose every span cites evidence captured by `?1`: a bundle is read whole
+/// or not at all, as a scoped read does with the evidence it cannot see.
+const KNOWN_BY: &str = "EXISTS (SELECT 1 FROM justification_span s WHERE s.justification_id = j.id) \
+     AND NOT EXISTS (SELECT 1 FROM justification_span s JOIN evidence e ON e.id = s.evidence_id \
+     WHERE s.justification_id = j.id AND e.captured_at > ?1)";
+/// Rebuilds what `source` held at `at`. A quote is copied only for the evidence `claim` cites:
+/// replaying a lifecycle needs none, and `why` cites one claim's.
+fn reconstruct(
+    source: &Connection,
+    at: chrono::DateTime<chrono::Utc>,
+    claim: Option<&str>,
+) -> Result<Past> {
+    let at = crate::stamp(at);
+    let db = Connection::open_in_memory()?;
+    db.execute_batch("PRAGMA foreign_keys = OFF;")?;
+    db.execute_batch(include_str!("projection_temp.sql"))?;
+    db.execute_batch("BEGIN")?;
+    db.execute_batch(
+        "CREATE TABLE evidence (id INTEGER PRIMARY KEY, source TEXT, scope TEXT, location TEXT, field TEXT, start INTEGER, end INTEGER, quote TEXT, captured_at TEXT, source_updated_at TEXT, trust_class TEXT);
+         CREATE TABLE intent (append_seq INTEGER PRIMARY KEY, id TEXT, format_version INTEGER,
+         kind TEXT, owner_id TEXT, issuer_context TEXT, issued_at TEXT, domain_key TEXT,
+         targets_json TEXT, payload_json TEXT, undo_of TEXT, supersedes TEXT)",
+    )?;
+    copy(
+        source,
+        &db,
+        "justification",
+        &format!("SELECT j.* FROM justification j WHERE {KNOWN_BY}"),
+        &[&at],
+    )?;
+    copy(
+        source,
+        &db,
+        "justification_span",
+        &format!(
+            "SELECT s.* FROM justification_span s JOIN justification j ON j.id = s.justification_id WHERE {KNOWN_BY}"
+        ),
+        &[&at],
+    )?;
+    let claims = id_list(&db, "SELECT DISTINCT claim_id FROM justification")?;
+    copy(
+        source,
+        &db,
+        "claim",
+        "SELECT * FROM claim WHERE id IN (SELECT value FROM json_each(?1))",
+        &[&claims],
+    )?;
+    let entities = id_list(
+        &db,
+        "SELECT subject FROM claim UNION SELECT object_entity FROM claim WHERE object_entity IS NOT NULL",
+    )?;
+    copy(
+        source,
+        &db,
+        "entity",
+        "SELECT * FROM entity WHERE id IN (SELECT value FROM json_each(?1))",
+        &[&entities],
+    )?;
+    let evidence = id_list(&db, "SELECT DISTINCT evidence_id FROM justification_span")?;
+    copy(
+        source,
+        &db,
+        "evidence",
+        "SELECT id, source, scope, location, field, start, end, \
+         CASE WHEN ?2 IS NOT NULL AND id IN (SELECT s.evidence_id FROM justification_span s JOIN justification j ON j.id = s.justification_id WHERE j.claim_id = ?2) THEN quote ELSE '' END, \
+         captured_at, source_updated_at, trust_class FROM evidence WHERE id IN (SELECT value FROM json_each(?1))",
+        &[&evidence, &claim],
+    )?;
+    copy(
+        source,
+        &db,
+        "intent",
+        "SELECT append_seq, id, format_version, kind, owner_id, issuer_context, issued_at, domain_key, targets_json, payload_json, undo_of, supersedes FROM intent WHERE issued_at <= ?1",
+        &[&at],
+    )?;
+    let components: BTreeSet<(String, String)> = db
+        .prepare("SELECT DISTINCT subject, predicate FROM claim")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    lifecycle::refresh(&db, &components)?;
+    super::identity::apply(&db)?;
+    super::automatic::apply(&db)?;
+    lifecycle::settle(&db)?;
+    let versions = db
+        .prepare("SELECT DISTINCT extractor, extractor_version, vocabulary_version FROM justification ORDER BY 1, 2, 3")?
+        .query_map([], |r| {
+            Ok(ReconstructionVersions {
+                extractor: r.get(0)?,
+                extractor_version: r.get(1)?,
+                vocabulary_version: r.get(2)?,
+            })
+        })?
+        .collect::<Result<_, _>>()?;
+    db.execute_batch("COMMIT")?;
+    Ok(Past { db, versions })
+}
 
 /// Claims of `rastro:alias` (id, subject, subject identifier, status) matching a canonical alias `<namespace>:<kind>/<value>` in `?1`.
 /// Split on the first `:` then the first `/`; kind and value compare exactly (no case folding), and
@@ -310,7 +454,7 @@ impl View<'_> {
         clippy::too_many_lines,
         reason = "the view gathers classes, accounts, claims and their budgets in one pass; the budget must see every claim before it answers"
     )]
-    pub(super) fn about_view(
+    fn about_now(
         &self,
         entity: &str,
         options: &AboutOptions,
@@ -375,6 +519,7 @@ impl View<'_> {
                 resolved: true,
                 claims: summaries(ids, None)?,
                 person: None,
+                reconstruction: None,
             });
         }
         let class = self.merge_class(&entity)?;
@@ -484,14 +629,104 @@ impl View<'_> {
                 identifier: person.identifier,
                 accounts: linked,
             }),
+            reconstruction: None,
         })
     }
 
+    /// What `about` reads: today's claims, or as of `options.as_of` the claims of the store as it
+    /// stood then, with what that reconstruction says about itself.
+    pub(super) fn about_view(
+        &self,
+        entity: &str,
+        options: &AboutOptions,
+        budget: usize,
+    ) -> Result<AboutClaims> {
+        let Some(at) = options.as_of else {
+            return self.about_now(entity, options, budget);
+        };
+        // The sources the entity has claims from are today's: a source unread at `at` has no
+        // claim in the rebuilt store to show for it.
+        let unread = match self.resolve(entity)? {
+            Some(_) => {
+                let today = AboutOptions {
+                    since: None,
+                    limit: 1_000_000,
+                    history: true,
+                    state: Vec::new(),
+                    as_of: None,
+                };
+                let read = self.about_now(entity, &today, budget)?;
+                let ids: Vec<String> = read
+                    .claims
+                    .iter()
+                    .map(|c| c.summary.claim.id.clone())
+                    .collect();
+                self.unread(&ids, at)?
+            }
+            None => Vec::new(),
+        };
+        let past = reconstruct(self.0, at, None)?;
+        let mut read = View(&past.db).about_now(
+            entity,
+            &AboutOptions {
+                as_of: None,
+                ..options.clone()
+            },
+            budget,
+        )?;
+        read.reconstruction = Some(Reconstruction::new(at, past.versions, unread));
+        Ok(read)
+    }
+    /// The sources, with their scopes, that `claims` cite today and that held no evidence by `at`,
+    /// by name.
+    fn unread(
+        &self,
+        claims: &[String],
+        at: chrono::DateTime<chrono::Utc>,
+    ) -> Result<Vec<UnreadSource>> {
+        let mut unread: Vec<UnreadSource> = self
+            .0
+            .prepare(
+                "SELECT DISTINCT e.source, e.scope FROM justification j \
+                 JOIN justification_span s ON s.justification_id = j.id JOIN evidence e ON e.id = s.evidence_id \
+                 WHERE j.claim_id IN (SELECT value FROM json_each(?1)) \
+                 AND NOT EXISTS (SELECT 1 FROM evidence o WHERE o.source = e.source AND o.scope = e.scope AND o.captured_at <= ?2)",
+            )?
+            .query_map(params![serde_json::to_string(claims)?, crate::stamp(at)], |r| {
+                Ok(UnreadSource {
+                    source: r.get(0)?,
+                    scope: Scope(r.get(1)?),
+                })
+            })?
+            .collect::<Result<_, _>>()?;
+        unread.sort_by(|a, b| (&a.source, &a.scope.0).cmp(&(&b.source, &b.scope.0)));
+        Ok(unread)
+    }
+    /// Why a claim is held: today's justifications, or as of `options.as_of` those of the store as
+    /// it stood then. A claim nothing yet held then is unknown.
     pub(super) fn explanation(
         &self,
         claim: &str,
         options: &WhyOptions,
     ) -> Result<Option<Explanation>> {
+        let Some(at) = options.as_of else {
+            return self.explanation_now(claim, options);
+        };
+        let unread = self.unread(&[claim.to_string()], at)?;
+        let past = reconstruct(self.0, at, Some(claim))?;
+        let mut why = View(&past.db).explanation_now(
+            claim,
+            &WhyOptions {
+                as_of: None,
+                ..*options
+            },
+        )?;
+        if let Some(why) = &mut why {
+            why.reconstruction = Some(Reconstruction::new(at, past.versions, unread));
+        }
+        Ok(why)
+    }
+    fn explanation_now(&self, claim: &str, options: &WhyOptions) -> Result<Option<Explanation>> {
         let Some(claim) = self.summary(claim)? else {
             return Ok(None);
         };
@@ -591,6 +826,7 @@ impl View<'_> {
             truncated,
             coverage: vec![],
             extraction: vec![],
+            reconstruction: None,
         }))
     }
     fn citations(&self, justification: &str, full: bool) -> Result<Vec<Citation>> {

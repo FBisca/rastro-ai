@@ -201,8 +201,26 @@ fn scopes_shown(scopes: &[rastro_core::Scope]) -> String {
         .collect::<Vec<_>>()
         .join(", ")
 }
+/// What a read as of a past time says of itself: that it is a reconstruction, and the sources it
+/// had not read yet.
+fn reconstruction_lines(
+    reconstruction: Option<&rastro_core::knowledge::Reconstruction>,
+) -> Vec<String> {
+    let Some(reconstruction) = reconstruction else {
+        return Vec::new();
+    };
+    let mut lines = vec![display_safe(&reconstruction.statement)];
+    lines.extend(reconstruction.not_read_yet.iter().map(|unread| {
+        format!(
+            "{}: not read yet at this time (scope {})",
+            display_safe(&unread.source),
+            display_safe(&unread.scope.0)
+        )
+    }));
+    lines
+}
 fn about_text(about: &rastro_operations::results::AboutResult) -> String {
-    let mut lines = Vec::new();
+    let mut lines = reconstruction_lines(about.reconstruction.as_ref());
     if !about.resolved {
         lines.push("No entity matches".into());
     }
@@ -281,7 +299,8 @@ fn about_text(about: &rastro_operations::results::AboutResult) -> String {
 }
 fn why_text(why: &WhyResult) -> String {
     let c = &why.claim.claim;
-    let mut lines = vec![claim_line(&why.claim)];
+    let mut lines = reconstruction_lines(why.reconstruction.as_ref());
+    lines.push(claim_line(&why.claim));
     lines.push("  Valid time: unknown".into());
     for interval in &c.known_intervals {
         lines.push(format!(
