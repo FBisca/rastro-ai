@@ -877,6 +877,10 @@ impl Storage for SqliteStorage {
         let (intents, out) = plan(&View(&transaction))?;
         let stored = identity::insert_all(&transaction, sees, intents)?;
         identity::apply(&transaction)?;
+        // An undone correction no longer holds its claim at the status it gave.
+        if identity::release(&transaction)? {
+            identity::apply(&transaction)?;
+        }
         automatic::apply(&transaction)?;
         lifecycle::settle(&transaction)?;
         // An intent write changes the projection, so it publishes like any other projection write.

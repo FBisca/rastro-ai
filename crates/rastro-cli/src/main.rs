@@ -832,6 +832,31 @@ fn correction_text(r: &rastro_operations::results::ClaimWriteResult, did: &str) 
         None => format!("{} is already {did}; nothing recorded", r.claim),
     }
 }
+/// What an undo of a claim correction says.
+fn undo_text(r: &rastro_operations::results::ClaimWriteResult) -> String {
+    match r.intents.first() {
+        Some(intent) => format!(
+            "undid intent {} on {} (intent {}, {})",
+            intent.undo_of.as_deref().unwrap_or_default(),
+            r.claim,
+            intent.id,
+            intent.issued_at.format("%Y-%m-%d %H:%M")
+        ),
+        None => format!("{} has nothing to undo; nothing recorded", r.claim),
+    }
+}
+/// What a fix of a claim says: the claim it retracted and the one it asserted.
+fn edit_text(r: &rastro_operations::results::ClaimWriteResult) -> String {
+    match (&r.asserted, r.intents.first()) {
+        (Some(asserted), Some(intent)) => format!(
+            "retracted {}, asserted {asserted} (intent {}, {})",
+            r.claim,
+            intent.id,
+            intent.issued_at.format("%Y-%m-%d %H:%M")
+        ),
+        _ => format!("{} already says that; nothing recorded", r.claim),
+    }
+}
 fn human(response: &Response) -> String {
     let or_none = |lines: Vec<String>| {
         if lines.is_empty() {
@@ -909,15 +934,8 @@ fn human(response: &Response) -> String {
         }
         Response::ClaimConfirm(r) => correction_text(r, "confirmed"),
         Response::ClaimReject(r) => correction_text(r, "retracted"),
-        Response::ClaimEdit(r) => match (&r.asserted, r.intents.first()) {
-            (Some(asserted), Some(intent)) => format!(
-                "retracted {}, asserted {asserted} (intent {}, {})",
-                r.claim,
-                intent.id,
-                intent.issued_at.format("%Y-%m-%d %H:%M")
-            ),
-            _ => format!("{} already says that; nothing recorded", r.claim),
-        },
+        Response::ClaimUndo(r) => undo_text(r),
+        Response::ClaimEdit(r) => edit_text(r),
         Response::IdentityCandidates(r) => candidates_text(r),
         Response::IdentityHistory(r) => match &r.entity {
             Some(entity) => format!(

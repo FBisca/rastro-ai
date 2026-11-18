@@ -376,6 +376,11 @@ mod tests {
                 intents: vec![],
                 asserted: None,
             }),
+            Response::ClaimUndo(ClaimWriteResult {
+                claim: "c_1".into(),
+                intents: vec![],
+                asserted: None,
+            }),
         ];
         let arguments = |name: &str| match name {
             "source.add" => {
@@ -399,6 +404,7 @@ mod tests {
             "claim.edit" => {
                 serde_json::json!({"claim": "c_1", "seen": "r_1", "object": "x"})
             }
+            "claim.undo" => serde_json::json!({"intent": "i_1"}),
             "identity.history" => serde_json::json!({"entity": "me"}),
             "identity.answer" => {
                 serde_json::json!({"account": "github:login/a", "other": "linear:user/u", "verdict": "no"})
