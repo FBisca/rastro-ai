@@ -1,6 +1,7 @@
 #!/usr/bin/env bash
-# Refuses a workspace member that declares no role, a role outside the table, or a dependency on
-# another member that its role does not allow (normal, dev or build).
+# Refuses a workspace member that declares no role, a role outside the table, a dependency on
+# another member that its role does not allow (normal, dev or build), or a manifest without
+# `[lints] workspace = true` to inherit the workspace lints.
 #
 #   scripts/crate-gate.sh [--root <workspace dir>]
 #

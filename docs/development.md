@@ -22,7 +22,7 @@ Every workspace member declares the role it plays, in its own manifest:
 role = "core"
 ```
 
-[`scripts/crate-gate.sh`](../scripts/crate-gate.sh) reads those roles and fails when a member declares none — no metadata, a `rastro` value that is not a table, or no `role` under it — declares one the table does not name, or depends — normal, dev or build — on a member whose role its own role does not allow. The table lives in that script:
+[`scripts/crate-gate.sh`](../scripts/crate-gate.sh) reads those roles and fails when a member declares none — no metadata, a `rastro` value that is not a table, or no `role` under it — declares one the table does not name, depends — normal, dev or build — on a member whose role its own role does not allow, or has no `[lints] workspace = true` to inherit the workspace lints. The table lives in that script:
 
 | Role | Crates | May depend on |
 |---|---|---|
