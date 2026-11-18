@@ -22,14 +22,14 @@ store-success-output = false
 store-failure-output = true
 
 # The live tests: the ignored ones, which talk to a real service or read a copy of the owner's data, so
-# only the owner's machine can run them, one run at a time, with a network's patience.
-#
-# nextest has no per-profile "run the ignored tests", so the selection is a flag beside the profile:
+# only the owner's machine can run them, one run at a time, with a network's patience. The live run is
+# one command, and this profile is half of it:
 #
 #   cargo nextest run --profile live --run-ignored only
 #
-# The profile keeps that run's evidence apart from the default one: its own JUnit report under
-# target/nextest/live/, and one failure never stopping the rest.
+# nextest reads the selection from the flag, so the command carries both: the flag picks the ignored
+# tests and the profile gives that run its own JUnit report under target/nextest/live/ and a network's
+# timeouts. Neither half alone is the live run.
 [profile.live]
 # A live test waits on a network and on the owner's database before it asserts anything.
 slow-timeout = { period = "120s", terminate-after = 2 }

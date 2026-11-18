@@ -52,23 +52,24 @@ The config reports a test running past 20 seconds as SLOW and kills it after thr
 An ignored test is one the default run skips, and it earns that place only as a live test or a bench test: its `#[ignore]` reason starts with `live:` or `bench:`, and a live test names every environment variable it reads, so an operator can run it without reading the test.
 
 ```rust
-#[ignore = "live: talks to GitHub; set RASTRO_LIVE_REPO and RASTRO_LIVE_PHRASE"]
+#[ignore = "live: reads a copy of the owner's database; set RASTRO_LIVE_DB and RASTRO_LIVE_ENTITY"]
 #[ignore = "bench: release build only"]
 ```
 
 [`scripts/ignored-tests.sh`](../scripts/ignored-tests.sh) reads every `#[ignore]` in the workspace and fails, naming the file and line, on one whose reason is missing or starts with anything else. An ignored test that says none of the two is a test nobody runs.
 
-Live tests talk to a real service or read a copy of the owner's data, so they never run in the default run: name the variables they read and run them on request, alone, under the `live` profile. That profile keeps their evidence apart, at `target/nextest/live/junit.xml`, and gives a network round trip its own timeouts. nextest has no per-profile "run the ignored tests", so `--run-ignored only` travels with the profile:
+Live tests talk to a real service or read a copy of the owner's data, so the default run never touches them: name every variable they read, and run them on request with the live run. The live run is one command, with no other form:
 
 ```sh
-cargo nextest run --profile live --run-ignored only                                  # every live test
-cargo nextest run -p rastro-cli --test live --run-ignored only the_owners_account   # one of them
+cargo nextest run --profile live --run-ignored only
 ```
 
-A bench test measures a release build, so it runs with `--release`:
+Both halves are part of it, not one instead of the other: nextest reads the selection from the flag in that command, and the `live` profile gives that run its own JUnit report at `target/nextest/live/junit.xml` and a network round trip's timeouts instead of the default run's 20 and 60 seconds.
+
+A bench test measures a release build, so its live run adds `--release`:
 
 ```sh
-cargo nextest run --release -p rastro-storage-sqlite --test scoped_benchmark --run-ignored only --no-capture
+cargo nextest run --profile live --release --run-ignored only
 ```
 
 ### Rerun only the last run's failures

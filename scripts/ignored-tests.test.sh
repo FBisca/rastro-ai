@@ -184,8 +184,28 @@ RS
   end_test the_default_run_skips_the_ignored_tests_the_live_profile_runs_them_alone
 }
 
+# spec: live tests only on request
+# The live run is one command, `cargo nextest run --profile live --run-ignored only`: nextest reads the
+# selection from the flag, and the profile gives that run its settings. A form that drops either half
+# runs the wrong tests with the wrong timeouts, so every place that writes a live run — the ignore
+# reasons, the docs, the config — names the profile.
+test_every_live_run_is_the_documented_command() {
+  start_test every_live_run_is_the_documented_command
+  local out file files=(.config/nextest.toml docs/development.md)
+  # The places that write a run for an operator: the config, the guide and the ignore reasons. The
+  # plan's own files predate the decision and a ticket may not edit them, so they are not read here.
+  while IFS= read -r file; do files+=("$file"); done < <(find crates -name '*.rs' -type f)
+  out=$(grep -nIH -- '--run-ignored' "${files[@]}" | grep -v -- '--profile live')
+  if [ -n "$out" ]; then
+    flunk "these write a live run other than the documented one:"
+    printf '%s\n' "$out"
+  fi
+  end_test every_live_run_is_the_documented_command
+}
+
 test_an_ignore_without_a_live_or_bench_reason_is_refused
 test_a_live_or_bench_reason_is_accepted
 test_the_default_run_skips_the_ignored_tests_the_live_profile_runs_them_alone
+test_every_live_run_is_the_documented_command
 
 exit $fail
