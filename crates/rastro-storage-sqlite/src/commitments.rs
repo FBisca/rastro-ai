@@ -52,7 +52,7 @@ fn loaded(view: &View, scopes: &[Scope]) -> Result<Vec<StoredMeeting>> {
 fn known(view: &View, scopes: &[Scope]) -> Result<Vec<KnownCommitment>> {
     let mut statement = view.0.prepare_cached(&format!(
         "SELECT subject, predicate, object_value FROM claim c
-         WHERE predicate LIKE 'std:%' AND status = 'observed' AND object_value IS NOT NULL
+         WHERE predicate LIKE 'std:%' AND status IN ('observed', 'confirmed') AND object_value IS NOT NULL
          AND (?1 OR {} OR {})",
         scoped::VISIBLE_CLAIM,
         scoped::VISIBLE_INTENT_CLAIM

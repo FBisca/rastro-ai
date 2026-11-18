@@ -4,7 +4,7 @@
 use crate::knowledge::CURRENT;
 use crate::scoped::VISIBLE_CLAIM;
 use crate::{parse_time, stamp};
-use anyhow::{Context, Result, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use rastro_core::Scope;
 use rastro_core::claims::{
     ALIAS_PREDICATE, Object, TYPE_PREDICATE, intent_justification_id_with_ordinal,
@@ -128,6 +128,33 @@ pub(crate) fn insert_all(
                 visible(db, &issued, &entity.id, sees)?,
                 "the issuing context can't see a target of this {} intent",
                 intent.kind.as_str()
+            );
+        }
+        // A confirmation names a claim the issuer sees, as it stands now: the revision the owner
+        // read is the revision the projection holds, or the owner confirms what they never saw.
+        if intent.kind == IntentKind::Confirm
+            && let Some(claim) = intent.targets.claim()
+        {
+            let current: Option<(String, String)> = db
+                .query_row(
+                    "SELECT subject, revision FROM claim WHERE id = ?1",
+                    [&claim.id],
+                    |r| Ok((r.get(0)?, r.get(1)?)),
+                )
+                .optional()?;
+            let Some((subject, revision)) = current else {
+                bail!("unknown claim: {}", claim.id);
+            };
+            ensure!(
+                visible(db, &issued, &subject, sees)?,
+                "the issuing context can't see claim {}",
+                claim.id
+            );
+            ensure!(
+                revision == claim.revision,
+                "claim {} changed since you saw it (now {revision}); read it again with `rastro why {}`",
+                claim.id,
+                claim.id
             );
         }
         // Only an account is held by a Person; its types are in the projection. Checked after
@@ -389,7 +416,8 @@ pub(crate) fn copy_visible(db: &Connection, target: &Connection, scopes: &[Scope
     let claims: Vec<(String, String, String, Option<String>, String)> = db
         .prepare(
             "SELECT c.id, c.predicate, c.subject, c.object_entity, ij.intent_id FROM claim c
-             JOIN intent_justification ij ON ij.claim_id = c.id",
+             JOIN intent_justification ij ON ij.claim_id = c.id
+             JOIN intent i ON i.id = ij.intent_id WHERE i.kind <> 'confirm'",
         )?
         .query_map([], |r| {
             Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
@@ -436,9 +464,14 @@ pub(crate) fn copy_visible(db: &Connection, target: &Connection, scopes: &[Scope
     }
     type Stretch = (String, String, String, Option<String>, Option<String>);
     let justifications: Vec<Stretch> = db
-        .prepare("SELECT id, claim_id, intent_id, started_at, ended_at FROM intent_justification WHERE claim_id IN (SELECT value FROM json_each(?1))")?
+        .prepare("SELECT ij.id, ij.claim_id, ij.intent_id, ij.started_at, ij.ended_at FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id WHERE ij.claim_id IN (SELECT value FROM json_each(?1)) AND i.kind <> 'confirm' UNION ALL SELECT ij.id, ij.claim_id, ij.intent_id, ij.started_at, ij.ended_at FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id WHERE i.kind = 'confirm'")?
         .query_map([&shown], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?)))?
         .collect::<Result<_, _>>()?;
+    let confirmations: BTreeSet<&str> = intents
+        .iter()
+        .filter(|intent| intent.kind == IntentKind::Confirm)
+        .map(|intent| intent.id.as_str())
+        .collect();
     let mut needed: BTreeSet<String> = resolution
         .me
         .as_ref()
@@ -453,6 +486,19 @@ pub(crate) fn copy_visible(db: &Connection, target: &Connection, scopes: &[Scope
         // never becomes a support of a visible claim.
         if !in_scope(intent) {
             continue;
+        }
+        // A confirmation applies where the claim it confirms is seen on other grounds: it
+        // never makes a claim visible. Its claim is in the replay only when a visible
+        // justification or another intent put it there.
+        if confirmations.contains(intent.as_str()) {
+            let held: bool = target.query_row(
+                "SELECT EXISTS (SELECT 1 FROM claim WHERE id = ?1)",
+                [claim],
+                |r| r.get(0),
+            )?;
+            if !held {
+                continue;
+            }
         }
         target.execute(
             "INSERT OR IGNORE INTO intent_justification (id, claim_id, intent_id, started_at, ended_at) VALUES (?1, ?2, ?3, ?4, ?5)",

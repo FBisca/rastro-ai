@@ -52,6 +52,8 @@
         "status": {
           "enum": [
             "observed",
+            "confirmed",
+            "retracted",
             "superseded"
           ],
           "type": "string"
@@ -370,8 +372,9 @@
           "type": "string"
         },
         "status": {
-          "description": "`observed` when any member is.",
+          "description": "The strongest status of its members: `confirmed` when any member is, else `observed` when\nany member is, else `superseded`.",
           "enum": [
+            "confirmed",
             "observed",
             "superseded"
           ],
@@ -433,6 +436,8 @@
         "status": {
           "enum": [
             "observed",
+            "confirmed",
+            "retracted",
             "superseded"
           ],
           "type": "string"
@@ -1006,6 +1011,8 @@
         "status": {
           "enum": [
             "observed",
+            "confirmed",
+            "retracted",
             "superseded"
           ],
           "type": "string"
@@ -1113,7 +1120,7 @@
       "type": "object"
     },
     "IntentKind": {
-      "description": "The kinds this slice enables. Slice 7 adds claim and claim-set kinds to the same table.",
+      "description": "The kinds the table holds. A claim intent (`confirm`) names a [`Targets::Claim`].",
       "oneOf": [
         {
           "enum": [
@@ -1149,6 +1156,11 @@
         {
           "const": "answer",
           "description": "Answer a queue question: the two accounts are one person, or are not. One answer, one\nintent, whatever it decides.",
+          "type": "string"
+        },
+        {
+          "const": "confirm",
+          "description": "Confirm a claim the owner read: it stays alive on the owner's word and reads `confirmed`.",
           "type": "string"
         }
       ]
@@ -3630,6 +3642,36 @@
               "type": "object"
             }
           }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "claim.confirm"
+            },
+            "result": {
+              "additionalProperties": false,
+              "description": "What a claim correction recorded.",
+              "properties": {
+                "claim": {
+                  "description": "The claim the correction names.",
+                  "type": "string"
+                },
+                "intents": {
+                  "description": "The intents accepted, in acceptance order; none when the correction was already in force.",
+                  "items": {
+                    "$ref": "#/$defs/IntentView"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "claim",
+                "intents"
+              ],
+              "title": "ClaimWriteResult",
+              "type": "object"
+            }
+          }
         }
       ],
       "required": [
@@ -3673,7 +3715,8 @@
         "queue.reject",
         "queue.answer",
         "queue.missed",
-        "queue.outcomes"
+        "queue.outcomes",
+        "claim.confirm"
       ]
     },
     "result": {
@@ -5332,6 +5375,56 @@
           "totals"
         ],
         "title": "Outcomes",
+        "type": "object"
+      },
+      "surfaces": [
+        "cli"
+      ]
+    },
+    {
+      "description": "Confirm a claim you read: it reads `confirmed` and stays alive on your word. Name the revision you read; a claim that changed since is refused, and nothing is recorded.",
+      "input": {
+        "additionalProperties": false,
+        "description": "Confirm a claim you read: it reads `confirmed` and stays alive on your word. Name the revision you read; a claim that changed since is refused, and nothing is recorded.",
+        "properties": {
+          "claim": {
+            "description": "The claim's id, as `about` and `why` show it.",
+            "type": "string"
+          },
+          "seen": {
+            "description": "The claim's revision as you read it, as `about` and `why` show it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "claim",
+          "seen"
+        ],
+        "title": "ClaimConfirmRequest",
+        "type": "object"
+      },
+      "name": "claim.confirm",
+      "result": {
+        "additionalProperties": false,
+        "description": "What a claim correction recorded.",
+        "properties": {
+          "claim": {
+            "description": "The claim the correction names.",
+            "type": "string"
+          },
+          "intents": {
+            "description": "The intents accepted, in acceptance order; none when the correction was already in force.",
+            "items": {
+              "$ref": "#/$defs/IntentView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "claim",
+          "intents"
+        ],
+        "title": "ClaimWriteResult",
         "type": "object"
       },
       "surfaces": [

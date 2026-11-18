@@ -4,7 +4,7 @@ use crate::{Evidence, Scope, TrustClass};
 use chrono::{DateTime, Utc};
 use rastro_plugin_sdk::{ClaimObject, ClaimSubmit, Manifest, Vocabulary};
 use schemars::JsonSchema;
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::collections::{BTreeSet, HashMap};
 
@@ -37,7 +37,7 @@ impl Entity {
     }
 }
 /// What a claim says about its subject.
-#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Object {
     Entity {
@@ -249,6 +249,31 @@ pub fn intent_justification_id_with_ordinal(claim: &str, intent: &str, ordinal: 
         "rastro/intent-justification/v1",
         &[(b'C', claim), (b'I', intent), (b'N', &ordinal.to_string())],
     )
+}
+/// The lifecycle fingerprint of a claim (ADR 0013): the hash of the claim id, the key of its
+/// primary live justification (`None` when none is live) and its sorted `conflicts_with` and
+/// `supersedes` links, each as (kind, other claim). It leaves out the claim's status, its revision
+/// and every correction, so correcting a claim never changes the state the correction binds to,
+/// and it leaves out every justification but the primary one, so corroboration doesn't either.
+pub fn lifecycle_fingerprint(
+    claim: &str,
+    primary: Option<&str>,
+    links: &[(String, String)],
+) -> String {
+    let mut parts = vec![(b'C', claim), (b'P', primary.unwrap_or_default())];
+    let links: BTreeSet<_> = links.iter().collect();
+    for (kind, target) in links {
+        parts.extend([(b'K', kind.as_str()), (b'C', target.as_str())]);
+    }
+    digest("f_", "rastro/lifecycle/v1", &parts)
+}
+/// What storage reads of a claim for a correction to bind to.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ClaimLifecycle {
+    /// [`lifecycle_fingerprint`] of the claim as it stands now.
+    pub fingerprint: String,
+    /// Whether a newer value of the claim's predicate supersedes it.
+    pub scalar: bool,
 }
 /// A group of equivalent claims: the hash of its sorted (member id, revision) pairs. Metadata
 /// only, never a claim id (knowledge §35).
@@ -515,7 +540,7 @@ pub struct ClaimView {
     pub subject: Entity,
     pub predicate: String,
     pub object: Object,
-    #[schemars(extend("enum" = ["observed", "superseded"]))]
+    #[schemars(extend("enum" = ["observed", "confirmed", "retracted", "superseded"]))]
     pub status: String,
     pub revision: String,
     pub known_intervals: Vec<KnownInterval>,

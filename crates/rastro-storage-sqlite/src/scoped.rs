@@ -104,7 +104,7 @@ const INTENT_BACKED: &str =
 /// The claim `c` is backed by an owner intent still in force whose queue item's source scope
 /// (`?1`: every scope; otherwise the scope set `?2`) sees; an intent that names no scope, as the
 /// identity graph's do, is seen in every scope.
-pub(crate) const VISIBLE_INTENT_CLAIM: &str = "EXISTS (SELECT 1 FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id WHERE ij.claim_id = c.id AND ij.ended_at IS NULL AND (?1 OR json_extract(i.targets_json, '$.scope') IS NULL OR json_extract(i.targets_json, '$.scope') IN (SELECT value FROM json_each(?2))))";
+pub(crate) const VISIBLE_INTENT_CLAIM: &str = "EXISTS (SELECT 1 FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id WHERE ij.claim_id = c.id AND i.kind <> 'confirm' AND ij.ended_at IS NULL AND (?1 OR json_extract(i.targets_json, '$.scope') IS NULL OR json_extract(i.targets_json, '$.scope') IN (SELECT value FROM json_each(?2))))";
 /// The identity premises a scope set (`?2`) sees, so the replay derives the scope's automatic
 /// links: every visible verified-email and token-owner claim, plus the type and alias claims of
 /// their subjects (a type claim may cite an email snapshot or guest flag, so a newer one still
@@ -322,6 +322,8 @@ fn build(
     // Hidden data may suppress an automatic link but never create one.
     let allowed = super::automatic::linked_windows(db)?;
     super::automatic::apply_within(&result, Some(&allowed))?;
+    // The owner's confirmations read as the status they give, in every scope that sees the claim.
+    lifecycle::settle(&result)?;
     result.execute_batch("COMMIT")?;
     Ok((result, work))
 }
