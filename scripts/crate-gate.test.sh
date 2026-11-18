@@ -55,6 +55,12 @@ expect_failure test_a_role_that_is_not_a_string_fails scripts/fixtures/crate-gat
 expect_failure test_metadata_that_is_not_a_table_declares_no_role scripts/fixtures/crate-gate/non-table-metadata \
   "fixture-textual-metadata" "declares no role"
 
+# spec: Every crate inherits the workspace lints
+# A member that never writes `[lints] workspace = true` is refused by name, so a crate added without it
+# fails before CI would run clippy with the workspace table missing.
+expect_failure test_a_member_without_the_workspace_lints_fails scripts/fixtures/crate-gate/missing-lints \
+  "fixture-unlinted" "does not inherit the workspace lints"
+
 # spec: Crates depend by role
 # This workspace passes: every member carries a role and every member dependency is allowed.
 status=0

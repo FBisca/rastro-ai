@@ -1,0 +1,9 @@
+# Declares its role but never inherits the workspace lints, so the crate gate must refuse it.
+[package]
+name = "fixture-unlinted"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+[package.metadata.rastro]
+role = "core"

@@ -3,3 +3,7 @@
 [workspace]
 members = ["fixture-numbered"]
 resolver = "3"
+
+# Every member here inherits these lints, so only the role rule under test can fail the gate.
+[workspace.lints.clippy]
+too_many_lines = "warn"
