@@ -37,40 +37,116 @@ done or tracked.
 
 ## Requirements
 
-- **R1** WHEN the owner asks for commitments and a source has hypotheses, THEN the list shows every hypothesis with its source (kind, name, scope), its kind, the promise text, the stated date or null, the responsible and the recipient (the label, and the entity only when the owner mapped it explicitly, else null), the exact quote with its turn, speaker and byte range, the status `hypothesis` and the standard vocabulary terms it expresses; and for each source its extraction state, its coverage state and whether its results are stale. (from commitments/S1)
-- **R2** WHEN two sources have hypotheses, or the caller filters by source or by vocabulary term, THEN one list holds both sources' hypotheses, each naming its source; a source filter narrows the list to that source and drops the other sources' entries; a term filter narrows the hypotheses to those expressing that term; a filter that matches nothing returns an empty list, not an error. A term filter drops a source whose last run looked and has no hypothesis expressing the term, and keeps a source whose last run failed (its gap is part of the answer). (from commitments/S2)
-- **R3** WHEN a source has no hypotheses, or its last run failed, or its coverage couldn't look, THEN the list names that source: `found nothing` (no hypotheses, extraction `succeeded`, coverage `found`), the failed run with its cause, or `couldn't look` with its reason; a source is never left out silently. (from commitments/S3)
-- **R4** WHEN the launch scope hides a source, THEN its hypotheses are absent from the list, and the list still succeeds. (from commitments/S4)
+### Requirement: The list shows every hypothesis with its source and state
+The `commitments` list SHALL show every hypothesis of every source with that source's kind, name and scope, the source's extraction state, its coverage state and whether its results are stale, and each hypothesis with its kind, its promise, its stated date, its responsible and recipient parties, the exact quote with its turn, speaker and byte range, the status `hypothesis` and the standard vocabulary terms it expresses.
 
-## Coverage: commitments
+#### Scenario: a source's hypotheses come back with their state
+- WHEN the owner asks for commitments and a source has hypotheses
+- THEN the list shows every hypothesis with its source (kind, name, scope), its kind, the promise text, the stated date or null, the responsible and the recipient (the label, and the entity only when the owner mapped it explicitly, else null), the exact quote with its turn, speaker and byte range, the status `hypothesis` and the standard vocabulary terms it expresses, and for each source its extraction state, its coverage state and whether its results are stale
 
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R1 | S1 | `crates/rastro-cli/tests/commitments_oracle.rs::S1_the_list_shows_every_hypothesis_with_its_source_and_state`<br>`crates/rastro-cli/tests/meeting.rs::S1_a_commitments_hypothesis_keeps_its_kind_and_defaults_to_a_promise` |
-| R2 | S2 | `crates/rastro-cli/tests/commitments_oracle.rs::S2_the_list_holds_every_source_and_the_filters_narrow_it`<br>`crates/rastro-cli/tests/meeting.rs::S2_the_commitments_list_holds_every_source_and_the_filters_narrow_it` |
-| R3 | S3 | `crates/rastro-cli/tests/commitments_oracle.rs::S3_a_source_with_nothing_and_a_failed_run_are_both_named`<br>`crates/rastro-cli/tests/meeting.rs::S3_a_commitments_term_filter_keeps_a_source_whose_run_failed` |
-| R4 | S4 | `crates/rastro-cli/tests/commitments_oracle.rs::S4_a_scope_that_hides_a_source_hides_its_hypotheses`<br>`crates/rastro-cli/tests/meeting.rs::S4_the_commitments_list_shows_each_scope_only_to_a_server_that_holds_it` |
+#### Scenario: a record without a kind reads as a promise
+- WHEN a hypothesis's recorded output holds no kind, because it was recorded before adapters proposed kinds
+- THEN the hypothesis keeps no other kind and reads as a `promise`
 
-## Requirements: commitments
+### Requirement: One list holds every source, and the filters narrow it
+One list SHALL hold every source's hypotheses, each naming its source, and SHALL narrow to the source or the vocabulary term the caller filters by, returning an empty list rather than an error when a filter matches nothing.
 
-- **R5** WHEN The standard vocabulary is loaded., THEN It defines `std:Commitment` and the predicates `std:owes`, `std:owed_to`, `std:due` and `std:waiting_on`, each with a definition, what it is not, examples and the evidence it needs; and every hypothesis carries the terms it expresses: `std:owes` when it has a responsible party, `std:owed_to` when it has a recipient, `std:due` when it states a date, and `std:waiting_on` when it is a waiting-on. (from commitments/S5)
-- **R6** WHEN The owner imports a conversation with a configured agent tool adapter., THEN The core calls the adapter over the plugin protocol with the content, its own instructions and the fields it expects, and keeps only the candidates that pass the core's own checks (an exact contiguous quote, the owner's involvement, a stated date the quote states); an adapter whose response breaks the expected shape fails the run and keeps the last good results. (from commitments/S6)
-- **R7** WHEN An adapter's manifest is checked., THEN It declares the kind `agent-tool-adapter` and the agent-tool capabilities it needs, never a named tool; a manifest that names a tool, or that doesn't declare the kind, is refused before anything runs. (from commitments/S7)
-- **R8** WHEN A run succeeds, is replayed, or the projection is rebuilt., THEN The interpretation is recorded with the spans it cites; a replay checks it again with no model call, and a replay of a record that no longer validates fails and marks the results stale; a rebuild never calls a model; an export leaves the recorded output and the spans out. (from commitments/S8)
-- **R9** WHEN A candidate's party is explicitly mapped to an account the evidence says is a bot., THEN The candidate is excluded and counted; a party that is only named is not excluded. (from commitments/S9)
-- **R10** WHEN The slice has landed., THEN The owner reads the commitments of a real conversation from the `commitments` list over MCP, without opening the transcript by hand. (from commitments/S10)
+#### Scenario: two sources share one list
+- WHEN two sources have hypotheses
+- THEN one list holds both sources' hypotheses, each naming its source
 
-## Coverage: commitments
+#### Scenario: a source filter drops the other sources
+- WHEN the caller filters by source
+- THEN the list narrows to that source and drops the other sources' entries
 
-| Requirement | Scenario | Test nodes |
-|---|---|---|
-| R1 | S1 | `crates/rastro-cli/tests/commitments_oracle.rs::S1_the_list_shows_every_hypothesis_with_its_source_and_state`<br>`crates/rastro-cli/tests/commitments_oracle.rs::S1_a_hypothesis_recorded_without_a_kind_reads_as_a_promise`<br>`crates/rastro-cli/tests/meeting.rs::S1_a_commitments_hypothesis_keeps_its_kind_and_defaults_to_a_promise`<br>`crates/rastro-cli/tests/commitments_oracle.rs` |
-| R2 | S2 | `crates/rastro-cli/tests/commitments_oracle.rs::S2_the_list_holds_every_source_and_the_filters_narrow_it`<br>`crates/rastro-cli/tests/meeting.rs::S2_the_commitments_list_holds_every_source_and_the_filters_narrow_it`<br>`crates/rastro-cli/tests/commitments_oracle.rs` |
-| R3 | S3 | `crates/rastro-cli/tests/commitments_oracle.rs::S3_a_source_with_nothing_and_a_failed_run_are_both_named`<br>`crates/rastro-cli/tests/commitments_oracle.rs::S3_a_term_filter_keeps_a_source_whose_run_failed`<br>`crates/rastro-cli/tests/meeting.rs::S3_a_commitments_term_filter_keeps_a_source_whose_run_failed`<br>`crates/rastro-cli/tests/commitments_oracle.rs` |
-| R4 | S4 | `crates/rastro-cli/tests/commitments_oracle.rs::S4_a_scope_that_hides_a_source_hides_its_hypotheses`<br>`crates/rastro-cli/tests/commitments_oracle.rs::S4_the_list_shows_each_scope_only_to_a_server_that_holds_it`<br>`crates/rastro-cli/tests/meeting.rs::S4_the_commitments_list_shows_each_scope_only_to_a_server_that_holds_it`<br>`crates/rastro-cli/tests/commitments_oracle.rs` |
-| R5 | S5 | `crates/rastro-core/src/commitments/vocabulary.rs::S5_the_standard_vocabulary_defines_the_commitment_terms`<br>`crates/rastro-cli/tests/commitments_oracle.rs` |
-| R6 | S6 | `crates/rastro-cli/tests/adapter.rs::S6_the_core_calls_the_adapter_and_keeps_only_the_candidates_that_pass_its_checks`<br>`crates/rastro-cli/tests/adapter.rs::S6_an_adapter_whose_response_breaks_the_shape_fails_the_run_and_keeps_the_last_good_results`<br>`crates/rastro-cli/tests/adapter.rs::S6_an_adapter_that_never_answers_or_answers_with_an_error_fails_the_run` |
-| R7 | S7 | `crates/rastro-cli/tests/adapter.rs::S7_a_manifest_that_names_a_tool_or_lacks_the_kind_is_refused_before_anything_runs` |
-| R8 | S8 | `crates/rastro-storage-sqlite/tests/migrations.rs::S8_the_interpretation_is_recorded_with_the_spans_it_cites`<br>`crates/rastro-storage-sqlite/tests/migrations.rs::S8_a_replay_checks_the_record_with_no_model_call_and_a_broken_record_fails_stale`<br>`crates/rastro-storage-sqlite/tests/migrations.rs::S8_a_rebuild_never_calls_a_model`<br>`crates/rastro-storage-sqlite/tests/migrations.rs::S8_an_export_leaves_the_recorded_output_and_the_spans_out`<br>`crates/rastro-cli/tests/commitments_oracle.rs` |
-| R9 | S9 | `crates/rastro-cli/tests/commitments.rs::S9_a_party_mapped_to_a_bot_is_excluded_and_counted_and_a_named_party_is_not` |
-| R10 | S10 | human: The owner read one real conversation's commitments over MCP, from the `commitments` list, without opening the transcript by hand. |
+#### Scenario: a term filter narrows the hypotheses
+- WHEN the caller filters by vocabulary term
+- THEN the hypotheses narrow to those expressing that term, and a filter that matches nothing returns an empty list, not an error
+
+#### Scenario: a failed source survives the term filter
+- WHEN a term filter runs and a source's last run looked but no hypothesis of it expresses the term, or a source's last run failed
+- THEN the looking source drops and the failed source stays, because its gap is part of the answer
+
+### Requirement: A gap is named, never left out
+The list SHALL name a source that has no hypotheses, whose last run failed or whose coverage couldn't look — `found nothing`, the failed run with its cause, or `couldn't look` with its reason — and SHALL never leave a source out silently.
+
+#### Scenario: a source with nothing is named
+- WHEN a source has no hypotheses, its extraction succeeded and its coverage found the turns
+- THEN the list names that source `found nothing`
+
+#### Scenario: a failed run or a blocked look names its cause
+- WHEN a source's last run failed, or its coverage couldn't look
+- THEN the list names the failed run with its cause, or `couldn't look` with its reason, and the source is never left out silently
+
+### Requirement: A scope that hides a source hides its hypotheses
+The list SHALL leave out the hypotheses of a source the launch scope hides, and SHALL still succeed.
+
+#### Scenario: a hidden source's hypotheses are absent and the list succeeds
+- WHEN the launch scope hides a source
+- THEN its hypotheses are absent from the list, and the list still succeeds
+
+### Requirement: The standard vocabulary defines the commitment terms
+The standard vocabulary SHALL define `std:Commitment` and the predicates `std:owes`, `std:owed_to`, `std:due` and `std:waiting_on`, each with a definition, what it is not, examples and the evidence it needs, and every hypothesis SHALL carry the terms it expresses: `std:owes` when it has a responsible party and is not a waiting-on, `std:owed_to` when it has a recipient, `std:due` when it states a date, and `std:waiting_on` when it is a waiting-on.
+
+#### Scenario: the bundled vocabulary holds the commitment terms
+- WHEN the standard vocabulary is loaded
+- THEN it defines `std:Commitment` and the predicates `std:owes`, `std:owed_to`, `std:due` and `std:waiting_on`, each with a definition, what it is not, examples and the evidence it needs
+
+#### Scenario: every hypothesis carries the terms it expresses
+- WHEN a hypothesis is read
+- THEN it carries `std:owes` when it has a responsible party and is not a waiting-on, `std:owed_to` when it has a recipient, `std:due` when it states a date, and `std:waiting_on` when it is a waiting-on
+
+### Requirement: The core calls the adapter and keeps only the candidates that pass its checks
+The core SHALL call the owner's configured agent tool adapter over the plugin protocol with the content, its own instructions and the fields it expects, and SHALL keep only the candidates that pass the core's own checks: an exact contiguous quote, the owner's involvement and a stated date the quote states.
+
+#### Scenario: only the candidates the core's checks pass are kept
+- WHEN the owner imports a conversation with a configured agent tool adapter
+- THEN the core calls the adapter over the plugin protocol with the content, its own instructions and the fields it expects, and keeps only the candidates that pass the core's own checks: an exact contiguous quote, the owner's involvement and a stated date the quote states
+
+#### Scenario: a response that breaks the shape fails the run
+- WHEN an adapter's response breaks the expected shape, never answers, or answers with an error
+- THEN the run fails and the last good results stay
+
+### Requirement: An adapter's manifest declares its kind and names no tool
+An adapter's manifest SHALL declare the kind `agent-tool-adapter` and the agent-tool capabilities it needs, never a named tool, and a manifest that names a tool or doesn't declare the kind SHALL be refused before anything runs.
+
+#### Scenario: a manifest that names a tool or lacks the kind is refused
+- WHEN an adapter's manifest is checked
+- THEN a manifest that names a tool, or that doesn't declare the kind, is refused before anything runs
+
+### Requirement: The interpretation is recorded, replayed without a model and kept out of exports
+Every successful run, replay and projection rebuild SHALL record the interpretation with the spans it cites; a replay SHALL check it again with no model call, and SHALL fail and mark the results stale when the record no longer validates; a rebuild SHALL never call a model; and an export SHALL leave the recorded output and the spans out.
+
+#### Scenario: a run records its interpretation with its spans
+- WHEN a run succeeds
+- THEN the interpretation is recorded with the spans it cites
+
+#### Scenario: a replay checks the record with no model call
+- WHEN recorded output is replayed
+- THEN it is checked again with no model call
+
+#### Scenario: a record that no longer validates fails stale
+- WHEN a replay's record no longer validates
+- THEN the replay fails and marks the results stale
+
+#### Scenario: a rebuild calls no model
+- WHEN the projection is rebuilt
+- THEN no model is called
+
+#### Scenario: an export leaves the output and the spans out
+- WHEN a database is exported
+- THEN the recorded output and the spans stay out
+
+### Requirement: A party mapped to a bot excludes the candidate
+The core SHALL exclude and count a candidate whose party is explicitly mapped to an account the evidence says is a bot, and SHALL keep a party that is only named.
+
+#### Scenario: a mapped bot excludes and a named party stays
+- WHEN a candidate's party is explicitly mapped to an account the evidence says is a bot
+- THEN the candidate is excluded and counted; a party that is only named is not excluded
+
+### Requirement: The owner reads a real conversation's commitments over MCP
+The owner SHALL read the commitments of a real conversation from the `commitments` list over MCP, without opening the transcript by hand.
+
+#### Scenario: the list alone carries a conversation's hypotheses
+- WHEN the owner asks the MCP tool `commitments` for a conversation they imported
+- THEN every hypothesis comes back with the exact quote it rests on, its turn and its speaker, so the transcript is never opened by hand

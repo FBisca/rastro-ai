@@ -182,6 +182,7 @@ fn good() -> Vec<Value> {
 
 /// S6: the core calls the adapter over the plugin protocol with the content, its own
 /// instructions and the fields it expects, and keeps only the candidates that pass its checks.
+// spec: The core calls the adapter and keeps only the candidates that pass its checks
 #[test]
 fn S6_the_core_calls_the_adapter_and_keeps_only_the_candidates_that_pass_its_checks() {
     let env = Env::new();
@@ -271,6 +272,7 @@ fn S6_the_core_calls_the_adapter_and_keeps_only_the_candidates_that_pass_its_che
 }
 
 /// S6: a response that breaks the expected shape fails the run and keeps the last good results.
+// spec: The core calls the adapter and keeps only the candidates that pass its checks
 #[test]
 fn S6_an_adapter_whose_response_breaks_the_shape_fails_the_run_and_keeps_the_last_good_results() {
     let env = Env::new();
@@ -319,6 +321,7 @@ fn S6_an_adapter_whose_response_breaks_the_shape_fails_the_run_and_keeps_the_las
 
 /// S7: a manifest that names a tool, or that does not declare the kind, is refused before the
 /// adapter runs.
+// spec: An adapter's manifest declares its kind and names no tool
 #[test]
 fn S7_a_manifest_that_names_a_tool_or_lacks_the_kind_is_refused_before_anything_runs() {
     let named_in_table = MANIFEST.replace(
@@ -355,6 +358,7 @@ fn S7_a_manifest_that_names_a_tool_or_lacks_the_kind_is_refused_before_anything_
 
 /// S6: an adapter that never answers is stopped at its timeout and fails the run, and one that
 /// answers with a JSON-RPC error fails it too, with its message as the reason.
+// spec: The core calls the adapter and keeps only the candidates that pass its checks
 #[test]
 fn S6_an_adapter_that_never_answers_or_answers_with_an_error_fails_the_run() {
     let env = Env::new();

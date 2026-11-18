@@ -181,6 +181,36 @@ impl Env {
         assert!(ok, "{value}");
         value["result"].clone()
     }
+    /// One `rastro mcp --scope work` tool call over stdio; returns the tool's v2 envelope.
+    fn mcp(&self, tool: &str, arguments: Value) -> Value {
+        use std::io::{BufRead, BufReader, Write};
+        use std::process::Stdio;
+        let mut child = Command::new(support::rastro())
+            .env("RASTRO_HOME", self.home.path())
+            .env("RASTRO_PLUGIN_PATH", self.path("no-plugins"))
+            .args(["mcp", "--scope", "work"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .spawn()
+            .unwrap();
+        let mut stdin = child.stdin.take().unwrap();
+        let mut lines = BufReader::new(child.stdout.take().unwrap()).lines();
+        let mut send = |message: Value| writeln!(stdin, "{message}").unwrap();
+        send(
+            json!({"jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {
+            "protocolVersion": "2025-11-25", "capabilities": {},
+            "clientInfo": {"name": "test", "version": "1"}}}),
+        );
+        lines.next().unwrap().unwrap();
+        send(json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
+        send(json!({"jsonrpc": "2.0", "id": 2, "method": "tools/call",
+            "params": {"name": tool, "arguments": arguments}}));
+        let reply: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
+        drop(stdin);
+        let _ = child.wait();
+        reply["result"]["structuredContent"].clone()
+    }
+
     /// Records the evidence-backed claim that the account `identifier` is typed `code:Bot`.
     fn bot(&self, identifier: &str) {
         let location = format!("https://api.github.com/users/{identifier}");
@@ -243,6 +273,7 @@ impl Env {
 
 /// S9: a candidate whose party is mapped to a bot account is excluded and counted; a party that
 /// is only named (no mapping) is kept.
+// spec: A party mapped to a bot excludes the candidate
 #[test]
 fn S9_a_party_mapped_to_a_bot_is_excluded_and_counted_and_a_named_party_is_not() {
     let env = Env::new();
@@ -273,4 +304,53 @@ fn S9_a_party_mapped_to_a_bot_is_excluded_and_counted_and_a_named_party_is_not()
     let named = env.import_ok(&["--owner-speaker", "Alice"]);
     assert_eq!(named["extraction"]["excluded"], 0, "{named}");
     assert_eq!(named["hypotheses"].as_array().unwrap().len(), 3, "{named}");
+}
+
+// spec: The owner reads a real conversation's commitments over MCP
+/// commitments/R10: the owner imports a conversation, deletes the transcript, and reads the
+/// conversation's hypotheses over MCP; every hypothesis carries the exact quote it rests on, its
+/// turn and its speaker, so the transcript is never opened by hand.
+#[test]
+fn the_owner_reads_a_conversations_hypotheses_over_mcp_without_opening_the_transcript() {
+    let env = Env::new();
+    let imported = env.import_ok(&["--owner-speaker", "Alice"]);
+    assert_eq!(
+        imported["hypotheses"].as_array().unwrap().len(),
+        3,
+        "{imported}"
+    );
+    fs::remove_file(env.path("transcript.txt")).unwrap();
+
+    // The one read the owner makes all morning: no transcript on disk, only the list.
+    let list = env.mcp("commitments", json!({}));
+    let hypotheses = list["result"]["sources"][0]["hypotheses"]
+        .as_array()
+        .unwrap();
+    assert_eq!(hypotheses.len(), 3, "{list}");
+
+    let quoted: Vec<(&str, &str, u64)> = hypotheses
+        .iter()
+        .map(|hypothesis| {
+            assert_eq!(hypothesis["status"], "hypothesis", "{hypothesis}");
+            let quote = &hypothesis["quote"];
+            (
+                quote["text"].as_str().unwrap(),
+                quote["speaker"].as_str().unwrap(),
+                quote["turn"].as_u64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        quoted,
+        [
+            ("I'll send Bob the budget by Friday", "Alice", 1),
+            (
+                "I'll share the roadmap with you after the board meeting",
+                "Bob",
+                5
+            ),
+            ("I'll update the plan.", "Alice", 6),
+        ],
+        "the list alone says whose words each hypothesis rests on"
+    );
 }
