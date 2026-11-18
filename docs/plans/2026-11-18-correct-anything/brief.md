@@ -163,6 +163,7 @@ Non-goals:
 - D24 The lifecycle fingerprint is the hash of the claim id, the current occurrence of each live justification, and its `conflicts_with`/`supersedes` links. The renderer revision stays the fuller hash with the occurrence history, so new corroboration changes the revision and leaves the fingerprint alone. Recorded as ADR 0013, over binding to the revision (knowledge §42, §48; ADR 0010 "Deferred to slice 7"; owner, Q11).
 - D25 Switch day: the morning after the last code ticket merges, the owner rejects or edits at least one wrong claim in `about me` and confirms one claim they rely on, over a fixture-only demo (roadmap preamble; owner, Q12).
 - D26 In a merged Person's group, members rank by the D7 precedence and a retracted member is left out, over ranking by recency. This follows from D7 and closes ADR 0010's deferred "how non-observed statuses rank in a group" (ADR 0010; D7).
+- D27 Accepting a proposal also asserts the commitment's anchor: a `rastro:type std:Commitment` claim on `std:commitment/<item id>`, justified by the accept intent. The commitment's slot claims rest on the anchor, so rejecting it ends every slot that only it justifies, and a slot with its own observed justification stays. Rebuild replays accepts, so commitments accepted earlier gain their anchor. Over retracting the commitment as a `ClaimSet`, which needs a new CLI form (D18; review of the carry-through PR found no anchor claim in the code; owner, 2026-11-18).
 
 ## Risks / Trade-offs
 - **Migration on the owner's store.** Widening the `claim.status` CHECK rewrites a table in a store with thousands of claims (2,248 on 2026-11-05, knowledge §50). Mitigation: T1's migration test (`tests/migrations.rs`) runs it over a populated fixture, and the projection stays rebuildable from evidence and intents.
@@ -175,6 +176,5 @@ Non-goals:
 
 ## Open Questions
 Assumed without asking:
-- The anchor of an accepted commitment is its `rastro:type` claim on the `std:commitment/<item id>` entity. T4 confirms this against the code. If the anchor is something else, the scenario stands and only its fixture changes.
 - Answering the Ask "no" records the answer and lets the claim stand with its evidence status, the opposite of S17. No scenario pins the "no" path beyond the queue's existing "One intent per answer" requirement.
 - `claim undo` of an `edit` removes both the retraction and the asserted claim, since the asserted claim's only justification is that intent.
