@@ -328,6 +328,29 @@ fn remove_labels(value: &mut serde_json::Value) -> usize {
     found
 }
 
+/// A result gains an optional `reconstruction`, set by a read as of a past time: removes it after
+/// checking what it holds and that it is never required.
+fn remove_reconstruction(operation: &mut serde_json::Value, name: &str) {
+    let result = operation["result"].as_object_mut().unwrap();
+    let reconstruction = result["properties"]
+        .as_object_mut()
+        .unwrap()
+        .remove("reconstruction")
+        .unwrap_or_else(|| panic!("{name} says nothing of a reconstruction"));
+    assert_eq!(
+        property_names(&reconstruction),
+        ["as_of", "extractors", "not_read_yet", "statement"],
+        "{name}"
+    );
+    assert!(
+        !result["required"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("reconstruction")),
+        "{name}"
+    );
+}
+
 /// spec: The generated schema equals the committed file
 /// spec: About says whether its identifier resolved
 /// identity changes `about` and `why` only additively: `about` gains an optional
@@ -380,6 +403,7 @@ fn about_and_why_change_only_additively_for_identity() {
                 .contains(&json!("as_of")),
             "{name}"
         );
+        remove_reconstruction(&mut new, name);
         match name {
             "about" => {
                 let result = new["result"].as_object_mut().unwrap();

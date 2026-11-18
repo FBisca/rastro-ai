@@ -14,6 +14,9 @@ pub struct AboutOptions {
     /// Only claims with a side whose label state is one of these, compared without case. Empty:
     /// every claim.
     pub state: Vec<String>,
+    /// Read as of this time: rebuilt from the evidence captured and the intents issued by it, under
+    /// today's rules ([`Reconstruction`]). `None`: today.
+    pub as_of: Option<DateTime<Utc>>,
 }
 impl Default for AboutOptions {
     fn default() -> Self {
@@ -22,6 +25,72 @@ impl Default for AboutOptions {
             limit: 20,
             history: false,
             state: Vec::new(),
+            as_of: None,
+        }
+    }
+}
+/// The extractor and vocabulary versions a reconstruction used.
+#[derive(Clone, Debug, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct ReconstructionVersions {
+    pub extractor: String,
+    pub extractor_version: String,
+    pub vocabulary_version: String,
+}
+/// A source the entity has claims from whose evidence had not been captured yet at the time read.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
+pub struct UnreadSource {
+    pub source: String,
+    pub scope: Scope,
+}
+/// What an answer as of a past time says about itself: it is a reconstruction under today's rules,
+/// not what was shown then (corrections §Reads as of a past time).
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
+pub struct Reconstruction {
+    /// The time read as of.
+    pub as_of: DateTime<Utc>,
+    /// The sentence that says so, naming the versions used.
+    pub statement: String,
+    /// The extractor and vocabulary versions the evidence captured by then was read with.
+    pub extractors: Vec<ReconstructionVersions>,
+    /// Sources the entity has claims from that held no evidence yet at that time, instead of a
+    /// silent absence of claims.
+    pub not_read_yet: Vec<UnreadSource>,
+}
+impl Reconstruction {
+    pub fn new(
+        as_of: DateTime<Utc>,
+        extractors: Vec<ReconstructionVersions>,
+        not_read_yet: Vec<UnreadSource>,
+    ) -> Self {
+        let used = if extractors.is_empty() {
+            "no extractor".to_string()
+        } else {
+            extractors
+                .iter()
+                .map(|v| {
+                    format!(
+                        "{} {}, vocabulary {}",
+                        v.extractor,
+                        v.extractor_version,
+                        if v.vocabulary_version.is_empty() {
+                            "none"
+                        } else {
+                            &v.vocabulary_version
+                        }
+                    )
+                })
+                .collect::<Vec<_>>()
+                .join("; ")
+        };
+        let statement = format!(
+            "Reconstructed from the evidence captured and the intents issued by {}, with today's rules ({used}). It is not what was shown then.",
+            as_of.format("%Y-%m-%d %H:%M UTC")
+        );
+        Self {
+            as_of,
+            statement,
+            extractors,
+            not_read_yet,
         }
     }
 }
@@ -96,6 +165,9 @@ pub struct About {
     /// those accounts are among `claims`, each naming its account.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub person: Option<PersonView>,
+    /// Present when the read was as of a past time: the answer is rebuilt, not remembered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reconstruction: Option<Reconstruction>,
 }
 // One claim of an `about` answer. No doc comment: the schema keeps the claim's description.
 #[derive(Debug, JsonSchema, Serialize)]
@@ -158,6 +230,8 @@ pub struct AboutClaims {
     /// one more than `limit`.
     pub claims: Vec<AboutClaim>,
     pub person: Option<PersonView>,
+    /// Set by a read as of a past time.
+    pub reconstruction: Option<Reconstruction>,
 }
 /// Claims that say the same thing once merged Persons are taken as one (knowledge §35). There is
 /// no representative claim: each member keeps its own id, status and revision.
@@ -283,6 +357,7 @@ fn answer(
         resolved,
         claims,
         person,
+        reconstruction,
     } = read;
     use crate::claims::Object;
     use std::collections::BTreeMap;
@@ -375,6 +450,7 @@ fn answer(
         extraction,
         groups,
         person,
+        reconstruction,
     }
 }
 impl<S: ReadStorage> Reader<S> {
@@ -519,17 +595,23 @@ pub struct Explanation {
     pub truncated: bool,
     pub coverage: Vec<Coverage>,
     pub extraction: Vec<crate::runs::ExtractionPair>,
+    /// Present when the read was as of a past time: the answer is rebuilt, not remembered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reconstruction: Option<Reconstruction>,
 }
 #[derive(Clone, Copy, Debug)]
 pub struct WhyOptions {
     pub limit: usize,
     pub full: bool,
+    /// Read as of this time ([`AboutOptions::as_of`]). `None`: today.
+    pub as_of: Option<DateTime<Utc>>,
 }
 impl Default for WhyOptions {
     fn default() -> Self {
         Self {
             limit: 20,
             full: false,
+            as_of: None,
         }
     }
 }

@@ -298,6 +298,7 @@ mod tests {
                 truncated: false,
                 coverage: vec![],
                 extraction: vec![],
+                reconstruction: None,
             }),
             Response::ClaimsRebuild(ClaimsRebuildResult {
                 claims: 0,
@@ -311,6 +312,7 @@ mod tests {
                 extraction: vec![],
                 groups: vec![],
                 person: None,
+                reconstruction: None,
             }),
             Response::IdentityMe(person()),
             Response::IdentityPersonCreate(person()),

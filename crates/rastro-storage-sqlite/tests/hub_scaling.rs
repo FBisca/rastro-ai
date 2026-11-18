@@ -14,6 +14,7 @@ fn explained(db: &SqliteStorage, claim: &str) -> Explanation {
                 &WhyOptions {
                     limit: 10_000,
                     full: true,
+                    as_of: None,
                 },
             )
         })
