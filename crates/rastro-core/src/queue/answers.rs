@@ -8,8 +8,8 @@
 //! commitment, its standard terms justified by that intent alone.
 use super::{Item, read};
 use crate::identity::{
-    self, AnswerPerson, EntityTarget, Intent, IntentKind, Payload, Resolution, StandardTerm,
-    StatementSnapshot, Targets, plan_answer, resolve,
+    self, AnswerPerson, EntityTarget, Intent, IntentKind, Payload, StandardTerm, StatementSnapshot,
+    Targets, commitment_target, plan_answer, resolve,
 };
 use crate::read_only::Snapshot;
 use crate::{Rastro, Storage, commitments};
@@ -74,34 +74,27 @@ fn statement(item: &Item) -> Result<StatementSnapshot> {
     })
 }
 
-/// The entity an accepted proposal's statements are about: the party the item maps to the
-/// owner's Person, so `about me` shows what the owner accepted, and otherwise the first party
-/// the owner mapped. A proposal whose parties name no Person can't become a claim.
-fn subject(view: &dyn Snapshot, item: &Item) -> Result<EntityTarget> {
+/// The commitment an accepted proposal becomes and the Persons the item maps to parties: one
+/// `std:Commitment` of its own, named by the item's id, so each acceptance keeps its own
+/// statement set, and its parties carry it into their view, so `about me` shows what the owner
+/// accepted. A proposal whose parties name no Person can't become a claim.
+fn commitment(item: &Item) -> Result<(EntityTarget, Vec<EntityTarget>)> {
     proposal(item)?;
     let hypothesis = item.proposal.as_ref().expect("a proposal item carries one");
-    let person = |side: &commitments::Party| {
-        side.identity.as_ref().map(|identity| EntityTarget {
+    let parties: Vec<EntityTarget> = (hypothesis.responsible.identity.iter())
+        .chain(hypothesis.recipient.identity.iter())
+        .map(|identity| EntityTarget {
             id: identity.id.clone(),
             identifier: identity.identifier.clone(),
             role: "person".into(),
         })
-    };
-    let me = Resolution::of(&view.intents()?).me;
-    let parties = [
-        person(&hypothesis.responsible),
-        person(&hypothesis.recipient),
-    ];
-    (parties.iter().flatten())
-        .find(|party| me.as_ref() == Some(&party.id))
-        .or_else(|| parties.iter().flatten().next())
-        .cloned()
-        .ok_or_else(|| {
-            anyhow::anyhow!(
-                "the queue can't accept {}: it names no party the owner mapped to a person",
-                item.id
-            )
-        })
+        .collect();
+    ensure!(
+        !parties.is_empty(),
+        "the queue can't accept {}: it names no party the owner mapped to a person",
+        item.id
+    );
+    Ok((commitment_target(&item.id), parties))
 }
 
 /// The standard terms an accepted proposal states, as the owner accepted them: the item's
@@ -137,6 +130,7 @@ struct ProposalAnswer {
     seen: Option<StatementSnapshot>,
     edited: Option<StatementSnapshot>,
     subject: Option<EntityTarget>,
+    parties: Vec<EntityTarget>,
     terms: Vec<StandardTerm>,
     scope: Option<String>,
 }
@@ -155,6 +149,7 @@ fn proposal_intent(
         seen: answer.seen,
         edited: answer.edited,
         subject: answer.subject,
+        parties: answer.parties,
         terms: answer.terms,
         scope: answer.scope,
     };
@@ -168,13 +163,15 @@ impl<S: Storage> Rastro<S> {
         let id = item.to_string();
         let issued = self.issue(|view, _| {
             let pending = still_queued(view, &id)?;
+            let (subject, parties) = commitment(&pending)?;
             let intent = proposal_intent(
                 IntentKind::Accept,
                 Some(pending.id.clone()),
                 None,
                 ProposalAnswer {
                     seen: Some(statement(&pending)?),
-                    subject: Some(subject(view, &pending)?),
+                    subject: Some(subject),
+                    parties,
                     terms: accepted_terms(&pending, None)?,
                     scope: Some(pending.source.scope.clone()),
                     ..ProposalAnswer::default()
@@ -211,6 +208,7 @@ impl<S: Storage> Rastro<S> {
                 promise: promise.clone().unwrap_or_else(|| seen.promise.clone()),
                 stated_date: date.clone().or_else(|| seen.stated_date.clone()),
             };
+            let (subject, parties) = commitment(&pending)?;
             let intent = proposal_intent(
                 IntentKind::Edit,
                 Some(pending.id.clone()),
@@ -218,7 +216,8 @@ impl<S: Storage> Rastro<S> {
                 ProposalAnswer {
                     seen: Some(seen),
                     edited: Some(edited),
-                    subject: Some(subject(view, &pending)?),
+                    subject: Some(subject),
+                    parties,
                     terms: accepted_terms(&pending, date.as_deref())?,
                     scope: Some(pending.source.scope.clone()),
                 },

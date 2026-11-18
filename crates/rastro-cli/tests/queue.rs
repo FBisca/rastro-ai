@@ -10,7 +10,7 @@ use rastro_core::claims::{self, Entity, Object, ObservedClaim, Support};
 use rastro_core::{Evidence, Scope, Source, Storage, TrustClass};
 use serde_json::{Value, json};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::{BufRead, BufReader, Write},
     os::unix::fs::PermissionsExt,
@@ -1434,24 +1434,33 @@ fn S9_accepting_a_proposal_mints_its_standard_terms_justified_by_the_intent() {
     );
     assert!(!ids(&env.queue()).contains(&proposal), "still queued");
 
-    // One commitment holds the item's statements: the same subject carries every standard term,
-    // each predicate with the party's name or the stated date as a literal, and none is split
-    // across subjects.
+    // One commitment holds the item's statements: the item's own `std:Commitment` carries every
+    // standard term, each predicate with the party's name or the stated date as a literal, and
+    // none is split across subjects.
     let about = env.ok(&["about", "me"]);
     assert_eq!(about["person"]["id"], person, "{about}");
-    let held = commitment_statements(&about);
+    let commitment = claims::entity_id(&format!("std:commitment/{proposal}"));
+    assert_ne!(commitment, person, "the commitment is its own entity");
     let expected: BTreeSet<(String, String, String)> = [
-        (person.clone(), "std:owes".to_string(), "Alice".to_string()),
-        (person.clone(), "std:owed_to".to_string(), "Bob".to_string()),
         (
-            person.clone(),
+            commitment.clone(),
+            "std:owes".to_string(),
+            "Alice".to_string(),
+        ),
+        (
+            commitment.clone(),
+            "std:owed_to".to_string(),
+            "Bob".to_string(),
+        ),
+        (
+            commitment.clone(),
             "std:due".to_string(),
             "by Friday".to_string(),
         ),
     ]
     .into_iter()
     .collect();
-    assert_eq!(held, expected, "{about}");
+    assert_eq!(commitment_statements(&about), expected, "{about}");
 
     // Each is an observed claim whose only justification is the accept intent, with no evidence
     // span: `why` explains it by that intent.
@@ -1496,10 +1505,6 @@ fn S10_accepting_with_edits_mints_the_edited_statement_and_snapshots_both() {
         "2026-11-10T10:00:00Z",
         &["--owner-speaker", "Alice"],
     );
-    let person = env.ok(&["identity", "me"])["person"]["id"]
-        .as_str()
-        .unwrap()
-        .to_string();
     let waiting_on = ids(&env.queue())[1].clone();
 
     let edited = env.ok(&[
@@ -1530,21 +1535,22 @@ fn S10_accepting_with_edits_mints_the_edited_statement_and_snapshots_both() {
     );
 
     // The claim holds the owner's edited statement: the date as they made it, not the one they
-    // replaced. The statements are the item's, on the owner's Person, and the intent backs them.
+    // replaced. The statements are the item's own commitment's, and the intent backs them.
     let about = env.ok(&["about", "me"]);
+    let commitment = claims::entity_id(&format!("std:commitment/{waiting_on}"));
     let expected: BTreeSet<(String, String, String)> = [
         (
-            person.clone(),
+            commitment.clone(),
             "std:waiting_on".to_string(),
             "Bob".to_string(),
         ),
         (
-            person.clone(),
+            commitment.clone(),
             "std:owed_to".to_string(),
             "Alice".to_string(),
         ),
         (
-            person.clone(),
+            commitment.clone(),
             "std:due".to_string(),
             "next Friday".to_string(),
         ),
@@ -1587,14 +1593,18 @@ fn S11_an_accepted_claim_is_visible_only_in_the_scopes_that_see_its_source() {
     let accepted = env.ok(&["queue", "accept", &proposal]);
     let intent = accepted["intents"][0]["id"].as_str().unwrap().to_string();
 
-    // Read without a scope: every scope, so the claim is on the owner's Person and its `why`
-    // names the accept intent.
+    // Read without a scope: every scope, so the item's commitment is part of `about me` and its
+    // `why` names the accept intent.
     let about = env.ok(&["about", "me"]);
+    assert_eq!(about["person"]["id"], person, "{about}");
+    let commitment = claims::entity_id(&format!("std:commitment/{proposal}"));
     let statements = commitment_statements(&about);
     assert_eq!(statements.len(), 3, "{about}");
     assert!(
-        statements.iter().all(|(subject, _, _)| subject == &person),
-        "{about}"
+        statements
+            .iter()
+            .all(|(subject, _, _)| subject == &commitment),
+        "the commitment's own subject: {about}"
     );
     let due = (about["claims"].as_array().unwrap().iter())
         .find(|claim| claim["predicate"] == "std:due")
@@ -1614,5 +1624,145 @@ fn S11_an_accepted_claim_is_visible_only_in_the_scopes_that_see_its_source() {
     assert!(
         !ids(&queue["structuredContent"]["result"]).contains(&proposal),
         "the item is absent in a work scope: {queue}"
+    );
+}
+
+/// An accepted item keeps its own standard terms: each acceptance is one commitment of its own,
+/// so two accepted proposals never merge into one statement set, and the same statements proposed
+/// again are known one commitment at a time.
+#[test]
+fn an_accepted_commitment_keeps_its_own_standard_terms() {
+    let env = Env::new();
+    env.candidates(&good());
+    env.import_ok(
+        "weekly-1",
+        "work",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+    );
+    let items = ids(&env.queue());
+    assert_eq!(items.len(), 2, "two proposals: {items:?}");
+    for item in &items {
+        env.ok(&["queue", "accept", item]);
+    }
+
+    // Two commitments, each carrying exactly its own three statements, not one merged set.
+    let about = env.ok(&["about", "me"]);
+    let mut per_subject: BTreeMap<String, BTreeSet<(String, String)>> = BTreeMap::new();
+    for (subject, predicate, value) in commitment_statements(&about) {
+        per_subject
+            .entry(subject)
+            .or_default()
+            .insert((predicate, value));
+    }
+    assert_eq!(per_subject.len(), 2, "one commitment per item: {about}");
+    for statements in per_subject.values() {
+        assert_eq!(statements.len(), 3, "each holds its own three: {about}");
+    }
+
+    // The same statements proposed again are known, one commitment at a time: the waiting-on's
+    // set must not have been merged with the promise's.
+    env.import_ok(
+        "weekly-2",
+        "work",
+        "2026-11-11T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+    );
+    let queue = env.queue();
+    assert_eq!(queue["already_known"], 2, "{queue}");
+    assert!(queue["items"].as_array().unwrap().is_empty(), "{queue}");
+}
+
+/// A scoped read never explains a hidden acceptance: a claim visible in work cites only the
+/// intents that scope sees, never a personal item's accept.
+#[test]
+fn a_scoped_read_never_explains_a_hidden_accept() {
+    let env = Env::new();
+    env.candidates(&good());
+    env.import_ok(
+        "personal-meeting",
+        "personal",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+    );
+    // A work meeting proposes the same parties with another date: the two proposals share the
+    // parties' terms but neither statement set.
+    fs::write(
+        env.path("work.txt"),
+        "Alice: I'll send Bob the budget next week.\nBob: Thanks.\n",
+    )
+    .unwrap();
+    env.candidates(&[candidate(
+        1,
+        "promise",
+        Some("Alice"),
+        Some("Bob"),
+        "send Bob the budget",
+        Some("next week"),
+        "I'll send Bob the budget next week.",
+    )]);
+    env.import_from(
+        "work-meeting",
+        "work.txt",
+        "work",
+        "2026-11-11T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+    );
+
+    let personal = item(&env.queue(), "personal-meeting")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let personal_accept = env.ok(&["queue", "accept", &personal])["intents"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let work = item(&env.queue(), "work-meeting")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let work_accept = env.ok(&["queue", "accept", &work])["intents"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // The work commitment's own statement, read without a scope, then explained in a work scope.
+    let about = env.ok(&["about", "me"]);
+    let work_subject = (about["claims"].as_array().unwrap().iter())
+        .find(|claim| claim["predicate"] == "std:due" && claim["object"]["value"] == "next week")
+        .map(|claim| claim["subject"]["id"].as_str().unwrap().to_string())
+        .unwrap_or_else(|| panic!("no work statement: {about}"));
+    let owed_to = (about["claims"].as_array().unwrap().iter())
+        .find(|claim| claim["subject"]["id"] == work_subject && claim["predicate"] == "std:owed_to")
+        .map(|claim| claim["id"].as_str().unwrap().to_string())
+        .unwrap_or_else(|| panic!("no work owed_to claim: {about}"));
+
+    // A work-scoped read shows the work commitment in `about me` and not the personal one.
+    let read = env.mcp(&["work"], "about", json!({"entity": "me"}));
+    let scoped = commitment_statements(&read["structuredContent"]["result"]);
+    assert!(
+        scoped
+            .iter()
+            .any(|(_, predicate, value)| predicate == "std:due" && value == "next week"),
+        "the work commitment shows in its scope: {read}"
+    );
+    assert!(
+        scoped.iter().all(|(_, _, value)| value != "by Friday"),
+        "the personal item stays hidden: {read}"
+    );
+
+    let why = env.mcp(&["work"], "why", json!({"claim": owed_to, "limit": 20}));
+    let why = &why["structuredContent"]["result"];
+    let intents: Vec<&str> = (why["supports"].as_array().unwrap().iter())
+        .filter_map(|support| support["intent"]["id"].as_str())
+        .collect();
+    assert_eq!(
+        intents,
+        [work_accept.as_str()],
+        "only the work accept backs it: {why}"
+    );
+    assert!(
+        !intents.contains(&personal_accept.as_str()),
+        "the personal accept stays hidden: {why}"
     );
 }

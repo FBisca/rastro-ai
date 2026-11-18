@@ -34,6 +34,8 @@ pub const NAME_KIND: &str = "name";
 /// The justification kind of an intent-backed claim.
 pub const OWNER_INTENT: &str = "owner_intent";
 const PERSON_PREFIX: &str = "rastro:person/";
+/// The identifier prefix of the `std:Commitment` an accepted queue item becomes.
+const COMMITMENT_PREFIX: &str = "std:commitment/";
 
 /// The kinds this slice enables. Slice 7 adds claim and claim-set kinds to the same table.
 #[derive(
@@ -139,8 +141,9 @@ pub enum Targets {
     /// One queue proposal, named by the content-addressed id the queue read gave it, and what
     /// the owner answered about it: the reason they rejected it, the words of a missed report,
     /// and the statement they saw and, when they edited it, the one they made. An accepted
-    /// proposal also carries the commitment it becomes — the entity its statements are about
-    /// and the standard terms it states, as the owner accepted them — and every answer that
+    /// proposal also carries the commitment it becomes — one `std:Commitment` of its own, so two
+    /// acceptances never merge into one statement set — with the parties the item mapped to
+    /// Persons and the standard terms it states, as the owner accepted them. Every answer that
     /// names an item records the scope of the item's source, so the claim and its outcome are
     /// visible only where that source is. A missed report may name no item: it can be about
     /// something that was never queued.
@@ -154,10 +157,14 @@ pub enum Targets {
         seen: Option<StatementSnapshot>,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         edited: Option<StatementSnapshot>,
-        /// The entity an accepted proposal's statements are about: the party the item maps to a
-        /// Person, so `about me` shows what the owner accepted.
+        /// The commitment an accepted proposal becomes: the `std:Commitment` its statements are
+        /// about, one per acceptance.
         #[serde(default, skip_serializing_if = "Option::is_none")]
         subject: Option<EntityTarget>,
+        /// The Persons the item mapped to parties, so the commitment is part of their view:
+        /// `about me` shows what the owner accepted.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        parties: Vec<EntityTarget>,
         /// The accepted proposal's standard statements, as the owner accepted them; a rejection
         /// or a missed report states none.
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -250,13 +257,11 @@ impl Targets {
                 entities
             }
             Self::Claim { .. } | Self::ClaimSet { .. } => vec![],
-            // A queue item is not an entity; an accepted proposal's subject is the entity it
-            // states something about, so the issuer must see it.
+            // A queue item is not an entity; an accepted proposal's commitment and the parties
+            // it maps are, so the issuer must see them.
             Self::Proposal {
-                subject: Some(subject),
-                ..
-            } => vec![subject],
-            Self::Proposal { .. } => vec![],
+                subject, parties, ..
+            } => subject.iter().chain(parties).collect(),
         }
     }
     fn version(&self) -> u32 {
@@ -288,6 +293,16 @@ impl Targets {
             Self::Entity { entity, .. } => Some(entity),
             _ => None,
         }
+    }
+}
+/// The commitment an accepted queue item becomes, named by the item's content-addressed id: one
+/// `std:Commitment` per acceptance, so two accepted proposals never share a statement set.
+pub fn commitment_target(item: &str) -> EntityTarget {
+    let identifier = format!("{COMMITMENT_PREFIX}{item}");
+    EntityTarget {
+        id: claims::entity_id(&identifier),
+        identifier,
+        role: "commitment".into(),
     }
 }
 /// The versioned operation data.
@@ -558,6 +573,7 @@ impl Intent {
                 seen,
                 edited,
                 subject,
+                parties,
                 terms,
                 scope,
                 ..
@@ -570,11 +586,14 @@ impl Intent {
                         "an accept snapshots the proposal it saw, and no edit"
                     );
                     ensure!(
-                        subject.is_some() && !terms.is_empty() && scope.is_some(),
-                        "an accept names the commitment it mints, its standard terms and its source's scope"
+                        subject.is_some()
+                            && !parties.is_empty()
+                            && !terms.is_empty()
+                            && scope.is_some(),
+                        "an accept names the commitment it mints, its parties, its standard terms and its source's scope"
                     );
                     ensure!(
-                        terms.iter().all(|term| {
+                        (terms.iter()).all(|term| {
                             term.predicate.starts_with("std:") && !term.value.trim().is_empty()
                         }),
                         "an accept's standard terms are `std:` predicates with a literal"
@@ -586,11 +605,14 @@ impl Intent {
                         "an edit snapshots the proposal it saw and the one it made"
                     );
                     ensure!(
-                        subject.is_some() && !terms.is_empty() && scope.is_some(),
-                        "an edit names the commitment it mints, its standard terms and its source's scope"
+                        subject.is_some()
+                            && !parties.is_empty()
+                            && !terms.is_empty()
+                            && scope.is_some(),
+                        "an edit names the commitment it mints, its parties, its standard terms and its source's scope"
                     );
                     ensure!(
-                        terms.iter().all(|term| {
+                        (terms.iter()).all(|term| {
                             term.predicate.starts_with("std:") && !term.value.trim().is_empty()
                         }),
                         "an edit's standard terms are `std:` predicates with a literal"
@@ -601,7 +623,7 @@ impl Intent {
                 // names an item, so its outcome is visible only where that source is.
                 IntentKind::Reject | IntentKind::Missed => {
                     ensure!(
-                        subject.is_none() && terms.is_empty(),
+                        subject.is_none() && parties.is_empty() && terms.is_empty(),
                         "a {} mints no commitment",
                         self.kind.as_str()
                     );
@@ -621,6 +643,7 @@ impl Intent {
                         && edited.is_none()
                         && text.is_none()
                         && subject.is_none()
+                        && parties.is_empty()
                         && terms.is_empty()
                         && scope.is_none(),
                     "only a queue answer carries what the owner answered"
