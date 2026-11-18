@@ -39,7 +39,8 @@ const CLAIM_DOMAIN: &str = "claim/";
 /// The identifier prefix of the `std:Commitment` an accepted queue item becomes.
 const COMMITMENT_PREFIX: &str = "std:commitment/";
 
-/// The kinds the table holds. A claim intent (`confirm`) names a [`Targets::Claim`].
+/// The kinds the table holds. A claim intent (`confirm`, or `reject` of a claim) names a
+/// [`Targets::Claim`].
 #[derive(
     Clone, Copy, Debug, Deserialize, Eq, JsonSchema, Ord, PartialEq, PartialOrd, Serialize,
 )]
@@ -55,7 +56,8 @@ pub enum IntentKind {
     Accept,
     /// Accept a queue proposal with the owner's edits.
     Edit,
-    /// Reject a queue proposal, with the owner's reason.
+    /// Reject a queue proposal, with the owner's reason; or retract a claim the owner read: it
+    /// leaves every current read and `why` says it is retracted.
     Reject,
     /// Report something Rastro should have caught, about an item or not.
     Missed,
@@ -466,6 +468,10 @@ impl Intent {
             IntentKind::CannotLink => pair("cannot_link"),
             IntentKind::SameAs => pair("same_as"),
             IntentKind::Undo => None,
+            IntentKind::Reject if self.targets.claim().is_some() => self
+                .targets
+                .claim()
+                .map(|claim| format!("{CLAIM_DOMAIN}{}", claim.id)),
             IntentKind::Accept | IntentKind::Edit | IntentKind::Reject | IntentKind::Answer => self
                 .targets
                 .queue_item()
@@ -504,6 +510,30 @@ impl Intent {
             ) => Some(entity),
             _ => None,
         }
+    }
+    /// Checks a correction's claim target: the statement hashes to the claim id, and the revision
+    /// seen and the lifecycle binding are there.
+    fn check_review(&self) -> Result<()> {
+        let Some(claim) = self.targets.claim() else {
+            return Ok(());
+        };
+        let statement = claim.statement()?;
+        ensure!(
+            statement.claim_id() == claim.id,
+            "a claim target's id is the hash of its statement"
+        );
+        let binding = claim.binding()?;
+        ensure!(
+            binding.is_some_and(|b| b.version == SHAPE_VERSION && !b.fingerprint.is_empty()),
+            "a {} binds to the lifecycle state the owner saw",
+            self.kind.as_str()
+        );
+        ensure!(
+            !claim.revision.is_empty(),
+            "a {} names the revision seen",
+            self.kind.as_str()
+        );
+        Ok(())
     }
     /// Checks the row on its own: the envelope, the JSON shapes and the kind's target shape.
     /// What it says about other intents (an undo's target) is checked against the log.
@@ -581,28 +611,13 @@ impl Intent {
                 &self.targets,
                 Targets::Claim { .. } | Targets::ClaimSet { .. }
             ),
-            IntentKind::Confirm => match &self.targets {
-                Targets::Claim { claim, .. } => {
-                    let statement = claim.statement()?;
-                    ensure!(
-                        statement.claim_id() == claim.id,
-                        "a claim target's id is the hash of its statement"
-                    );
-                    let binding = claim.binding()?;
-                    ensure!(
-                        binding.is_some_and(
-                            |b| b.version == SHAPE_VERSION && !b.fingerprint.is_empty()
-                        ),
-                        "a confirmation binds to the lifecycle state the owner saw"
-                    );
-                    ensure!(
-                        !claim.revision.is_empty(),
-                        "a confirmation names the revision seen"
-                    );
-                    true
-                }
-                _ => false,
-            },
+            // A correction names the claim it reviewed: the statement it said, the revision the
+            // owner read and the lifecycle state it binds to.
+            IntentKind::Confirm | IntentKind::Reject if self.targets.claim().is_some() => {
+                self.check_review()?;
+                true
+            }
+            IntentKind::Confirm => false,
             IntentKind::Accept | IntentKind::Edit | IntentKind::Reject => {
                 matches!(&self.targets, Targets::Proposal { item: Some(item), .. } if plain(item))
             }
@@ -753,7 +768,7 @@ impl Intent {
             _ => ensure!(
                 self.kind != IntentKind::Accept
                     && self.kind != IntentKind::Edit
-                    && self.kind != IntentKind::Reject
+                    && (self.kind != IntentKind::Reject || self.targets.claim().is_some())
                     && self.kind != IntentKind::Missed,
                 "a {} intent takes a queue proposal",
                 self.kind.as_str()
@@ -808,8 +823,12 @@ pub struct Resolution {
     pub merges: BTreeMap<(String, String), String>,
     /// Sorted endpoint ids to the cannot-link intent in force.
     pub cannot: BTreeMap<(String, String), String>,
-    /// Claim id to the confirmation in force on it.
+    /// Claim id to the confirmation in force on it: the latest correction of the claim, when
+    /// that is a confirmation.
     pub confirmed: BTreeMap<String, String>,
+    /// Claim id to the rejection in force on it: the latest correction of the claim, when that
+    /// is a rejection.
+    pub retracted: BTreeMap<String, String>,
     /// Each intent's status, and the intent that gave it that status (the undo, the clearing
     /// link or merge, the newer name).
     pub status: BTreeMap<String, (IntentStatus, Option<String>)>,
@@ -941,17 +960,36 @@ impl Resolution {
                 }
                 // A proposal's answer is the owner's record of what they decided; its item
                 // leaves the queue by that record alone and it backs no claim.
-                IntentKind::Accept | IntentKind::Edit | IntentKind::Reject | IntentKind::Missed => {
-                }
+                IntentKind::Accept | IntentKind::Edit | IntentKind::Missed => {}
+                // The latest valid correction of a claim is the one in force.
                 IntentKind::Confirm => {
                     if let Some(claim) = intent.targets.claim() {
+                        r.supersede_correction(&claim.id, &id);
                         r.confirmed.insert(claim.id.clone(), id);
+                    }
+                }
+                IntentKind::Reject => {
+                    if let Some(claim) = intent.targets.claim() {
+                        r.supersede_correction(&claim.id, &id);
+                        r.retracted.insert(claim.id.clone(), id);
                     }
                 }
                 IntentKind::Undo => {}
             }
         }
         r
+    }
+    /// A newer correction of a claim takes the place of the one in force: that one is superseded
+    /// by it, so what it held ends where the newer one begins.
+    fn supersede_correction(&mut self, claim: &str, by: &str) {
+        let older = self
+            .confirmed
+            .remove(claim)
+            .or_else(|| self.retracted.remove(claim));
+        if let Some(older) = older {
+            self.status
+                .insert(older, (IntentStatus::Superseded, Some(by.into())));
+        }
     }
     /// An explicit link or merge clears the cannot-link of its own pair, and only that one.
     fn clear(&mut self, pair: &(String, String), by: &str) {
@@ -1093,6 +1131,9 @@ impl Resolution {
                     }
                     // A proposal's answer is a decision about one item; undoing it would bring
                     // back an item whose source may have replaced it.
+                    IntentKind::Reject if target.targets.claim().is_some() => {
+                        bail!("a retraction can't be undone with `rastro identity undo`")
+                    }
                     IntentKind::Accept
                     | IntentKind::Edit
                     | IntentKind::Reject
@@ -1181,8 +1222,14 @@ impl Resolution {
         // A link or merge holds from its intent until its undo, if any.
         for id in &self.order {
             let intent = &self.intents[id];
+            // A correction a newer one replaced ends where the newer one was issued.
             let ended = match self.status.get(id) {
                 Some((IntentStatus::Undone, Some(by))) => Some(self.issued[by]),
+                Some((IntentStatus::Superseded, Some(by)))
+                    if matches!(intent.kind, IntentKind::Confirm | IntentKind::Reject) =>
+                {
+                    Some(self.issued[by])
+                }
                 _ => None,
             };
             let stretch = (intent.issued_at, ended);
@@ -1244,9 +1291,10 @@ impl Resolution {
                         );
                     }
                 }
-                // A confirmation holds the claim it reviewed from the statement it snapshotted,
-                // while it stands: a rebuild keeps the claim even when its evidence is gone.
-                (IntentKind::Confirm, _) => {
+                // A confirmation or a rejection holds the claim it reviewed from the statement it
+                // snapshotted, while it stands: a rebuild keeps the claim even when its evidence
+                // is gone. A rejection of a queue proposal names no claim and holds none.
+                (IntentKind::Confirm | IntentKind::Reject, _) => {
                     let Some(claim) = intent.targets.claim() else {
                         continue;
                     };
@@ -1707,6 +1755,19 @@ impl<S: Storage> Rastro<S> {
     /// the claim's current revision is not `seen`, naming the claim and its current revision.
     /// Confirming a claim already confirmed at that revision records nothing.
     pub fn confirm_claim(&mut self, claim: &str, seen: &str) -> Result<Issued> {
+        self.review_claim(IntentKind::Confirm, claim, seen)
+    }
+    /// Retracts a claim the owner read at revision `seen`: one `reject` intent that binds to the
+    /// claim's lifecycle state. The claim leaves every current read in every scope that sees it,
+    /// and `why` says it is retracted. Refused when the claim's current revision is not `seen`,
+    /// naming the claim and its current revision, and when an owner `link` (or merge, or answer)
+    /// made it: that is undone with `rastro identity undo`, naming the intent. Retracting a claim
+    /// already retracted records nothing.
+    pub fn reject_claim(&mut self, claim: &str, seen: &str) -> Result<Issued> {
+        self.review_claim(IntentKind::Reject, claim, seen)
+    }
+    /// One correction of one claim, as `kind` says: the claim as the owner saw it at `seen`.
+    fn review_claim(&mut self, kind: IntentKind, claim: &str, seen: &str) -> Result<Issued> {
         self.issue(|view, resolution| {
             let explained = view
                 .explain(claim, &crate::knowledge::WhyOptions::default())?
@@ -1719,8 +1780,30 @@ impl<S: Storage> Rastro<S> {
                 current.revision,
                 current.id
             );
-            if current.status == "confirmed" && resolution.confirmed.contains_key(&current.id) {
+            let (held, in_force) = match kind {
+                IntentKind::Reject => ("retracted", &resolution.retracted),
+                _ => ("confirmed", &resolution.confirmed),
+            };
+            if current.status == held && in_force.contains_key(&current.id) {
                 return Ok((vec![], None, false));
+            }
+            if kind == IntentKind::Reject {
+                // The owner's own link, merge or answer is not a reading to retract: it is
+                // undone, which also records the cannot-link that keeps it from coming back.
+                let made = explained.supports.iter().find(|support| {
+                    support.current
+                        && support.justification_kind == OWNER_INTENT
+                        && matches!(support.extraction_rule.as_str(), "link" | "same_as" | "answer")
+                });
+                if let Some((support, intent)) = made.and_then(|s| Some((s, s.intent.as_ref()?))) {
+                    bail!(
+                        "claim {} was made by your {} intent {}; undo it with `rastro identity undo {}`",
+                        current.id,
+                        support.extraction_rule,
+                        intent.id,
+                        intent.id
+                    );
+                }
             }
             let state = view
                 .claim_lifecycle(&current.id)?
@@ -1738,7 +1821,7 @@ impl<S: Storage> Rastro<S> {
             let review = ClaimTarget::review(current.revision, &statement, state.fingerprint)?;
             let id = review.id.clone();
             let intent = new_intent(
-                IntentKind::Confirm,
+                kind,
                 String::new(),
                 Targets::Claim {
                     version: SHAPE_VERSION,

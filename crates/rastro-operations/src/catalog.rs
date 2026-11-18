@@ -394,6 +394,9 @@ operations! {
         Confirm(ClaimConfirmRequest => ClaimWriteResult) as ClaimConfirm {
             slot: 30, name: "claim.confirm", surfaces: [Cli], read_only: false
         },
+        Reject(ClaimRejectRequest => ClaimWriteResult) as ClaimReject {
+            slot: 31, name: "claim.reject", surfaces: [Cli], read_only: false
+        },
     }
     /// Owner identity: Persons, links between accounts and Persons, and merges. Writes are CLI only.
     Identity / IdentityRequest {
