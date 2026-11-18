@@ -7,12 +7,13 @@
 //! the claim the intent backs when there is one. An item with no answering intent that the queue
 //! no longer holds was shown and never answered; it left one of two ways. A later run of its
 //! source dropped its content, and it was ignored: its outcome names the time it waited, from
-//! its first shown report to that run. Or the queue settled it — an observed commitment holds the
-//! item's statements, so it was already known; its accounts were linked; or its meeting was
-//! forgotten — and it became moot, whatever a later run's content says. Nothing records when a
-//! moot item left, so it is dated at its last shown report and measures no wait: dating it at the
-//! read, or at a run that ran later, would move it after the fact.
-use super::{ShownReport, held, known_by_subject, read};
+//! its first shown report to that run. Or the queue settled it — its statements became known, so
+//! it was already known; its accounts were linked; or its meeting was forgotten — and it became
+//! moot, whatever a later run's content says. Whichever event came first fixes the kind and the
+//! time, and neither is derived again from the knowledge present at a later read. Nothing records
+//! when a settled item left, so it is dated at its last shown report and measures no wait: dating
+//! it at the read, or at a run that ran later, would move it after the fact.
+use super::{ShownReport, held_since, read};
 use crate::identity::{Intent, IntentKind};
 use crate::read_only::Snapshot;
 use crate::{Rastro, ReadStorage, Reader, Scope, Storage};
@@ -39,8 +40,8 @@ pub enum OutcomeKind {
     Rejected,
     /// A question answered yes or no.
     Answered,
-    /// Shown, never answered, and gone from the queue because the queue settled it: an observed
-    /// commitment already holds its statements, its accounts were linked, or its meeting was
+    /// Shown, never answered, and gone from the queue because the queue settled it before any run
+    /// dropped it: its statements became known, its accounts were linked, or its meeting was
     /// forgotten.
     BecameMoot,
     /// Shown, never answered, and gone because a later run of its source dropped its content.
@@ -65,9 +66,9 @@ pub struct Outcome {
     /// The item's id as the queue read gave it.
     pub item: String,
     pub kind: OutcomeKind,
-    /// When it happened: the intent's time; for an ignored item, the run that dropped it; for an
-    /// item that became moot, the last terminal read that showed it waiting, since nothing
-    /// records when it left.
+    /// When it happened: the intent's time; for an ignored item, the run that dropped it, whatever
+    /// knowledge arrived later; for an item that became moot, the last terminal read that showed it
+    /// waiting, since nothing records when it left.
     pub at: DateTime<Utc>,
     /// The claim an accepted item became; absent when no claim holds it. One accept mints one
     /// claim per standard term of the item, so an outcome names the first of them in id order.
@@ -130,7 +131,7 @@ pub(crate) fn outcomes(view: &dyn Snapshot, scopes: &[Scope]) -> Result<Outcomes
         .map(|item| item.id)
         .collect();
     let claims = view.intent_claims()?;
-    let known = known_by_subject(&view.known_commitments(scopes)?);
+    let history = view.statement_history(scopes)?;
     let mut outcomes = Vec::new();
     let mut answered_items = BTreeSet::new();
     for intent in &intents {
@@ -158,23 +159,28 @@ pub(crate) fn outcomes(view: &dyn Snapshot, scopes: &[Scope]) -> Result<Outcomes
         }
         let first = reports.first().expect("by_item groups at least one report");
         let last = reports.last().expect("by_item groups at least one report");
-        // An item whose statements an observed commitment holds was settled elsewhere: the owner
-        // accepted the same statements from another source, or an adapter observed them. It left
-        // the queue when that knowledge reached it, not because a run's content no longer carries
-        // it, so a later run that lacks it never turns it into an ignored item. A question has no
-        // source run either, and one that left with no run dropping it was settled another way.
-        let settled = held(&known, &last.statements);
-        let dropped = match settled || last.run.is_empty() {
+        // The first event that took the item out of the queue fixes both the kind and the time,
+        // and no later knowledge re-derives either: a run of its source that dropped its content,
+        // or the moment its statements became known, so the queue left it out as already known
+        // (the owner accepted them from another source, or an adapter observed them). Whichever
+        // came first decides; an item a run really dropped stays ignored even if later knowledge
+        // holds its statements, and one settled first stays became moot even if a later run no
+        // longer carries it. A question has no source run and was settled another way.
+        let dropped = match last.run.is_empty() {
             true => None,
             false => view.departed_run(&last.source, &last.run, &item)?,
         };
-        let (kind, at, waited_seconds) = match dropped {
-            Some(at) => (
+        let settled = held_since(&history, &last.statements);
+        let (kind, at, waited_seconds) = match (settled, dropped) {
+            (Some(settled), Some(dropped)) if settled < dropped => {
+                (OutcomeKind::BecameMoot, last.at, None)
+            }
+            (_, Some(dropped)) => (
                 OutcomeKind::Ignored,
-                at,
-                Some((at - first.at).num_seconds()),
+                dropped,
+                Some((dropped - first.at).num_seconds()),
             ),
-            None => (OutcomeKind::BecameMoot, last.at, None),
+            (_, None) => (OutcomeKind::BecameMoot, last.at, None),
         };
         outcomes.push(Outcome {
             item: item.clone(),

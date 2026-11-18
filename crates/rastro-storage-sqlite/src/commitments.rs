@@ -49,7 +49,7 @@ fn loaded(view: &View, scopes: &[Scope]) -> Result<Vec<StoredMeeting>> {
 /// ever matches a hypothesis against one commitment; a name or a text match drops nothing. An
 /// accepted proposal's claims count too, in the scopes that see the item's source: what the owner
 /// accepted is knowledge the queue never proposes again.
-pub(crate) fn known(view: &View, scopes: &[Scope]) -> Result<Vec<KnownCommitment>> {
+fn known(view: &View, scopes: &[Scope]) -> Result<Vec<KnownCommitment>> {
     let mut statement = view.0.prepare_cached(&format!(
         "SELECT subject, predicate, object_value FROM claim c
          WHERE predicate LIKE 'std:%' AND status = 'observed' AND object_value IS NOT NULL

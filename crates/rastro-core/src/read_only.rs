@@ -132,9 +132,13 @@ pub trait Snapshot {
     fn shown_reports(&self) -> Result<Vec<crate::queue::ShownReport>> {
         Ok(Default::default())
     }
-    /// The commitments observed `std:` claims hold, visible to `scopes` (empty: every scope): what
-    /// the queue leaves an item out as already known against.
-    fn known_commitments(&self, _scopes: &[Scope]) -> Result<Vec<crate::queue::KnownCommitment>> {
+    /// Every standard statement an observed commitment holds, by the commitment's id and with the
+    /// first moment the record shows it known, visible to `scopes` (empty: every scope): what says
+    /// when an item's statements began to be held, and so when the queue began leaving it out.
+    fn statement_history(
+        &self,
+        _scopes: &[Scope],
+    ) -> Result<Vec<(String, crate::queue::Statement, DateTime<Utc>)>> {
         Ok(Default::default())
     }
     /// When the first run of `source` that succeeded after the last one still carrying `item`

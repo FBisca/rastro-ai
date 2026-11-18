@@ -1861,6 +1861,19 @@ fn revised() -> Vec<Value> {
     )]
 }
 
+/// The id of `meeting`'s proposal promising to send Bob the budget.
+fn promised(queue: &Value, meeting: &str) -> String {
+    (queue["items"].as_array().unwrap().iter())
+        .find(|item| {
+            item["source"]["name"] == meeting
+                && item["proposal"]["promise"] == "send Bob the budget"
+        })
+        .unwrap_or_else(|| panic!("no promise from {meeting}: {queue}"))["id"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
 /// S12: an item the owner printed and a re-import later replaced, left unanswered, reads
 /// ignored with the time it waited since its first shown report; an item still pending is never
 /// ignored however often it was shown.
@@ -2097,17 +2110,6 @@ fn S14_an_item_settled_elsewhere_reads_became_moot_and_no_read_moves_it() {
     }
     let queue = env.queue();
     assert_eq!(queue["items"].as_array().unwrap().len(), 4, "{queue}");
-    let promised = |queue: &Value, meeting: &str| -> String {
-        (queue["items"].as_array().unwrap().iter())
-            .find(|item| {
-                item["source"]["name"] == meeting
-                    && item["proposal"]["promise"] == "send Bob the budget"
-            })
-            .unwrap_or_else(|| panic!("no promise from {meeting}: {queue}"))["id"]
-            .as_str()
-            .unwrap()
-            .to_string()
-    };
     let accepted = promised(&queue, "weekly-1");
     let settled = promised(&queue, "weekly-2");
 
@@ -2183,6 +2185,71 @@ fn S14_an_item_settled_elsewhere_reads_became_moot_and_no_read_moves_it() {
     let rebuilt = env.outcomes_at("2026-11-10T22:00:00Z");
     assert_eq!(rebuilt["outcomes"], replaced["outcomes"], "{rebuilt}");
     assert_eq!(rebuilt["totals"], replaced["totals"], "{rebuilt}");
+}
+
+/// S14: an item a run really dropped stays ignored, dated at that run, even when later knowledge
+/// holds the statements it expressed: which came first — the run or the knowledge — fixes the
+/// kind and the time, in either order.
+#[test]
+fn S14_an_item_a_run_dropped_stays_ignored_when_later_knowledge_holds_it() {
+    let env = Env::new();
+    env.candidates(&good());
+    for meeting in ["weekly-1", "weekly-2"] {
+        env.import_ok(
+            meeting,
+            "work",
+            "2026-11-10T10:00:00Z",
+            &["--owner-speaker", "Alice"],
+        );
+    }
+    let queue = env.queue();
+    let accepted = promised(&queue, "weekly-1");
+    let dropped = promised(&queue, "weekly-2");
+
+    // The owner prints the queue, then a re-import replaces weekly-2's content: its promise
+    // leaves unanswered, and nothing had settled it.
+    env.print_queue_at("2026-11-10T11:00:00Z");
+    env.candidates(&revised());
+    env.import_ok_at(
+        "weekly-2",
+        "work",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+        "2026-11-10T12:00:00Z",
+    );
+    let before = env.outcomes_at("2026-11-10T12:30:00Z");
+    let ignored = (before["outcomes"].as_array().unwrap().iter())
+        .find(|outcome| outcome["item"] == dropped.as_str())
+        .unwrap_or_else(|| panic!("no outcome for the dropped item: {before}"));
+    assert_eq!(ignored["kind"], "ignored", "{before}");
+    assert_eq!(ignored["at"], "2026-11-10T12:00:00Z", "{before}");
+    assert_eq!(ignored["waited_seconds"], 3600, "{before}");
+
+    // The owner then accepts the identical promise from the other meeting, so knowledge now holds
+    // the statements the dropped item expressed. The run came first, and it stays ignored.
+    env.ok_at(
+        &["queue", "accept", &accepted],
+        Some("2026-11-10T13:00:00Z"),
+    );
+    let after = env.outcomes_at("2026-11-10T13:30:00Z");
+    let still = (after["outcomes"].as_array().unwrap().iter())
+        .find(|outcome| outcome["item"] == dropped.as_str())
+        .unwrap_or_else(|| panic!("no outcome for the dropped item: {after}"));
+    assert_eq!(still["kind"], "ignored", "{after}");
+    assert_eq!(still["at"], "2026-11-10T12:00:00Z", "{after}");
+    assert_eq!(still["waited_seconds"], 3600, "{after}");
+    assert_eq!(
+        after["totals"],
+        json!({"shown": 4, "acted_on": 1}),
+        "{after}"
+    );
+
+    // No later read and no rebuild derives it again.
+    let later = env.outcomes_at("2026-11-10T13:45:00Z");
+    assert_eq!(later["outcomes"], after["outcomes"], "{later}");
+    env.ok_at(&["claims", "rebuild"], Some("2026-11-10T14:00:00Z"));
+    let rebuilt = env.outcomes_at("2026-11-10T14:30:00Z");
+    assert_eq!(rebuilt["outcomes"], after["outcomes"], "{rebuilt}");
 }
 
 /// S14: a question that goes away when the owner links its two accounts to one Person reads

@@ -1052,11 +1052,51 @@ impl Snapshot for View<'_> {
             })
             .collect()
     }
-    fn known_commitments(
+    fn statement_history(
         &self,
         scopes: &[Scope],
-    ) -> Result<Vec<rastro_core::queue::KnownCommitment>> {
-        commitments::known(self, scopes)
+    ) -> Result<Vec<(String, rastro_core::queue::Statement, DateTime<Utc>)>> {
+        // When each statement was known: an observed claim from the evidence it was read from, an
+        // owner intent's claim from the moment the intent held it, even after that claim stops
+        // being observed, so a settled item stays settled. `known_since` is the start of a claim's
+        // last known stretch, so a claim undone and held again reads from its restoration.
+        let mut query = self.0.prepare_cached(&format!(
+            "SELECT subject, predicate, object_value, known_at FROM (
+                 SELECT c.subject, c.predicate, c.object_value, c.known_since AS known_at
+                 FROM claim c WHERE c.predicate LIKE 'std:%' AND c.status = 'observed'
+                   AND c.object_value IS NOT NULL AND c.known_since <> ''
+                   AND (?1 OR {} OR {})
+                 UNION ALL
+                 SELECT c.subject, c.predicate, c.object_value, coalesce(ij.started_at, i.issued_at)
+                 FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id
+                 JOIN claim c ON c.id = ij.claim_id
+                 WHERE c.predicate LIKE 'std:%' AND c.object_value IS NOT NULL
+                   AND ij.ended_at IS NULL AND (?1 OR {})
+             )",
+            scoped::VISIBLE_CLAIM,
+            scoped::VISIBLE_INTENT_CLAIM,
+            scoped::VISIBLE_INTENT_CLAIM
+        ))?;
+        let every = scopes.is_empty();
+        let scopes = serde_json::to_string(scopes)?;
+        let rows = query.query_map(params![every, scopes], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+                row.get::<_, String>(3)?,
+            ))
+        })?;
+        let mut history = Vec::new();
+        for row in rows {
+            let (subject, predicate, value, known_at) = row?;
+            history.push((
+                subject,
+                rastro_core::queue::Statement { predicate, value },
+                parse_time(known_at)?,
+            ));
+        }
+        Ok(history)
     }
     fn departed_run(
         &self,

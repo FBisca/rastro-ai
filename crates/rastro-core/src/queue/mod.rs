@@ -421,6 +421,46 @@ fn held(known: &BTreeMap<String, BTreeSet<Statement>>, expressed: &[Statement]) 
     !expressed.is_empty() && (known.values()).any(|held| *held == expressed)
 }
 
+/// The first moment one observed commitment held exactly the statements `expressed`, from when
+/// each of its claims was known: the moment the last of them arrived, unless that commitment
+/// already carried a statement the item does not express, in which case its set was never the
+/// item's. `None` when no commitment ever held them, and for an item that expresses nothing.
+pub(crate) fn held_since(
+    history: &[(String, Statement, DateTime<Utc>)],
+    expressed: &[Statement],
+) -> Option<DateTime<Utc>> {
+    let wanted: BTreeSet<&Statement> = expressed.iter().collect();
+    if wanted.is_empty() {
+        return None;
+    }
+    let mut by_subject: BTreeMap<&str, BTreeMap<&Statement, DateTime<Utc>>> = BTreeMap::new();
+    for (subject, statement, known_at) in history {
+        (by_subject.entry(subject).or_default().entry(statement))
+            .and_modify(|known| *known = (*known).min(*known_at))
+            .or_insert(*known_at);
+    }
+    let mut held: Option<DateTime<Utc>> = None;
+    for known in by_subject.values() {
+        let Some(complete) = wanted
+            .iter()
+            .map(|statement| known.get(statement).copied())
+            .collect::<Option<Vec<_>>>()
+        else {
+            continue;
+        };
+        let at = complete
+            .into_iter()
+            .max()
+            .expect("one moment per statement");
+        let extra = (known.iter())
+            .any(|(statement, known_at)| *known_at <= at && !wanted.contains(statement));
+        if !extra {
+            held = Some(held.map_or(at, |held| held.min(at)));
+        }
+    }
+    held
+}
+
 /// An item with the key the queue's order sorts by.
 struct Aged {
     /// When the item's content belongs to; a question has none.
