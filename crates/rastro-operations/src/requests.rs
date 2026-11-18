@@ -193,6 +193,10 @@ pub struct WhyRequest {
     #[arg(long)]
     #[serde(default)]
     pub full: bool,
+    /// Read as of this RFC 3339 time. Not answered yet: a request that sets it is refused rather than answered with today's claims.
+    #[arg(long)]
+    #[serde(default)]
+    pub as_of: Option<chrono::DateTime<chrono::Utc>>,
 }
 
 /// Rebuild the full-text index from the stored evidence.
@@ -311,6 +315,7 @@ impl SearchRequest {
 }
 impl WhyRequest {
     pub(crate) fn run<S: Storage + StoredTwins>(self, rastro: &mut Rastro<S>) -> Result<WhyResult> {
+        refuse_as_of(self.as_of)?;
         rastro.explain(&self.claim, &self.options())
     }
 }
@@ -354,14 +359,31 @@ pub struct AboutRequest {
     #[arg(long = "state")]
     #[serde(default)]
     pub state: Vec<String>,
+    /// Read as of this RFC 3339 time. Not answered yet: a request that sets it is refused rather than answered with today's claims.
+    #[arg(long)]
+    #[serde(default)]
+    pub as_of: Option<chrono::DateTime<chrono::Utc>>,
 }
 impl AboutRequest {
     pub(crate) fn run<S: Storage + StoredTwins>(
         self,
         rastro: &mut Rastro<S>,
     ) -> Result<AboutResult> {
+        refuse_as_of(self.as_of)?;
         rastro.about(&self.entity, &self.options())
     }
+}
+
+/// A read as of a past time is not reconstructed yet: refusing is better than answering with
+/// today's claims as though they were the past's.
+pub(crate) fn refuse_as_of(as_of: Option<chrono::DateTime<chrono::Utc>>) -> Result<()> {
+    if let Some(at) = as_of {
+        anyhow::bail!(
+            "reads as of {} are not answered yet; read without as_of for today's claims",
+            at.to_rfc3339()
+        );
+    }
+    Ok(())
 }
 
 impl AboutRequest {
@@ -520,6 +542,28 @@ impl ClaimEditRequest {
             &self.claim,
             rastro.edit_claim(&self.claim, &self.seen, &self.object)?,
         ))
+    }
+}
+
+/// Undo one earlier correction of a claim, and only that one: the claim reads as the latest correction still in force says, or as its evidence does when none is. Undoing a fix takes back both the retraction and the claim it asserted. An intent that corrects no claim is refused: undo it with `rastro identity undo`.
+#[derive(Args, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ClaimUndoRequest {
+    /// Id of the intent to undo, as `rastro claim confirm`, `reject` and `edit` print it and `rastro why` shows it.
+    pub intent: String,
+}
+impl ClaimUndoRequest {
+    pub(crate) fn run<S: Storage + StoredTwins>(
+        self,
+        rastro: &mut Rastro<S>,
+    ) -> Result<ClaimWriteResult> {
+        let issued = rastro.undo_claim(&self.intent)?;
+        let claim = issued
+            .intents
+            .iter()
+            .find_map(|i| i.targets.claim().map(|c| c.id.clone()))
+            .unwrap_or_default();
+        Ok(ClaimWriteResult::of(&claim, issued))
     }
 }
 

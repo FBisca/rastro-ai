@@ -611,6 +611,26 @@ pub(crate) fn fingerprint(db: &Connection, id: &str) -> Result<Option<(String, b
         scalar,
     )))
 }
+/// Reads again, from its evidence, every claim that carries a status only an owner correction
+/// gave (`confirmed`, `retracted`) and that no correction holds any more: an undo ended the
+/// correction, and the claim reads as its evidence does. Returns whether it read any. A claim
+/// only intents or an automatic link hold takes its status from them instead. Runs after the
+/// intents are applied, which end the corrections an undo took back, and is followed by another
+/// application of them, since a reading of a component rewrites every claim in it.
+pub(crate) fn release(db: &Connection) -> Result<bool> {
+    let released: BTreeSet<Component> = db
+        .prepare(&format!(
+            "SELECT DISTINCT c.subject, c.predicate FROM claim c
+             WHERE c.status IN ('confirmed', 'retracted')
+               AND EXISTS (SELECT 1 FROM justification j WHERE j.claim_id = c.id)
+               AND NOT EXISTS (SELECT 1 FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id
+                               WHERE ij.claim_id = c.id AND ij.ended_at IS NULL AND {CORRECTION})"
+        ))?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    refresh(db, &released)?;
+    Ok(!released.is_empty())
+}
 /// Reads every claim an owner correction holds as the status it gives, `confirmed` or
 /// `retracted`, whatever status its evidence or its intents gave it (ADR 0014). The latest
 /// correction that still holds wins. Runs last in every path that writes a status, so an
