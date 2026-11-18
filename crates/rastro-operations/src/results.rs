@@ -290,6 +290,8 @@ mod tests {
                         conflicts_with: vec![],
                         supersedes: vec![],
                         superseded_by: vec![],
+                        earlier_retracted: false,
+                        stale: false,
                     },
                 }),
                 supports: vec![],

@@ -611,26 +611,94 @@ pub(crate) fn fingerprint(db: &Connection, id: &str) -> Result<Option<(String, b
         scalar,
     )))
 }
+/// The latest correction in force on a claim, and whether the claim is still in the lifecycle
+/// state it was bound to (ADR 0014).
+#[derive(Clone, Copy)]
+pub(crate) struct Standing {
+    /// A confirmation; otherwise a retraction (a rejection, or the retraction half of a fix).
+    pub confirms: bool,
+    /// The claim's lifecycle fingerprint is the one the correction bound to. A correction that
+    /// bound to nothing always holds.
+    pub holds: bool,
+}
+/// The latest correction that still holds its `intent_justification`, per claim (or for `only`),
+/// with the fingerprint it bound to. The latest wins whatever its state.
+fn latest_corrections(
+    db: &Connection,
+    only: Option<&str>,
+) -> Result<BTreeMap<String, (bool, Option<String>)>> {
+    let rows: Vec<(String, String, Option<String>)> = db
+        .prepare(&format!("SELECT ij.claim_id, i.kind, json_extract(i.targets_json, '$.claim.lifecycle_binding.fingerprint') FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id WHERE ij.ended_at IS NULL AND {CORRECTION} AND ij.claim_id IN (SELECT id FROM claim) AND (?1 IS NULL OR ij.claim_id = ?1) ORDER BY i.append_seq"))?
+        .query_map([only], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))?
+        .collect::<Result<_, _>>()?;
+    Ok(rows
+        .into_iter()
+        .map(|(claim, kind, bound)| (claim, (kind == "confirm", bound)))
+        .collect())
+}
+/// Whether `id`'s latest correction in force still holds; `None` when it has none.
+pub(crate) fn standing(db: &Connection, id: &str) -> Result<Option<Standing>> {
+    let Some((confirms, bound)) = latest_corrections(db, Some(id))?.remove(id) else {
+        return Ok(None);
+    };
+    Ok(Some(Standing {
+        confirms,
+        holds: holds(db, id, bound.as_deref())?,
+    }))
+}
+/// Whether the claim is still in the lifecycle state a correction bound to (ADR 0014). A
+/// correction that bound to nothing always holds. A scoped replay holds only what its scope
+/// sees, so its fingerprints are not the store's: it reads the decision the full store made
+/// (`carry_holds`) instead of recomputing it.
+fn holds(db: &Connection, id: &str, bound: Option<&str>) -> Result<bool> {
+    if db.query_row(
+        "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'held_correction')",
+        [],
+        |r| r.get::<_, bool>(0),
+    )? {
+        return Ok(db
+            .query_row(
+                "SELECT holds FROM held_correction WHERE claim_id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .unwrap_or(true));
+    }
+    let current = fingerprint(db, id)?.map(|(fingerprint, _)| fingerprint);
+    Ok(bound.is_none_or(|bound| current.as_deref() == Some(bound)))
+}
+/// Gives a scoped replay `scoped` the decision `full`, the store the replay was cut from, made
+/// for each correction on a claim the replay holds: whether it still holds. Scoped corrections
+/// then lapse and go stale exactly where the store's do, whatever the scope hides.
+pub(crate) fn carry_holds(full: &Connection, scoped: &Connection) -> Result<()> {
+    scoped.execute_batch(
+        "CREATE TABLE held_correction (claim_id TEXT PRIMARY KEY, holds INTEGER NOT NULL)",
+    )?;
+    let mut insert =
+        scoped.prepare("INSERT INTO held_correction SELECT id, ?2 FROM claim WHERE id = ?1")?;
+    for (claim, (_, bound)) in latest_corrections(full, None)? {
+        insert.execute(params![claim, holds(full, &claim, bound.as_deref())?])?;
+    }
+    Ok(())
+}
 /// Reads every claim an owner correction holds as the status it gives, `confirmed` or
 /// `retracted`, whatever status its evidence or its intents gave it (ADR 0014). The latest
-/// correction that still holds wins. Runs last in every path that writes a status, so an
-/// incremental write, a rebuild and a scoped replay agree. A correction holds while its
-/// `intent_justification` does not end.
+/// correction that still holds wins. A retraction whose claim left the lifecycle state it was
+/// bound to has lapsed: the claim keeps the status its evidence gave it. A confirmation stays
+/// whatever the state, and reads stale (`standing`). Runs last in every path that writes a
+/// status, so an incremental write, a rebuild and a scoped replay agree. A correction holds
+/// while its `intent_justification` does not end.
 pub(crate) fn settle(db: &Connection) -> Result<()> {
     let mut latest: BTreeMap<String, &'static str> = BTreeMap::new();
-    let corrections: Vec<(String, String)> = db
-        .prepare(&format!("SELECT ij.claim_id, i.kind FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id WHERE ij.ended_at IS NULL AND {CORRECTION} AND ij.claim_id IN (SELECT id FROM claim) ORDER BY i.append_seq"))?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
-        .collect::<Result<_, _>>()?;
-    for (claim, kind) in corrections {
+    for (claim, (confirms, bound)) in latest_corrections(db, None)? {
+        if !confirms && !holds(db, &claim, bound.as_deref())? {
+            continue;
+        }
         latest.insert(
             claim,
             // A fix retracts the claim it fixes, as a rejection does.
-            if kind == "confirm" {
-                "confirmed"
-            } else {
-                "retracted"
-            },
+            if confirms { "confirmed" } else { "retracted" },
         );
     }
     let mut update =
