@@ -367,6 +367,9 @@ operations! {
         Missed(QueueMissedRequest => QueueAnswerResult) as QueueMissed {
             slot: 28, name: "queue.missed", surfaces: [Cli], read_only: false
         },
+        Outcomes(QueueOutcomesRequest => OutcomesResult) as QueueOutcomes {
+            slot: 29, name: "queue.outcomes", surfaces: [Cli], read_only: true, reader: run_read, cli_read_path: true
+        },
     }
     /// Import a meeting transcript, read its commitment hypotheses, replay, forget or export it.
     Meeting / MeetingRequest {

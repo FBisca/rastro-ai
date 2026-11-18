@@ -45,6 +45,12 @@ impl QueueRequest {
     }
 }
 
+impl QueueOutcomesRequest {
+    pub(crate) fn run_read<S: ReadStorage>(self, reader: &mut Reader<S>) -> Result<OutcomesResult> {
+        reader.outcomes()
+    }
+}
+
 impl MeetingCommitmentsRequest {
     pub(crate) fn run_read<S: ReadStorage>(self, reader: &mut Reader<S>) -> Result<MeetingResult> {
         reader.meeting_commitments(&self.meeting)

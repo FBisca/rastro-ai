@@ -30,7 +30,7 @@ pub use scoped::{cache_len as scoped_cache_len, clear_cache as clear_scoped_cach
 /// The migration recording when an intent's contribution ended; an open that applies it replays
 /// the stored intents once all migrations are in.
 const INTENT_END: &str = "202611081000_intent_justification_end";
-const MIGRATIONS: [(&str, &str); 15] = [
+const MIGRATIONS: [(&str, &str); 16] = [
     (
         "202611041200_initial",
         include_str!("../migrations/202611041200_initial.sql"),
@@ -90,6 +90,10 @@ const MIGRATIONS: [(&str, &str); 15] = [
     (
         "202611131100_meeting_retention",
         include_str!("../migrations/202611131100_meeting_retention.sql"),
+    ),
+    (
+        "202611141000_shown_reports",
+        include_str!("../migrations/202611141000_shown_reports.sql"),
     ),
 ];
 
@@ -354,6 +358,22 @@ impl Storage for SqliteStorage {
     }
     fn forget_meeting(&mut self, meeting: &str) -> Result<Option<rastro_core::meeting::Removed>> {
         meeting::forget(&mut self.connection, meeting)
+    }
+    fn record_shown_reports(
+        &mut self,
+        reports: &[rastro_core::queue::ShownReport],
+    ) -> Result<usize> {
+        let transaction = self.connection.transaction()?;
+        let mut recorded = 0;
+        for report in reports {
+            transaction.execute(
+                "INSERT INTO shown_report (item, source, run, shown_at) VALUES (?1, ?2, ?3, ?4)",
+                params![report.item, report.source, report.run, stamp(report.at)],
+            )?;
+            recorded += 1;
+        }
+        transaction.commit()?;
+        Ok(recorded)
     }
     fn project_sources(&mut self, sources: &[Source]) -> Result<()> {
         let transaction = self.connection.transaction()?;
@@ -971,6 +991,62 @@ impl Snapshot for View<'_> {
     }
     fn intents(&self) -> Result<Vec<rastro_core::identity::Intent>> {
         identity::load(self.0)
+    }
+    fn intent_claims(&self) -> Result<std::collections::BTreeMap<String, String>> {
+        let mut statement = self.0.prepare(
+            "SELECT intent_id, claim_id FROM intent_justification ORDER BY intent_id, claim_id",
+        )?;
+        let rows = statement.query_map([], |row| {
+            Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+        })?;
+        let mut claims: std::collections::BTreeMap<String, String> =
+            std::collections::BTreeMap::new();
+        for row in rows {
+            let (intent, claim) = row?;
+            claims.entry(intent).or_insert(claim);
+        }
+        Ok(claims)
+    }
+    fn shown_reports(&self) -> Result<Vec<rastro_core::queue::ShownReport>> {
+        let mut statement = self
+            .0
+            .prepare("SELECT item, source, run, shown_at FROM shown_report ORDER BY append_seq")?;
+        let rows: Vec<(String, String, String, String)> = statement
+            .query_map([], |row| {
+                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+            })?
+            .collect::<Result<_, _>>()?;
+        (rows.into_iter())
+            .map(|(item, source, run, at)| {
+                Ok(rastro_core::queue::ShownReport {
+                    item,
+                    source,
+                    run,
+                    at: parse_time(at)?,
+                })
+            })
+            .collect()
+    }
+    fn successor_run(
+        &self,
+        source: &str,
+        run: &str,
+    ) -> Result<Option<chrono::DateTime<chrono::Utc>>> {
+        // A run id the item no longer has a numeric form for names no run this build knows.
+        let Ok(run) = run.parse::<i64>() else {
+            return Ok(None);
+        };
+        let finished: Option<String> = self
+            .0
+            .query_row(
+                "SELECT finished_at FROM meeting_run
+                 WHERE meeting_id = ?1 AND id > ?2 AND state = 'succeeded'
+                 ORDER BY id LIMIT 1",
+                params![source, run],
+                |row| row.get(0),
+            )
+            .optional()?;
+        finished.map(parse_time).transpose()
     }
     fn identity_accounts(&self) -> Result<Vec<rastro_core::identity::AccountFacts>> {
         identity::accounts(self.0)

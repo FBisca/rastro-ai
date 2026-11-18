@@ -26,6 +26,8 @@
 
 mod answers;
 pub use answers::{Answered, answered_items};
+mod outcomes;
+pub use outcomes::{NOTICE as OUTCOMES_NOTICE, Outcome, OutcomeKind, Outcomes, Totals};
 
 use crate::commitments::{self, Hypothesis};
 use crate::identity::{
@@ -135,6 +137,11 @@ pub struct Item {
     /// once. Context only — an item with claims beside it stays in the queue.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub context: Vec<ClaimSummary>,
+    /// The source run the item's content came from, when it came from one: what a shown report
+    /// records, so an outcome can date the item's departure. Never printed or published.
+    #[serde(skip)]
+    #[schemars(skip)]
+    pub(crate) run: Option<String>,
 }
 
 /// What a source's gap is.
@@ -183,6 +190,30 @@ pub struct Statement {
 pub struct KnownCommitment {
     pub subject: String,
     pub statements: BTreeSet<Statement>,
+}
+
+/// One item a terminal read printed, when it printed it, and the source run that carried it.
+/// Insert-only, outside the claims projection: it is what the owner saw, not what Rastro knows.
+#[derive(Clone, Debug)]
+pub struct ShownReport {
+    pub item: String,
+    /// The source's name, as the item's source carried it.
+    pub source: String,
+    /// The run the item's content came from; empty for a question, which is computed on read.
+    pub run: String,
+    pub at: DateTime<Utc>,
+}
+
+/// One shown report per item a terminal read printed.
+pub fn shown(queue: &Queue, at: DateTime<Utc>) -> Vec<ShownReport> {
+    (queue.items.iter())
+        .map(|item| ShownReport {
+            item: item.id.clone(),
+            source: item.source.name.clone(),
+            run: item.run.clone().unwrap_or_default(),
+            at,
+        })
+        .collect()
 }
 
 /// A source of proposals and the time its content belongs to.
@@ -251,6 +282,7 @@ impl Queue {
                     proposal: Some(hypothesis.clone()),
                     question: None,
                     context: Vec::new(),
+                    run: (origin.source.results_from.as_ref()).map(|results| results.run.clone()),
                 };
                 if answered.contains(&item.id) {
                     continue;
@@ -282,6 +314,7 @@ impl Queue {
                 proposal: None,
                 question: Some(question),
                 context: Vec::new(),
+                run: None,
             };
             if seen.insert(item.id.clone()) {
                 // Computed on read, so a question has no time: it is older than every proposal
@@ -588,6 +621,13 @@ impl<S: Storage> Rastro<S> {
     /// The queue over every scope, on a writing open.
     pub fn queue(&mut self) -> Result<Queue> {
         self.storage.snapshot(|view| read(view, &[]))
+    }
+
+    /// Records one shown report per item a terminal read printed, at the time it printed them.
+    /// Only the terminal read calls it: a machine read records nothing.
+    pub fn queue_shown(&mut self, queue: &Queue) -> Result<usize> {
+        let at = crate::coverage::now()?;
+        self.storage.record_shown_reports(&shown(queue, at))
     }
 }
 

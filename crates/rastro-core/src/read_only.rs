@@ -123,6 +123,20 @@ pub trait Snapshot {
     fn intents(&self) -> Result<Vec<crate::identity::Intent>> {
         anyhow::bail!("storage does not support owner intents")
     }
+    /// The claim ids each owner intent backs, the first in id order: an intent may mint several
+    /// claims (a question's yes holds and names), and an accepted proposal's outcome names one.
+    fn intent_claims(&self) -> Result<std::collections::BTreeMap<String, String>> {
+        Ok(Default::default())
+    }
+    /// Every shown report the terminal read recorded, in the order it recorded them.
+    fn shown_reports(&self) -> Result<Vec<crate::queue::ShownReport>> {
+        Ok(Default::default())
+    }
+    /// When the first run of `source` that succeeded after `run` finished: the moment the run's
+    /// content was replaced, and so the moment its unanswered items left the queue.
+    fn successor_run(&self, _source: &str, _run: &str) -> Result<Option<DateTime<Utc>>> {
+        Ok(None)
+    }
     /// The entity (id, canonical identifier) a form names, resolved unscoped as `about` resolves
     /// it: an exact id or identifier, else a canonical alias. An ambiguous alias is an error.
     /// Whether the evidence says the entity `id` is a bot: one of its current types is a

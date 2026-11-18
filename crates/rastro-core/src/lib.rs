@@ -452,6 +452,9 @@ pub trait Storage {
     /// Deletes a meeting and everything kept for it in one transaction, and scrubs the freed
     /// space. `None` when there is no such meeting.
     fn forget_meeting(&mut self, meeting: &str) -> Result<Option<meeting::Removed>>;
+    /// Records one shown report per item a terminal queue read printed, in one transaction.
+    /// Insert-only: what the owner saw is never revised.
+    fn record_shown_reports(&mut self, reports: &[queue::ShownReport]) -> Result<usize>;
 }
 
 pub struct Rastro<S> {

@@ -48,6 +48,10 @@ Status: agreed 2026-11-04, except where marked open. North star: `../concept.md`
     - the interruption budget respected;
     - the share of items decided by deterministic evidence rising.
 
+16. **An outcome is derived, never a second table (2026-11-18).** The owner intent is the durable record; an outcome is read from the intents and the shown reports, and a claims rebuild reproduces both. A shown report has its own insert-only table because it records what the owner saw, not what Rastro knows. No surface writes an outcome.
+17. **Seen is what the terminal printed (2026-11-18).** A terminal queue read records a shown report for each item it printed. The same read as `--json`, and the MCP tool, record none: automation cannot make an item look ignored.
+18. **Ignored is shown, unanswered and gone (2026-11-18).** An item reads ignored when a terminal read recorded it, no intent answered it, and the queue no longer holds it; an item still pending is never ignored, however often it was shown. Its outcome carries the time it waited, from its first shown report to the run that replaced its source's content. Engagement counts each item once: `shown` is what a terminal read printed, `acted on` is what an intent answered.
+
 ## Experiments
 - **Rubber-stamp guard.** Approvals given faster than the item could be read count as low-attention and carry little weight. To be tried and measured; drop it if it doesn't help.
 

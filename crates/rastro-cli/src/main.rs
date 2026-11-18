@@ -768,6 +768,40 @@ fn queue_text(queue: &rastro_core::queue::Queue) -> String {
     lines.join("\n")
 }
 
+/// The outcomes: each item with what happened to it and when, then what was shown and acted on.
+fn outcomes_text(outcomes: &rastro_core::queue::Outcomes) -> String {
+    let mut lines = vec![outcomes.notice.clone()];
+    if outcomes.outcomes.is_empty() {
+        lines.push("Nothing has happened yet".into());
+    }
+    for outcome in &outcomes.outcomes {
+        let kind = match outcome.kind {
+            rastro_core::queue::OutcomeKind::Accepted => "accepted",
+            rastro_core::queue::OutcomeKind::AcceptedWithEdits => "accepted with edits",
+            rastro_core::queue::OutcomeKind::Rejected => "rejected",
+            rastro_core::queue::OutcomeKind::Answered => "answered",
+            rastro_core::queue::OutcomeKind::Ignored => "ignored",
+        };
+        let mut line = format!(
+            "Item: {} | Kind: {kind} | At: {}",
+            outcome.item,
+            stamp(outcome.at)
+        );
+        if let Some(claim) = &outcome.claim {
+            line += &format!(" | Claim: {claim}");
+        }
+        if let Some(waited) = outcome.waited_seconds {
+            line += &format!(" | Waited: {waited}s");
+        }
+        lines.push(line);
+    }
+    lines.push(format!(
+        "Shown: {} | Acted on: {}",
+        outcomes.totals.shown, outcomes.totals.acted_on
+    ));
+    lines.join("\n")
+}
+
 /// What a queue answer recorded: the item it named, then each owner intent.
 fn queue_answer_text(result: &rastro_operations::results::QueueAnswerResult) -> String {
     let mut lines = Vec::new();
@@ -821,6 +855,7 @@ fn human(response: &Response) -> String {
         Response::About(r) => about_text(r),
         Response::Commitments(r) => commitments_text(r),
         Response::Queue(r) => queue_text(r),
+        Response::QueueOutcomes(r) => outcomes_text(r),
         Response::QueueAccept(r)
         | Response::QueueEdit(r)
         | Response::QueueReject(r)
@@ -866,9 +901,14 @@ fn human(response: &Response) -> String {
         },
     }
 }
-fn execute(request: Request) -> Result<Outcome> {
+fn execute(request: Request, json: bool) -> Result<Outcome> {
     let locations = Locations::resolve()?;
-    if catalog::find(request.name()).is_some_and(|spec| spec.read_only && spec.read_path) {
+    // The terminal queue read records what it printed (learning.md §3); a machine read — `--json`
+    // or an MCP call — records nothing, so automation can never make an item look ignored.
+    let printed = !json && matches!(request, Request::Queue { command: None, .. });
+    if !printed
+        && catalog::find(request.name()).is_some_and(|spec| spec.read_only && spec.read_path)
+    {
         let mut reader = Rastro::open_read_only(locations, SqliteStorage::open_read_only)?;
         let response = request.run_read(&mut reader)?;
         let text = human(&response);
@@ -879,6 +919,9 @@ fn execute(request: Request) -> Result<Outcome> {
     // Progress goes to stderr whatever the output format, never to stdout.
     let response =
         request.run_observed(&mut rastro, &mut rastro_core::runs::StderrProgress::new())?;
+    if printed && let Response::Queue(queue) = &response {
+        rastro.queue_shown(queue)?;
+    }
     let text = human(&response);
     Ok((response, text))
 }
@@ -943,7 +986,7 @@ fn main() {
             }
         },
     };
-    match execute(request) {
+    match execute(request, cli.json) {
         Ok((response, text)) => {
             if cli.json {
                 println!("{}", response.envelope());
