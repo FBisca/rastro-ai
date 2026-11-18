@@ -41,11 +41,31 @@ The workspace's tests run under [cargo-nextest](https://nexte.st), one process p
 
 ```sh
 cargo nextest run --workspace                     # the whole suite, as CI runs it
+cargo nextest run --workspace --profile fast      # the unit tests alone, as the fast tier runs them
 cargo nextest run -p <package> --lib              # one crate's unit tests
 cargo nextest run -p <package> --test <target>    # one test in crates/<package>/tests/<target>.rs
 ```
 
 The config reports a test running past 20 seconds as SLOW and kills it after three periods (60 seconds), never retries a failure, and keeps going after one so a single run holds every failure: `target/nextest/default/junit.xml` names each failing test with its captured output. See [ADR 0013](adr/0013-cargo-nextest-runs-the-tests.md).
+
+### The fast suite
+
+A test's location is its level. A test in a `src/` `#[cfg(test)]` module is a unit test: it starts
+no process and touches no filesystem or socket. A test that needs a database file, a spawned
+process, a network, or a built workspace binary is an integration test under the crate's `tests/`,
+where nextest runs it in its own process beside the rest of the suite.
+
+The `fast` profile runs the unit tests alone — the lib and bin targets of every crate, no `tests/`
+binary:
+
+```sh
+cargo nextest run --workspace --profile fast
+```
+
+The orchestrator's fast check tier runs the same command on every hand-in, so a change that breaks a
+unit test fails the cheapest tier first. [`scripts/fast-suite.test.sh`](../scripts/fast-suite.test.sh)
+proves the selection — every unit test, no test from a `tests/` binary — and that the run is green.
+CI and the affected selector still run the whole suite under the default profile.
 
 ### Live and bench tests
 
@@ -139,5 +159,5 @@ The NUL-delimited list preserves spaces; disabling rename detection includes bot
 - During iteration, run the focused test. Once green, run the affected selection once; rerun only after further relevant changes or a failure.
 - For Rust changes, run `cargo fmt --all --check` and Clippy for the selected packages (`cargo clippy -p <package> --all-targets -- -D warnings`, repeat `-p` for dependents). Use workspace scope for global configuration or uncertain impact.
 - For documentation-only changes, check links, examples, and `git diff --check`; skip Rust compilation unless executable examples or behavior changed.
-- For selector changes, run `scripts/affected-tests.test.sh`. For role, manifest, or gate changes, run `scripts/crate-gate.sh` and `scripts/crate-gate.test.sh`. For changes to an `#[ignore]`, [.config/nextest.toml](../.config/nextest.toml), [.config/nextest-user.toml](../.config/nextest-user.toml) or the CI workflow, run `scripts/ignored-tests.sh`, `scripts/ignored-tests.test.sh` and `scripts/nextest-config.test.sh`. For toolchain, dependency, shared build, or cross-workspace changes, run the full CI commands from [.github/workflows/ci.yml](../.github/workflows/ci.yml). CI remains the full workspace gate for every PR.
+- For selector changes, run `scripts/affected-tests.test.sh`. For role, manifest, or gate changes, run `scripts/crate-gate.sh` and `scripts/crate-gate.test.sh`. For changes to a test's location, an `#[ignore]`, [.config/nextest.toml](../.config/nextest.toml), [.config/nextest-user.toml](../.config/nextest-user.toml), the check tiers or the CI workflow, run `scripts/fast-suite.test.sh`, `scripts/ignored-tests.sh`, `scripts/ignored-tests.test.sh` and `scripts/nextest-config.test.sh`. For toolchain, dependency, shared build, or cross-workspace changes, run the full CI commands from [.github/workflows/ci.yml](../.github/workflows/ci.yml). CI remains the full workspace gate for every PR.
 - Report exact commands and outcomes, including the red/green observation for behavior changes. Separate focused or affected evidence from a full workspace pass; state anything left to CI.

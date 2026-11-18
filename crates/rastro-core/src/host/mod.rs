@@ -26,6 +26,9 @@ mod io;
 mod judge;
 pub use extract::extract;
 pub(crate) use extract::vocabulary;
+/// How many helper threads a teardown left, for the tests that drive a connector directly.
+#[doc(hidden)]
+pub use io::Tally;
 pub use judge::{JudgmentFailure, MAX_RESPONSE_BYTES, judge};
 
 /// Queues one progress line for stderr. The printer drops it when its queue is full and
@@ -346,17 +349,21 @@ pub fn run<S: Storage>(
 
 /// What bounds a conversation. The core reads these from its own environment, which a
 /// connector can neither see (it starts with a cleared one) nor change.
-struct Limits {
-    max_line: usize,
-    silence: Duration,
+///
+/// Exposed with its fields so a teardown test can pick its own deadlines; every run reads them
+/// with [`Limits::from_env`].
+#[doc(hidden)]
+pub struct Limits {
+    pub max_line: usize,
+    pub silence: Duration,
     /// How long a connector may take to exit after `run.finish`.
-    shutdown: Duration,
+    pub shutdown: Duration,
     /// Stderr lines relayed per run.
-    stderr_lines: usize,
+    pub stderr_lines: usize,
     /// Claims an extractor run may submit; unset, it scales with the evidence delivered.
-    max_claims: Option<usize>,
+    pub max_claims: Option<usize>,
     /// How long an extractor run may take in all.
-    extraction_time: Duration,
+    pub extraction_time: Duration,
 }
 impl Limits {
     fn from_env() -> Self {
@@ -460,7 +467,11 @@ fn drive<S: Storage>(
 }
 
 /// A running connector and everything the host holds to talk to it.
-struct Connector {
+///
+/// Exposed so the teardown tests under `tests/` can signal a real process, which only a run does
+/// in production: a `src/` test starts no process (docs/development.md).
+#[doc(hidden)]
+pub struct Connector {
     child: Child,
     wire: Wire,
     relay: io::Relay,
@@ -470,7 +481,7 @@ struct Connector {
 impl Connector {
     /// Starts the command with piped stdio and its own process group,
     /// so everything it starts can be stopped with it.
-    fn launch(mut command: Command, id: &str, limits: Limits) -> std::io::Result<Self> {
+    pub fn launch(mut command: Command, id: &str, limits: Limits) -> std::io::Result<Self> {
         command
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
@@ -502,13 +513,13 @@ impl Connector {
     /// Ends the connector. After a clean finish it gets the shutdown deadline to exit on its
     /// own; then its whole process group is killed, so a descendant can't keep the pipes open
     /// and the helper threads end. Returns the helper-thread tally for tests.
-    fn teardown(self, finished: bool) -> io::Tally {
+    pub fn teardown(self, finished: bool) -> Tally {
         self.teardown_observed(finished, |_| {})
     }
 
     /// `before_signal` runs with the leader's pid just before the group is signalled; tests use
     /// it to see the leader is still unreaped at that moment.
-    fn teardown_observed(mut self, finished: bool, before_signal: impl FnOnce(u32)) -> io::Tally {
+    pub fn teardown_observed(mut self, finished: bool, before_signal: impl FnOnce(u32)) -> Tally {
         // Closing the job queue closes stdin, which is how a well-behaved connector exits.
         drop(self.wire);
         let pid = self.child.id();
@@ -796,64 +807,6 @@ mod tests {
         assert_eq!(
             (release.max_claims, release.extraction_time),
             (None, DEFAULT_EXTRACTION_TIME)
-        );
-    }
-
-    /// evidence/R26: teardown kills the process group and releases every helper thread
-    #[test]
-    fn teardown_kills_the_process_group_and_releases_every_helper_thread() {
-        for finished in [false, true] {
-            let mut command = Command::new("/bin/sh");
-            // A background child shares the pipes with the connector; neither will exit.
-            command.args(["-c", "sleep 60 & exec sleep 60"]);
-            let limits = Limits {
-                max_line: 4096,
-                silence: Duration::from_secs(1),
-                shutdown: Duration::from_millis(200),
-                stderr_lines: 10,
-                max_claims: None,
-                extraction_time: Duration::from_secs(5),
-            };
-            let connector = Connector::launch(command, "test", limits).unwrap();
-            let tally = connector.teardown(finished);
-            let started = Instant::now();
-            while tally.live() > 0 {
-                assert!(
-                    started.elapsed() < Duration::from_secs(5),
-                    "{} helper threads still hold the pipes",
-                    tally.live()
-                );
-                std::thread::sleep(Duration::from_millis(10));
-            }
-        }
-    }
-
-    /// evidence/R27: the group is signalled while the exited leader is still unreaped
-    #[test]
-    fn the_group_is_signalled_while_the_exited_leader_is_still_unreaped() {
-        let mut command = Command::new("/bin/sh");
-        // The leader exits at once; its background child keeps the pipes.
-        command.args(["-c", "sleep 60 & exit 0"]);
-        let limits = Limits {
-            max_line: 4096,
-            silence: Duration::from_secs(1),
-            shutdown: Duration::from_secs(5),
-            stderr_lines: 10,
-            max_claims: None,
-            extraction_time: Duration::from_secs(5),
-        };
-        let connector = Connector::launch(command, "test", limits).unwrap();
-        let mut state = String::new();
-        connector.teardown_observed(true, |pid| {
-            let output = Command::new("ps")
-                .args(["-o", "stat=", "-p", &pid.to_string()])
-                .output()
-                .unwrap();
-            state = String::from_utf8_lossy(&output.stdout).trim().to_string();
-        });
-        assert!(
-            state.starts_with('Z'),
-            "leader was {state:?} when signalled, not a zombie"
         );
     }
 }
