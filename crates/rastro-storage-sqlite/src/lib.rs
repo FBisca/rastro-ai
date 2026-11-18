@@ -878,7 +878,7 @@ impl Storage for SqliteStorage {
         let stored = identity::insert_all(&transaction, sees, intents)?;
         identity::apply(&transaction)?;
         // An undone correction no longer holds its claim at the status it gave.
-        if lifecycle::release(&transaction)? {
+        if identity::release(&transaction)? {
             identity::apply(&transaction)?;
         }
         automatic::apply(&transaction)?;
