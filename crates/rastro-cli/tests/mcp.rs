@@ -1525,7 +1525,10 @@ impl Env {
         self.claim_about(scope, location, location, predicate, object, scalar, day)
     }
     /// The same, about the entity `subject` named by evidence at `location`.
-    #[allow(clippy::too_many_arguments)]
+    #[expect(
+        clippy::too_many_arguments,
+        reason = "the claim's scope, subject, location, predicate, object and scalar each read as their own argument at the call site"
+    )]
     fn claim_about(
         &self,
         scope: &str,
@@ -2371,6 +2374,14 @@ fn why_text(session: &mut Session, claim: &str) -> Value {
 /// a cannot-link, each automatic link the full projection doesn't hold. Both link sets are
 /// written out by hand from the seeded log, never read back from the code under test.
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the oracle writes both link sets out by hand over one seeded log and compares each scoped read to its rebuild"
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "the scoped reads, the hidden middle and the automatic links each need their own branch against the same seeded log"
+)]
 fn random_scope_sets_with_intents_and_automatic_links_equal_a_per_scope_rebuild() {
     use rastro_core::claims::entity_id;
     use rastro_core::identity::{

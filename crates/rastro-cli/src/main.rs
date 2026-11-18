@@ -657,6 +657,10 @@ fn commitments_text(list: &rastro_core::commitments::Commitments) -> String {
     lines.join("\n")
 }
 /// The queue: each proposal or question with its id and source, then each source's gap.
+#[expect(
+    clippy::too_many_lines,
+    reason = "each item, its source and the gaps after them are written in one pass, so their order reads at a glance"
+)]
 fn queue_text(queue: &rastro_core::queue::Queue) -> String {
     use rastro_core::queue::ItemKind;
     let mut lines = vec![queue.notice.clone()];
