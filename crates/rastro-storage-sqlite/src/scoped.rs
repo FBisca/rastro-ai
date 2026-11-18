@@ -186,6 +186,10 @@ fn automatic_accounts(
     Ok(held.into_iter().filter(|a| !roots.contains(a)).collect())
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the projection is built and its links settled over the same scopes and temporary store; a split would open it twice"
+)]
 fn build(
     db: &Connection,
     scopes: &[Scope],

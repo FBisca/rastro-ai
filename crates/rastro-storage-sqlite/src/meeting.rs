@@ -67,6 +67,10 @@ fn party(label: Option<String>, entity: Option<String>, identifier: Option<Strin
     }
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the meeting, its parties and its transcript are read against one snapshot so a partial meeting can't escape"
+)]
 pub(crate) fn load(view: &View, meeting: &str, scopes: &[Scope]) -> Result<Option<StoredMeeting>> {
     let c = view.0;
     let Some((scope, captured_at)) = c
@@ -307,6 +311,10 @@ pub(crate) fn export(view: &View, meeting: &str) -> Result<Option<MeetingExport>
     }))
 }
 
+#[expect(
+    clippy::too_many_lines,
+    reason = "the run, its parties and its transcript are written in one transaction so a failed insert leaves no partial meeting"
+)]
 pub(crate) fn record(connection: &mut Connection, run: &RunRecord) -> Result<i64> {
     let transaction = connection.transaction()?;
     let id = &run.meeting.id;

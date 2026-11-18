@@ -121,6 +121,10 @@ fn incremental_record_on_a_hub_is_near_linear_and_equals_the_full_replay() {
 
 /// claims/R52: a new observation on an entity typed at many locations replays only its own slots, the
 /// entity-wide type conflict stays in place, and a rebuild equals the incremental projection
+#[expect(
+    clippy::too_many_lines,
+    reason = "the scenario seeds a hub typed at many locations and asserts the replay, the conflict and the rebuild in one journey"
+)]
 #[test]
 fn a_new_observation_on_a_hub_replays_only_its_slots_and_equals_a_rebuild() {
     let n: usize = 4000;

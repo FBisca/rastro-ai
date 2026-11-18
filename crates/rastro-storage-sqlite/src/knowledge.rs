@@ -303,6 +303,10 @@ impl View<'_> {
     /// the class holds through an observed `rastro:held_by`, each account's claims naming it, all
     /// of them read so equivalents can group; their justification spans count against `budget`,
     /// and a view past it fails instead of answering partially.
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the view gathers classes, accounts, claims and their budgets in one pass; the budget must see every claim before it answers"
+    )]
     pub(super) fn about_view(
         &self,
         entity: &str,
