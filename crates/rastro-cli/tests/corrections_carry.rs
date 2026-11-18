@@ -494,3 +494,53 @@ fn a_proposal_for_a_statement_the_owner_fixed_away_returns_marked_earlier_retrac
         .unwrap_or_else(|| panic!("the promise is proposed again: {queue}"));
     assert_eq!(promise["earlier_retracted"], true, "{queue}");
 }
+
+/// Another conversation, the same speaker and recipient, a different promise and date: it shares
+/// two statements with the accepted commitment and expresses a third of its own.
+fn import_a_different_promise(env: &Env) {
+    fs::write(
+        env.path("transcript.txt"),
+        "Alice: I'll send Bob the report by Monday.\n",
+    )
+    .unwrap();
+    let candidate = json!([{"turn": 1, "kind": "promise", "responsible": "Alice",
+        "recipient": "Bob", "promise": "send Bob the report", "stated_date": "by Monday",
+        "quote": "I'll send Bob the report by Monday"}]);
+    fs::write(env.path("candidates.json"), candidate.to_string()).unwrap();
+    env.import("weekly-2", "2026-11-11T10:00:00Z");
+}
+
+/// The queue's promise proposal read from `weekly-2`.
+fn weekly_2_promise(queue: &Value) -> &Value {
+    (queue["items"].as_array().unwrap().iter())
+        .find(|item| item["source"]["name"] == "weekly-2")
+        .unwrap_or_else(|| panic!("no proposal from weekly-2: {queue}"))
+}
+
+// spec: A retracted commitment is no longer known
+#[test]
+fn a_proposal_that_only_shares_a_retracted_party_is_not_marked() {
+    let env = Env::with_adapter();
+    let (commitment, _) = accepted_commitment(&env);
+    let recipient = env.claim(&commitment, "std:owed_to", "Bob");
+    env.reject(&recipient);
+    import_a_different_promise(&env);
+
+    let queue = env.queue();
+    let proposal = weekly_2_promise(&queue);
+    assert!(proposal.get("earlier_retracted").is_none(), "{queue}");
+}
+
+// spec: A retracted commitment is no longer known
+#[test]
+fn a_proposal_that_only_shares_a_party_with_a_rejected_anchor_is_not_marked() {
+    let env = Env::with_adapter();
+    let (commitment, _) = accepted_commitment(&env);
+    let anchor = env.claim(&commitment, claims::TYPE_PREDICATE, "std:Commitment");
+    env.reject(&anchor);
+    import_a_different_promise(&env);
+
+    let queue = env.queue();
+    let proposal = weekly_2_promise(&queue);
+    assert!(proposal.get("earlier_retracted").is_none(), "{queue}");
+}

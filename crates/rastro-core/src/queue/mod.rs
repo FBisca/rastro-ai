@@ -137,8 +137,9 @@ pub struct Item {
     /// once. Context only — an item with claims beside it stays in the queue.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub context: Vec<ClaimSummary>,
-    /// Set on a proposal that expresses a statement the owner retracted from a commitment: new
-    /// evidence proposes it again, and the owner decides again. Never set on a question.
+    /// Set on a proposal that one commitment covered before the owner retracted some of its
+    /// statements: new evidence proposes it again, and the owner decides again. Never set on a
+    /// question.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub earlier_retracted: bool,
     /// The source run the item's content came from, when it came from one: what a shown report
@@ -303,7 +304,7 @@ impl Queue {
                     already_known += 1;
                     continue;
                 }
-                item.earlier_retracted = returns(&retracted, &statements(hypothesis));
+                item.earlier_retracted = returns(&known, &retracted, &statements(hypothesis));
                 aged.push(Aged {
                     at: Some(origin.at),
                     question: false,
@@ -440,13 +441,24 @@ fn retracted_by_subject<'a>(
     by_subject
 }
 
-/// Whether the item expresses a statement the owner retracted from a commitment: a fixed due
-/// date or a rejected party comes back in a new proposal. A retracted statement is not known, so
-/// this never hides an item; it only marks one.
-fn returns(retracted: &BTreeMap<String, BTreeSet<Statement>>, expressed: &[Statement]) -> bool {
-    retracted
-        .values()
-        .any(|gone| expressed.iter().any(|statement| gone.contains(statement)))
+/// Whether one commitment covered the item before the owner retracted part of it: what it still
+/// holds and what was retracted together cover every statement the item expresses, and the item
+/// expresses at least one retracted statement. Judged per commitment, never across them: a party
+/// or a date shared with some other retracted commitment says nothing. A retracted statement is
+/// not known, so this never hides an item; it only marks one.
+fn returns(
+    known: &BTreeMap<String, BTreeSet<Statement>>,
+    retracted: &BTreeMap<String, BTreeSet<Statement>>,
+    expressed: &[Statement],
+) -> bool {
+    !expressed.is_empty()
+        && retracted.iter().any(|(subject, gone)| {
+            let kept = known.get(subject);
+            let covered = |statement: &Statement| {
+                gone.contains(statement) || kept.is_some_and(|kept| kept.contains(statement))
+            };
+            expressed.iter().all(covered) && expressed.iter().any(|s| gone.contains(s))
+        })
 }
 
 /// Whether an observed commitment already holds the statements `expressed`: the same set, on one
@@ -974,9 +986,10 @@ mod tests {
         assert_eq!(shown, ["keep the budget"]);
         assert_eq!(queue.already_known, 1);
     }
-    /// A retracted statement is not known: a proposal that expresses one stays in the queue,
-    /// marked, whether the whole commitment was retracted, a part of it, or one statement was
-    /// fixed to another; a proposal that expresses no retracted statement is not marked.
+    /// A retracted statement is not known: a proposal that one commitment covered before a
+    /// retraction stays in the queue, marked, whether the whole commitment was retracted, a part
+    /// of it, or one statement was fixed to another. A proposal sharing only some statements with
+    /// a retracted commitment, or whose statements are split across two, is not marked.
     #[test]
     fn a_retracted_statement_no_longer_hides_a_proposal_but_marks_it() {
         let terms = [
@@ -1021,6 +1034,12 @@ mod tests {
                 "by Friday",
                 false,
             ),
+            (
+                "a retracted party shared, a different date",
+                commitment(&terms[..2], &terms[2..]),
+                "by Monday",
+                false,
+            ),
         ];
         for (name, known, date, marked) in cases {
             let queue = Queue::new(
@@ -1032,5 +1051,39 @@ mod tests {
             assert_eq!(queue.items.len(), 1, "{name}");
             assert_eq!(queue.items[0].earlier_retracted, marked, "{name}");
         }
+    }
+
+    /// Statements retracted from two commitments never add up to one: a proposal whose
+    /// statements are split across them is not marked.
+    #[test]
+    fn statements_retracted_from_two_commitments_do_not_mark_a_proposal() {
+        let retracted = |subject: &str, statements: &[(&str, &str)]| KnownCommitment {
+            subject: subject.into(),
+            statements: BTreeSet::new(),
+            retracted: statement_set(statements),
+        };
+        let proposal = hypothesis(
+            commitments::Kind::Promise,
+            "Alice",
+            Some("Bob"),
+            Some("by Friday"),
+            "send Bob the budget",
+        );
+        let queue = Queue::new(
+            vec![origin(
+                vec![proposal],
+                vec![
+                    retracted(
+                        "std:commitment/1",
+                        &[(commitments::OWES, "Alice"), (commitments::OWED_TO, "Bob")],
+                    ),
+                    retracted("std:commitment/2", &[(commitments::DUE, "by Friday")]),
+                ],
+            )],
+            Vec::new(),
+            &BTreeSet::new(),
+        );
+        assert_eq!(queue.items.len(), 1);
+        assert!(!queue.items[0].earlier_retracted);
     }
 }
