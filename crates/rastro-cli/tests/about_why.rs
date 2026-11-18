@@ -334,6 +334,14 @@ fn about_filters_known_time_orders_limits_and_includes_history() {
 
 /// claims/R35: why bounds complete justifications and clips utf8 quotes
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one complete and one clipped justification are read from the same run, so both bounds sit beside the stored text they bound"
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "the bounds, the utf8 clipping and the stored row each add a branch to the same assertion"
+)]
 fn why_bounds_complete_justifications_and_clips_utf8_quotes() {
     let env = Env::new();
     let quote = "é🦀".repeat(100);

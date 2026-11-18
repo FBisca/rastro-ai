@@ -214,6 +214,14 @@ fn item_number(location: &str) -> &str {
 /// `GH_TOKEN`; run with `cargo test -p rastro-cli --test live -- --ignored the_owners_account`.
 #[test]
 #[ignore = "talks to GitHub; set RASTRO_LIVE_REPO and RASTRO_LIVE_GITHUB_LOGIN"]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one live run seeds two scopes, syncs and reads back both claims and receipts, so a failure names the step"
+)]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "each scope, claim and receipt branch compares a different GitHub fact, kept beside its assertion"
+)]
 fn the_owners_account_claims_and_receipts_match_github() {
     let config = live_config(
         std::env::var_os("RASTRO_LIVE_REPO"),

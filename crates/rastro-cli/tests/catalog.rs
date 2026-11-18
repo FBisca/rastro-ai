@@ -97,6 +97,10 @@ fn help_lists_exactly_what_the_catalog_defines() {
 
 /// surfaces/R6: every command's `--json` envelope is version 2, valid against the v2 schema; v1 is frozen
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "one run collects every command's envelope and validates it against the schema, so a broken surface names itself"
+)]
 fn every_envelope_is_version_2_and_schema_valid() {
     let schema: Value =
         serde_json::from_str(include_str!("../../../schema/operations-v2.schema.json")).unwrap();
