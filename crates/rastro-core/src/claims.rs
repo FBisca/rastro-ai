@@ -262,6 +262,10 @@ pub fn group_revision(members: &[(String, String)]) -> String {
 }
 /// Checks a submission against what this run delivered, the extractor's declared rules and
 /// its vocabulary. `Err` carries the reason it is rejected.
+#[expect(
+    clippy::too_many_lines,
+    reason = "the ordered rejections read as the list of rules the extractor's manifest declares"
+)]
 pub fn validate(
     submit: ClaimSubmit,
     delivered: &HashMap<i64, Evidence>,

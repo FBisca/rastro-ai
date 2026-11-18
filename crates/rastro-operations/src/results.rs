@@ -225,6 +225,10 @@ mod tests {
     /// surfaces/R2: a request, its response and the catalog give an operation the same name
     #[test]
     #[allow(non_snake_case)]
+    #[expect(
+        clippy::too_many_lines,
+        reason = "one case per operation kind keeps the request, response and catalog names in sight together"
+    )]
     fn request_response_and_catalog_agree_on_names() {
         let responses = [
             Response::SourceAdd(SourceAddResult {

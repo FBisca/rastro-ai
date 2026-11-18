@@ -186,6 +186,10 @@ struct Session<'a> {
 }
 
 /// Runs one connector over `[from, to)` and records the run and its coverage.
+#[expect(
+    clippy::too_many_lines,
+    reason = "a run's record, conversation and coverage share one borrow of storage and one place to fail"
+)]
 pub fn run<S: Storage>(
     storage: &mut S,
     source: &Source,
