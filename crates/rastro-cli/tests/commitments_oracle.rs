@@ -257,6 +257,7 @@ fn terms(hypothesis: &Value) -> Vec<String> {
     terms
 }
 
+/// spec: Commitments gives one envelope on the CLI and over MCP
 /// S1: the list shows every hypothesis with its source, its kind, its parties, its stated date,
 /// its exact quote, its terms and its status, and the source's extraction, coverage and stale
 /// state.

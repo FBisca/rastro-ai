@@ -242,7 +242,8 @@ mod tests {
         }
     }
 
-    /// surfaces/R2: a request, its response and the catalog give an operation the same name
+    /// spec: Help and the catalog name the same operations
+    /// a request, its response and the catalog give an operation the same name
     #[test]
     #[allow(non_snake_case)]
     #[expect(
