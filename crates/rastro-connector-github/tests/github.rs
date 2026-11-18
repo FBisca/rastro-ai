@@ -696,7 +696,7 @@ fn rejected_token_is_auth_and_never_appears_anywhere() {
     assert!(!env.leaks(TOKEN, &[sync, coverage]));
 }
 
-/// spec: A rate limit mid-run keeps the finished pages
+/// spec: A capped or incomplete search is never found
 /// A search result cap is incomplete, not found.
 #[test]
 fn search_result_cap_is_incomplete_not_found() {
@@ -717,7 +717,7 @@ fn search_result_cap_is_incomplete_not_found() {
     );
 }
 
-/// spec: A rate limit mid-run keeps the finished pages
+/// spec: A 403 is rate limited only on a limit signal
 /// HTTP failures map to typed reasons.
 #[test]
 fn http_failures_map_to_typed_reasons() {

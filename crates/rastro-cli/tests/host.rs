@@ -808,7 +808,6 @@ fn a_storage_failure_under_blocked_stderr_fails_the_run_with_storage_without_han
     assert_eq!(env.sql::<i64>("SELECT count(*) FROM evidence"), 0);
 }
 
-/// spec: An undeclared or missing option is refused
 /// A stored option the manifest doesn't declare is refused at sync, before the connector runs.
 #[test]
 fn a_hand_edited_option_is_refused_at_sync_before_the_connector_runs() {
@@ -827,7 +826,6 @@ fn a_hand_edited_option_is_refused_at_sync_before_the_connector_runs() {
     assert_eq!(env.sql::<i64>("SELECT count(*) FROM evidence"), 0);
 }
 
-/// spec: The declared repo pattern checks the repo
 /// A hand-edited GitHub repo that fails the declared pattern never reaches the connector.
 #[test]
 fn a_hand_edited_github_repo_is_refused_at_sync() {

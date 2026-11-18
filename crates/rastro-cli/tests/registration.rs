@@ -206,8 +206,7 @@ fn concurrent_registrations_persist_and_reject_duplicates() {
     assert_eq!(successes, 1, "exactly one duplicate registration succeeds");
 }
 
-/// spec: Data and config live where the environment says
-/// Private files under permissive umask.
+/// Files stay private under a permissive umask.
 #[cfg(unix)]
 #[test]
 fn private_files_under_permissive_umask() {
@@ -426,8 +425,7 @@ fn github_repo_shorthand_uses_the_manifest_pattern() {
     );
 }
 
-/// spec: An undeclared or missing option is refused
-/// A declared option is saved listed and survives reload.
+/// A declared option is saved, listed and survives a reload.
 #[test]
 fn a_declared_option_is_saved_listed_and_survives_reload() {
     let home = TempDir::new().unwrap();

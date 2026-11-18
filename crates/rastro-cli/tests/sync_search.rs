@@ -346,7 +346,7 @@ fn search_without_a_match_states_the_coverage_of_each_source() {
     assert_eq!(coverage[1]["state"], "never looked");
 }
 
-/// spec: A complete sync stores evidence and reports found
+/// spec: A missing connector is couldnt look not installed
 /// A sync without a manifest records couldn't look.
 #[test]
 fn sync_without_manifest_records_couldnt_look() {
