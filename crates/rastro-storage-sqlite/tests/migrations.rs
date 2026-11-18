@@ -129,6 +129,7 @@ fn legacy_user_version_maps_to_the_migrations_it_meant() {
 
 /// claims/R1: evidence appended while the clock reads earlier than an extracted observation is still
 /// pending for the extractor: capture times never go backwards within a (source, scope)
+/// spec: A bound extractor runs over its source's pending evidence
 #[test]
 fn evidence_captured_with_an_earlier_clock_is_still_extracted() {
     use chrono::{DateTime, Utc};
@@ -189,6 +190,7 @@ fn evidence_captured_with_an_earlier_clock_is_still_extracted() {
 }
 
 /// claims/R24: projection publication receipts reject updates and deletes
+/// spec: Every publication records its receipt
 #[test]
 fn projection_publication_receipts_reject_updates_and_deletes() {
     let home = tempfile::tempdir().unwrap();
@@ -210,6 +212,7 @@ fn projection_publication_receipts_reject_updates_and_deletes() {
 }
 
 /// claims/R17: entity types are never stored as a column
+/// spec: A renamed account keeps its entity and both logins
 #[test]
 fn entity_types_are_never_stored_as_a_column() {
     let home = tempfile::tempdir().unwrap();
@@ -547,7 +550,8 @@ fn intent_rows(path: &std::path::Path) -> Vec<String> {
     rows
 }
 
-/// identity/R33: opening a database that holds intents applies the intent-end migration, then replays
+/// spec: An undone claim stays superseded
+/// Opening a database that holds intents applies the intent-end migration, then replays
 /// the intents once, after every migration: a link undone before the upgrade is a superseded
 /// claim at once; the justification ids main wrote stay; an evidence claim and a claim no intent
 /// ever backed stay; the projection is published once, and a second open publishes nothing. The
@@ -642,7 +646,7 @@ fn the_intent_end_migration_replays_existing_intents() {
     assert_eq!(intent_rows(&path), intent_rows(&fresh));
 }
 
-/// identity/R33: a database without intents upgrades without a replay: nothing is published
+/// A database without intents upgrades without a replay: nothing is published
 #[test]
 fn the_intent_end_migration_publishes_nothing_without_intents() {
     let home = tempfile::tempdir().unwrap();
@@ -659,7 +663,8 @@ fn the_intent_end_migration_publishes_nothing_without_intents() {
     assert_eq!(count("SELECT count(*) FROM claim"), 2);
 }
 
-/// identity/R33: the replay runs after every migration of the open, so it meets the final schema: a later
+/// spec: An undone claim stays superseded
+/// The replay runs after every migration of the open, so it meets the final schema: a later
 /// migration that resets intent-backed projection rows doesn't undo it
 #[test]
 fn the_intent_replay_runs_after_every_migration() {

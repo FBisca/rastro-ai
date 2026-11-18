@@ -214,6 +214,7 @@ fn item_number(location: &str) -> &str {
 /// pull request or issue in that repository, usually the owner's) and `gh auth login` or
 /// `GH_TOKEN`; run with
 /// `cargo nextest run --profile live --run-ignored only`.
+/// spec: The owner's claims and receipts match GitHub
 #[test]
 #[ignore = "live: talks to GitHub; set RASTRO_LIVE_REPO and RASTRO_LIVE_GITHUB_LOGIN, and GH_TOKEN or gh auth login"]
 #[expect(
@@ -412,7 +413,8 @@ fn half_configured_or_malformed_live_variables_fail_naming_them() {
     }
 }
 
-/// identity/R31: on a copy of the owner's database, after the owner synced a GitHub repository and
+/// spec: The owner's database answers about me
+/// On a copy of the owner's database, after the owner synced a GitHub repository and
 /// Linear and ran `rastro identity me`, `about me` lists a GitHub and a Linear account, and
 /// `rastro identity candidates` answers without error.
 ///

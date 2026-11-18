@@ -133,19 +133,22 @@ fn snapshot_removal_closes_link(empty: bool) {
     assert_eq!(link["known_intervals"], expected_intervals, "{rebuilt}");
 }
 
-/// identity/R16: removing one address closes its automatic link
+/// spec: An unobserved email closes its link
+/// Removing one address closes its automatic link
 #[test]
 fn removing_one_address_closes_its_automatic_link() {
     snapshot_removal_closes_link(false);
 }
 
-/// identity/R16: empty snapshot closes its automatic link
+/// spec: An unobserved email closes its link
+/// Empty snapshot closes its automatic link
 #[test]
 fn empty_snapshot_closes_its_automatic_link() {
     snapshot_removal_closes_link(true);
 }
 
-/// identity/R11: github token owner links to me
+/// spec: The GitHub token owner holds me
+/// github token owner links to me
 #[test]
 fn github_token_owner_links_to_me() {
     let fixture = Fixture::start(|req, base| match req.path.as_str() {
@@ -172,7 +175,8 @@ fn github_token_owner_links_to_me() {
     );
 }
 
-/// identity/R16: empty verified email snapshot closes the old observation
+/// spec: An unobserved email closes its link
+/// Empty verified email snapshot closes the old observation
 #[test]
 fn empty_verified_email_snapshot_closes_the_old_observation() {
     use std::sync::{
@@ -220,7 +224,8 @@ fn empty_verified_email_snapshot_closes_the_old_observation() {
     assert!(!historical["known_intervals"][0]["end"].is_null());
 }
 
-/// identity/R9: records viewer verified emails and author names
+/// spec: A sync records the accounts it observed
+/// Records viewer verified emails and author names
 #[test]
 fn records_viewer_verified_emails_and_author_names() {
     let fixture = Fixture::start(|req, base| match req.path.as_str() {
@@ -283,7 +288,8 @@ fn records_viewer_verified_emails_and_author_names() {
     );
 }
 
-/// identity/R9: verified email with json escapes is an alias
+/// spec: A sync records the accounts it observed
+/// Verified email with json escapes is an alias
 #[test]
 fn verified_email_with_json_escapes_is_an_alias() {
     let fixture = Fixture::start(|req, base| match req.path.as_str() {
@@ -316,7 +322,8 @@ fn verified_email_with_json_escapes_is_an_alias() {
     );
 }
 
-/// identity/R10: inaccessible emails report coverage without failing sync
+/// spec: Unreadable emails are a coverage gap
+/// Inaccessible emails report coverage without failing sync
 #[test]
 fn inaccessible_emails_report_coverage_without_failing_sync() {
     let fixture = Fixture::start(|req, base| match req.path.as_str() {
@@ -336,7 +343,8 @@ fn inaccessible_emails_report_coverage_without_failing_sync() {
     );
 }
 
-/// identity/R10: unreadable later email page keeps sync and reports gap
+/// spec: Unreadable emails are a coverage gap
+/// Unreadable later email page keeps sync and reports gap
 #[test]
 fn unreadable_later_email_page_keeps_sync_and_reports_gap() {
     let fixture = Fixture::start(|req, base| match req.path.as_str() {
@@ -365,7 +373,8 @@ fn unreadable_later_email_page_keeps_sync_and_reports_gap() {
     );
 }
 
-/// identity/R10: rate limited email endpoint is a gap when the main read succeeds
+/// spec: Unreadable emails are a coverage gap
+/// Rate limited email endpoint is a gap when the main read succeeds
 #[test]
 fn rate_limited_email_endpoint_is_a_gap_when_the_main_read_succeeds() {
     let fixture = Fixture::start(|req, base| match req.path.as_str() {
@@ -382,7 +391,8 @@ fn rate_limited_email_endpoint_is_a_gap_when_the_main_read_succeeds() {
     );
 }
 
-/// identity/R10: a 429 on user emails is a coverage gap
+/// spec: Unreadable emails are a coverage gap
+/// A 429 on user emails is a coverage gap
 #[test]
 fn a_429_on_user_emails_is_a_coverage_gap() {
     let fixture = Fixture::start(|req, base| match req.path.as_str() {
@@ -397,7 +407,8 @@ fn a_429_on_user_emails_is_a_coverage_gap() {
     assert_eq!(gap["reason"], "rate_limited", "{coverage}");
 }
 
-/// identity/R9: a kept viewer original holds only its id and type
+/// spec: A sync records the accounts it observed
+/// A kept viewer original holds only its id and type
 #[test]
 fn a_kept_viewer_original_holds_only_its_id_and_type() {
     let fixture = Fixture::start(|req, base| match req.path.as_str() {
@@ -420,7 +431,8 @@ fn a_kept_viewer_original_holds_only_its_id_and_type() {
     }
 }
 
-/// identity/R9: a kept author profile original holds only its id and name
+/// spec: A sync records the accounts it observed
+/// A kept author profile original holds only its id and name
 #[test]
 fn a_kept_author_profile_original_holds_only_its_id_and_name() {
     let fixture = Fixture::start(|req, base| match req.path.as_str() {
@@ -442,7 +454,8 @@ fn a_kept_author_profile_original_holds_only_its_id_and_name() {
     );
 }
 
-/// identity/R9: an unreadable author profile is a gap not a failed sync
+/// spec: A sync records the accounts it observed
+/// An unreadable author profile is a gap not a failed sync
 #[test]
 fn an_unreadable_author_profile_is_a_gap_not_a_failed_sync() {
     let fixture = Fixture::start(|req, base| match req.path.as_str() {
@@ -475,7 +488,8 @@ fn an_unreadable_author_profile_is_a_gap_not_a_failed_sync() {
     }
 }
 
-/// identity/R9: a verified email cites only its own address span
+/// spec: A sync records the accounts it observed
+/// A verified email cites only its own address span
 #[test]
 fn a_verified_email_cites_only_its_own_address_span() {
     let fixture = Fixture::start(|req, base| match req.path.as_str() {

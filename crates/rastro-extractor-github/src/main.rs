@@ -488,6 +488,7 @@ mod tests {
     }
 
     /// claims/R18: titles bodies and untrusted fields are never read
+    /// spec: Instruction-like text yields no claim or label
     #[test]
     fn titles_bodies_and_untrusted_fields_are_never_read() {
         let pr = "https://github.com/o/p/pull/4";
@@ -514,6 +515,7 @@ mod tests {
     }
 
     /// claims/R19: an author and an alias are each one bundle of all the spans they need
+    /// spec: The GitHub extractor emits cited code claims
     #[test]
     fn an_author_and_an_alias_are_each_one_bundle_of_all_the_spans_they_need() {
         let pr = "https://github.com/o/p/pull/4";

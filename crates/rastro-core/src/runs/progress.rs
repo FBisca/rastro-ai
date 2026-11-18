@@ -176,6 +176,7 @@ mod tests {
     use super::*;
 
     /// sync-progress/S15: a throttle lets one count through per interval
+    /// spec: A slow read shows running counts at most every two seconds
     #[test]
     fn S15_a_throttle_lets_one_count_through_per_interval() {
         let start = Instant::now();

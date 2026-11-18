@@ -143,6 +143,7 @@ fn alias(kind: &str, value: &str) -> Object {
 }
 
 /// claims/R30: about resolves exact forms and returns one hop with aliases
+/// spec: About resolves an entity's current claims
 #[test]
 fn about_resolves_exact_forms_and_returns_one_hop_with_aliases() {
     let env = Env::new();
@@ -231,6 +232,7 @@ fn about_resolves_exact_forms_and_returns_one_hop_with_aliases() {
 }
 
 /// claims/R32: about filters known time orders limits and includes history
+/// spec: About filters, orders and bounds
 #[test]
 fn about_filters_known_time_orders_limits_and_includes_history() {
     let env = Env::new();
@@ -333,6 +335,7 @@ fn about_filters_known_time_orders_limits_and_includes_history() {
 }
 
 /// claims/R35: why bounds complete justifications and clips utf8 quotes
+/// spec: Why explains a claim and bounds its supports
 #[test]
 #[expect(
     clippy::too_many_lines,
@@ -487,6 +490,7 @@ fn why_bounds_complete_justifications_and_clips_utf8_quotes() {
 }
 
 /// claims/R33: unknown entity returns empty claims with coverage
+/// spec: An unknown entity reads as empty with coverage
 #[test]
 fn unknown_entity_returns_empty_claims_with_coverage() {
     let env = Env::new();
@@ -502,6 +506,7 @@ fn unknown_entity_returns_empty_claims_with_coverage() {
 }
 
 /// claims/R36: unknown claim is an operation error on catalog and cli
+/// spec: An unknown claim is an operation error
 #[test]
 fn unknown_claim_is_an_operation_error_on_catalog_and_cli() {
     let env = Env::new();
@@ -581,6 +586,7 @@ fn claim_reads_leave_rows_unchanged_and_missing_database_uncreated() {
 }
 
 /// claims/R34: claim answers include coverage and extraction state for every pair
+/// spec: Reads carry coverage and extraction state per pair
 #[test]
 fn claim_answers_include_coverage_and_extraction_state_for_every_pair() {
     let env = Env::new();
@@ -660,6 +666,7 @@ fn claim_answers_include_coverage_and_extraction_state_for_every_pair() {
 }
 
 /// claims/R31: about resolves a canonical alias by namespace kind and exact value
+/// spec: A login resolves through its alias claim
 #[test]
 fn about_resolves_a_canonical_alias_by_namespace_kind_and_exact_value() {
     let env = Env::new();
@@ -705,6 +712,7 @@ fn renamed(env: &Env, account: &str, old: &str, new: &str) -> String {
 }
 
 /// claims/R38: an old login still resolves to its account
+/// spec: An old login still resolves to its account
 #[test]
 fn an_old_login_resolves_to_its_account() {
     let env = Env::new();
@@ -732,6 +740,7 @@ fn an_old_login_resolves_to_its_account() {
 }
 
 /// claims/R39: a login held by several entities names every candidate with its mark
+/// spec: A login held twice names both candidates
 #[test]
 fn an_ambiguous_login_marks_each_candidate() {
     let env = Env::new();
@@ -754,6 +763,7 @@ fn an_ambiguous_login_marks_each_candidate() {
 }
 
 /// claims/R40: resolving through an old login lists current aliases; why shows the old interval
+/// spec: A resolution through an old alias lists current aliases
 #[test]
 fn resolving_through_an_old_login_lists_current_aliases_only() {
     let env = Env::new();
@@ -779,6 +789,7 @@ fn resolving_through_an_old_login_lists_current_aliases_only() {
 }
 
 /// claims/R39: one entity holding a login both current and historical resolves directly
+/// spec: A login held twice names both candidates
 #[test]
 fn an_entity_that_regained_a_login_resolves_directly() {
     let env = Env::new();
@@ -812,6 +823,7 @@ const BAD_FORMS: [&str; 10] = [
 ];
 
 /// claims/R53: a malformed entity form is an operation error naming the three forms
+/// spec: A malformed entity form is an operation error
 #[test]
 fn a_malformed_entity_form_is_an_operation_error_naming_the_three_forms() {
     let env = Env::new();
@@ -826,6 +838,7 @@ fn a_malformed_entity_form_is_an_operation_error_naming_the_three_forms() {
 }
 
 /// claims/R54: a well-formed form that matches nothing is the empty result with coverage
+/// spec: A well-formed form that matches nothing is empty
 #[test]
 fn a_well_formed_form_that_matches_nothing_is_empty_with_coverage() {
     let env = Env::new();
@@ -842,6 +855,7 @@ fn a_well_formed_form_that_matches_nothing_is_empty_with_coverage() {
 }
 
 /// claims/R55: real identifiers (fragment URLs, accounts, bot logins) are accepted
+/// spec: Every real identifier is accepted
 #[test]
 fn real_identifiers_are_accepted() {
     let env = Env::new();
@@ -1053,6 +1067,7 @@ fn world(env: &Env) -> World {
 }
 
 /// labels/S1: a GitHub issue or PR side carries its `/title` label with every cited field
+/// spec: A GitHub issue or pull request side carries its title
 #[test]
 fn S1_a_github_issue_or_pr_side_carries_its_cited_title_label() {
     let env = Env::new();
@@ -1088,6 +1103,7 @@ fn S1_a_github_issue_or_pr_side_carries_its_cited_title_label() {
 }
 
 /// labels/S2: why gives its subject and object the labels about gives
+/// spec: Why carries the same labels as about
 #[test]
 fn S2_why_carries_the_same_labels_as_about() {
     let env = Env::new();
@@ -1115,6 +1131,7 @@ fn S2_why_carries_the_same_labels_as_about() {
 }
 
 /// labels/S3: a Linear issue's label is its `/title` with no url; a Linear user's is its `/name`
+/// spec: A Linear issue and a Linear user are labelled from their own fields
 #[test]
 fn S3_a_linear_issue_and_a_linear_user_are_labelled_from_title_and_name() {
     let env = Env::new();
@@ -1158,6 +1175,7 @@ fn S3_a_linear_issue_and_a_linear_user_are_labelled_from_title_and_name() {
 }
 
 /// labels/S4: a repository, a comment, a GitHub account and a Person have a null label
+/// spec: A repository, comment, account or Person has no label
 #[test]
 fn S4_repository_comment_account_and_person_sides_have_a_null_label() {
     let env = Env::new();
@@ -1185,6 +1203,7 @@ fn S4_repository_comment_account_and_person_sides_have_a_null_label() {
 }
 
 /// labels/S5: a long title is cut to 200 whole chars across a multibyte char, and flagged
+/// spec: A long title is clipped on a character boundary
 #[test]
 fn S5_a_title_over_200_chars_is_cut_on_a_char_boundary_and_flagged() {
     let env = Env::new();
@@ -1211,6 +1230,7 @@ fn S5_a_title_over_200_chars_is_cut_on_a_char_boundary_and_flagged() {
 }
 
 /// labels/S6: the latest `captured_at` wins; a tie goes to the higher evidence id
+/// spec: The latest observation's title is the label
 #[test]
 fn S6_the_latest_observation_wins_and_a_tie_goes_to_the_higher_evidence_id() {
     let env = Env::new();
@@ -1249,6 +1269,7 @@ fn S6_the_latest_observation_wins_and_a_tie_goes_to_the_higher_evidence_id() {
 
 /// labels/S8: adding labels leaves claims, supports and revisions as they were, and a title's
 /// text is not an alias of the entity
+/// spec: Labels change no claim, support or revision
 #[test]
 fn S8_labels_change_no_claim_support_or_revision_and_a_title_is_not_an_alias() {
     let env = Env::new();
@@ -1291,6 +1312,7 @@ fn S8_labels_change_no_claim_support_or_revision_and_a_title_is_not_an_alias() {
 
 /// labels/S9: `label.state` holds the current observed state, `code:state` or `tracker:state`,
 /// and is null with none
+/// spec: The label carries the current state
 #[test]
 fn S9_label_state_holds_the_current_observed_state_or_null() {
     let env = Env::new();
@@ -1323,6 +1345,7 @@ fn S9_label_state_holds_the_current_observed_state_or_null() {
 }
 
 /// labels/S10: the CLI text shows the label after the id with control chars escaped
+/// spec: The CLI shows labels as the MCP result does
 #[test]
 fn S10_cli_text_shows_the_escaped_label_after_the_id_for_about_and_why() {
     let env = Env::new();

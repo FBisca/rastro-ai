@@ -31,7 +31,8 @@ fn coverage(env: &Env) -> Vec<Vec<String>> {
     env.rows("SELECT state, reason FROM coverage")
 }
 
-/// identity/R17: key owner links to me without an owner link
+/// spec: The Linear key owner holds me
+/// Key owner links to me without an owner link
 #[test]
 fn key_owner_links_to_me_without_an_owner_link() {
     let fixture = Fixture::start(world());
@@ -55,7 +56,8 @@ fn key_owner_links_to_me_without_an_owner_link() {
     );
 }
 
-/// identity/R17: a new key owner replaces the previous viewer
+/// spec: The Linear key owner holds me
+/// A new key owner replaces the previous viewer
 #[test]
 fn a_new_key_owner_replaces_the_previous_viewer() {
     let fixture = Fixture::start(world());
@@ -88,7 +90,8 @@ fn a_new_key_owner_replaces_the_previous_viewer() {
     assert_eq!(old["status"], "superseded", "{history}");
 }
 
-/// identity/R32: bot viewer is not linked when user enumeration fails
+/// spec: Only account types may be linked
+/// Bot viewer is not linked when user enumeration fails
 #[test]
 fn bot_viewer_is_not_linked_when_user_enumeration_fails() {
     const APP: &str = "0b5a8c1e-0000-4000-8000-000000000009";
@@ -122,7 +125,8 @@ fn bot_viewer_is_not_linked_when_user_enumeration_fails() {
     );
 }
 
-/// identity/R14: guest flag is recorded as evidence
+/// spec: A guest never links automatically
+/// Guest flag is recorded as evidence
 #[test]
 fn guest_flag_is_recorded_as_evidence() {
     let mut data = world();
@@ -136,7 +140,8 @@ fn guest_flag_is_recorded_as_evidence() {
     assert_eq!(rows, [["true"]]);
 }
 
-/// identity/R14: a guest email does not link but a member email does
+/// spec: A guest never links automatically
+/// A guest email does not link but a member email does
 #[test]
 fn a_guest_email_does_not_link_but_a_member_email_does() {
     let mut data = world();
@@ -176,7 +181,8 @@ fn a_guest_email_does_not_link_but_a_member_email_does() {
     );
 }
 
-/// identity/R16: removed member email closes automatic link
+/// spec: An unobserved email closes its link
+/// Removed member email closes automatic link
 #[test]
 fn removed_member_email_closes_automatic_link() {
     let mut data = world();
@@ -208,7 +214,8 @@ fn removed_member_email_closes_automatic_link() {
     assert!(!link["known_intervals"][0]["end"].is_null(), "{about}");
 }
 
-/// identity/R20: WHEN no Linear API key is available, THEN the pair fails with an auth failure shown
+/// spec: A missing Linear key is an auth failure
+/// WHEN no Linear API key is available, THEN the pair fails with an auth failure shown
 /// in coverage, and no request is made; WHEN a key is read from `LINEAR_API_KEY` or the
 /// keychain item `rastro-linear`, THEN it is sent to the API and never appears in the
 /// database, the config or any output
@@ -253,7 +260,8 @@ fn without_an_api_key_the_pair_fails_with_auth_and_a_key_is_never_stored() {
     assert!(!env.leaks(keychain_key, &outputs));
 }
 
-/// identity/R20: a key the API refuses is an auth failure, and never appears anywhere
+/// spec: A missing Linear key is an auth failure
+/// A key the API refuses is an auth failure, and never appears anywhere
 #[test]
 fn a_rejected_key_is_an_auth_failure_and_never_appears_anywhere() {
     for reply in [
@@ -272,12 +280,13 @@ fn a_rejected_key_is_an_auth_failure_and_never_appears_anywhere() {
     }
 }
 
-/// identity/R18: the connector reads every workspace user (deactivated ones too), the issues involving
+/// The connector reads every workspace user (deactivated ones too), the issues involving
 /// the API-key user in the window, and whose key it is, with fixed queries only
 #[expect(
     clippy::too_many_lines,
     reason = "the three fixed queries and their window are asserted against one sync's record"
 )]
+/// spec: A Linear sync records users and issues
 #[test]
 fn the_connector_reads_users_involved_issues_and_the_key_user_with_fixed_queries() {
     let fixture = Fixture::start(World {
@@ -390,7 +399,8 @@ fn the_connector_reads_users_involved_issues_and_the_key_user_with_fixed_queries
     }
 }
 
-/// identity/R18: an issue updated outside the window, or with no creator or assignee, records only
+/// spec: A Linear sync records users and issues
+/// An issue updated outside the window, or with no creator or assignee, records only
 /// what it has
 #[test]
 fn issues_outside_the_window_are_skipped_and_missing_people_record_nothing() {
@@ -422,7 +432,8 @@ fn issues_outside_the_window_are_skipped_and_missing_people_record_nothing() {
     );
 }
 
-/// identity/R18: a rate limit part-way keeps what was read and is never "found"
+/// spec: A Linear sync records users and issues
+/// A rate limit part-way keeps what was read and is never "found"
 #[test]
 fn a_rate_limit_keeps_what_was_read_and_records_when_to_retry() {
     let reset_ms = (chrono::Utc::now().timestamp() + 600) * 1000;
@@ -448,7 +459,8 @@ fn a_rate_limit_keeps_what_was_read_and_records_when_to_retry() {
     );
 }
 
-/// identity/R20: failures map to typed reasons, never raw error text
+/// spec: A missing Linear key is an auth failure
+/// Failures map to typed reasons, never raw error text
 #[test]
 fn failures_map_to_typed_reasons_in_coverage() {
     for (reply, reason) in [
@@ -481,7 +493,8 @@ fn failures_map_to_typed_reasons_in_coverage() {
     assert_eq!(coverage(&env), [["couldn't look", "protocol"]]);
 }
 
-/// identity/R36: WHEN a sync reads an app (integration) user, THEN its `app` flag is recorded at the
+/// spec: An app user is a bot and never links
+/// WHEN a sync reads an app (integration) user, THEN its `app` flag is recorded at the
 /// user, and an issue records its creator's and assignee's flags, each just before the id it
 /// belongs to. Linear's field is `User.app`; whether the live `users` query lists app users is
 /// unverified, as the API here is scripted
