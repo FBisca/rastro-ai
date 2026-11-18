@@ -768,6 +768,16 @@ fn queue_text(queue: &rastro_core::queue::Queue) -> String {
     lines.join("\n")
 }
 
+/// What a queue answer recorded: the item it named, then each owner intent.
+fn queue_answer_text(result: &rastro_operations::results::QueueAnswerResult) -> String {
+    let mut lines = Vec::new();
+    if let Some(item) = &result.item {
+        lines.push(format!("Item: {item}"));
+    }
+    lines.push(intents_text(&result.intents, "Nothing recorded"));
+    lines.join("\n")
+}
+
 /// The result of an operation, its human form, and whether it succeeded.
 type Outcome = (Response, String);
 
@@ -811,6 +821,11 @@ fn human(response: &Response) -> String {
         Response::About(r) => about_text(r),
         Response::Commitments(r) => commitments_text(r),
         Response::Queue(r) => queue_text(r),
+        Response::QueueAccept(r)
+        | Response::QueueEdit(r)
+        | Response::QueueReject(r)
+        | Response::QueueAnswer(r)
+        | Response::QueueMissed(r) => queue_answer_text(r),
         Response::MeetingImport(r)
         | Response::MeetingCommitments(r)
         | Response::MeetingReplay(r) => meeting_text(r),

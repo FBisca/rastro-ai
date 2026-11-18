@@ -10,7 +10,7 @@ use rastro_core::claims::{self, Entity, Object, ObservedClaim, Support};
 use rastro_core::{Evidence, Scope, Source, Storage, TrustClass};
 use serde_json::{Value, json};
 use std::{
-    collections::BTreeSet,
+    collections::{BTreeMap, BTreeSet},
     fs,
     io::{BufRead, BufReader, Write},
     os::unix::fs::PermissionsExt,
@@ -254,6 +254,33 @@ impl Env {
         self.path("data/rastro.sqlite3")
     }
 
+    fn sql<T: rusqlite::types::FromSql>(&self, query: &str) -> T {
+        rusqlite::Connection::open(self.database())
+            .unwrap()
+            .query_row(query, [], |row| row.get(0))
+            .unwrap()
+    }
+
+    /// How many owner intents are recorded.
+    fn intents(&self) -> i64 {
+        self.sql("SELECT count(*) FROM intent")
+    }
+
+    /// How many claims the projection holds.
+    fn claims(&self) -> i64 {
+        self.sql("SELECT count(*) FROM claim")
+    }
+
+    /// The newest owner intent, as the insert-only table stores it.
+    fn last_intent(&self) -> Value {
+        let recorded: String = self.sql(
+            "SELECT json_object('id', id, 'kind', kind, 'domain', domain_key,\n\
+             'targets', json(targets_json), 'payload', json(payload_json))\n\
+             FROM intent ORDER BY append_seq DESC LIMIT 1",
+        );
+        serde_json::from_str(&recorded).unwrap()
+    }
+
     /// Records one claim, read from `location` and `field` by source `project` (scope
     /// `personal`), bound to an extractor that isn't installed.
     fn record(&self, subject: &Entity, predicate: &str, object: Object, at: (&str, &str)) {
@@ -365,6 +392,79 @@ fn item<'a>(queue: &'a Value, name: &str) -> &'a Value {
         .iter()
         .find(|item| item["source"]["name"] == name)
         .unwrap_or_else(|| panic!("no item from {name}: {queue}"))
+}
+
+/// Records one later `name` intent for `person` and returns its id. No CLI operation names an
+/// existing Person yet, so the test seeds the intent a naming surface would record.
+fn name_person(env: &Env, person: &Value, name: &str) -> String {
+    use rastro_core::identity::{
+        EntityTarget, FORMAT_VERSION, Intent, IntentKind, IssuerContext, OWNER, Payload,
+        SHAPE_VERSION, Targets,
+    };
+    let mut intent = Intent {
+        id: "i_test_name".into(),
+        append_seq: 0,
+        format_version: FORMAT_VERSION,
+        kind: IntentKind::Name,
+        owner_id: OWNER.into(),
+        issuer_context: IssuerContext::owner_cli(&[]),
+        issued_at: Utc::now(),
+        domain_key: String::new(),
+        targets: Targets::Entity {
+            version: SHAPE_VERSION,
+            entity: EntityTarget {
+                id: person["id"].as_str().unwrap().into(),
+                identifier: person["identifier"].as_str().unwrap().into(),
+                role: "person".into(),
+            },
+        },
+        payload: Payload {
+            version: SHAPE_VERSION,
+            name: Some(name.into()),
+        },
+        undo_of: None,
+        supersedes: None,
+    };
+    intent.domain_key = intent.expected_domain().unwrap_or_default();
+    let mut db = rastro_storage_sqlite::SqliteStorage::open(&env.database()).unwrap();
+    db.issue_intents(&[], |_| Ok((vec![intent], ()))).unwrap();
+    "i_test_name".into()
+}
+
+/// The question item whose accounts include `identifier`.
+fn question<'a>(queue: &'a Value, identifier: &str) -> &'a Value {
+    queue["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| {
+            item["kind"] == "question"
+                && item["question"]["accounts"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .any(|account| account["identifier"] == identifier)
+        })
+        .unwrap_or_else(|| panic!("no question holding {identifier}: {queue}"))
+}
+
+/// The `std:` claims an `about` answer shows, as (subject id, predicate, literal value): the
+/// standard statements one or more commitments already hold.
+fn commitment_statements(about: &Value) -> BTreeSet<(String, String, String)> {
+    (about["claims"].as_array().into_iter().flatten())
+        .filter(|claim| {
+            claim["predicate"]
+                .as_str()
+                .is_some_and(|predicate| predicate.starts_with("std:"))
+        })
+        .map(|claim| {
+            (
+                claim["subject"]["id"].as_str().unwrap().to_string(),
+                claim["predicate"].as_str().unwrap().to_string(),
+                claim["object"]["value"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect()
 }
 
 /// The gap a source names.
@@ -675,4 +775,994 @@ fn S3_every_gap_is_named_and_a_hidden_sources_items_are_absent() {
         .collect();
     assert!(!names.contains(&"weekly-1"), "{personal}");
     assert!(names.contains(&"private-1"), "{personal}");
+}
+
+/// A literal claim object, as an extractor submits the text a source states.
+fn literal(value: &str) -> Object {
+    Object::Literal {
+        value: value.into(),
+        datatype: "string".into(),
+    }
+}
+
+/// S4: an item whose standard statement an observed claim already holds is absent from the queue
+/// and the result counts it as already known; a claim matching only a name or the promise's text
+/// drops nothing.
+#[test]
+fn S4_an_item_an_observed_claim_already_holds_is_omitted_and_counted() {
+    let env = Env::new();
+    env.candidates(&good());
+    env.import_ok(
+        "weekly-1",
+        "work",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+    );
+    let queue = env.queue();
+    assert_eq!(queue["items"].as_array().unwrap().len(), 2, "{queue}");
+    assert_eq!(queue["already_known"], 0, "{queue}");
+
+    // Look-alikes that hold no more than a part of a statement: a title repeating the promise's
+    // words, a tracker field repeating a party's name, and the promise's two party names and its
+    // date each on a different commitment, so no one commitment holds the item's statement.
+    let issue = Entity::new("tracker:issue/1".into(), "tracker:Issue".into());
+    env.record(
+        &issue,
+        "tracker:title",
+        literal("send Bob the budget"),
+        ("https://tracker.test/issue/1", "/title"),
+    );
+    env.record(
+        &issue,
+        "tracker:assignee",
+        literal("Alice"),
+        ("https://tracker.test/issue/1", "/assignee"),
+    );
+    let owes = Entity::new("std:commitment/owes".into(), "std:Commitment".into());
+    env.record(
+        &owes,
+        "std:owes",
+        literal("Alice"),
+        ("https://meetings.test/other", "/owes"),
+    );
+    let owed_to = Entity::new("std:commitment/owed-to".into(), "std:Commitment".into());
+    env.record(
+        &owed_to,
+        "std:owed_to",
+        literal("Bob"),
+        ("https://meetings.test/other", "/owed_to"),
+    );
+    let due = Entity::new("std:commitment/due".into(), "std:Commitment".into());
+    env.record(
+        &due,
+        "std:due",
+        literal("by Friday"),
+        ("https://meetings.test/other", "/due"),
+    );
+    let queue = env.queue();
+    assert_eq!(queue["items"].as_array().unwrap().len(), 2, "{queue}");
+    assert_eq!(queue["already_known"], 0, "{queue}");
+
+    // Observed claims hold the first proposal's statements: the same standard predicates, party
+    // names and stated date.
+    let commitment = Entity::new("std:commitment/1".into(), "std:Commitment".into());
+    env.record(
+        &commitment,
+        "std:owes",
+        literal("Alice"),
+        ("https://meetings.test/weekly-1", "/owes"),
+    );
+    env.record(
+        &commitment,
+        "std:owed_to",
+        literal("Bob"),
+        ("https://meetings.test/weekly-1", "/owed_to"),
+    );
+    env.record(
+        &commitment,
+        "std:due",
+        literal("by Friday"),
+        ("https://meetings.test/weekly-1", "/due"),
+    );
+
+    let queue = env.queue();
+    let items = queue["items"].as_array().unwrap();
+    assert_eq!(items.len(), 1, "{queue}");
+    assert_eq!(
+        items[0]["proposal"]["kind"], "waiting_on",
+        "the promise is known, the waiting-on is not: {queue}"
+    );
+    assert_eq!(queue["already_known"], 1, "{queue}");
+}
+
+/// S5: a proposal naming a party the owner mapped to an entity that has visible claims carries
+/// those claims as context and stays in the queue.
+#[test]
+fn S5_a_mapped_partys_visible_claims_are_the_items_context() {
+    let env = Env::new();
+    let me = env.ok(&["identity", "me"])["person"]["identifier"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let person = Entity::new(me.clone(), "rastro:Person".into());
+    let owns = literal("the budget");
+    env.record(
+        &person,
+        "note:owns",
+        owns.clone(),
+        ("https://contacts.test/owner", "/owns"),
+    );
+
+    env.candidates(&good());
+    env.import_ok(
+        "weekly-1",
+        "work",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+    );
+
+    let queue = env.queue();
+    assert_eq!(queue["items"].as_array().unwrap().len(), 2, "{queue}");
+    let promise = item(&queue, "weekly-1");
+    assert_eq!(
+        promise["proposal"]["responsible"]["identity"]["identifier"], me,
+        "{promise}"
+    );
+    let context = promise["context"]
+        .as_array()
+        .unwrap_or_else(|| panic!("the mapped party brings no context: {promise}"));
+    let held = context
+        .iter()
+        .find(|claim| claim["id"] == claims::claim_id(&person.id, "note:owns", &owns))
+        .unwrap_or_else(|| panic!("the party's visible claim is not context: {promise}"));
+    assert_eq!(held["subject"]["id"], person.id, "{promise}");
+    assert_eq!(held["object"]["value"], "the budget", "{promise}");
+    assert_eq!(held["status"], "observed", "{promise}");
+    // The item stays in the queue, and every claim appears once.
+    let ids: BTreeSet<&str> = context
+        .iter()
+        .map(|claim| claim["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids.len(), context.len(), "{promise}");
+}
+
+/// S6: a rejection with a reason and a yes or no answer each record one owner intent, the item
+/// leaves the queue on the CLI and on an MCP read, a rejection mints no claim, and a yes still
+/// creates and names the Person that holds a pair nobody held.
+#[test]
+fn S6_a_rejection_and_an_answer_record_one_intent_and_leave_every_surface() {
+    let env = Env::new();
+    env.candidates(&good());
+    env.import_ok(
+        "weekly-1",
+        "work",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+    );
+    env.typed_account(
+        "github:account/1",
+        "code:Account",
+        ("name", "Ana Silva"),
+        "https://api.github.com/users/1",
+    );
+    env.typed_account(
+        "linear:user/u-1",
+        "tracker:Account",
+        ("name", "ana silva"),
+        "https://linear.app/rastro/profiles/u-1",
+    );
+    env.typed_account(
+        "github:account/2",
+        "code:Account",
+        ("name", "Bob Jones"),
+        "https://api.github.com/users/2",
+    );
+    env.typed_account(
+        "linear:user/u-2",
+        "tracker:Account",
+        ("name", "bob jones"),
+        "https://linear.app/rastro/profiles/u-2",
+    );
+
+    let queue = env.queue();
+    let proposal = item(&queue, "weekly-1")["id"].as_str().unwrap().to_string();
+    let ana = question(&queue, "github:account/1")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let bob = question(&queue, "github:account/2")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // A rejection: one intent, no claim, and the item leaves the queue on both surfaces.
+    let claims = env.claims();
+    let intents = env.intents();
+    let rejected = env.ok(&[
+        "queue",
+        "reject",
+        &proposal,
+        "--reason",
+        "Alice never promised that",
+    ]);
+    assert_eq!(rejected["item"], proposal, "{rejected}");
+    let recorded = rejected["intents"].as_array().unwrap();
+    assert_eq!(recorded.len(), 1, "{rejected}");
+    assert_eq!(recorded[0]["kind"], "reject", "{rejected}");
+    assert_eq!(env.intents(), intents + 1, "{rejected}");
+    assert_eq!(env.claims(), claims, "a rejection mints no claim");
+    assert!(!ids(&env.queue()).contains(&proposal), "still on the CLI");
+    let read = env.mcp(&[], "queue", json!({}));
+    assert!(
+        !ids(&read["structuredContent"]["result"]).contains(&proposal),
+        "still on MCP: {read}"
+    );
+
+    // A yes on a pair no Person holds yet: still one intent, and it is the answer itself.
+    let claims = env.claims();
+    let before = env.intents();
+    let answered = env.ok(&["queue", "answer", &bob, "yes"]);
+    let recorded = answered["intents"].as_array().unwrap();
+    assert_eq!(recorded.len(), 1, "{answered}");
+    assert_eq!(recorded[0]["kind"], "answer", "{answered}");
+    assert_eq!(env.intents(), before + 1, "{answered}");
+    assert!(!ids(&env.queue()).contains(&bob), "still queued");
+    let read = env.mcp(&[], "queue", json!({}));
+    assert!(
+        !ids(&read["structuredContent"]["result"]).contains(&bob),
+        "still on MCP: {read}"
+    );
+    // The one answer decided the whole question: its Person is named, typed and holds both
+    // accounts, and those claims are the answer's.
+    assert!(env.claims() > claims, "a yes mints the claims it decides");
+    let person = env.ok(&["about", "rastro:name/Bob Jones"]);
+    let accounts: Vec<&str> = (person["person"]["accounts"].as_array().unwrap().iter())
+        .map(|account| account["identifier"].as_str().unwrap())
+        .collect();
+    assert!(
+        accounts.contains(&"github:account/2") && accounts.contains(&"linear:user/u-2"),
+        "{person}"
+    );
+    let held: Vec<&str> = (person["person"]["accounts"].as_array().unwrap().iter())
+        .map(|account| account["reasons"][0]["intent"].as_str().unwrap())
+        .collect();
+    assert_eq!(held.len(), 2, "{person}");
+    assert_eq!(
+        held,
+        [recorded[0]["id"].as_str().unwrap(); 2],
+        "both held-by claims are the one answer's: {person}"
+    );
+
+    // A no: still one intent, and the question leaves too.
+    let claims = env.claims();
+    let before = env.intents();
+    let answered = env.ok(&["queue", "answer", &ana, "no"]);
+    let recorded = answered["intents"].as_array().unwrap();
+    assert_eq!(recorded.len(), 1, "{answered}");
+    assert_eq!(recorded[0]["kind"], "answer", "{answered}");
+    assert_eq!(env.intents(), before + 1, "{answered}");
+    assert!(!ids(&env.queue()).contains(&ana), "still queued");
+    assert_eq!(env.claims(), claims, "a no mints no claim");
+    let read = env.mcp(&[], "queue", json!({}));
+    assert!(
+        !ids(&read["structuredContent"]["result"]).contains(&ana),
+        "still on MCP: {read}"
+    );
+}
+
+/// spec: One intent per answer, recorded once
+/// Undoing a yes that was answered in the queue ends what it decided — the accounts it held and
+/// the name it gave — and the question waits again.
+#[test]
+fn undoing_a_queues_yes_ends_its_decision_and_returns_the_question() {
+    let env = Env::new();
+    env.typed_account(
+        "github:account/7",
+        "code:Account",
+        ("name", "Carla Dias"),
+        "https://api.github.com/users/7",
+    );
+    env.typed_account(
+        "linear:user/u-7",
+        "tracker:Account",
+        ("name", "carla dias"),
+        "https://linear.app/rastro/profiles/u-7",
+    );
+    let queue = env.queue();
+    let item = question(&queue, "github:account/7")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let answered = env.ok(&["queue", "answer", &item, "yes"]);
+    let answer = answered["intents"][0]["id"].as_str().unwrap().to_string();
+    assert!(!ids(&env.queue()).contains(&item), "{answered}");
+
+    // Undoing the answer is refused by nothing: it ends the answer's decision.
+    let undone = env.ok(&["identity", "undo", &answer]);
+    assert_eq!(undone["intents"][0]["kind"], "undo", "{undone}");
+    assert_eq!(undone["intents"][0]["status"], "effective", "{undone}");
+    let history = env.ok(&["identity", "history", "github:account/7"]);
+    let answer_row = (history["intents"].as_array().unwrap().iter())
+        .find(|intent| intent["id"] == answer.as_str())
+        .unwrap_or_else(|| panic!("the answer is not in the account's history: {history}"));
+    assert_eq!(answer_row["status"], "undone", "{history}");
+
+    // The question waits again, and no account is held now.
+    assert!(
+        ids(&env.queue()).contains(&item),
+        "the question returns: {}",
+        env.queue()
+    );
+    let about = env.ok(&["about", "github:account/7"]);
+    let held = (about["claims"].as_array().unwrap().iter())
+        .filter(|claim| claim["predicate"] == "rastro:held_by")
+        .count();
+    assert_eq!(held, 0, "no current held-by claim: {about}");
+    // It ends the claim; it does not erase that the account was held until the undo.
+    let history = env.ok(&["about", "github:account/7", "--history"]);
+    let ended = (history["claims"].as_array().unwrap().iter())
+        .find(|claim| claim["predicate"] == "rastro:held_by")
+        .unwrap_or_else(|| panic!("the held-by claim is gone, not ended: {history}"));
+    assert_eq!(ended["status"], "superseded", "{history}");
+    let known = (ended["known_intervals"].as_array().unwrap().iter())
+        .any(|interval| interval["end"].is_string());
+    assert!(known, "the claim ends at the undo: {history}");
+}
+
+/// The answer records the accounts it links when it is written: undoing an earlier link on one of
+/// them never re-decides the answer on replay.
+#[test]
+fn an_answers_decision_survives_undoing_an_earlier_link() {
+    let env = Env::new();
+    env.typed_account(
+        "github:account/1",
+        "code:Account",
+        ("name", "Ana Silva"),
+        "https://api.github.com/users/1",
+    );
+    env.typed_account(
+        "linear:user/u-1",
+        "tracker:Account",
+        ("name", "ana silva"),
+        "https://linear.app/rastro/profiles/u-1",
+    );
+    // The first account is the owner's, so a yes links only the second.
+    let linked = env.ok(&["identity", "link", "github:account/1", "me"]);
+    let link = linked["intents"][0]["id"].as_str().unwrap().to_string();
+    let item = question(&env.queue(), "github:account/1")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let answered = env.ok(&["queue", "answer", &item, "yes"]);
+    assert_eq!(
+        answered["intents"].as_array().unwrap().len(),
+        1,
+        "{answered}"
+    );
+
+    // Undoing the earlier link leaves the answer's decision as it was written: one account.
+    env.ok(&["identity", "undo", &link]);
+    let me = env.ok(&["about", "me"]);
+    let accounts: Vec<&str> = (me["person"]["accounts"].as_array().unwrap().iter())
+        .map(|account| account["identifier"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        accounts,
+        ["linear:user/u-1"],
+        "the answer still links only the account it recorded: {me}"
+    );
+}
+
+/// A yes that created a Person can't be undone while a later intent holds or merges that Person:
+/// the undo would leave a held-by claim pointing at something that is no longer a Person.
+#[test]
+fn an_answer_that_created_a_person_is_kept_while_later_intents_depend_on_it() {
+    let env = Env::new();
+    env.typed_account(
+        "github:account/9",
+        "code:Account",
+        ("name", "Dora Melo"),
+        "https://api.github.com/users/9",
+    );
+    env.typed_account(
+        "linear:user/u-9",
+        "tracker:Account",
+        ("name", "dora melo"),
+        "https://linear.app/rastro/profiles/u-9",
+    );
+    env.typed_account(
+        "github:account/10",
+        "code:Account",
+        ("name", "Dora Work"),
+        "https://api.github.com/users/10",
+    );
+    let item = question(&env.queue(), "github:account/9")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let answered = env.ok(&["queue", "answer", &item, "yes"]);
+    let answer = answered["intents"][0]["id"].as_str().unwrap().to_string();
+    // A later link holds a third account by the Person the answer created.
+    let person = env.ok(&["about", "rastro:name/Dora Melo"]);
+    let person = person["person"]["identifier"].as_str().unwrap().to_string();
+    env.ok(&["identity", "link", "github:account/10", &person]);
+
+    let link = env.last_intent()["id"].as_str().unwrap().to_string();
+    let intents = env.intents();
+    let (ok, refused) = env.run(&["identity", "undo", &answer]);
+    assert!(!ok, "{refused}");
+    assert_eq!(
+        refused["error"].as_str().unwrap(),
+        format!("{person} is held, named or merged by intent {link}; undo that first"),
+        "the refusal reads as one sentence: {refused}"
+    );
+    assert_eq!(env.intents(), intents, "nothing is recorded");
+    let me = env.ok(&["about", &person]);
+    let accounts: Vec<&str> = (me["person"]["accounts"].as_array().unwrap().iter())
+        .map(|account| account["identifier"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        accounts,
+        ["github:account/10", "github:account/9", "linear:user/u-9"],
+        "the Person still holds what it did: {me}"
+    );
+}
+
+/// A yes that created a Person can't be undone while a later name intent targets that Person:
+/// the undo would leave a name claim on an entity that is no longer a Person.
+#[test]
+fn an_answer_that_created_a_person_is_kept_while_a_later_name_targets_it() {
+    let env = Env::new();
+    env.typed_account(
+        "github:account/11",
+        "code:Account",
+        ("name", "Dora Melo"),
+        "https://api.github.com/users/11",
+    );
+    env.typed_account(
+        "linear:user/u-11",
+        "tracker:Account",
+        ("name", "dora melo"),
+        "https://linear.app/rastro/profiles/u-11",
+    );
+    let item = question(&env.queue(), "github:account/11")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let answered = env.ok(&["queue", "answer", &item, "yes"]);
+    let answer = answered["intents"][0]["id"].as_str().unwrap().to_string();
+    let person = env.ok(&["about", "rastro:name/Dora Melo"])["person"].clone();
+    let name = name_person(&env, &person, "Dora M.");
+
+    let intents = env.intents();
+    let (ok, refused) = env.run(&["identity", "undo", &answer]);
+    assert!(!ok, "{refused}");
+    let identifier = person["identifier"].as_str().unwrap();
+    assert_eq!(
+        refused["error"].as_str().unwrap(),
+        format!("{identifier} is held, named or merged by intent {name}; undo that first"),
+        "the refusal names the later name intent: {refused}"
+    );
+    assert_eq!(env.intents(), intents, "nothing is recorded");
+
+    // The Person keeps its new name and both accounts.
+    let about = env.ok(&["about", "rastro:name/Dora M."]);
+    let mut accounts: Vec<&str> = (about["person"]["accounts"].as_array().unwrap().iter())
+        .map(|account| account["identifier"].as_str().unwrap())
+        .collect();
+    accounts.sort();
+    assert_eq!(
+        accounts,
+        ["github:account/11", "linear:user/u-11"],
+        "{about}"
+    );
+}
+
+/// S7: a missed report records its text and, when one was named, the item; the named item stays
+/// pending and the report is recorded as missed.
+#[test]
+fn S7_a_missed_report_records_its_text_and_keeps_the_named_item_pending() {
+    let env = Env::new();
+    env.candidates(&good());
+    env.import_ok(
+        "weekly-1",
+        "work",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+    );
+    let queue = env.queue();
+    let item = item(&queue, "weekly-1")["id"].as_str().unwrap().to_string();
+
+    // With no item: something Rastro should have caught that may never have been queued.
+    let before = env.intents();
+    let text = "Alice asked me for the budget on Monday";
+    let report = env.ok(&["queue", "missed", text]);
+    assert!(report.get("item").is_none(), "{report}");
+    assert_eq!(report["intents"].as_array().unwrap().len(), 1, "{report}");
+    let recorded = env.last_intent();
+    assert_eq!(recorded["kind"], "missed", "{recorded}");
+    assert_eq!(recorded["targets"]["text"], text, "{recorded}");
+    assert!(recorded["targets"]["item"].is_null(), "{recorded}");
+    assert_eq!(env.intents(), before + 1, "{recorded}");
+    assert_eq!(ids(&env.queue()), ids(&queue), "nothing left the queue");
+
+    // With an item: it records the item and the item stays pending.
+    let before = env.intents();
+    let report = env.ok(&["queue", "missed", "I promised to send it", "--item", &item]);
+    assert_eq!(report["item"], item, "{report}");
+    let recorded = env.last_intent();
+    assert_eq!(recorded["kind"], "missed", "{recorded}");
+    assert_eq!(
+        recorded["targets"]["text"], "I promised to send it",
+        "{recorded}"
+    );
+    assert_eq!(recorded["targets"]["item"], item, "{recorded}");
+    assert_eq!(env.intents(), before + 1, "{recorded}");
+    assert!(ids(&env.queue()).contains(&item), "the item stays pending");
+}
+
+/// S8: an answer naming an item the queue no longer holds, or the same item a second time, is
+/// refused with a reason naming the item; nothing is recorded and the queue reads the same.
+#[test]
+fn S8_an_answer_for_an_item_the_queue_no_longer_holds_is_refused_and_records_nothing() {
+    let env = Env::new();
+    env.candidates(&good());
+    env.import_ok(
+        "weekly-1",
+        "work",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+    );
+    let queue = env.queue();
+    let item = item(&queue, "weekly-1")["id"].as_str().unwrap().to_string();
+
+    // An item the queue never held.
+    let unknown = "q_00000000000000000000000000000000";
+    let intents = env.intents();
+    let before = env.queue();
+    let (ok, refused) = env.run(&["queue", "reject", unknown, "--reason", "not mine"]);
+    assert!(!ok, "{refused}");
+    assert!(
+        refused["error"].as_str().unwrap().contains(unknown),
+        "the refusal names the item: {refused}"
+    );
+    assert_eq!(env.intents(), intents, "nothing is recorded");
+    assert_eq!(env.queue(), before, "the queue reads the same");
+
+    // The same item a second time: the first answer left the queue.
+    env.ok(&["queue", "reject", &item, "--reason", "not a promise"]);
+    let after = env.queue();
+    assert!(!ids(&after).contains(&item));
+    let intents = env.intents();
+    let (ok, refused) = env.run(&["queue", "reject", &item, "--reason", "still not"]);
+    assert!(!ok, "{refused}");
+    assert!(
+        refused["error"].as_str().unwrap().contains(&item),
+        "the refusal names the item: {refused}"
+    );
+    assert_eq!(env.intents(), intents, "nothing is recorded");
+    assert_eq!(env.queue(), after, "the queue reads the same");
+}
+
+/// spec: One intent per answer, recorded once
+/// An accept and an edit each record one owner intent, snapshotting what the owner saw and,
+/// when they edited it, what they made; the item leaves the queue.
+#[test]
+fn an_accept_and_an_edit_record_one_intent_each_and_leave_the_queue() {
+    let env = Env::new();
+    env.candidates(&good());
+    env.import_ok(
+        "weekly-1",
+        "work",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+    );
+    let queue = env.queue();
+    let items = queue["items"].as_array().unwrap();
+    assert_eq!(items.len(), 2, "{queue}");
+    let first = items[0]["id"].as_str().unwrap().to_string();
+    let second = items[1]["id"].as_str().unwrap().to_string();
+    let seen = json!({"promise": "send Bob the budget", "stated_date": "by Friday"});
+    let second_seen = json!({"promise": "review the numbers", "stated_date": "next week"});
+
+    let before = env.intents();
+    let accepted = env.ok(&["queue", "accept", &first]);
+    assert_eq!(accepted["item"], first, "{accepted}");
+    let recorded = accepted["intents"].as_array().unwrap();
+    assert_eq!(recorded.len(), 1, "{accepted}");
+    assert_eq!(recorded[0]["kind"], "accept", "{accepted}");
+    assert_eq!(env.intents(), before + 1, "{accepted}");
+    let stored = env.last_intent();
+    assert_eq!(stored["targets"]["seen"], seen, "{stored}");
+    assert!(stored["targets"]["edited"].is_null(), "{stored}");
+    assert!(!ids(&env.queue()).contains(&first), "still queued");
+
+    let before = env.intents();
+    let edited = env.ok(&[
+        "queue",
+        "edit",
+        &second,
+        "--promise",
+        "review the numbers on Friday",
+        "--date",
+        "next Friday",
+    ]);
+    assert_eq!(edited["item"], second, "{edited}");
+    let recorded = edited["intents"].as_array().unwrap();
+    assert_eq!(recorded.len(), 1, "{edited}");
+    assert_eq!(recorded[0]["kind"], "edit", "{edited}");
+    assert_eq!(env.intents(), before + 1, "{edited}");
+    let stored = env.last_intent();
+    assert_eq!(stored["targets"]["seen"], second_seen, "{stored}");
+    assert_eq!(
+        stored["targets"]["edited"],
+        json!({"promise": "review the numbers on Friday", "stated_date": "next Friday"}),
+        "{stored}"
+    );
+    assert!(!ids(&env.queue()).contains(&second), "still queued");
+}
+
+/// S9: accepting a proposal unchanged records one owner intent and mints one observed commitment
+/// on the owner's Person, holding the item's statements — each standard predicate carrying the
+/// party name or the stated date as a literal — and justified by that intent alone; `why` names
+/// the intent, the item leaves the queue, and the intent reads as a clean accept.
+#[test]
+fn S9_accepting_a_proposal_mints_its_standard_terms_justified_by_the_intent() {
+    let env = Env::new();
+    env.candidates(&good());
+    env.import_ok(
+        "weekly-1",
+        "work",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+    );
+    let me = env.ok(&["identity", "me"])["person"].clone();
+    let person = me["id"].as_str().unwrap().to_string();
+    let proposal = item(&env.queue(), "weekly-1")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let claims = env.claims();
+    let accepted = env.ok(&["queue", "accept", &proposal]);
+    let recorded = accepted["intents"].as_array().unwrap();
+    assert_eq!(recorded.len(), 1, "{accepted}");
+    assert_eq!(recorded[0]["kind"], "accept", "{accepted}");
+    assert!(
+        env.claims() > claims,
+        "the accept mints the claim it decided"
+    );
+    assert!(!ids(&env.queue()).contains(&proposal), "still queued");
+
+    // One commitment holds the item's statements: the item's own `std:Commitment` carries every
+    // standard term, each predicate with the party's name or the stated date as a literal, and
+    // none is split across subjects.
+    let about = env.ok(&["about", "me"]);
+    assert_eq!(about["person"]["id"], person, "{about}");
+    let commitment = claims::entity_id(&format!("std:commitment/{proposal}"));
+    assert_ne!(commitment, person, "the commitment is its own entity");
+    let expected: BTreeSet<(String, String, String)> = [
+        (
+            commitment.clone(),
+            "std:owes".to_string(),
+            "Alice".to_string(),
+        ),
+        (
+            commitment.clone(),
+            "std:owed_to".to_string(),
+            "Bob".to_string(),
+        ),
+        (
+            commitment.clone(),
+            "std:due".to_string(),
+            "by Friday".to_string(),
+        ),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(commitment_statements(&about), expected, "{about}");
+
+    // Each is an observed claim whose only justification is the accept intent, with no evidence
+    // span: `why` explains it by that intent.
+    let claim = (about["claims"].as_array().unwrap().iter())
+        .find(|claim| claim["predicate"] == "std:owes")
+        .unwrap_or_else(|| panic!("no owes claim: {about}"));
+    assert_eq!(claim["status"], "observed", "{about}");
+    let why = env.ok(&["why", claim["id"].as_str().unwrap()]);
+    let supports = why["supports"].as_array().unwrap();
+    assert_eq!(supports.len(), 1, "{why}");
+    assert_eq!(supports[0]["justification_kind"], "owner_intent", "{why}");
+    assert_eq!(supports[0]["intent"]["id"], recorded[0]["id"], "{why}");
+    assert_eq!(supports[0]["spans"], json!([]), "{why}");
+
+    // What the owner accepted is knowledge: the same statements proposed again by another
+    // conversation are left out and counted, never shown twice.
+    env.import_ok(
+        "weekly-2",
+        "work",
+        "2026-11-11T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+    );
+    let queue = env.queue();
+    assert_eq!(queue["already_known"], 1, "{queue}");
+    assert!(
+        (queue["items"].as_array().unwrap().iter())
+            .all(|item| item["proposal"]["kind"] == "waiting_on"),
+        "only the promise is known: {queue}"
+    );
+}
+
+/// S10: editing a proposal's promise or stated date and accepting it mints the claim from the
+/// owner's edited statement, and the one intent snapshots both what the owner saw and what they
+/// made, so the record reads as an accept with edits rather than a clean accept.
+#[test]
+fn S10_accepting_with_edits_mints_the_edited_statement_and_snapshots_both() {
+    let env = Env::new();
+    env.candidates(&good());
+    env.import_ok(
+        "weekly-1",
+        "work",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+    );
+    let waiting_on = ids(&env.queue())[1].clone();
+
+    let edited = env.ok(&[
+        "queue",
+        "edit",
+        &waiting_on,
+        "--promise",
+        "review the numbers on Friday",
+        "--date",
+        "next Friday",
+    ]);
+    let recorded = edited["intents"].as_array().unwrap();
+    assert_eq!(recorded.len(), 1, "{edited}");
+    assert_eq!(recorded[0]["kind"], "edit", "accepted with edits: {edited}");
+    assert!(!ids(&env.queue()).contains(&waiting_on), "still queued");
+
+    // The one intent snapshots both statements: what the owner saw and what they made.
+    let stored = env.last_intent();
+    assert_eq!(
+        stored["targets"]["seen"],
+        json!({"promise": "review the numbers", "stated_date": "next week"}),
+        "{stored}"
+    );
+    assert_eq!(
+        stored["targets"]["edited"],
+        json!({"promise": "review the numbers on Friday", "stated_date": "next Friday"}),
+        "{stored}"
+    );
+
+    // The claim holds the owner's edited statement: the date as they made it, not the one they
+    // replaced. The statements are the item's own commitment's, and the intent backs them.
+    let about = env.ok(&["about", "me"]);
+    let commitment = claims::entity_id(&format!("std:commitment/{waiting_on}"));
+    let expected: BTreeSet<(String, String, String)> = [
+        (
+            commitment.clone(),
+            "std:waiting_on".to_string(),
+            "Bob".to_string(),
+        ),
+        (
+            commitment.clone(),
+            "std:owed_to".to_string(),
+            "Alice".to_string(),
+        ),
+        (
+            commitment.clone(),
+            "std:due".to_string(),
+            "next Friday".to_string(),
+        ),
+    ]
+    .into_iter()
+    .collect();
+    assert_eq!(commitment_statements(&about), expected, "{about}");
+    let due = (about["claims"].as_array().unwrap().iter())
+        .find(|claim| claim["predicate"] == "std:due")
+        .unwrap_or_else(|| panic!("no due claim: {about}"));
+    assert_eq!(due["object"]["value"], "next Friday", "{about}");
+    let why = env.ok(&["why", due["id"].as_str().unwrap()]);
+    assert_eq!(
+        why["supports"][0]["intent"]["id"], recorded[0]["id"],
+        "the edit alone backs the edited claim: {why}"
+    );
+}
+
+/// S11: an accepted claim keeps its item's source's scope. A work-scoped read of the queue and of
+/// `about me` succeeds with neither the item nor the claim, while a read without a scope shows
+/// the claim in `about me` and `why` names the intent.
+#[test]
+fn S11_an_accepted_claim_is_visible_only_in_the_scopes_that_see_its_source() {
+    let env = Env::new();
+    env.candidates(&good());
+    env.import_ok(
+        "personal-meeting",
+        "personal",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+    );
+    let person = env.ok(&["identity", "me"])["person"]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let proposal = item(&env.queue(), "personal-meeting")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let accepted = env.ok(&["queue", "accept", &proposal]);
+    let intent = accepted["intents"][0]["id"].as_str().unwrap().to_string();
+
+    // Read without a scope: every scope, so the item's commitment is part of `about me` and its
+    // `why` names the accept intent.
+    let about = env.ok(&["about", "me"]);
+    assert_eq!(about["person"]["id"], person, "{about}");
+    let commitment = claims::entity_id(&format!("std:commitment/{proposal}"));
+    let statements = commitment_statements(&about);
+    assert_eq!(statements.len(), 3, "{about}");
+    assert!(
+        statements
+            .iter()
+            .all(|(subject, _, _)| subject == &commitment),
+        "the commitment's own subject: {about}"
+    );
+    let due = (about["claims"].as_array().unwrap().iter())
+        .find(|claim| claim["predicate"] == "std:due")
+        .unwrap_or_else(|| panic!("no due claim: {about}"));
+    let why = env.ok(&["why", due["id"].as_str().unwrap()]);
+    assert_eq!(why["supports"][0]["intent"]["id"], intent, "{why}");
+
+    // Read with a work scope: the source is hidden, so the claim is too, and the read succeeds.
+    let read = env.mcp(&["work"], "about", json!({"entity": "me"}));
+    let scoped = &read["structuredContent"]["result"];
+    assert_eq!(scoped["resolved"], true, "the read succeeds: {read}");
+    assert!(
+        commitment_statements(scoped).is_empty(),
+        "the personal claim is absent in a work scope: {read}"
+    );
+    let queue = env.mcp(&["work"], "queue", json!({}));
+    assert!(
+        !ids(&queue["structuredContent"]["result"]).contains(&proposal),
+        "the item is absent in a work scope: {queue}"
+    );
+}
+
+/// An accepted item keeps its own standard terms: each acceptance is one commitment of its own,
+/// so two accepted proposals never merge into one statement set, and the same statements proposed
+/// again are known one commitment at a time.
+#[test]
+fn an_accepted_commitment_keeps_its_own_standard_terms() {
+    let env = Env::new();
+    env.candidates(&good());
+    env.import_ok(
+        "weekly-1",
+        "work",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+    );
+    let items = ids(&env.queue());
+    assert_eq!(items.len(), 2, "two proposals: {items:?}");
+    for item in &items {
+        env.ok(&["queue", "accept", item]);
+    }
+
+    // Two commitments, each carrying exactly its own three statements, not one merged set.
+    let about = env.ok(&["about", "me"]);
+    let mut per_subject: BTreeMap<String, BTreeSet<(String, String)>> = BTreeMap::new();
+    for (subject, predicate, value) in commitment_statements(&about) {
+        per_subject
+            .entry(subject)
+            .or_default()
+            .insert((predicate, value));
+    }
+    assert_eq!(per_subject.len(), 2, "one commitment per item: {about}");
+    for statements in per_subject.values() {
+        assert_eq!(statements.len(), 3, "each holds its own three: {about}");
+    }
+
+    // The same statements proposed again are known, one commitment at a time: the waiting-on's
+    // set must not have been merged with the promise's.
+    env.import_ok(
+        "weekly-2",
+        "work",
+        "2026-11-11T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+    );
+    let queue = env.queue();
+    assert_eq!(queue["already_known"], 2, "{queue}");
+    assert!(queue["items"].as_array().unwrap().is_empty(), "{queue}");
+}
+
+/// A scoped read never explains a hidden acceptance: a claim visible in work cites only the
+/// intents that scope sees, never a personal item's accept.
+#[test]
+fn a_scoped_read_never_explains_a_hidden_accept() {
+    let env = Env::new();
+    env.candidates(&good());
+    env.import_ok(
+        "personal-meeting",
+        "personal",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+    );
+    // A work meeting proposes the same parties with another date: the two proposals share the
+    // parties' terms but neither statement set.
+    fs::write(
+        env.path("work.txt"),
+        "Alice: I'll send Bob the budget next week.\nBob: Thanks.\n",
+    )
+    .unwrap();
+    env.candidates(&[candidate(
+        1,
+        "promise",
+        Some("Alice"),
+        Some("Bob"),
+        "send Bob the budget",
+        Some("next week"),
+        "I'll send Bob the budget next week.",
+    )]);
+    env.import_from(
+        "work-meeting",
+        "work.txt",
+        "work",
+        "2026-11-11T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+    );
+
+    let personal = item(&env.queue(), "personal-meeting")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let personal_accept = env.ok(&["queue", "accept", &personal])["intents"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let work = item(&env.queue(), "work-meeting")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let work_accept = env.ok(&["queue", "accept", &work])["intents"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    // The work commitment's own statement, read without a scope, then explained in a work scope.
+    let about = env.ok(&["about", "me"]);
+    let work_subject = (about["claims"].as_array().unwrap().iter())
+        .find(|claim| claim["predicate"] == "std:due" && claim["object"]["value"] == "next week")
+        .map(|claim| claim["subject"]["id"].as_str().unwrap().to_string())
+        .unwrap_or_else(|| panic!("no work statement: {about}"));
+    let owed_to = (about["claims"].as_array().unwrap().iter())
+        .find(|claim| claim["subject"]["id"] == work_subject && claim["predicate"] == "std:owed_to")
+        .map(|claim| claim["id"].as_str().unwrap().to_string())
+        .unwrap_or_else(|| panic!("no work owed_to claim: {about}"));
+
+    // A work-scoped read shows the work commitment in `about me` and not the personal one.
+    let read = env.mcp(&["work"], "about", json!({"entity": "me"}));
+    let scoped = commitment_statements(&read["structuredContent"]["result"]);
+    assert!(
+        scoped
+            .iter()
+            .any(|(_, predicate, value)| predicate == "std:due" && value == "next week"),
+        "the work commitment shows in its scope: {read}"
+    );
+    assert!(
+        scoped.iter().all(|(_, _, value)| value != "by Friday"),
+        "the personal item stays hidden: {read}"
+    );
+
+    let why = env.mcp(&["work"], "why", json!({"claim": owed_to, "limit": 20}));
+    let why = &why["structuredContent"]["result"];
+    let intents: Vec<&str> = (why["supports"].as_array().unwrap().iter())
+        .filter_map(|support| support["intent"]["id"].as_str())
+        .collect();
+    assert_eq!(
+        intents,
+        [work_accept.as_str()],
+        "only the work accept backs it: {why}"
+    );
+    assert!(
+        !intents.contains(&personal_accept.as_str()),
+        "the personal accept stays hidden: {why}"
+    );
 }

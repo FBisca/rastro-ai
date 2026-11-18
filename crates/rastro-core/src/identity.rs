@@ -11,6 +11,7 @@ use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 
 mod candidates;
+pub(crate) use candidates::plan_answer;
 pub use candidates::*;
 
 /// The canonical encoding version of an intent row.
@@ -33,6 +34,8 @@ pub const NAME_KIND: &str = "name";
 /// The justification kind of an intent-backed claim.
 pub const OWNER_INTENT: &str = "owner_intent";
 const PERSON_PREFIX: &str = "rastro:person/";
+/// The identifier prefix of the `std:Commitment` an accepted queue item becomes.
+const COMMITMENT_PREFIX: &str = "std:commitment/";
 
 /// The kinds this slice enables. Slice 7 adds claim and claim-set kinds to the same table.
 #[derive(
@@ -46,15 +49,31 @@ pub enum IntentKind {
     CannotLink,
     SameAs,
     Undo,
+    /// Accept a queue proposal unchanged.
+    Accept,
+    /// Accept a queue proposal with the owner's edits.
+    Edit,
+    /// Reject a queue proposal, with the owner's reason.
+    Reject,
+    /// Report something Rastro should have caught, about an item or not.
+    Missed,
+    /// Answer a queue question: the two accounts are one person, or are not. One answer, one
+    /// intent, whatever it decides.
+    Answer,
 }
 impl IntentKind {
-    pub const ALL: [Self; 6] = [
+    pub const ALL: [Self; 11] = [
         Self::CreatePerson,
         Self::Name,
         Self::Link,
         Self::CannotLink,
         Self::SameAs,
         Self::Undo,
+        Self::Accept,
+        Self::Edit,
+        Self::Reject,
+        Self::Missed,
+        Self::Answer,
     ];
     pub fn as_str(self) -> &'static str {
         match self {
@@ -64,6 +83,11 @@ impl IntentKind {
             Self::CannotLink => "cannot_link",
             Self::SameAs => "same_as",
             Self::Undo => "undo",
+            Self::Accept => "accept",
+            Self::Edit => "edit",
+            Self::Reject => "reject",
+            Self::Missed => "missed",
+            Self::Answer => "answer",
         }
     }
     /// The core validates kinds; storage keeps them as text with no SQL enum.
@@ -89,7 +113,8 @@ pub struct ClaimTarget {
     pub statement: Value,
     pub lifecycle_binding: Option<Value>,
 }
-/// The tagged target structure. Entity and pair are used now; claim and claim set are reserved.
+/// The tagged target structure: an entity, a pair, or the queue item an answer names; claim and
+/// claim set are reserved.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(tag = "shape", rename_all = "snake_case", deny_unknown_fields)]
 pub enum Targets {
@@ -113,6 +138,88 @@ pub enum Targets {
         members: Vec<ClaimTarget>,
         anchor: String,
     },
+    /// One queue proposal, named by the content-addressed id the queue read gave it, and what
+    /// the owner answered about it: the reason they rejected it, the words of a missed report,
+    /// and the statement they saw and, when they edited it, the one they made. An accepted
+    /// proposal also carries the commitment it becomes — one `std:Commitment` of its own, so two
+    /// acceptances never merge into one statement set — with the parties the item mapped to
+    /// Persons and the standard terms it states, as the owner accepted them. Every answer that
+    /// names an item records the scope of the item's source, so the claim and its outcome are
+    /// visible only where that source is. A missed report may name no item: it can be about
+    /// something that was never queued.
+    Proposal {
+        version: u32,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        item: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        text: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        seen: Option<StatementSnapshot>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        edited: Option<StatementSnapshot>,
+        /// The commitment an accepted proposal becomes: the `std:Commitment` its statements are
+        /// about, one per acceptance.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        subject: Option<EntityTarget>,
+        /// The Persons the item mapped to parties, so the commitment is part of their view:
+        /// `about me` shows what the owner accepted.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        parties: Vec<EntityTarget>,
+        /// The accepted proposal's standard statements, as the owner accepted them; a rejection
+        /// or a missed report states none.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        terms: Vec<StandardTerm>,
+        /// The scope of the item's source: the accepted claim and the outcome are visible only
+        /// to readers that see it.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        scope: Option<String>,
+    },
+    /// A queue question's answer: the item it settles, its two accounts, the verdict, and for a
+    /// yes the Person that holds them. One intent both records the answer and decides what the
+    /// identity graph would otherwise record as a creation, a name and two links.
+    Answer {
+        version: u32,
+        item: String,
+        endpoints: [EntityTarget; 2],
+        yes: bool,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        person: Option<AnswerPerson>,
+        /// The accounts the answer links to that Person, as it decided when it was written.
+        /// A replay uses these, never what later intents made of the accounts.
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        linked: Vec<EntityTarget>,
+    },
+}
+/// The Person a question's yes holds its accounts by.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct AnswerPerson {
+    pub entity: EntityTarget,
+    /// The name this answer gives the Person it creates; none when the Person already existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Whether this answer creates the Person, rather than finding it already holding an
+    /// account of the pair.
+    pub created: bool,
+}
+/// One standard statement an accepted proposal holds, as the owner accepted it: a `std:`
+/// predicate and the literal it carries — a party's name exactly as the source said it, or the
+/// stated date. The claim it mints carries them, and the promise is not among them: the standard
+/// vocabulary has no predicate for it.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct StandardTerm {
+    pub predicate: String,
+    pub value: String,
+}
+/// A proposal's statement, as the owner saw it and, when they edited it, as they made it: the
+/// promise and the stated date's text, snapshotted so the record outlives the item's source.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct StatementSnapshot {
+    pub promise: String,
+    /// The date as the source stated it; none when it was unknown.
+    pub stated_date: Option<String>,
 }
 impl Targets {
     fn entity(entity: EntityTarget) -> Self {
@@ -134,12 +241,27 @@ impl Targets {
             endpoints,
         }
     }
-    /// Every entity the targets name, in order.
+    /// Every entity the targets name, in order. A queue item is not an entity; an answer's
+    /// accounts come first, then the Person a yes holds them by.
     pub fn entities(&self) -> Vec<&EntityTarget> {
         match self {
             Self::Entity { entity, .. } => vec![entity],
             Self::Pair { endpoints, .. } => endpoints.iter().collect(),
+            Self::Answer {
+                endpoints, person, ..
+            } => {
+                let mut entities: Vec<&EntityTarget> = endpoints.iter().collect();
+                if let Some(person) = person {
+                    entities.push(&person.entity);
+                }
+                entities
+            }
             Self::Claim { .. } | Self::ClaimSet { .. } => vec![],
+            // A queue item is not an entity; an accepted proposal's commitment and the parties
+            // it maps are, so the issuer must see them.
+            Self::Proposal {
+                subject, parties, ..
+            } => subject.iter().chain(parties).collect(),
         }
     }
     fn version(&self) -> u32 {
@@ -147,12 +269,22 @@ impl Targets {
             Self::Entity { version, .. }
             | Self::Pair { version, .. }
             | Self::Claim { version, .. }
-            | Self::ClaimSet { version, .. } => *version,
+            | Self::ClaimSet { version, .. }
+            | Self::Proposal { version, .. }
+            | Self::Answer { version, .. } => *version,
         }
     }
-    fn endpoints(&self) -> Option<&[EntityTarget; 2]> {
+    /// The queue item the targets name, when they name one.
+    pub fn queue_item(&self) -> Option<&str> {
         match self {
-            Self::Pair { endpoints, .. } => Some(endpoints),
+            Self::Proposal { item, .. } => item.as_deref(),
+            Self::Answer { item, .. } => Some(item),
+            _ => None,
+        }
+    }
+    pub(crate) fn endpoints(&self) -> Option<&[EntityTarget; 2]> {
+        match self {
+            Self::Pair { endpoints, .. } | Self::Answer { endpoints, .. } => Some(endpoints),
             _ => None,
         }
     }
@@ -161,6 +293,16 @@ impl Targets {
             Self::Entity { entity, .. } => Some(entity),
             _ => None,
         }
+    }
+}
+/// The commitment an accepted queue item becomes, named by the item's content-addressed id: one
+/// `std:Commitment` per acceptance, so two accepted proposals never share a statement set.
+pub fn commitment_target(item: &str) -> EntityTarget {
+    let identifier = format!("{COMMITMENT_PREFIX}{item}");
+    EntityTarget {
+        id: claims::entity_id(&identifier),
+        identifier,
+        role: "commitment".into(),
     }
 }
 /// The versioned operation data.
@@ -173,7 +315,7 @@ pub struct Payload {
     pub name: Option<String>,
 }
 impl Payload {
-    fn empty() -> Self {
+    pub(crate) fn empty() -> Self {
         Self {
             version: SHAPE_VERSION,
             name: None,
@@ -253,6 +395,39 @@ impl Intent {
             IntentKind::CannotLink => pair("cannot_link"),
             IntentKind::SameAs => pair("same_as"),
             IntentKind::Undo => None,
+            IntentKind::Accept | IntentKind::Edit | IntentKind::Reject | IntentKind::Answer => self
+                .targets
+                .queue_item()
+                .map(|item| format!("queue/{item}")),
+            // A missed report needs no item, so its domain names only what it is.
+            IntentKind::Missed => Some(match self.targets.queue_item() {
+                Some(item) => format!("queue/{item}"),
+                None => "queue/missed".into(),
+            }),
+        }
+    }
+    /// The queue item this intent names, when it answers one.
+    pub fn queue_item(&self) -> Option<&str> {
+        self.targets.queue_item()
+    }
+    /// The Person this intent mints: the one a creation names, or the one an answer's yes
+    /// creates. Nobody could see it before the intent, so storage skips the visibility check.
+    pub fn minted_person(&self) -> Option<&EntityTarget> {
+        match (&self.kind, &self.targets) {
+            (IntentKind::CreatePerson, Targets::Entity { entity, .. }) => Some(entity),
+            (
+                IntentKind::Answer,
+                Targets::Answer {
+                    person:
+                        Some(AnswerPerson {
+                            entity,
+                            created: true,
+                            ..
+                        }),
+                    ..
+                },
+            ) => Some(entity),
+            _ => None,
         }
     }
     /// Checks the row on its own: the envelope, the JSON shapes and the kind's target shape.
@@ -317,13 +492,58 @@ impl Intent {
             IntentKind::Link => {
                 matches!(&self.targets, Targets::Pair { symmetric: false, endpoints, .. } if endpoints[0].role == "account" && endpoints[1].role == "person")
             }
-            IntentKind::CannotLink | IntentKind::SameAs => {
+            IntentKind::CannotLink => {
+                matches!(&self.targets, Targets::Pair { symmetric: true, endpoints, .. } if endpoints[0].id < endpoints[1].id)
+            }
+            IntentKind::SameAs => {
                 matches!(&self.targets, Targets::Pair { symmetric: true, endpoints, .. } if endpoints[0].id < endpoints[1].id)
             }
             IntentKind::Undo => !matches!(
                 &self.targets,
                 Targets::Claim { .. } | Targets::ClaimSet { .. }
             ),
+            IntentKind::Accept | IntentKind::Edit | IntentKind::Reject => {
+                matches!(&self.targets, Targets::Proposal { item: Some(item), .. } if plain(item))
+            }
+            IntentKind::Missed => match &self.targets {
+                Targets::Proposal {
+                    item: Some(item), ..
+                } => plain(item),
+                Targets::Proposal { item: None, .. } => true,
+                _ => false,
+            },
+            IntentKind::Answer => match &self.targets {
+                Targets::Answer {
+                    item,
+                    endpoints,
+                    yes,
+                    person,
+                    linked,
+                    ..
+                } => {
+                    let accounts = endpoints[0].role == "account"
+                        && endpoints[1].role == "account"
+                        && endpoints[0].id != endpoints[1].id;
+                    // What it links is what it decided: one of its own accounts.
+                    let links = (linked.iter()).all(|account| {
+                        account.role == "account"
+                            && endpoints.iter().any(|endpoint| endpoint.id == account.id)
+                    });
+                    plain(item)
+                        && accounts
+                        && links
+                        && if *yes {
+                            // A yes names the Person that holds them; a created one is named.
+                            person.as_ref().is_some_and(|answer| {
+                                answer.entity.role == "person"
+                                    && (!answer.created || answer.name.is_some())
+                            })
+                        } else {
+                            person.is_none() && linked.is_empty()
+                        }
+                }
+                _ => false,
+            },
         };
         ensure!(
             shape_fits,
@@ -338,6 +558,105 @@ impl Intent {
             (IntentKind::Name, None) => bail!("a name intent carries the name"),
             (_, Some(_)) => bail!("only a name intent carries a name"),
             _ => {}
+        }
+        // One answer decides a whole question, so only an answer names one; an undo takes the
+        // targets of the intent it undoes, exactly as it does for every other kind.
+        ensure!(
+            !matches!(&self.targets, Targets::Answer { .. })
+                || matches!(self.kind, IntentKind::Answer | IntentKind::Undo),
+            "only an answer, or the undo of one, takes a queue question"
+        );
+        match &self.targets {
+            Targets::Proposal {
+                item,
+                text,
+                seen,
+                edited,
+                subject,
+                parties,
+                terms,
+                scope,
+                ..
+            } => match self.kind {
+                // An accept or an edit mints the commitment it decided, so it names the entity
+                // its statements are about, the terms themselves and the source's scope.
+                IntentKind::Accept => {
+                    ensure!(
+                        seen.is_some() && edited.is_none(),
+                        "an accept snapshots the proposal it saw, and no edit"
+                    );
+                    ensure!(
+                        subject.is_some()
+                            && !parties.is_empty()
+                            && !terms.is_empty()
+                            && scope.is_some(),
+                        "an accept names the commitment it mints, its parties, its standard terms and its source's scope"
+                    );
+                    ensure!(
+                        (terms.iter()).all(|term| {
+                            term.predicate.starts_with("std:") && !term.value.trim().is_empty()
+                        }),
+                        "an accept's standard terms are `std:` predicates with a literal"
+                    );
+                }
+                IntentKind::Edit => {
+                    ensure!(
+                        seen.is_some() && edited.is_some(),
+                        "an edit snapshots the proposal it saw and the one it made"
+                    );
+                    ensure!(
+                        subject.is_some()
+                            && !parties.is_empty()
+                            && !terms.is_empty()
+                            && scope.is_some(),
+                        "an edit names the commitment it mints, its parties, its standard terms and its source's scope"
+                    );
+                    ensure!(
+                        (terms.iter()).all(|term| {
+                            term.predicate.starts_with("std:") && !term.value.trim().is_empty()
+                        }),
+                        "an edit's standard terms are `std:` predicates with a literal"
+                    );
+                }
+                // A rejection or a missed report is a decision about an item, not a commitment:
+                // it states no terms and mints no claim. It names its source's scope whenever it
+                // names an item, so its outcome is visible only where that source is.
+                IntentKind::Reject | IntentKind::Missed => {
+                    ensure!(
+                        subject.is_none() && parties.is_empty() && terms.is_empty(),
+                        "a {} mints no commitment",
+                        self.kind.as_str()
+                    );
+                    ensure!(
+                        item.is_some() == scope.is_some(),
+                        "a {} names its source's scope exactly when it names an item",
+                        self.kind.as_str()
+                    );
+                    ensure!(
+                        text.as_ref().is_some_and(|text| !text.trim().is_empty()),
+                        "a {} carries its text",
+                        self.kind.as_str()
+                    );
+                }
+                _ => ensure!(
+                    seen.is_none()
+                        && edited.is_none()
+                        && text.is_none()
+                        && subject.is_none()
+                        && parties.is_empty()
+                        && terms.is_empty()
+                        && scope.is_none(),
+                    "only a queue answer carries what the owner answered"
+                ),
+            },
+            _ => ensure!(
+                self.kind != IntentKind::Accept
+                    && self.kind != IntentKind::Edit
+                    && self.kind != IntentKind::Reject
+                    && self.kind != IntentKind::Missed,
+                "a {} intent takes a queue proposal",
+                self.kind.as_str()
+            ),
         }
         ensure!(
             (self.kind == IntentKind::Undo) == self.undo_of.is_some(),
@@ -476,6 +795,47 @@ impl Resolution {
                         r.cannot.entry(sorted(&a.id, &b.id)).or_insert(id);
                     }
                 }
+                IntentKind::Answer => {
+                    let Targets::Answer {
+                        endpoints: [a, b],
+                        yes,
+                        person,
+                        linked,
+                        ..
+                    } = &intent.targets
+                    else {
+                        continue;
+                    };
+                    if !*yes {
+                        r.cannot.entry(sorted(&a.id, &b.id)).or_insert(id);
+                        continue;
+                    }
+                    let Some(answer) = person else {
+                        continue;
+                    };
+                    let holder = answer.entity.clone();
+                    if answer.created {
+                        r.persons.entry(holder.id.clone()).or_insert(Person {
+                            entity: holder.clone(),
+                            created_by: id.clone(),
+                            me: false,
+                        });
+                        if let Some(name) = answer.name.clone() {
+                            r.names.insert(holder.id.clone(), (name, id.clone()));
+                        }
+                    }
+                    // The accounts the answer decided to link, as it recorded them: a later
+                    // intent on those accounts never changes what this answer said.
+                    for account in linked {
+                        r.links
+                            .insert((account.id.clone(), holder.id.clone()), id.clone());
+                        r.clear(&sorted(&account.id, &holder.id), &id);
+                    }
+                }
+                // A proposal's answer is the owner's record of what they decided; its item
+                // leaves the queue by that record alone and it backs no claim.
+                IntentKind::Accept | IntentKind::Edit | IntentKind::Reject | IntentKind::Missed => {
+                }
                 IntentKind::Undo => {}
             }
         }
@@ -544,6 +904,13 @@ impl Resolution {
                 }
             }
             IntentKind::CannotLink => {}
+            // An answer is judged when it is written, against the queue it names and the
+            // identity graph's own rules; nothing about an earlier intent can refuse it.
+            IntentKind::Answer
+            | IntentKind::Accept
+            | IntentKind::Edit
+            | IntentKind::Reject
+            | IntentKind::Missed => {}
             IntentKind::Undo => {
                 let undone = intent.undo_of.as_deref().unwrap_or_default();
                 let Some(target) = self.intents.get(undone) else {
@@ -565,6 +932,54 @@ impl Resolution {
                     }
                     IntentKind::CreatePerson => bail!("creating a Person can't be undone"),
                     IntentKind::Name | IntentKind::Link | IntentKind::SameAs => {}
+                    IntentKind::Answer => {
+                        let Targets::Answer { yes, person, .. } = &target.targets else {
+                            bail!("an answer names the question it answered");
+                        };
+                        ensure!(
+                            *yes,
+                            "a no can't be undone, as a cannot-link can't; link the accounts instead"
+                        );
+                        // Undoing a yes ends what it decided; a Person it created goes with it,
+                        // so no effective later intent may hold, name or merge that Person: each
+                        // would be left claiming something that is no longer a Person.
+                        if let Some(answer) = person
+                            && answer.created
+                        {
+                            let person = &answer.entity;
+                            let mut later: Vec<&String> = (self.links.iter())
+                                .filter(|((_, holder), _)| holder == &person.id)
+                                .map(|(_, by)| by)
+                                .collect();
+                            later.extend(
+                                (self.merges.iter())
+                                    .filter(|((a, b), _)| a == &person.id || b == &person.id)
+                                    .map(|(_, by)| by),
+                            );
+                            if let Some((_, by)) = self.names.get(&person.id) {
+                                later.push(by);
+                            }
+                            let effective = |by: &&String| {
+                                by.as_str() != undone
+                                    && matches!(
+                                        self.status.get(by.as_str()),
+                                        Some((IntentStatus::Effective, _))
+                                    )
+                            };
+                            if let Some(by) = later.into_iter().find(effective) {
+                                bail!(
+                                    "{} is held, named or merged by intent {by}; undo that first",
+                                    person.identifier
+                                );
+                            }
+                        }
+                    }
+                    // A proposal's answer is a decision about one item; undoing it would bring
+                    // back an item whose source may have replaced it.
+                    IntentKind::Accept
+                    | IntentKind::Edit
+                    | IntentKind::Reject
+                    | IntentKind::Missed => bail!("a proposal's answer can't be undone"),
                 }
             }
         }
@@ -604,6 +1019,13 @@ impl Resolution {
             });
         };
         for person in self.persons.values() {
+            // An answer that creates a Person holds it while the answer holds; its type claim
+            // is pushed with the answer's stretch below.
+            if (self.intents.get(&person.created_by))
+                .is_some_and(|creator| creator.kind == IntentKind::Answer)
+            {
+                continue;
+            }
             let type_object = Object::Literal {
                 value: PERSON_TYPE.into(),
                 datatype: TYPE_DATATYPE.into(),
@@ -660,7 +1082,71 @@ impl Resolution {
                         stretch,
                     )
                 }
+                // One answer backs every claim it decided, from what it recorded: the Person
+                // it creates exists while the answer holds, and each account it linked is held
+                // by that Person over the same stretch — an undo ends them, it doesn't erase
+                // that they held.
+                (IntentKind::Answer, _) => {
+                    let Targets::Answer {
+                        yes: true,
+                        person: Some(answer),
+                        linked,
+                        ..
+                    } = &intent.targets
+                    else {
+                        continue;
+                    };
+                    if answer.created {
+                        push(
+                            &self.entities[&answer.entity.id],
+                            TYPE_PREDICATE,
+                            Object::Literal {
+                                value: PERSON_TYPE.into(),
+                                datatype: TYPE_DATATYPE.into(),
+                            },
+                            true,
+                            id,
+                            stretch,
+                        );
+                    }
+                    for account in linked {
+                        push(
+                            &self.entities[&account.id],
+                            HELD_BY,
+                            person_object(&answer.entity.id),
+                            false,
+                            id,
+                            stretch,
+                        );
+                    }
+                }
                 _ => {}
+            }
+            // An accepted proposal becomes one observed commitment: each of its standard terms,
+            // as the owner accepted them, is a claim about the entity the item maps to a Person,
+            // carrying the party's name or the stated date as a literal. The intent alone backs
+            // them — no evidence span — and a proposal's answer can't be undone, so they hold
+            // from the acceptance on.
+            if matches!(intent.kind, IntentKind::Accept | IntentKind::Edit)
+                && let Targets::Proposal {
+                    subject: Some(subject),
+                    terms,
+                    ..
+                } = &intent.targets
+            {
+                for term in terms {
+                    push(
+                        subject,
+                        &term.predicate,
+                        Object::Literal {
+                            value: term.value.clone(),
+                            datatype: "string".into(),
+                        },
+                        true,
+                        id,
+                        (intent.issued_at, None),
+                    );
+                }
             }
         }
         out
@@ -682,13 +1168,42 @@ impl Resolution {
                     };
                     (person.id.clone(), (None, Some(id.clone())))
                 }
+                // A yes that creates a Person names it in the same answer.
+                IntentKind::Answer => match &intent.targets {
+                    Targets::Answer {
+                        yes: true,
+                        person:
+                            Some(AnswerPerson {
+                                entity,
+                                name: Some(_),
+                                created: true,
+                            }),
+                        ..
+                    } => (entity.id.clone(), (None, Some(id.clone()))),
+                    _ => continue,
+                },
                 IntentKind::Undo => {
                     let Some(undone) = intent.undo_of.as_ref().and_then(|u| self.intents.get(u))
                     else {
                         continue;
                     };
-                    let (IntentKind::Name, Some(person)) = (undone.kind, undone.targets.single())
-                    else {
+                    let person = match (&undone.kind, &undone.targets) {
+                        (IntentKind::Name, Targets::Entity { entity, .. }) => Some(entity),
+                        (
+                            IntentKind::Answer,
+                            Targets::Answer {
+                                person:
+                                    Some(AnswerPerson {
+                                        entity,
+                                        created: true,
+                                        ..
+                                    }),
+                                ..
+                            },
+                        ) => Some(entity),
+                        _ => None,
+                    };
+                    let Some(person) = person else {
                         continue;
                     };
                     (person.id.clone(), (Some(undone.id.clone()), None))
@@ -716,12 +1231,24 @@ impl Resolution {
                 open.3.1 = Some(at);
             }
             if let Some(after) = after
-                && let Some(name) = self.intents[&after].payload.name.clone()
+                && let Some(name) = self.name_given_by(&after)
             {
                 stretches.push((person, name, after, (at, None)));
             }
         }
         stretches
+    }
+    /// The name one intent gives a Person: a name intent's payload, or a yes that creates a
+    /// Person in its own answer.
+    fn name_given_by(&self, id: &str) -> Option<String> {
+        let intent = self.intents.get(id)?;
+        match &intent.targets {
+            Targets::Answer {
+                person: Some(answer),
+                ..
+            } => answer.name.clone(),
+            _ => intent.payload.name.clone(),
+        }
     }
     /// The Persons a form could name among the `visible` entities: `me`, a Person's id or
     /// identifier, or any name a Person has or had (`rastro:name/<name>`); with every Person
@@ -853,7 +1380,7 @@ fn mint_person() -> Result<EntityTarget> {
         role: "person".into(),
     })
 }
-fn new_intent(
+pub(crate) fn new_intent(
     kind: IntentKind,
     domain_key: String,
     targets: Targets,
@@ -1070,7 +1597,7 @@ impl<S: Storage> Rastro<S> {
             })
         })
     }
-    fn issue(
+    pub(crate) fn issue(
         &mut self,
         plan: impl FnOnce(
             &dyn Snapshot,
@@ -1185,6 +1712,54 @@ mod tests {
             identifier: identifier.into(),
             role: role.into(),
         }
+    }
+
+    /// A yes answered in the queue holds the accounts it recorded, whatever a later undo did to
+    /// the links on those accounts: a replay never re-decides the answer.
+    #[test]
+    fn an_answers_yes_holds_the_accounts_it_recorded_after_a_link_is_undone() {
+        let p = target("rastro:person/1", "person");
+        let a = target("github:account/1", "account");
+        let b = target("linear:user/u-1", "account");
+        let create = intent(
+            IntentKind::CreatePerson,
+            Targets::entity(p.clone()),
+            None,
+            "i_1",
+        );
+        let link = intent(
+            IntentKind::Link,
+            Targets::pair(false, a.clone(), p.clone()),
+            None,
+            "i_2",
+        );
+        let mut undo = intent(IntentKind::Undo, link.targets.clone(), Some("i_2"), "i_3");
+        undo.domain_key = link.domain_key.clone();
+        let answer = intent(
+            IntentKind::Answer,
+            Targets::Answer {
+                version: SHAPE_VERSION,
+                item: "q_1".into(),
+                endpoints: [a.clone(), b.clone()],
+                yes: true,
+                person: Some(AnswerPerson {
+                    entity: p,
+                    name: None,
+                    created: false,
+                }),
+                linked: vec![a, b],
+            },
+            None,
+            "i_4",
+        );
+        let resolution = Resolution::of(&[create, link, undo, answer]);
+        let claims = resolution.claims();
+        let mut held: Vec<&str> = (claims.iter())
+            .filter(|claim| claim.predicate == HELD_BY && claim.ended_at.is_none())
+            .map(|claim| claim.subject.identifier.as_str())
+            .collect();
+        held.sort();
+        assert_eq!(held, ["github:account/1", "linear:user/u-1"]);
     }
 
     /// identity/R4: an undo removes only its intents contribution and a link clears a cannot link

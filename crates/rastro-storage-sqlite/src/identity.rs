@@ -11,7 +11,8 @@ use rastro_core::claims::{
     revision_with_links,
 };
 use rastro_core::identity::{
-    AccountFacts, HELD_BY, Intent, IntentKind, Resolution, SAME_AS, SeenType, admit_account,
+    AccountFacts, HELD_BY, Intent, IntentKind, Resolution, SAME_AS, SeenType, Targets,
+    admit_account,
 };
 use rusqlite::{Connection, OptionalExtension, params};
 use std::collections::{BTreeMap, BTreeSet};
@@ -115,8 +116,11 @@ pub(crate) fn insert_all(
             continue;
         }
         Resolution::of(&log).admit(&intent)?;
+        // A Person the intent itself mints (a creation, or an answer's yes) is new: nobody
+        // could see it before.
+        let minted_here = intent.minted_person().map(|person| person.id.clone());
         for entity in intent.targets.entities() {
-            if intent.kind == IntentKind::CreatePerson || minted.contains(&entity.id) {
+            if minted_here.as_deref() == Some(entity.id.as_str()) || minted.contains(&entity.id) {
                 minted.insert(entity.id.clone());
                 continue;
             }
@@ -132,6 +136,18 @@ pub(crate) fn insert_all(
             && let Some(account) = intent.targets.entities().first()
         {
             admit_account(&account.identifier, &types(db, &account.id, sees)?)?;
+        }
+        // An answer's yes holds its two accounts by one Person, so both are held as accounts.
+        if intent.kind == IntentKind::Answer
+            && let Targets::Answer {
+                yes: true,
+                endpoints,
+                ..
+            } = &intent.targets
+        {
+            for account in endpoints {
+                admit_account(&account.identifier, &types(db, &account.id, sees)?)?;
+            }
         }
         db.execute(
             "INSERT INTO main.intent (id, format_version, kind, owner_id, issuer_context, issued_at,
@@ -331,7 +347,9 @@ fn account_visible(db: &Connection, id: &str, scopes: &str) -> Result<bool> {
 
 /// Copies the intent-backed claims a scope set can see, with their intents, into a private
 /// scoped projection: a Person's own claims where the Person is visible, a link where its
-/// account is, a merge where both Persons are. Endpoint entities are copied by the caller.
+/// account is, a merge where both Persons are, and a commitment an accepted proposal minted
+/// only where the scope set sees the item's source — its justifications, and the accept intent
+/// they rest on, filtered the same way. Endpoint entities are copied by the caller.
 pub(crate) fn copy_visible(db: &Connection, target: &Connection, scopes: &[Scope]) -> Result<()> {
     target.execute_batch(
         "CREATE TABLE intent (append_seq INTEGER PRIMARY KEY, id TEXT, format_version INTEGER,
@@ -343,21 +361,50 @@ pub(crate) fn copy_visible(db: &Connection, target: &Connection, scopes: &[Scope
     let mut sight = Sight::new(db, scopes)?;
     let persons = sight.persons(&resolution)?;
     let mut account = |id: &str| sight.account(id);
-    let claims: Vec<(String, String, String, Option<String>)> = db
+    // A proposal's answer records the scope of the item's source; the claim it minted is shown
+    // only where that source is. Every other intent names no scope and is seen as its targets
+    // are.
+    let in_scope = |intent: &str| -> bool {
+        if scopes.is_empty() {
+            return true;
+        }
+        match (intents.iter())
+            .find(|known| known.id == intent)
+            .map(|known| &known.targets)
+        {
+            Some(Targets::Proposal {
+                scope: Some(scope), ..
+            }) => scopes.iter().any(|seen| &seen.0 == scope),
+            _ => true,
+        }
+    };
+    let claims: Vec<(String, String, String, Option<String>, String)> = db
         .prepare(
-            "SELECT c.id, c.predicate, c.subject, c.object_entity FROM claim c
-             WHERE EXISTS (SELECT 1 FROM intent_justification ij WHERE ij.claim_id = c.id)",
+            "SELECT c.id, c.predicate, c.subject, c.object_entity, ij.intent_id FROM claim c
+             JOIN intent_justification ij ON ij.claim_id = c.id",
         )?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })?
         .collect::<Result<_, _>>()?;
     let mut shown = Vec::new();
-    for (id, predicate, subject, object) in claims {
-        // A link or a merge only where both its ends are: an effective link makes its Person
-        // visible, but an undone one doesn't.
-        let seen = match (predicate.as_str(), object) {
-            (HELD_BY, Some(person)) => account(&subject)? && persons.contains(&person),
-            (SAME_AS, Some(other)) => persons.contains(&subject) && persons.contains(&other),
-            _ => persons.contains(&subject),
+    for (id, predicate, subject, object, intent) in claims {
+        // A commitment an accepted proposal minted is seen where its source is, whoever the
+        // commitment is about. Every other intent-backed claim follows its endpoints: a link or
+        // a merge only where both its ends are, since an effective link makes its Person visible
+        // but an undone one doesn't.
+        let commitment = (intents.iter()).any(|known| {
+            known.id == intent && matches!(known.kind, IntentKind::Accept | IntentKind::Edit)
+        });
+        let seen = if commitment {
+            in_scope(&intent)
+        } else {
+            let visible = match (predicate.as_str(), object) {
+                (HELD_BY, Some(person)) => account(&subject)? && persons.contains(&person),
+                (SAME_AS, Some(other)) => persons.contains(&subject) && persons.contains(&other),
+                _ => persons.contains(&subject),
+            };
+            visible && in_scope(&intent)
         };
         if seen {
             shown.push(id);
@@ -394,6 +441,11 @@ pub(crate) fn copy_visible(db: &Connection, target: &Connection, scopes: &[Scope
     // log is internal to the replay; only the visible claims below are exposed to readers.
     needed.extend(intents.iter().map(|intent| intent.id.clone()));
     for (id, claim, intent, started_at, ended_at) in &justifications {
+        // A claim a scope sees is explained by that scope's intents alone: a hidden acceptance
+        // never becomes a support of a visible claim.
+        if !in_scope(intent) {
+            continue;
+        }
         target.execute(
             "INSERT OR IGNORE INTO intent_justification (id, claim_id, intent_id, started_at, ended_at) VALUES (?1, ?2, ?3, ?4, ?5)",
             params![id, claim, intent, started_at, ended_at],

@@ -101,6 +101,10 @@ pub(crate) const VISIBLE_CLAIM: &str = "EXISTS (SELECT 1 FROM justification j WH
 /// The claim `c` is backed by an owner intent.
 const INTENT_BACKED: &str =
     "EXISTS (SELECT 1 FROM intent_justification ij WHERE ij.claim_id = c.id)";
+/// The claim `c` is backed by an owner intent still in force whose queue item's source scope
+/// (`?1`: every scope; otherwise the scope set `?2`) sees; an intent that names no scope, as the
+/// identity graph's do, is seen in every scope.
+pub(crate) const VISIBLE_INTENT_CLAIM: &str = "EXISTS (SELECT 1 FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id WHERE ij.claim_id = c.id AND ij.ended_at IS NULL AND (?1 OR json_extract(i.targets_json, '$.scope') IS NULL OR json_extract(i.targets_json, '$.scope') IN (SELECT value FROM json_each(?2))))";
 /// The identity premises a scope set (`?2`) sees, so the replay derives the scope's automatic
 /// links: every visible verified-email and token-owner claim, plus the type and alias claims of
 /// their subjects (a type claim may cite an email snapshot or guest flag, so a newer one still
