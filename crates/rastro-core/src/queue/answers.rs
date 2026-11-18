@@ -5,11 +5,13 @@
 //! rejected proposal leaves the queue by that record; an answered question leaves because the
 //! identity graph no longer holds its pair as a candidate; a missed report leaves its item
 //! waiting. A rejection mints no claim; an accepted or edited proposal becomes one observed
-//! commitment, its standard terms justified by that intent alone.
-use super::{Item, read};
+//! commitment, its standard terms justified by that intent alone. A yes to a question about a
+//! lapsed retraction or a stale confirmation records the earlier correction again, bound to the
+//! lifecycle state the claim has now.
+use super::{CorrectionKind, CorrectionQuestion, Item, read};
 use crate::identity::{
-    self, AnswerPerson, EntityTarget, Intent, IntentKind, Payload, StandardTerm, StatementSnapshot,
-    Targets, commitment_target, plan_answer, resolve,
+    self, AnswerPerson, ClaimStatement, ClaimTarget, EntityTarget, Intent, IntentKind, Payload,
+    StandardTerm, StatementSnapshot, Targets, commitment_target, plan_answer, resolve,
 };
 use crate::read_only::Snapshot;
 use crate::{Rastro, Storage, commitments};
@@ -121,6 +123,44 @@ fn accepted_terms(item: &Item, date: Option<&str>) -> Result<Vec<StandardTerm>> 
         }
     }
     Ok(terms)
+}
+
+/// The intent a yes to a correction question records: the earlier correction again, as the owner
+/// reads the claim now, so the claim's lifecycle state is the one it binds to and the question
+/// is no longer asked. Unlike `claim reject` and `claim confirm` it records one even when the
+/// claim already reads as the correction says: a stale confirmation still reads `confirmed`.
+fn repeat_correction(view: &dyn Snapshot, correction: &CorrectionQuestion) -> Result<Intent> {
+    let current = &correction.claim.claim;
+    let state = view
+        .claim_lifecycle(&current.id)?
+        .ok_or_else(|| anyhow::anyhow!("unknown claim: {}", current.id))?;
+    let statement = ClaimStatement {
+        subject: EntityTarget {
+            id: current.subject.id.clone(),
+            identifier: current.subject.identifier.clone(),
+            role: "subject".into(),
+        },
+        predicate: current.predicate.clone(),
+        object: current.object.clone(),
+        scalar: state.scalar,
+    };
+    let review = ClaimTarget::review(current.revision.clone(), &statement, state.fingerprint)?;
+    let kind = match correction.kind {
+        CorrectionKind::LapsedRetraction => IntentKind::Reject,
+        CorrectionKind::StaleConfirmation => IntentKind::Confirm,
+    };
+    let anchor = review.id.clone();
+    identity::new_intent(
+        kind,
+        String::new(),
+        Targets::Claim {
+            version: identity::SHAPE_VERSION,
+            claim: review,
+            anchor,
+        },
+        Payload::empty(),
+        None,
+    )
 }
 
 /// What an answer about a proposal records about the item it names: the statements the owner
@@ -290,7 +330,8 @@ impl<S: Storage> Rastro<S> {
         })
     }
 
-    /// Answers a question yes or no, naming the item. One intent records the whole answer: the
+    /// Answers a question yes or no, naming the item. A question about a corrected claim takes
+    /// only a yes, which records the earlier correction again. One intent records the whole answer: the
     /// verdict, and for a yes the Person that holds the accounts and, when this answer creates
     /// it, the name it gives. The identity graph's own planner decides who holds whom, so a yes
     /// follows `rastro identity answer`'s rules; what differs is that the decision is one row.
@@ -299,6 +340,17 @@ impl<S: Storage> Rastro<S> {
         let name = name.map(String::from);
         let issued = self.issue(|view, resolution| {
             let pending = still_queued(view, &id)?;
+            if let Some(correction) = &pending.correction {
+                ensure!(
+                    yes,
+                    "{} asks about claim {}: answer yes to hold your earlier correction again; \
+                     to correct it the other way, use `rastro claim confirm` or `rastro claim \
+                     reject`",
+                    pending.id,
+                    correction.claim.claim.id
+                );
+                return Ok((vec![repeat_correction(view, correction)?], None, false));
+            }
             let Some(question) = &pending.question else {
                 bail!(
                     "{} is a proposal; accept, edit or reject it, or file it as missed",

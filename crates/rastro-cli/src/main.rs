@@ -725,6 +725,23 @@ fn queue_text(queue: &rastro_core::queue::Queue) -> String {
                     h.quote.end
                 ));
             }
+            ItemKind::Question if item.correction.is_some() => {
+                let c = item.correction.as_ref().expect("checked by the arm");
+                let claim = &c.claim.claim;
+                let (kind, mark) = match c.kind {
+                    rastro_core::queue::CorrectionKind::LapsedRetraction => {
+                        ("retraction lapsed", "earlier retracted")
+                    }
+                    rastro_core::queue::CorrectionKind::StaleConfirmation => {
+                        ("confirmation stale", "stale")
+                    }
+                };
+                lines.push(format!("Question | Id: {} | Source: {source}", item.id));
+                lines.push(format!(
+                    "  {kind} | Claim: {} | Status: {} ({mark}) | Intent: {} | Answer yes to hold it again",
+                    claim.id, claim.status, c.intent
+                ));
+            }
             ItemKind::Question => {
                 let q = item.question.as_ref().expect("a question item carries one");
                 lines.push(format!("Question | Id: {} | Source: {source}", item.id));
