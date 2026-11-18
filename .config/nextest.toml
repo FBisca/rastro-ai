@@ -1,8 +1,9 @@
 # Rastro's nextest configuration: the suite runs one process per test, a hung test fails its run
-# instead of holding it, and every failure of a run is kept. See
+# instead of holding it, every failure of a run is kept, and the live tests run alone on request. See
 # docs/adr/0013-cargo-nextest-runs-the-tests.md and docs/development.md.
 #
-# The checks, CI and the selector run this profile; scripts/nextest-config.test.sh proves it.
+# The checks, CI and the selector run the default profile; scripts/nextest-config.test.sh proves it.
+# scripts/ignored-tests.test.sh proves the live profile and the ignore-reason gate.
 
 [profile.default]
 # A test running past 20 seconds is reported SLOW, and three periods in a row terminate it at 60
@@ -16,6 +17,26 @@ retries = 0
 
 [profile.default.junit]
 # Relative to the target directory, so the report of a run lands at target/nextest/<profile>/junit.xml.
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true
+
+# The live tests: the ignored ones, which talk to a real service or read a copy of the owner's data, so
+# only the owner's machine can run them, one run at a time, with a network's patience.
+#
+# nextest has no per-profile "run the ignored tests", so the selection is a flag beside the profile:
+#
+#   cargo nextest run --profile live --run-ignored only
+#
+# The profile keeps that run's evidence apart from the default one: its own JUnit report under
+# target/nextest/live/, and one failure never stopping the rest.
+[profile.live]
+# A live test waits on a network and on the owner's database before it asserts anything.
+slow-timeout = { period = "120s", terminate-after = 2 }
+fail-fast = false
+retries = 0
+
+[profile.live.junit]
 path = "junit.xml"
 store-success-output = false
 store-failure-output = true

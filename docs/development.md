@@ -47,6 +47,30 @@ cargo nextest run -p <package> --test <target>    # one test in crates/<package>
 
 The config reports a test running past 20 seconds as SLOW and kills it after three periods (60 seconds), never retries a failure, and keeps going after one so a single run holds every failure: `target/nextest/default/junit.xml` names each failing test with its captured output. See [ADR 0013](adr/0013-cargo-nextest-runs-the-tests.md).
 
+### Live and bench tests
+
+An ignored test is one the default run skips, and it earns that place only as a live test or a bench test: its `#[ignore]` reason starts with `live:` or `bench:`, and a live test names the environment variables it reads.
+
+```rust
+#[ignore = "live: talks to GitHub; set RASTRO_LIVE_REPO and RASTRO_LIVE_PHRASE"]
+#[ignore = "bench: release build only"]
+```
+
+[`scripts/ignored-tests.sh`](../scripts/ignored-tests.sh) reads every `#[ignore]` in the workspace and fails, naming the file and line, on one whose reason is missing or starts with anything else. An ignored test that says none of the two is a test nobody runs.
+
+Live tests talk to a real service or read a copy of the owner's data, so they never run in the default run: name the variables they read and run them on request, alone, under the `live` profile. That profile keeps their evidence apart, at `target/nextest/live/junit.xml`, and gives a network round trip its own timeouts. nextest has no per-profile "run the ignored tests", so `--run-ignored only` travels with the profile:
+
+```sh
+cargo nextest run --profile live --run-ignored only                                  # every live test
+cargo nextest run -p rastro-cli --test live --run-ignored only the_owners_account   # one of them
+```
+
+A bench test measures a release build, so it runs with `--release`:
+
+```sh
+cargo nextest run --release -p rastro-storage-sqlite --test scoped_benchmark --run-ignored only --no-capture
+```
+
 ### Rerun only the last run's failures
 
 nextest's record-replay-rerun feature is experimental and reads the user config file, not the repository's, so point `NEXTEST_USER_CONFIG_FILE` at [.config/nextest-user.toml](../.config/nextest-user.toml) in your shell profile, or copy that file to `~/.config/nextest/config.toml`. Every run then leaves a recording:
@@ -114,5 +138,5 @@ The NUL-delimited list preserves spaces; disabling rename detection includes bot
 - During iteration, run the focused test. Once green, run the affected selection once; rerun only after further relevant changes or a failure.
 - For Rust changes, run `cargo fmt --all --check` and Clippy for the selected packages (`cargo clippy -p <package> --all-targets -- -D warnings`, repeat `-p` for dependents). Use workspace scope for global configuration or uncertain impact.
 - For documentation-only changes, check links, examples, and `git diff --check`; skip Rust compilation unless executable examples or behavior changed.
-- For selector changes, run `scripts/affected-tests.test.sh`. For role, manifest, or gate changes, run `scripts/crate-gate.sh` and `scripts/crate-gate.test.sh`. For changes to [.config/nextest.toml](../.config/nextest.toml), [.config/nextest-user.toml](../.config/nextest-user.toml) or the CI workflow, run `scripts/nextest-config.test.sh`. For toolchain, dependency, shared build, or cross-workspace changes, run the full CI commands from [.github/workflows/ci.yml](../.github/workflows/ci.yml). CI remains the full workspace gate for every PR.
+- For selector changes, run `scripts/affected-tests.test.sh`. For role, manifest, or gate changes, run `scripts/crate-gate.sh` and `scripts/crate-gate.test.sh`. For changes to an `#[ignore]`, [.config/nextest.toml](../.config/nextest.toml), [.config/nextest-user.toml](../.config/nextest-user.toml) or the CI workflow, run `scripts/ignored-tests.sh`, `scripts/ignored-tests.test.sh` and `scripts/nextest-config.test.sh`. For toolchain, dependency, shared build, or cross-workspace changes, run the full CI commands from [.github/workflows/ci.yml](../.github/workflows/ci.yml). CI remains the full workspace gate for every PR.
 - Report exact commands and outcomes, including the red/green observation for behavior changes. Separate focused or affected evidence from a full workspace pass; state anything left to CI.

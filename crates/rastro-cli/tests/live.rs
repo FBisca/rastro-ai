@@ -43,9 +43,9 @@ fn live_config(
 /// evidence/R57: a real repository syncs and a remembered phrase is found with a working link
 ///
 /// Needs `RASTRO_LIVE_REPO` (owner/name), `RASTRO_LIVE_PHRASE` and a GitHub token (`GH_TOKEN` or
-/// `gh auth login`); run with `cargo test -p rastro-cli -- --ignored`.
+/// `gh auth login`); run with `cargo nextest run -p rastro-cli --test live --run-ignored only`.
 #[test]
-#[ignore = "talks to GitHub; set RASTRO_LIVE_REPO and RASTRO_LIVE_PHRASE"]
+#[ignore = "live: talks to GitHub; set RASTRO_LIVE_REPO and RASTRO_LIVE_PHRASE"]
 fn owner_syncs_a_real_repo_and_finds_a_remembered_phrase() {
     let config = live_config(
         std::env::var_os("RASTRO_LIVE_REPO"),
@@ -211,9 +211,10 @@ fn item_number(location: &str) -> &str {
 ///
 /// Needs `RASTRO_LIVE_REPO` (owner/name), `RASTRO_LIVE_GITHUB_LOGIN` (an account that authored a
 /// pull request or issue in that repository, usually the owner's) and `gh auth login` or
-/// `GH_TOKEN`; run with `cargo test -p rastro-cli --test live -- --ignored the_owners_account`.
+/// `GH_TOKEN`; run with
+/// `cargo nextest run -p rastro-cli --test live --run-ignored only the_owners_account`.
 #[test]
-#[ignore = "talks to GitHub; set RASTRO_LIVE_REPO and RASTRO_LIVE_GITHUB_LOGIN"]
+#[ignore = "live: talks to GitHub; set RASTRO_LIVE_REPO and RASTRO_LIVE_GITHUB_LOGIN"]
 #[expect(
     clippy::too_many_lines,
     reason = "one live run seeds two scopes, syncs and reads back both claims and receipts, so a failure names the step"
@@ -416,9 +417,9 @@ fn half_configured_or_malformed_live_variables_fail_naming_them() {
 /// Needs `RASTRO_LIVE_DB`: a COPY of the owner's database (for example made with
 /// `sqlite3 ~/.local/share/rastro/rastro.sqlite3 ".backup /tmp/rastro-copy.sqlite3"`). The test
 /// copies it again into a temporary home, so the file it is given is never written. Run with
-/// `cargo test -p rastro-cli --test live -- --ignored the_owners_copy_lists_github_and_linear_accounts_and_runs_candidates`.
+/// `cargo nextest run -p rastro-cli --test live --run-ignored only the_owners_copy_lists_github_and_linear_accounts_and_runs_candidates`.
 #[test]
-#[ignore = "reads a copy of the owner's database; set RASTRO_LIVE_DB"]
+#[ignore = "live: reads a copy of the owner's database; set RASTRO_LIVE_DB"]
 fn the_owners_copy_lists_github_and_linear_accounts_and_runs_candidates() {
     let Some(source) = std::env::var_os("RASTRO_LIVE_DB") else {
         return;
@@ -459,9 +460,9 @@ fn the_owners_copy_lists_github_and_linear_accounts_and_runs_candidates() {
 ///
 /// Needs `RASTRO_LIVE_DB`, as above; it prints how long `about <entity>` took (`RASTRO_LIVE_ENTITY`,
 /// default `me`). Run with
-/// `cargo test -p rastro-cli --test live -- --ignored --nocapture the_owners_copy_labels_what_about_me_returns`.
+/// `cargo nextest run -p rastro-cli --test live --run-ignored only --no-capture the_owners_copy_labels_what_about_me_returns`.
 #[test]
-#[ignore = "reads a copy of the owner's database; set RASTRO_LIVE_DB"]
+#[ignore = "live: reads a copy of the owner's database; set RASTRO_LIVE_DB"]
 fn the_owners_copy_labels_what_about_me_returns() {
     let Some(source) = std::env::var_os("RASTRO_LIVE_DB") else {
         return;
