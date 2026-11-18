@@ -1,7 +1,8 @@
 #![allow(non_snake_case)]
-//! The owner confirms a claim end to end: `rastro claim confirm` records one intent bound to the
-//! revision the owner saw, the projection reads the claim `confirmed` in `about`, `why`, a merged
-//! Person's group and a scoped replay, and a rebuild brings every confirmation back unchanged.
+//! The owner confirms or retracts a claim end to end: `rastro claim confirm` and `rastro claim
+//! reject` record one intent bound to the revision the owner saw. A confirmed claim reads
+//! `confirmed` in `about`, `why`, a merged Person's group and a scoped replay; a retracted claim
+//! leaves every current read, in every scope that sees it; a rebuild brings both back unchanged.
 mod support;
 use chrono::{DateTime, Utc};
 use rastro_core::claims::{self, Entity, Object, ObservedClaim, Support};
@@ -10,7 +11,11 @@ use rastro_core::{Evidence, Scope, Source, Storage, TrustClass};
 use rastro_storage_sqlite::SqliteStorage;
 use rusqlite::Connection;
 use serde_json::Value;
-use std::{collections::BTreeSet, process::Command};
+use std::{
+    collections::BTreeSet,
+    io::{BufRead, BufReader, Write},
+    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
+};
 use tempfile::TempDir;
 
 /// The extractor a fixture source is bound to; it is never installed, so a rebuild carries the
@@ -191,6 +196,15 @@ impl Env {
             })
             .unwrap_or_else(|| panic!("no {predicate} {object}: {about}"))
             .clone()
+    }
+    fn reject(&self, claim: &Value) -> Value {
+        self.ok(&[
+            "claim",
+            "reject",
+            claim["id"].as_str().unwrap(),
+            "--seen",
+            claim["revision"].as_str().unwrap(),
+        ])
     }
     fn confirm(&self, claim: &Value) -> Value {
         self.ok(&[
@@ -383,9 +397,9 @@ fn rows(env: &Env) -> (Vec<String>, Vec<String>) {
 }
 
 // spec: Corrections replay at rebuild
-// Partial: S20 also names retracted and fixed claims; those are covered once reject and edit exist.
+// Partial: S20 also names fixed claims; those are covered once edit exists.
 #[test]
-fn a_rebuild_brings_every_confirmation_back_with_the_same_ids_and_statuses() {
+fn a_rebuild_brings_every_confirmation_and_retraction_back_with_the_same_ids_and_statuses() {
     let env = Env::new();
     let octocat = env.account(7, "octocat");
     let ana = env.person("Ana");
@@ -395,6 +409,10 @@ fn a_rebuild_brings_every_confirmation_back_with_the_same_ids_and_statuses() {
     let link = env.claim(&ana, "rastro:held_by", &ana);
     env.confirm(&observed);
     env.confirm(&link);
+    // One retraction, on a claim evidence holds.
+    env.login(7, "octo-alias", "https://example.test/alias/7");
+    let wrong = env.claim("github:account/7", "rastro:alias", "octo-alias");
+    env.reject(&wrong);
 
     let before = rows(&env);
     let read = |entity: &str, claim: &Value| {
@@ -405,6 +423,10 @@ fn a_rebuild_brings_every_confirmation_back_with_the_same_ids_and_statuses() {
     };
     let (about_before, why_before) = read(&ana, &link);
     let (account_about, account_why) = read("github:account/7", &observed);
+    assert_eq!(
+        env.ok(&["why", wrong["id"].as_str().unwrap()])["claim"]["status"],
+        "retracted"
+    );
     assert!(
         about_before.to_string().contains("\"confirmed\""),
         "{about_before}"
@@ -444,4 +466,175 @@ fn a_scoped_read_keeps_the_confirmed_status_of_a_claim_it_can_see() {
         .find(|c| c.claim.id == seen["id"].as_str().unwrap())
         .expect("the scope sees the claim");
     assert_eq!(shown.claim.status, "confirmed");
+}
+
+/// `rastro mcp --scope personal`, driven over stdio by raw JSON lines.
+struct Mcp {
+    child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+    next_id: u64,
+}
+impl Mcp {
+    fn start(env: &Env) -> Self {
+        let mut child = Command::new(support::rastro())
+            .env("RASTRO_HOME", env.home.path())
+            .env("RASTRO_PLUGIN_PATH", env.home.path().join("no-plugins"))
+            .args(["mcp", "--scope", "personal"])
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take().unwrap();
+        let stdout = BufReader::new(child.stdout.take().unwrap());
+        let mut mcp = Self {
+            child,
+            stdin,
+            stdout,
+            next_id: 1,
+        };
+        mcp.request(
+            "initialize",
+            serde_json::json!({"protocolVersion": "2025-11-25", "capabilities": {},
+                "clientInfo": {"name": "corrections", "version": "1"}}),
+        );
+        mcp.send(serde_json::json!({"jsonrpc": "2.0", "method": "notifications/initialized"}));
+        mcp
+    }
+    fn send(&mut self, message: Value) {
+        writeln!(self.stdin, "{message}").unwrap();
+        self.stdin.flush().unwrap();
+    }
+    fn request(&mut self, method: &str, params: Value) -> Value {
+        let id = self.next_id;
+        self.next_id += 1;
+        self.send(
+            serde_json::json!({"jsonrpc": "2.0", "id": id, "method": method, "params": params}),
+        );
+        loop {
+            let mut line = String::new();
+            assert_ne!(
+                self.stdout.read_line(&mut line).unwrap(),
+                0,
+                "server closed"
+            );
+            let message: Value = serde_json::from_str(&line).unwrap();
+            if message["id"] == serde_json::json!(id) && message.get("method").is_none() {
+                return message;
+            }
+        }
+    }
+    /// The claim ids the scoped `about` tool lists for `entity`.
+    fn about(&mut self, entity: &str) -> Vec<String> {
+        let answer = self.request(
+            "tools/call",
+            serde_json::json!({"name": "about", "arguments": {"entity": entity}}),
+        );
+        let result = &answer["result"]["structuredContent"]["result"];
+        result["claims"]
+            .as_array()
+            .unwrap_or_else(|| panic!("no claims: {answer}"))
+            .iter()
+            .map(|c| c["id"].as_str().unwrap().to_string())
+            .collect()
+    }
+}
+impl Drop for Mcp {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+    }
+}
+
+// spec: The owner retracts a claim
+#[test]
+fn a_rejected_claim_leaves_about_and_why_says_retracted_by_the_reject_intent() {
+    let env = Env::new();
+    env.account(7, "octocat");
+    let seen = env.claim("github:account/7", "rastro:alias", "octocat");
+    let id = seen["id"].as_str().unwrap();
+    let written = env.reject(&seen);
+    let intent = &written["intents"][0];
+    assert_eq!(intent["kind"], "reject", "{written}");
+    assert_eq!(written["intents"].as_array().unwrap().len(), 1);
+    assert_eq!(env.intents(), 1);
+
+    let about = env.about("github:account/7");
+    assert!(
+        about["claims"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|c| c["id"] != id),
+        "the retracted claim is still listed: {about}"
+    );
+    let why = env.ok(&["why", id]);
+    assert_eq!(why["claim"]["status"], "retracted", "{why}");
+    let retraction = why["supports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["justification_kind"] == "retraction")
+        .unwrap_or_else(|| panic!("no retraction justification: {why}"));
+    assert_eq!(retraction["intent"]["id"], intent["id"], "{why}");
+    assert_eq!(retraction["current"], true);
+    // The evidence that said it is still listed beside the owner's word.
+    assert!(
+        why["supports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["justification_kind"] == "provenance"),
+        "{why}"
+    );
+}
+
+// spec: The owner retracts a claim
+#[test]
+fn a_scoped_mcp_read_leaves_out_a_rejected_claim() {
+    let env = Env::new();
+    env.account(7, "octocat");
+    let seen = env.claim("github:account/7", "rastro:alias", "octocat");
+    let id = seen["id"].as_str().unwrap();
+    let mut mcp = Mcp::start(&env);
+    assert!(
+        mcp.about("github:account/7").iter().any(|c| c == id),
+        "the scope should see the claim before it is rejected"
+    );
+
+    env.reject(&seen);
+    let listed = mcp.about("github:account/7");
+    assert!(!listed.is_empty(), "the account's other claims stay");
+    assert!(
+        !listed.iter().any(|c| c == id),
+        "the rejected claim is still in the scoped read: {listed:?}"
+    );
+}
+
+// spec: The owner retracts a claim
+#[test]
+fn rejecting_a_claim_an_owner_link_made_is_sent_to_identity_undo() {
+    let env = Env::new();
+    let octocat = env.account(7, "octocat");
+    let ana = env.person("Ana");
+    let linked = env.ok(&["identity", "link", &octocat, &ana]);
+    let link = linked["intents"][0]["id"].as_str().unwrap().to_string();
+    let held = env.claim(&ana, "rastro:held_by", &ana);
+    let before = env.intents();
+
+    let error = env.refused(&[
+        "claim",
+        "reject",
+        held["id"].as_str().unwrap(),
+        "--seen",
+        held["revision"].as_str().unwrap(),
+    ]);
+    assert!(error.contains("identity undo"), "{error}");
+    assert!(error.contains(&link), "{error}");
+    assert_eq!(env.intents(), before);
+    assert_eq!(
+        env.claim(&ana, "rastro:held_by", &ana)["status"],
+        "observed"
+    );
 }
