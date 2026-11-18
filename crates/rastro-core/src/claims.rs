@@ -813,7 +813,8 @@ mod tests {
         validate(submit, &with_viewer(), &manifest(), &accounts())
     }
 
-    /// identity/R9: a verified email is exactly the text one of its supports quotes
+    /// spec: A sync records the accounts it observed
+    /// A verified email is exactly the text one of its supports quotes
     #[test]
     fn a_verified_email_is_exactly_the_text_its_support_quotes() {
         let email = crate::identity::VERIFIED_EMAIL;
@@ -846,7 +847,8 @@ mod tests {
         );
     }
 
-    /// identity/R11: a token owner cites its source's viewer observation
+    /// spec: The GitHub token owner holds me
+    /// A token owner cites its source's viewer observation
     #[test]
     fn a_token_owner_cites_its_sources_viewer_observation() {
         let owner = crate::identity::TOKEN_OWNER;
