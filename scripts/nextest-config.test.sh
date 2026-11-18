@@ -12,6 +12,9 @@ repo=$PWD
 fixtures=scripts/fixtures/nextest
 config=$repo/.config/nextest.toml
 
+# CI sets CARGO_TERM_COLOR, and nextest colours its output when it is set; escape codes then split
+# the lines these checks match. Every run below asks for plain output so the checks read the text.
+
 # nextest keeps recorded runs in a per-user state directory; keep this run's out of the developer's.
 export NEXTEST_STATE_DIR=$repo/target/nextest-config-test-state
 # The repository's user-level config, which enables recording. CI points at the same file.
@@ -70,7 +73,7 @@ test_a_test_past_the_timeout_is_slow_terminated_and_named() {
   local out status
   # The fixture sleeps past 90 seconds, so a config that never terminates it fails here instead of
   # passing by accident.
-  out=$(cd "$fixtures/hang" && timeout 200 cargo nextest run --config-file "$config" 2>&1)
+  out=$(cd "$fixtures/hang" && timeout 200 cargo nextest run --color never --config-file "$config" 2>&1)
   status=$?
   if [ "$status" -eq 0 ]; then
     echo "  the run exited 0 with a hung test"
@@ -91,7 +94,7 @@ test_a_test_past_the_timeout_is_slow_terminated_and_named() {
 test_a_failing_test_reaches_the_junit_report_with_its_output() {
   start_test a_failing_test_reaches_the_junit_report_with_its_output
   local out status junit report
-  out=$(cd "$fixtures/suite" && cargo nextest run --config-file "$config" 2>&1)
+  out=$(cd "$fixtures/suite" && cargo nextest run --color never --config-file "$config" 2>&1)
   status=$?
   if [ "$status" -eq 0 ]; then
     echo "  the run exited 0 with a failing test"
@@ -121,8 +124,8 @@ test_a_rerun_runs_only_the_test_that_failed() {
   start_test a_rerun_runs_only_the_test_that_failed
   local out
   # The rerun needs a parent run with a failure of its own, so this test does not lean on another.
-  (cd "$fixtures/suite" && cargo nextest run --config-file "$config") >/dev/null 2>&1
-  out=$(cd "$fixtures/suite" && cargo nextest run --rerun latest --config-file "$config" 2>&1)
+  (cd "$fixtures/suite" && cargo nextest run --color never --config-file "$config") >/dev/null 2>&1
+  out=$(cd "$fixtures/suite" && cargo nextest run --color never --rerun latest --config-file "$config" 2>&1)
   says "$out" "the rerun" "test_that_fails"
   says "$out" "the rerun" "test_that_also_fails"
   says_not "$out" "the rerun" "test_that_passes"
