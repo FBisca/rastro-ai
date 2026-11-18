@@ -38,6 +38,8 @@ const PERSON_PREFIX: &str = "rastro:person/";
 const CLAIM_DOMAIN: &str = "claim/";
 /// The identifier prefix of the `std:Commitment` an accepted queue item becomes.
 const COMMITMENT_PREFIX: &str = "std:commitment/";
+/// The type of the commitment an accepted queue item becomes, asserted by the acceptance.
+const COMMITMENT_TYPE: &str = "std:Commitment";
 
 /// The kinds the table holds. A claim intent (`confirm`, or `reject` of a claim) names a
 /// [`Targets::Claim`].
@@ -1393,7 +1395,7 @@ impl Resolution {
                 }
                 _ => {}
             }
-            // An accepted proposal becomes one observed commitment: each of its standard terms,
+            // An accepted proposal becomes one observed commitment, typed `std:Commitment` (its anchor), and each of its standard terms,
             // as the owner accepted them, is a claim about the entity the item maps to a Person,
             // carrying the party's name or the stated date as a literal. The intent alone backs
             // them — no evidence span — and a proposal's answer can't be undone, so they hold
@@ -1405,6 +1407,19 @@ impl Resolution {
                     ..
                 } = &intent.targets
             {
+                // The acceptance also asserts the commitment itself, its anchor: the terms rest on
+                // it, so retracting the anchor takes every term nothing else justifies.
+                push(
+                    subject,
+                    TYPE_PREDICATE,
+                    Object::Literal {
+                        value: COMMITMENT_TYPE.into(),
+                        datatype: TYPE_DATATYPE.into(),
+                    },
+                    true,
+                    id,
+                    (intent.issued_at, None),
+                );
                 for term in terms {
                     push(
                         subject,

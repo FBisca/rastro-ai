@@ -1825,6 +1825,10 @@
           },
           "type": "array"
         },
+        "earlier_retracted": {
+          "description": "Set on a proposal that one commitment covered before the owner retracted some of its\nstatements: new evidence proposes it again, and the owner decides again. Never set on a\nquestion.",
+          "type": "boolean"
+        },
         "id": {
           "description": "The content address of the item's canonical encoding.",
           "type": "string"
