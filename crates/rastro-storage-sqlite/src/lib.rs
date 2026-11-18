@@ -30,7 +30,7 @@ pub use scoped::{cache_len as scoped_cache_len, clear_cache as clear_scoped_cach
 /// The migration recording when an intent's contribution ended; an open that applies it replays
 /// the stored intents once all migrations are in.
 const INTENT_END: &str = "202611081000_intent_justification_end";
-const MIGRATIONS: [(&str, &str); 17] = [
+const MIGRATIONS: [(&str, &str); 18] = [
     (
         "202611041200_initial",
         include_str!("../migrations/202611041200_initial.sql"),
@@ -98,6 +98,10 @@ const MIGRATIONS: [(&str, &str); 17] = [
     (
         "202611141100_run_items",
         include_str!("../migrations/202611141100_run_items.sql"),
+    ),
+    (
+        "202611141200_shown_statements",
+        include_str!("../migrations/202611141200_shown_statements.sql"),
     ),
 ];
 
@@ -371,8 +375,15 @@ impl Storage for SqliteStorage {
         let mut recorded = 0;
         for report in reports {
             transaction.execute(
-                "INSERT INTO shown_report (item, source, run, shown_at) VALUES (?1, ?2, ?3, ?4)",
-                params![report.item, report.source, report.run, stamp(report.at)],
+                "INSERT INTO shown_report (item, source, run, statements, shown_at)
+                 VALUES (?1, ?2, ?3, ?4, ?5)",
+                params![
+                    report.item,
+                    report.source,
+                    report.run,
+                    serde_json::to_string(&report.statements)?,
+                    stamp(report.at)
+                ],
             )?;
             recorded += 1;
         }
@@ -1012,24 +1023,40 @@ impl Snapshot for View<'_> {
         Ok(claims)
     }
     fn shown_reports(&self) -> Result<Vec<rastro_core::queue::ShownReport>> {
-        let mut statement = self
-            .0
-            .prepare("SELECT item, source, run, shown_at FROM shown_report ORDER BY append_seq")?;
-        let rows: Vec<(String, String, String, String)> = statement
+        let mut statement = self.0.prepare(
+            "SELECT item, source, run, statements, shown_at FROM shown_report ORDER BY append_seq",
+        )?;
+        let rows: Vec<(String, String, String, Option<String>, String)> = statement
             .query_map([], |row| {
-                Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?))
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                ))
             })?
             .collect::<Result<_, _>>()?;
         (rows.into_iter())
-            .map(|(item, source, run, at)| {
+            .map(|(item, source, run, statements, at)| {
                 Ok(rastro_core::queue::ShownReport {
                     item,
                     source,
                     run,
+                    statements: match statements {
+                        Some(statements) => serde_json::from_str(&statements)?,
+                        None => Vec::new(),
+                    },
                     at: parse_time(at)?,
                 })
             })
             .collect()
+    }
+    fn known_commitments(
+        &self,
+        scopes: &[Scope],
+    ) -> Result<Vec<rastro_core::queue::KnownCommitment>> {
+        commitments::known(self, scopes)
     }
     fn departed_run(
         &self,

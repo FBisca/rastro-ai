@@ -7,11 +7,12 @@
 //! the claim the intent backs when there is one. An item with no answering intent that the queue
 //! no longer holds was shown and never answered; it left one of two ways. A later run of its
 //! source dropped its content, and it was ignored: its outcome names the time it waited, from
-//! its first shown report to that run. Or the queue settled it another way — it was already
-//! known, its accounts were linked, or its meeting was forgotten — and it became moot. Nothing
-//! records when a moot item left, so it is dated at its last shown report and measures no wait:
-//! dating it at the read would move it on every read.
-use super::{ShownReport, read};
+//! its first shown report to that run. Or the queue settled it — an observed commitment holds the
+//! item's statements, so it was already known; its accounts were linked; or its meeting was
+//! forgotten — and it became moot, whatever a later run's content says. Nothing records when a
+//! moot item left, so it is dated at its last shown report and measures no wait: dating it at the
+//! read, or at a run that ran later, would move it after the fact.
+use super::{ShownReport, held, known_by_subject, read};
 use crate::identity::{Intent, IntentKind};
 use crate::read_only::Snapshot;
 use crate::{Rastro, ReadStorage, Reader, Scope, Storage};
@@ -38,8 +39,9 @@ pub enum OutcomeKind {
     Rejected,
     /// A question answered yes or no.
     Answered,
-    /// Shown, never answered, and gone from the queue without a later run dropping it: the queue
-    /// had already settled it elsewhere, its accounts were linked, or its meeting was forgotten.
+    /// Shown, never answered, and gone from the queue because the queue settled it: an observed
+    /// commitment already holds its statements, its accounts were linked, or its meeting was
+    /// forgotten.
     BecameMoot,
     /// Shown, never answered, and gone because a later run of its source dropped its content.
     Ignored,
@@ -128,6 +130,7 @@ pub(crate) fn outcomes(view: &dyn Snapshot, scopes: &[Scope]) -> Result<Outcomes
         .map(|item| item.id)
         .collect();
     let claims = view.intent_claims()?;
+    let known = known_by_subject(&view.known_commitments(scopes)?);
     let mut outcomes = Vec::new();
     let mut answered_items = BTreeSet::new();
     for intent in &intents {
@@ -155,9 +158,13 @@ pub(crate) fn outcomes(view: &dyn Snapshot, scopes: &[Scope]) -> Result<Outcomes
         }
         let first = reports.first().expect("by_item groups at least one report");
         let last = reports.last().expect("by_item groups at least one report");
-        // A question has no source run, and a proposal that left with no later run dropping it
-        // did not leave because its content was replaced: the queue settled it elsewhere.
-        let dropped = match last.run.is_empty() {
+        // An item whose statements an observed commitment holds was settled elsewhere: the owner
+        // accepted the same statements from another source, or an adapter observed them. It left
+        // the queue when that knowledge reached it, not because a run's content no longer carries
+        // it, so a later run that lacks it never turns it into an ignored item. A question has no
+        // source run either, and one that left with no run dropping it was settled another way.
+        let settled = held(&known, &last.statements);
+        let dropped = match settled || last.run.is_empty() {
             true => None,
             false => view.departed_run(&last.source, &last.run, &item)?,
         };

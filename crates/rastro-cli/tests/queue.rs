@@ -2142,13 +2142,47 @@ fn S14_an_item_settled_elsewhere_reads_became_moot_and_no_read_moves_it() {
         "{outcomes}"
     );
 
+    // A later re-import replaces that meeting's content, so a run now lacks the settled item.
+    // It still reads became moot at the same time: the queue settled it before any run could
+    // have dropped it, and a run that merely lacks it never turns that into ignored.
+    env.candidates(&revised());
+    env.import_ok_at(
+        "weekly-2",
+        "work",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+        "2026-11-10T14:00:00Z",
+    );
+    let replaced = env.outcomes_at("2026-11-10T15:00:00Z");
+    let listed = replaced["outcomes"].as_array().unwrap();
+    let still = (listed.iter())
+        .find(|outcome| outcome["item"] == settled.as_str())
+        .unwrap_or_else(|| panic!("no outcome for the settled item: {replaced}"));
+    assert_eq!(still["kind"], "became_moot", "{replaced}");
+    assert_eq!(still["at"], "2026-11-10T11:00:00Z", "{replaced}");
+    assert!(
+        still.get("waited_seconds").is_none(),
+        "a moot item measures no wait: {replaced}"
+    );
+    // The item that re-import did replace reads ignored, dated at that run: the read still
+    // tells a run's departure from a settled one.
+    let dropped = (listed.iter())
+        .find(|outcome| outcome["item"] != settled.as_str() && outcome["kind"] == "ignored")
+        .unwrap_or_else(|| panic!("the re-import dropped an unanswered item: {replaced}"));
+    assert_eq!(dropped["at"], "2026-11-10T14:00:00Z", "{replaced}");
+    assert_eq!(
+        replaced["totals"],
+        json!({"shown": 4, "acted_on": 1}),
+        "{replaced}"
+    );
+
     // Nothing moves it: not a later read, not a rebuild.
     let later = env.outcomes_at("2026-11-10T20:00:00Z");
-    assert_eq!(later["outcomes"], outcomes["outcomes"], "{later}");
+    assert_eq!(later["outcomes"], replaced["outcomes"], "{later}");
     env.ok_at(&["claims", "rebuild"], Some("2026-11-10T21:00:00Z"));
     let rebuilt = env.outcomes_at("2026-11-10T22:00:00Z");
-    assert_eq!(rebuilt["outcomes"], outcomes["outcomes"], "{rebuilt}");
-    assert_eq!(rebuilt["totals"], outcomes["totals"], "{rebuilt}");
+    assert_eq!(rebuilt["outcomes"], replaced["outcomes"], "{rebuilt}");
+    assert_eq!(rebuilt["totals"], replaced["totals"], "{rebuilt}");
 }
 
 /// S14: a question that goes away when the owner links its two accounts to one Person reads

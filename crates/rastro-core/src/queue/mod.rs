@@ -176,7 +176,7 @@ pub struct Gap {
 /// A standard statement a hypothesis expresses: one `std:` predicate with the literal it
 /// carries, as the source said it. This is what an observed claim must hold for the item to be
 /// already known.
-#[derive(Clone, Debug, Eq, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Statement {
     pub predicate: String,
     pub value: String,
@@ -201,6 +201,10 @@ pub struct ShownReport {
     pub source: String,
     /// The run the item's content came from; empty for a question, which is computed on read.
     pub run: String,
+    /// The standard statements the item expressed, kept because an outcome has to tell an item
+    /// the queue settled for being already known from one a run dropped, and the item itself is
+    /// gone by then. Empty for a question.
+    pub statements: Vec<Statement>,
     pub at: DateTime<Utc>,
 }
 
@@ -211,6 +215,7 @@ pub fn shown(queue: &Queue, at: DateTime<Utc>) -> Vec<ShownReport> {
             item: item.id.clone(),
             source: item.source.name.clone(),
             run: item.run.clone().unwrap_or_default(),
+            statements: (item.proposal.as_ref()).map(statements).unwrap_or_default(),
             at,
         })
         .collect()
@@ -261,13 +266,7 @@ impl Queue {
         questions: Vec<Question>,
         answered: &BTreeSet<String>,
     ) -> Self {
-        let mut known: BTreeMap<String, BTreeSet<Statement>> = BTreeMap::new();
-        for commitment in origins.iter().flat_map(|origin| origin.known.iter()) {
-            known
-                .entry(commitment.subject.clone())
-                .or_default()
-                .extend(commitment.statements.iter().cloned());
-        }
+        let known = known_by_subject(origins.iter().flat_map(|origin| origin.known.iter()));
         let mut aged = Vec::new();
         let mut gaps = Vec::new();
         let mut seen = BTreeSet::new();
@@ -290,7 +289,7 @@ impl Queue {
                 if !seen.insert(item.id.clone()) {
                     continue;
                 }
-                if held(&known, hypothesis) {
+                if held(&known, &statements(hypothesis)) {
                     already_known += 1;
                     continue;
                 }
@@ -398,13 +397,28 @@ pub(super) fn statements(hypothesis: &Hypothesis) -> Vec<Statement> {
     statements
 }
 
-/// Whether an observed commitment already holds the statements a hypothesis expresses: the
-/// same set, on one subject. A commitment carrying more statements than the proposal, or claims
-/// spread over several commitments, never adds up to a match; the queue hides an item on an
-/// exact statement match only, never on a name or a text match.
-fn held(known: &BTreeMap<String, BTreeSet<Statement>>, hypothesis: &Hypothesis) -> bool {
-    let statements: BTreeSet<Statement> = statements(hypothesis).into_iter().collect();
-    !statements.is_empty() && (known.values()).any(|held| *held == statements)
+/// The statements observed claims hold, keyed by the commitment they are about. A hypothesis or
+/// a shown item matches when one commitment holds exactly its statements.
+pub(crate) fn known_by_subject<'a>(
+    known: impl IntoIterator<Item = &'a KnownCommitment>,
+) -> BTreeMap<String, BTreeSet<Statement>> {
+    let mut by_subject: BTreeMap<String, BTreeSet<Statement>> = BTreeMap::new();
+    for commitment in known {
+        by_subject
+            .entry(commitment.subject.clone())
+            .or_default()
+            .extend(commitment.statements.iter().cloned());
+    }
+    by_subject
+}
+
+/// Whether an observed commitment already holds the statements `expressed`: the same set, on one
+/// subject. A commitment carrying more statements than the item, or claims spread over several
+/// commitments, never adds up to a match; the queue hides an item on an exact statement match
+/// only, never on a name or a text match, and an item stating nothing is never already known.
+fn held(known: &BTreeMap<String, BTreeSet<Statement>>, expressed: &[Statement]) -> bool {
+    let expressed: BTreeSet<Statement> = expressed.iter().cloned().collect();
+    !expressed.is_empty() && (known.values()).any(|held| *held == expressed)
 }
 
 /// An item with the key the queue's order sorts by.

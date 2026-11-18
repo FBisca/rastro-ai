@@ -1919,7 +1919,7 @@
         },
         {
           "const": "became_moot",
-          "description": "Shown, never answered, and gone from the queue without a later run dropping it: the queue\nhad already settled it elsewhere, its accounts were linked, or its meeting was forgotten.",
+          "description": "Shown, never answered, and gone from the queue because the queue settled it: an observed\ncommitment already holds its statements, its accounts were linked, or its meeting was\nforgotten.",
           "type": "string"
         },
         {

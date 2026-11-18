@@ -132,6 +132,11 @@ pub trait Snapshot {
     fn shown_reports(&self) -> Result<Vec<crate::queue::ShownReport>> {
         Ok(Default::default())
     }
+    /// The commitments observed `std:` claims hold, visible to `scopes` (empty: every scope): what
+    /// the queue leaves an item out as already known against.
+    fn known_commitments(&self, _scopes: &[Scope]) -> Result<Vec<crate::queue::KnownCommitment>> {
+        Ok(Default::default())
+    }
     /// When the first run of `source` that succeeded after the last one still carrying `item`
     /// finished without it: the run that replaced the content the item came from, and so the
     /// moment the unanswered item left the queue. A run that kept the item's content — a replay,
