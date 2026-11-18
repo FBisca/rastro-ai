@@ -1120,7 +1120,7 @@
       "type": "object"
     },
     "IntentKind": {
-      "description": "The kinds the table holds. A claim intent (`confirm`) names a [`Targets::Claim`].",
+      "description": "The kinds the table holds. A claim intent (`confirm`, or `reject` of a claim) names a\n[`Targets::Claim`].",
       "oneOf": [
         {
           "enum": [
@@ -1145,7 +1145,7 @@
         },
         {
           "const": "reject",
-          "description": "Reject a queue proposal, with the owner's reason.",
+          "description": "Reject a queue proposal, with the owner's reason; or retract a claim the owner read: it\nleaves every current read and `why` says it is retracted.",
           "type": "string"
         },
         {
@@ -3672,6 +3672,36 @@
               "type": "object"
             }
           }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "claim.reject"
+            },
+            "result": {
+              "additionalProperties": false,
+              "description": "What a claim correction recorded.",
+              "properties": {
+                "claim": {
+                  "description": "The claim the correction names.",
+                  "type": "string"
+                },
+                "intents": {
+                  "description": "The intents accepted, in acceptance order; none when the correction was already in force.",
+                  "items": {
+                    "$ref": "#/$defs/IntentView"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "claim",
+                "intents"
+              ],
+              "title": "ClaimWriteResult",
+              "type": "object"
+            }
+          }
         }
       ],
       "required": [
@@ -3716,7 +3746,8 @@
         "queue.answer",
         "queue.missed",
         "queue.outcomes",
-        "claim.confirm"
+        "claim.confirm",
+        "claim.reject"
       ]
     },
     "result": {
@@ -5404,6 +5435,56 @@
         "type": "object"
       },
       "name": "claim.confirm",
+      "result": {
+        "additionalProperties": false,
+        "description": "What a claim correction recorded.",
+        "properties": {
+          "claim": {
+            "description": "The claim the correction names.",
+            "type": "string"
+          },
+          "intents": {
+            "description": "The intents accepted, in acceptance order; none when the correction was already in force.",
+            "items": {
+              "$ref": "#/$defs/IntentView"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "claim",
+          "intents"
+        ],
+        "title": "ClaimWriteResult",
+        "type": "object"
+      },
+      "surfaces": [
+        "cli"
+      ]
+    },
+    {
+      "description": "Retract a claim you read: it leaves every current read, in every scope that sees it, and `why` says it is retracted. Name the revision you read; a claim that changed since is refused, and nothing is recorded. A claim your own `identity link` made is refused too: undo that link with `rastro identity undo`.",
+      "input": {
+        "additionalProperties": false,
+        "description": "Retract a claim you read: it leaves every current read, in every scope that sees it, and `why` says it is retracted. Name the revision you read; a claim that changed since is refused, and nothing is recorded. A claim your own `identity link` made is refused too: undo that link with `rastro identity undo`.",
+        "properties": {
+          "claim": {
+            "description": "The claim's id, as `about` and `why` show it.",
+            "type": "string"
+          },
+          "seen": {
+            "description": "The claim's revision as you read it, as `about` and `why` show it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "claim",
+          "seen"
+        ],
+        "title": "ClaimRejectRequest",
+        "type": "object"
+      },
+      "name": "claim.reject",
       "result": {
         "additionalProperties": false,
         "description": "What a claim correction recorded.",

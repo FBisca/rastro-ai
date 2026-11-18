@@ -1126,7 +1126,7 @@ impl Snapshot for View<'_> {
                  FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id
                  JOIN claim c ON c.id = ij.claim_id
                  WHERE c.predicate LIKE 'std:%' AND c.object_value IS NOT NULL
-                   AND i.kind <> 'confirm' AND ij.ended_at IS NULL AND (?1 OR {})
+                   AND i.kind NOT IN ('confirm', 'reject') AND ij.ended_at IS NULL AND (?1 OR {})
              )",
             scoped::VISIBLE_CLAIM,
             scoped::VISIBLE_INTENT_CLAIM,

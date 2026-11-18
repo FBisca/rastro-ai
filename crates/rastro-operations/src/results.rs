@@ -361,6 +361,10 @@ mod tests {
                 claim: "c_1".into(),
                 intents: vec![],
             }),
+            Response::ClaimReject(ClaimWriteResult {
+                claim: "c_1".into(),
+                intents: vec![],
+            }),
         ];
         let arguments = |name: &str| match name {
             "source.add" => {
@@ -378,7 +382,9 @@ mod tests {
             "identity.link" => serde_json::json!({"account": "github:login/a", "person": "me"}),
             "identity.merge" => serde_json::json!({"person": "me", "other": "rastro:name/Ana"}),
             "identity.undo" => serde_json::json!({"intent": "i_1"}),
-            "claim.confirm" => serde_json::json!({"claim": "c_1", "seen": "r_1"}),
+            "claim.confirm" | "claim.reject" => {
+                serde_json::json!({"claim": "c_1", "seen": "r_1"})
+            }
             "identity.history" => serde_json::json!({"entity": "me"}),
             "identity.answer" => {
                 serde_json::json!({"account": "github:login/a", "other": "linear:user/u", "verdict": "no"})

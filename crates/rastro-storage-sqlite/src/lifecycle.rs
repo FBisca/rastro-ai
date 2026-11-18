@@ -576,7 +576,7 @@ pub(crate) fn fingerprint(db: &Connection, id: &str) -> Result<Option<(String, b
     for sql in [
         "SELECT o.captured_at, o.id FROM occurrence o JOIN justification j ON j.id = o.justification_id WHERE j.claim_id = ?1 AND o.end IS NULL",
         "SELECT started_at, id FROM automatic_justification WHERE claim_id = ?1 AND ended_at IS NULL",
-        "SELECT coalesce(ij.started_at, i.issued_at), ij.id FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id WHERE ij.claim_id = ?1 AND ij.ended_at IS NULL AND i.kind <> 'confirm'",
+        "SELECT coalesce(ij.started_at, i.issued_at), ij.id FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id WHERE ij.claim_id = ?1 AND ij.ended_at IS NULL AND i.kind NOT IN ('confirm', 'reject')",
     ] {
         live.extend(
             db.prepare(sql)?
@@ -596,18 +596,30 @@ pub(crate) fn fingerprint(db: &Connection, id: &str) -> Result<Option<(String, b
         scalar,
     )))
 }
-/// Reads every claim an owner confirmation holds as `confirmed`, whatever status its evidence or
-/// its intents gave it (ADR 0014). Runs last in every path that writes a status, so an incremental
-/// write, a rebuild and a scoped replay agree. A confirmation holds while its `intent_justification`
-/// does not end.
+/// Reads every claim an owner correction holds as the status it gives, `confirmed` or
+/// `retracted`, whatever status its evidence or its intents gave it (ADR 0014). The latest
+/// correction that still holds wins. Runs last in every path that writes a status, so an
+/// incremental write, a rebuild and a scoped replay agree. A correction holds while its
+/// `intent_justification` does not end.
 pub(crate) fn settle(db: &Connection) -> Result<()> {
-    let confirmed: Vec<String> = db
-        .prepare("SELECT DISTINCT ij.claim_id FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id WHERE ij.ended_at IS NULL AND i.kind = 'confirm' AND ij.claim_id IN (SELECT id FROM claim) ORDER BY ij.claim_id")?
-        .query_map([], |r| r.get(0))?
+    let mut latest: BTreeMap<String, &'static str> = BTreeMap::new();
+    let corrections: Vec<(String, String)> = db
+        .prepare("SELECT ij.claim_id, i.kind FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id WHERE ij.ended_at IS NULL AND i.kind IN ('confirm', 'reject') AND ij.claim_id IN (SELECT id FROM claim) ORDER BY i.append_seq")?
+        .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<Result<_, _>>()?;
+    for (claim, kind) in corrections {
+        latest.insert(
+            claim,
+            if kind == "reject" {
+                "retracted"
+            } else {
+                "confirmed"
+            },
+        );
+    }
     let mut update =
-        db.prepare_cached("UPDATE claim SET status = 'confirmed', revision = ?2 WHERE id = ?1")?;
-    for id in confirmed {
+        db.prepare_cached("UPDATE claim SET status = ?3, revision = ?2 WHERE id = ?1")?;
+    for (id, status) in latest {
         let mut keys: BTreeSet<String> = BTreeSet::new();
         for sql in [
             "SELECT DISTINCT s.portable_key FROM justification j JOIN justification_span s ON s.justification_id = j.id WHERE j.claim_id = ?1 AND j.current = 1",
@@ -631,8 +643,8 @@ pub(crate) fn settle(db: &Connection) -> Result<()> {
                 extraction_rule: String::new(),
             })
             .collect();
-        let revision = revision_with_links("confirmed", &supports, &visible_links(db, &id)?);
-        update.execute(params![id, revision])?;
+        let revision = revision_with_links(status, &supports, &visible_links(db, &id)?);
+        update.execute(params![id, revision, status])?;
     }
     Ok(())
 }

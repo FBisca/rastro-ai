@@ -476,6 +476,28 @@ impl ClaimConfirmRequest {
     }
 }
 
+/// Retract a claim you read: it leaves every current read, in every scope that sees it, and `why` says it is retracted. Name the revision you read; a claim that changed since is refused, and nothing is recorded. A claim your own `identity link` made is refused too: undo that link with `rastro identity undo`.
+#[derive(Args, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ClaimRejectRequest {
+    /// The claim's id, as `about` and `why` show it.
+    pub claim: String,
+    /// The claim's revision as you read it, as `about` and `why` show it.
+    #[arg(long)]
+    pub seen: String,
+}
+impl ClaimRejectRequest {
+    pub(crate) fn run<S: Storage + StoredTwins>(
+        self,
+        rastro: &mut Rastro<S>,
+    ) -> Result<ClaimWriteResult> {
+        Ok(ClaimWriteResult::of(
+            &self.claim,
+            rastro.reject_claim(&self.claim, &self.seen)?,
+        ))
+    }
+}
+
 /// Undo one earlier intent. Undoing a link or a merge also records a cannot-link for its pair.
 #[derive(Args, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
