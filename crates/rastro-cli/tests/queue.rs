@@ -8,7 +8,6 @@ mod support;
 use chrono::{DateTime, Utc};
 use rastro_core::claims::{self, Entity, Object, ObservedClaim, Support};
 use rastro_core::{Evidence, Scope, Source, Storage, TrustClass};
-use rusqlite::OptionalExtension;
 use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -334,17 +333,17 @@ impl Env {
         self.sql("SELECT count(*) FROM intent")
     }
 
-    /// The claim the owner intent backs in the projection, if any.
-    fn claim_of_intent(&self, intent: &str) -> Option<String> {
-        rusqlite::Connection::open(self.database())
-            .unwrap()
-            .query_row(
-                "SELECT claim_id FROM intent_justification WHERE intent_id = ?1",
-                [intent],
-                |row| row.get(0),
+    /// Every claim the owner intent backs in the projection, in id order: an accept mints one
+    /// claim per standard term of the item it accepted.
+    fn claims_of_intent(&self, intent: &str) -> Vec<String> {
+        let connection = rusqlite::Connection::open(self.database()).unwrap();
+        let mut statement = connection
+            .prepare(
+                "SELECT claim_id FROM intent_justification WHERE intent_id = ?1 ORDER BY claim_id",
             )
-            .optional()
-            .unwrap()
+            .unwrap();
+        let rows = statement.query_map([intent], |row| row.get(0)).unwrap();
+        rows.collect::<Result<_, _>>().unwrap()
     }
 
     /// How many claims the projection holds.
@@ -1847,7 +1846,6 @@ fn a_scoped_read_never_explains_a_hidden_accept() {
         "the personal accept stays hidden: {why}"
     );
 }
-=======
 
 /// What a re-import of `TRANSCRIPT` proposes instead: the second turn's waiting-on, with a
 /// different promise, so no earlier item's content survives it.
@@ -2028,10 +2026,28 @@ fn S14_every_outcome_carries_its_item_kind_time_and_claim_and_the_totals_count_s
     assert_eq!(listed[1]["at"], "2026-11-10T12:00:00Z", "{outcomes}");
     assert_eq!(listed[2]["item"], first.as_str(), "{outcomes}");
     assert_eq!(listed[2]["at"], "2026-11-10T11:00:00Z", "{outcomes}");
-    // The accepted one names the claim it became.
-    let claim = env.claim_of_intent(&accepted_intent);
-    assert!(claim.is_some(), "an accept mints a claim: {outcomes}");
-    assert_eq!(listed[2]["claim"], claim.unwrap(), "{outcomes}");
+    // The accepted one names a claim it became: one the accept intent backs, about the
+    // commitment the item minted.
+    let claim = listed[2]
+        .get("claim")
+        .and_then(Value::as_str)
+        .unwrap_or_else(|| panic!("an accept mints a claim: {outcomes}"))
+        .to_string();
+    let backed = env.claims_of_intent(&accepted_intent);
+    assert!(
+        backed.contains(&claim),
+        "the outcome names a claim the accept backs: {claim} not in {backed:?}"
+    );
+    let commitment = claims::entity_id(&format!("std:commitment/{first}"));
+    let about = env.ok(&["about", "me"]);
+    let minted: BTreeSet<&str> = (about["claims"].as_array().into_iter().flatten())
+        .filter(|claim| claim["subject"]["id"] == commitment)
+        .filter_map(|claim| claim["id"].as_str())
+        .collect();
+    assert!(
+        minted.contains(claim.as_str()),
+        "the outcome names a claim about the commitment the item became: {claim} not in {minted:?}"
+    );
     // The totals count what was shown and what was acted on, each item once.
     assert_eq!(
         outcomes["totals"],
@@ -2075,15 +2091,18 @@ fn S15_a_rebuild_reproduces_the_accepted_claim_and_every_outcome_with_no_adapter
     );
 
     let before = env.outcomes_at("2026-11-10T13:00:00Z");
-    let claim = env.claim_of_intent(&accepted_intent);
-    assert!(claim.is_some(), "an accept mints a claim: {before}");
+    let claims = env.claims_of_intent(&accepted_intent);
+    assert!(!claims.is_empty(), "an accept mints a claim: {before}");
     let accepted_outcome = (before["outcomes"].as_array().unwrap().iter())
         .find(|outcome| outcome["item"] == accepted.as_str())
         .unwrap();
-    assert_eq!(
-        accepted_outcome["claim"],
-        claim.clone().unwrap(),
-        "{before}"
+    let named = accepted_outcome["claim"]
+        .as_str()
+        .unwrap_or_else(|| panic!("the accepted outcome names a claim: {before}"))
+        .to_string();
+    assert!(
+        claims.contains(&named),
+        "the accepted outcome names a claim its intent backs: {named} not in {claims:?}"
     );
 
     // An adapter that would be called now fails and leaves a mark.
@@ -2098,11 +2117,12 @@ fn S15_a_rebuild_reproduces_the_accepted_claim_and_every_outcome_with_no_adapter
     env.ok_at(&["claims", "rebuild"], Some("2026-11-10T14:00:00Z"));
     assert!(!marker.exists(), "the rebuild called no adapter");
 
-    // The accepted claim returns with the same id, and every outcome and shown report with it.
+    // Every claim the accept minted returns with the same id, and every outcome and shown
+    // report with it.
     assert_eq!(
-        env.claim_of_intent(&accepted_intent),
-        claim,
-        "the accepted claim returns with the same id"
+        env.claims_of_intent(&accepted_intent),
+        claims,
+        "every accepted claim returns with the same id"
     );
     let after = env.outcomes_at("2026-11-10T15:00:00Z");
     assert_eq!(after["outcomes"], before["outcomes"], "{after}");

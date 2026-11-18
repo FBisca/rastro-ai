@@ -47,7 +47,8 @@ pub struct Outcome {
     pub kind: OutcomeKind,
     /// When it happened: the intent's time, or, for an ignored item, when it left the queue.
     pub at: DateTime<Utc>,
-    /// The claim an accepted item became; absent when no claim holds it.
+    /// The claim an accepted item became; absent when no claim holds it. One accept mints one
+    /// claim per standard term of the item, so an outcome names the first of them in id order.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub claim: Option<String>,
     /// How long an ignored item waited from its first shown report to its departure.
@@ -115,7 +116,9 @@ pub(crate) fn outcomes(view: &dyn Snapshot, scopes: &[Scope]) -> Result<Outcomes
             continue;
         };
         answered_items.insert(item.to_string());
-        // Only an accept or an edit mints an accepted claim.
+        // Only an accept or an edit mints an accepted claim. One accept mints a claim per
+        // standard term of the item, and the outcome is one row, so it names the first of them
+        // in id order: the same one before and after a rebuild, since the set is the same.
         let claim = matches!(kind, OutcomeKind::Accepted | OutcomeKind::AcceptedWithEdits)
             .then(|| (claims.get(intent.id.as_str())).cloned())
             .flatten();

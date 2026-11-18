@@ -1871,7 +1871,7 @@
           "type": "string"
         },
         "claim": {
-          "description": "The claim an accepted item became; absent when no claim holds it.",
+          "description": "The claim an accepted item became; absent when no claim holds it. One accept mints one\nclaim per standard term of the item, so an outcome names the first of them in id order.",
           "type": "string"
         },
         "item": {

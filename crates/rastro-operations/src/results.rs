@@ -336,6 +336,7 @@ mod tests {
                 item: None,
                 intents: vec![],
             }),
+            Response::QueueOutcomes(OutcomesResult::empty()),
         ];
         let arguments = |name: &str| match name {
             "source.add" => {
