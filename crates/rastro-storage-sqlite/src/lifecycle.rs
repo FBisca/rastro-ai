@@ -565,6 +565,18 @@ fn visible_links(db: &Connection, id: &str) -> Result<Vec<(String, String)>> {
 /// The lifecycle fingerprint of a claim and whether it is scalar (ADR 0014). Its primary live
 /// justification is the one that has held longest: an open occurrence of evidence, a live
 /// automatic link, or a live owner intent that is not itself a correction, by start and then key.
+/// SQL: the intent justification `ij`, joined to its intent `i`, is the owner's word on a claim
+/// (a confirmation, a retraction, or the retraction half of a fix) and not a claim the owner made.
+/// A fix's other half, the claim it asserts, is justified by the same intent and is an ordinary
+/// owner justification.
+macro_rules! correction {
+    () => {
+        "(i.kind IN ('confirm', 'reject') OR (i.kind = 'edit' AND json_extract(i.targets_json, '$.claim.id') = ij.claim_id))"
+    };
+}
+pub(crate) use correction;
+/// [`correction!`] for a statement built at run time.
+pub(crate) const CORRECTION: &str = correction!();
 pub(crate) fn fingerprint(db: &Connection, id: &str) -> Result<Option<(String, bool)>> {
     let Some(scalar) = db
         .query_row("SELECT scalar FROM claim WHERE id = ?1", [id], |r| r.get(0))
@@ -576,7 +588,10 @@ pub(crate) fn fingerprint(db: &Connection, id: &str) -> Result<Option<(String, b
     for sql in [
         "SELECT o.captured_at, o.id FROM occurrence o JOIN justification j ON j.id = o.justification_id WHERE j.claim_id = ?1 AND o.end IS NULL",
         "SELECT started_at, id FROM automatic_justification WHERE claim_id = ?1 AND ended_at IS NULL",
-        "SELECT coalesce(ij.started_at, i.issued_at), ij.id FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id WHERE ij.claim_id = ?1 AND ij.ended_at IS NULL AND i.kind NOT IN ('confirm', 'reject')",
+        concat!(
+            "SELECT coalesce(ij.started_at, i.issued_at), ij.id FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id WHERE ij.claim_id = ?1 AND ij.ended_at IS NULL AND NOT ",
+            correction!()
+        ),
     ] {
         live.extend(
             db.prepare(sql)?
@@ -604,16 +619,17 @@ pub(crate) fn fingerprint(db: &Connection, id: &str) -> Result<Option<(String, b
 pub(crate) fn settle(db: &Connection) -> Result<()> {
     let mut latest: BTreeMap<String, &'static str> = BTreeMap::new();
     let corrections: Vec<(String, String)> = db
-        .prepare("SELECT ij.claim_id, i.kind FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id WHERE ij.ended_at IS NULL AND i.kind IN ('confirm', 'reject') AND ij.claim_id IN (SELECT id FROM claim) ORDER BY i.append_seq")?
+        .prepare(&format!("SELECT ij.claim_id, i.kind FROM intent_justification ij JOIN intent i ON i.id = ij.intent_id WHERE ij.ended_at IS NULL AND {CORRECTION} AND ij.claim_id IN (SELECT id FROM claim) ORDER BY i.append_seq"))?
         .query_map([], |r| Ok((r.get(0)?, r.get(1)?)))?
         .collect::<Result<_, _>>()?;
     for (claim, kind) in corrections {
         latest.insert(
             claim,
-            if kind == "reject" {
-                "retracted"
-            } else {
+            // A fix retracts the claim it fixes, as a rejection does.
+            if kind == "confirm" {
                 "confirmed"
+            } else {
+                "retracted"
             },
         );
     }

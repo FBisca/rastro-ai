@@ -123,6 +123,9 @@ pub struct ClaimTarget {
     pub statement: Value,
     /// A [`LifecycleBinding`]; none on a target that binds to nothing.
     pub lifecycle_binding: Option<Value>,
+    /// What an `edit` fixes the claim's object to; a confirmation or a retraction has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub fixed: Option<Object>,
 }
 /// What a claim says, as the owner read it: copied into the intent, because the projection that
 /// held the claim is rebuilt from evidence and may no longer hold it.
@@ -164,7 +167,15 @@ impl ClaimTarget {
                 version: SHAPE_VERSION,
                 fingerprint,
             })?),
+            fixed: None,
         })
+    }
+    /// The same target, fixing the claim's object to `object`.
+    pub fn fixing(self, object: Object) -> Self {
+        Self {
+            fixed: Some(object),
+            ..self
+        }
     }
     /// The statement, when it parses.
     pub fn statement(&self) -> Result<ClaimStatement> {
@@ -468,7 +479,7 @@ impl Intent {
             IntentKind::CannotLink => pair("cannot_link"),
             IntentKind::SameAs => pair("same_as"),
             IntentKind::Undo => None,
-            IntentKind::Reject if self.targets.claim().is_some() => self
+            IntentKind::Reject | IntentKind::Edit if self.targets.claim().is_some() => self
                 .targets
                 .claim()
                 .map(|claim| format!("{CLAIM_DOMAIN}{}", claim.id)),
@@ -511,13 +522,51 @@ impl Intent {
             _ => None,
         }
     }
-    /// Checks a correction's claim target: the statement hashes to the claim id, and the revision
-    /// seen and the lifecycle binding are there.
+    /// The claim this intent corrects, when it is a confirmation, a retraction or a fix of one.
+    pub fn corrects(&self) -> Option<&str> {
+        match self.kind {
+            IntentKind::Confirm | IntentKind::Reject | IntentKind::Edit => {
+                self.targets.claim().map(|claim| claim.id.as_str())
+            }
+            _ => None,
+        }
+    }
+    /// The id of the claim a fix asserts, when this intent is one.
+    pub fn asserted_claim(&self) -> Option<String> {
+        let claim = self.targets.claim()?;
+        let statement = claim.statement().ok()?;
+        let fixed = claim
+            .fixed
+            .as_ref()
+            .filter(|_| self.kind == IntentKind::Edit)?;
+        Some(claims::claim_id(
+            &statement.subject.id,
+            &statement.predicate,
+            fixed,
+        ))
+    }
+    /// Checks a correction's claim target: the statement hashes to the claim id, the revision
+    /// seen and the lifecycle binding are there, and only a fix names the object it fixes to.
     fn check_review(&self) -> Result<()> {
         let Some(claim) = self.targets.claim() else {
             return Ok(());
         };
         let statement = claim.statement()?;
+        match (&claim.fixed, self.kind) {
+            (Some(fixed), IntentKind::Edit) => {
+                ensure!(
+                    *fixed != statement.object,
+                    "an edit fixes the object to a different one"
+                );
+                ensure!(
+                    !matches!(fixed, Object::Literal { value, .. } if value.trim().is_empty()),
+                    "an edit's object is not empty"
+                );
+            }
+            (None, IntentKind::Edit) => bail!("an edit names the object it fixes the claim to"),
+            (Some(_), _) => bail!("only an edit names an object"),
+            (None, _) => {}
+        }
         ensure!(
             statement.claim_id() == claim.id,
             "a claim target's id is the hash of its statement"
@@ -613,7 +662,9 @@ impl Intent {
             ),
             // A correction names the claim it reviewed: the statement it said, the revision the
             // owner read and the lifecycle state it binds to.
-            IntentKind::Confirm | IntentKind::Reject if self.targets.claim().is_some() => {
+            IntentKind::Confirm | IntentKind::Reject | IntentKind::Edit
+                if self.targets.claim().is_some() =>
+            {
                 self.check_review()?;
                 true
             }
@@ -767,8 +818,8 @@ impl Intent {
             },
             _ => ensure!(
                 self.kind != IntentKind::Accept
-                    && self.kind != IntentKind::Edit
-                    && (self.kind != IntentKind::Reject || self.targets.claim().is_some())
+                    && (!matches!(self.kind, IntentKind::Edit | IntentKind::Reject)
+                        || self.targets.claim().is_some())
                     && self.kind != IntentKind::Missed,
                 "a {} intent takes a queue proposal",
                 self.kind.as_str()
@@ -960,7 +1011,8 @@ impl Resolution {
                 }
                 // A proposal's answer is the owner's record of what they decided; its item
                 // leaves the queue by that record alone and it backs no claim.
-                IntentKind::Accept | IntentKind::Edit | IntentKind::Missed => {}
+                IntentKind::Accept | IntentKind::Missed => {}
+                IntentKind::Edit if intent.targets.claim().is_none() => {}
                 // The latest valid correction of a claim is the one in force.
                 IntentKind::Confirm => {
                     if let Some(claim) = intent.targets.claim() {
@@ -968,7 +1020,8 @@ impl Resolution {
                         r.confirmed.insert(claim.id.clone(), id);
                     }
                 }
-                IntentKind::Reject => {
+                // A fix retracts the claim it fixes, as a rejection does.
+                IntentKind::Reject | IntentKind::Edit => {
                     if let Some(claim) = intent.targets.claim() {
                         r.supersede_correction(&claim.id, &id);
                         r.retracted.insert(claim.id.clone(), id);
@@ -1134,6 +1187,9 @@ impl Resolution {
                     IntentKind::Reject if target.targets.claim().is_some() => {
                         bail!("a retraction can't be undone with `rastro identity undo`")
                     }
+                    IntentKind::Edit if target.targets.claim().is_some() => {
+                        bail!("an edit can't be undone with `rastro identity undo`")
+                    }
                     IntentKind::Accept
                     | IntentKind::Edit
                     | IntentKind::Reject
@@ -1225,9 +1281,7 @@ impl Resolution {
             // A correction a newer one replaced ends where the newer one was issued.
             let ended = match self.status.get(id) {
                 Some((IntentStatus::Undone, Some(by))) => Some(self.issued[by]),
-                Some((IntentStatus::Superseded, Some(by)))
-                    if matches!(intent.kind, IntentKind::Confirm | IntentKind::Reject) =>
-                {
+                Some((IntentStatus::Superseded, Some(by))) if intent.corrects().is_some() => {
                     Some(self.issued[by])
                 }
                 _ => None,
@@ -1309,6 +1363,39 @@ impl Resolution {
                         id,
                         stretch,
                     );
+                }
+                // A fix retracts the claim it fixes, held from its snapshot like a rejection,
+                // and asserts the claim with the new object: the same subject and predicate,
+                // backed by this intent alone from the edit until an undo, if any.
+                (IntentKind::Edit, _) if intent.targets.claim().is_some() => {
+                    let Some(claim) = intent.targets.claim() else {
+                        continue;
+                    };
+                    let Ok(statement) = claim.statement() else {
+                        continue;
+                    };
+                    push(
+                        &statement.subject,
+                        &statement.predicate,
+                        statement.object.clone(),
+                        statement.scalar,
+                        id,
+                        stretch,
+                    );
+                    if let Some(fixed) = &claim.fixed {
+                        let held = (
+                            intent.issued_at,
+                            ended_by_undo(&self.status, &self.issued, id),
+                        );
+                        push(
+                            &statement.subject,
+                            &statement.predicate,
+                            fixed.clone(),
+                            statement.scalar,
+                            id,
+                            held,
+                        );
+                    }
                 }
                 _ => {}
             }
@@ -1531,6 +1618,17 @@ pub fn admit_account(identifier: &str, types: &[SeenType]) -> Result<()> {
     )
 }
 
+/// When an undo ended what an intent asserted, when one did.
+fn ended_by_undo(
+    status: &BTreeMap<String, (IntentStatus, Option<String>)>,
+    issued: &BTreeMap<String, DateTime<Utc>>,
+    id: &str,
+) -> Option<DateTime<Utc>> {
+    match status.get(id) {
+        Some((IntentStatus::Undone, Some(by))) => Some(issued[by]),
+        _ => None,
+    }
+}
 /// A stretch of a Person's name: (Person id, name, intent id, (start, end)).
 type NameStretch = (
     String,
@@ -1755,7 +1853,7 @@ impl<S: Storage> Rastro<S> {
     /// the claim's current revision is not `seen`, naming the claim and its current revision.
     /// Confirming a claim already confirmed at that revision records nothing.
     pub fn confirm_claim(&mut self, claim: &str, seen: &str) -> Result<Issued> {
-        self.review_claim(IntentKind::Confirm, claim, seen)
+        self.review_claim(IntentKind::Confirm, claim, seen, None)
     }
     /// Retracts a claim the owner read at revision `seen`: one `reject` intent that binds to the
     /// claim's lifecycle state. The claim leaves every current read in every scope that sees it,
@@ -1764,10 +1862,52 @@ impl<S: Storage> Rastro<S> {
     /// made it: that is undone with `rastro identity undo`, naming the intent. Retracting a claim
     /// already retracted records nothing.
     pub fn reject_claim(&mut self, claim: &str, seen: &str) -> Result<Issued> {
-        self.review_claim(IntentKind::Reject, claim, seen)
+        self.review_claim(IntentKind::Reject, claim, seen, None)
+    }
+    /// Fixes the object of a claim the owner read at revision `seen`: one `edit` intent that
+    /// retracts the claim and asserts the claim with the same subject and predicate and `object`,
+    /// backed by that intent alone. `object` is read against the predicate's range: an entity of a
+    /// type in it, or a literal of a datatype in it. Refused, with nothing recorded, when the
+    /// object is outside the range (naming the predicate and its range), when the claim changed
+    /// since `seen`, and for a claim an owner `link` made. Fixing a claim to the object it has
+    /// records nothing.
+    pub fn edit_claim(&mut self, claim: &str, seen: &str, object: &str) -> Result<Issued> {
+        let vocabularies = self.claim_vocabularies(claim)?;
+        let fix = Fix {
+            vocabularies,
+            object,
+        };
+        self.review_claim(IntentKind::Edit, claim, seen, Some(fix))
+    }
+    /// The vocabularies that define the predicate of `claim`: those of the extractors that read
+    /// it, when they are installed, and the standard one the core bundles.
+    fn claim_vocabularies(&self, claim: &str) -> Result<Vec<rastro_plugin_sdk::Vocabulary>> {
+        let explained = self
+            .storage
+            .snapshot(|view| view.explain(claim, &crate::knowledge::WhyOptions::default()))?
+            .ok_or_else(|| anyhow::anyhow!("unknown claim: {claim}"))?;
+        let extractors: BTreeSet<&str> = (explained.supports.iter())
+            .filter(|support| support.justification_kind == "provenance")
+            .map(|support| support.extractor.as_str())
+            .collect();
+        let mut vocabularies = vec![crate::commitments::vocabulary::standard()?];
+        for extractor in extractors {
+            if let Ok(plugin) = crate::host::discover(&self.locations, extractor, "extractor")
+                && let Ok(vocabulary) = crate::host::vocabulary(&plugin)
+            {
+                vocabularies.push(vocabulary);
+            }
+        }
+        Ok(vocabularies)
     }
     /// One correction of one claim, as `kind` says: the claim as the owner saw it at `seen`.
-    fn review_claim(&mut self, kind: IntentKind, claim: &str, seen: &str) -> Result<Issued> {
+    fn review_claim(
+        &mut self,
+        kind: IntentKind,
+        claim: &str,
+        seen: &str,
+        fix: Option<Fix>,
+    ) -> Result<Issued> {
         self.issue(|view, resolution| {
             let explained = view
                 .explain(claim, &crate::knowledge::WhyOptions::default())?
@@ -1784,11 +1924,14 @@ impl<S: Storage> Rastro<S> {
                 IntentKind::Reject => ("retracted", &resolution.retracted),
                 _ => ("confirmed", &resolution.confirmed),
             };
-            if current.status == held && in_force.contains_key(&current.id) {
+            if kind != IntentKind::Edit
+                && current.status == held
+                && in_force.contains_key(&current.id)
+            {
                 return Ok((vec![], None, false));
             }
-            if kind == IntentKind::Reject {
-                // The owner's own link, merge or answer is not a reading to retract: it is
+            if matches!(kind, IntentKind::Reject | IntentKind::Edit) {
+                // The owner's own link, merge or answer is not a reading to retract or fix: it is
                 // undone, which also records the cannot-link that keeps it from coming back.
                 let made = explained.supports.iter().find(|support| {
                     support.current
@@ -1818,7 +1961,20 @@ impl<S: Storage> Rastro<S> {
                 object: current.object,
                 scalar: state.scalar,
             };
-            let review = ClaimTarget::review(current.revision, &statement, state.fingerprint)?;
+            let mut review = ClaimTarget::review(current.revision, &statement, state.fingerprint)?;
+            if let Some(fix) = fix {
+                let fixed = fix.object_for(view, &statement)?;
+                if fixed == statement.object {
+                    return Ok((vec![], None, false));
+                }
+                let asserted = claims::claim_id(&statement.subject.id, &statement.predicate, &fixed);
+                ensure!(
+                    view.explain(&asserted, &crate::knowledge::WhyOptions::default())?
+                        .is_none(),
+                    "claim {asserted} already says that; confirm it with `rastro claim confirm` instead"
+                );
+                review = review.fixing(fixed);
+            }
             let id = review.id.clone();
             let intent = new_intent(
                 kind,
@@ -1894,6 +2050,49 @@ impl<S: Storage> Rastro<S> {
             person,
             created,
         })
+    }
+}
+
+/// What an edit fixes a claim to: the words the owner typed, and the vocabularies that say what
+/// the predicate takes.
+struct Fix<'a> {
+    vocabularies: Vec<rastro_plugin_sdk::Vocabulary>,
+    object: &'a str,
+}
+impl Fix<'_> {
+    /// The object the words name for the claim's predicate; an error names the predicate and its
+    /// range.
+    fn object_for(&self, view: &dyn Snapshot, statement: &ClaimStatement) -> Result<Object> {
+        let entity = match crate::entity_form::check_reference(self.object) {
+            Ok(()) if self.object != ME => view.resolve_entity(self.object)?,
+            _ => None,
+        };
+        let entity = entity
+            .map(|(id, identifier)| -> Result<claims::FoundEntity> {
+                let types = view
+                    .about(&id, &crate::knowledge::AboutOptions::default())?
+                    .into_iter()
+                    .filter(|c| c.claim.subject.id == id && c.claim.predicate == TYPE_PREDICATE)
+                    .filter_map(|c| match c.claim.object {
+                        Object::Literal { value, .. } => Some(value),
+                        Object::Entity { .. } => None,
+                    })
+                    .collect();
+                Ok(claims::FoundEntity {
+                    id,
+                    identifier,
+                    types,
+                })
+            })
+            .transpose()?;
+        claims::fixed_object(
+            &self.vocabularies,
+            &statement.predicate,
+            &statement.object,
+            self.object,
+            entity,
+        )
+        .map_err(anyhow::Error::msg)
     }
 }
 
@@ -2161,6 +2360,7 @@ mod tests {
             revision: "r".into(),
             statement: serde_json::json!({}),
             lifecycle_binding: None,
+            fixed: None,
         };
         let set = |members: Vec<ClaimTarget>, anchor: &str| Targets::ClaimSet {
             version: SHAPE_VERSION,

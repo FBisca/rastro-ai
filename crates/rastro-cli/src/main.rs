@@ -909,6 +909,15 @@ fn human(response: &Response) -> String {
         }
         Response::ClaimConfirm(r) => correction_text(r, "confirmed"),
         Response::ClaimReject(r) => correction_text(r, "retracted"),
+        Response::ClaimEdit(r) => match (&r.asserted, r.intents.first()) {
+            (Some(asserted), Some(intent)) => format!(
+                "retracted {}, asserted {asserted} (intent {}, {})",
+                r.claim,
+                intent.id,
+                intent.issued_at.format("%Y-%m-%d %H:%M")
+            ),
+            _ => format!("{} already says that; nothing recorded", r.claim),
+        },
         Response::IdentityCandidates(r) => candidates_text(r),
         Response::IdentityHistory(r) => match &r.entity {
             Some(entity) => format!(

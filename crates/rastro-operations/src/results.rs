@@ -163,11 +163,15 @@ pub struct ClaimWriteResult {
     pub claim: String,
     /// The intents accepted, in acceptance order; none when the correction was already in force.
     pub intents: Vec<IntentView>,
+    /// The claim an edit asserted in place of the one it fixed; absent for any other correction.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub asserted: Option<String>,
 }
 impl ClaimWriteResult {
     pub(crate) fn of(claim: &str, issued: Issued) -> Self {
         Self {
             claim: claim.into(),
+            asserted: issued.intents.iter().find_map(|i| i.asserted_claim()),
             intents: views(&issued.intents),
         }
     }
@@ -360,10 +364,17 @@ mod tests {
             Response::ClaimConfirm(ClaimWriteResult {
                 claim: "c_1".into(),
                 intents: vec![],
+                asserted: None,
             }),
             Response::ClaimReject(ClaimWriteResult {
                 claim: "c_1".into(),
                 intents: vec![],
+                asserted: None,
+            }),
+            Response::ClaimEdit(ClaimWriteResult {
+                claim: "c_1".into(),
+                intents: vec![],
+                asserted: None,
             }),
         ];
         let arguments = |name: &str| match name {
@@ -384,6 +395,9 @@ mod tests {
             "identity.undo" => serde_json::json!({"intent": "i_1"}),
             "claim.confirm" | "claim.reject" => {
                 serde_json::json!({"claim": "c_1", "seen": "r_1"})
+            }
+            "claim.edit" => {
+                serde_json::json!({"claim": "c_1", "seen": "r_1", "object": "x"})
             }
             "identity.history" => serde_json::json!({"entity": "me"}),
             "identity.answer" => {

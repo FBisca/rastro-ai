@@ -397,6 +397,9 @@ operations! {
         Reject(ClaimRejectRequest => ClaimWriteResult) as ClaimReject {
             slot: 31, name: "claim.reject", surfaces: [Cli], read_only: false
         },
+        Edit(ClaimEditRequest => ClaimWriteResult) as ClaimEdit {
+            slot: 32, name: "claim.edit", surfaces: [Cli], read_only: false
+        },
     }
     /// Owner identity: Persons, links between accounts and Persons, and merges. Writes are CLI only.
     Identity / IdentityRequest {
