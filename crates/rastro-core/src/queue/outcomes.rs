@@ -4,7 +4,8 @@
 //! An outcome is derived, never recorded in a table of its own: the owner intent is the durable
 //! record, and the terminal read records what it printed. A proposal or question the owner
 //! accepted, accepted with edits, rejected or answered carries that intent's kind and time, and
-//! the claim the intent backs when there is one. An item with no answering intent that the queue
+//! the claim the intent backs when there is one. A question about a lapsed retraction or a stale
+//! confirmation is answered by the owner's next correction of its claim. An item with no answering intent that the queue
 //! no longer holds was shown and never answered; it left one of two ways. A later run of its
 //! source dropped its content, and it was ignored: its outcome names the time it waited, from
 //! its first shown report to that run. Or the queue settled it — its statements became known, so
@@ -13,8 +14,8 @@
 //! time, and neither is derived again from the knowledge present at a later read. Nothing records
 //! when a settled item left, so it is dated at its last shown report and measures no wait: dating
 //! it at the read, or at a run that ran later, would move it after the fact.
-use super::{ShownReport, held_since, read};
-use crate::identity::{Intent, IntentKind};
+use super::{CorrectionKind, ShownReport, correction_item_id, held_since, read};
+use crate::identity::{Intent, IntentKind, IntentStatus, Resolution};
 use crate::read_only::Snapshot;
 use crate::{Rastro, ReadStorage, Reader, Scope, Storage};
 use anyhow::Result;
@@ -153,8 +154,19 @@ pub(crate) fn outcomes(view: &dyn Snapshot, scopes: &[Scope]) -> Result<Outcomes
             waited_seconds: None,
         });
     }
+    let corrected = answered_corrections(&intents);
     for (item, reports) in by_item(&shown) {
         if answered_items.contains(&item) || pending.contains(&item) {
+            continue;
+        }
+        if let Some(at) = corrected.get(&item) {
+            outcomes.push(Outcome {
+                item,
+                kind: OutcomeKind::Answered,
+                at: *at,
+                claim: None,
+                waited_seconds: None,
+            });
             continue;
         }
         let first = reports.first().expect("by_item groups at least one report");
@@ -203,6 +215,38 @@ pub(crate) fn outcomes(view: &dyn Snapshot, scopes: &[Scope]) -> Result<Outcomes
         outcomes,
         totals: Totals { shown, acted_on },
     })
+}
+
+/// The correction questions the owner's later corrections of a claim answered, by item id, with
+/// the time of the answering intent. A yes to such a question records a claim correction, not an
+/// intent naming the item, so each correction that follows an earlier one on the same claim is
+/// read as the answer to the question that earlier one raised: the question names the claim, the
+/// earlier intent and whether it retracted or confirmed. An undone intent answers nothing.
+fn answered_corrections(intents: &[Intent]) -> BTreeMap<String, DateTime<Utc>> {
+    let resolution = Resolution::of(intents);
+    let mut latest: BTreeMap<&str, (&str, CorrectionKind)> = BTreeMap::new();
+    let mut answered = BTreeMap::new();
+    for intent in intents {
+        let Some(claim) = intent.corrects() else {
+            continue;
+        };
+        // A newer correction supersedes an older one, which was still the question's cause.
+        if matches!(
+            resolution.status.get(&intent.id),
+            Some((IntentStatus::Undone, _))
+        ) {
+            continue;
+        }
+        if let Some((earlier, kind)) = latest.get(claim) {
+            answered.insert(correction_item_id(claim, earlier, *kind), intent.issued_at);
+        }
+        let kind = match intent.kind {
+            IntentKind::Confirm => CorrectionKind::StaleConfirmation,
+            _ => CorrectionKind::LapsedRetraction,
+        };
+        latest.insert(claim, (&intent.id, kind));
+    }
+    answered
 }
 
 /// The shown reports grouped by item, each item's oldest report first.

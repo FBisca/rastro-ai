@@ -215,6 +215,23 @@ impl Env {
             .unwrap_or_else(|| panic!("{response}"))
             .clone()
     }
+    /// The human queue read the owner prints: what it prints is what it showed, and Rastro records
+    /// that it showed it.
+    fn print_queue(&self) {
+        let out = Command::new(support::rastro())
+            .env("RASTRO_HOME", self.home.path())
+            .env("RASTRO_PLUGIN_PATH", self.home.path().join("no-plugins"))
+            .arg("queue")
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(text.contains("retraction lapsed"), "{text}");
+    }
     /// The questions the queue holds about a correction, one per lapsed retraction or stale
     /// confirmation.
     fn asks(&self) -> Vec<Value> {
@@ -398,14 +415,10 @@ fn answering_yes_to_a_lapsed_retraction_retracts_the_claim_again() {
     assert_eq!(answered["intents"][0]["kind"], "reject", "{answered}");
     assert!(env.listed("octocat").is_none(), "yes retracts it again");
     assert!(env.asks().is_empty(), "the question is gone");
-    let queue = env.ok(&["queue"]);
+    let mcp = env.mcp_queue("personal");
     assert!(
-        queue["items"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .all(|i| i["id"] != item),
-        "{queue}"
+        mcp.iter().all(|i| i["id"] != item),
+        "the question is gone from the MCP queue: {mcp:?}"
     );
 }
 
@@ -500,4 +513,21 @@ fn a_no_to_a_correction_question_is_refused_and_records_nothing() {
     let message = String::from_utf8_lossy(&out.stderr);
     assert!(message.contains("rastro claim confirm"), "{message}");
     assert_eq!(env.asks().len(), 1, "the question still waits");
+}
+
+// spec: A lapsed or stale correction asks the owner
+#[test]
+fn an_answered_correction_question_the_owner_was_shown_is_an_answered_outcome() {
+    let env = Env::new();
+    a_lapsed_retraction(&env);
+    env.print_queue();
+    let item = env.asks()[0]["id"].as_str().unwrap().to_string();
+    env.ok(&["queue", "answer", &item, "yes"]);
+
+    let outcomes = env.ok(&["queue", "outcomes"]);
+    let listed = outcomes["outcomes"].as_array().unwrap();
+    assert_eq!(listed.len(), 1, "{outcomes}");
+    assert_eq!(listed[0]["item"], item, "{outcomes}");
+    assert_eq!(listed[0]["kind"], "answered", "{outcomes}");
+    assert_eq!(outcomes["totals"]["acted_on"], 1, "{outcomes}");
 }

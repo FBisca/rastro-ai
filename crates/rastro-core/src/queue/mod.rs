@@ -790,11 +790,20 @@ fn correction_items(
 /// what became of the correction, so a claim asked about again after a newer correction is a
 /// new item.
 fn correction_id(correction: &CorrectionQuestion) -> String {
+    correction_item_id(
+        &correction.claim.claim.id,
+        &correction.intent,
+        correction.kind,
+    )
+}
+/// [`correction_id`] from its parts, so an outcome can name the question a later correction of
+/// the claim answered without the question itself.
+pub(super) fn correction_item_id(claim: &str, intent: &str, kind: CorrectionKind) -> String {
     item_id(&[
         (b'K', ItemKind::Question.as_str().into()),
-        (b'L', correction.claim.claim.id.clone()),
-        (b'I', correction.intent.clone()),
-        (b'M', correction.kind.as_str().into()),
+        (b'L', claim.into()),
+        (b'I', intent.into()),
+        (b'M', kind.as_str().into()),
     ])
 }
 
