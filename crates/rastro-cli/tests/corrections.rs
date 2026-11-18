@@ -575,7 +575,7 @@ fn a_rejected_claim_leaves_about_and_why_says_retracted_by_the_reject_intent() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|s| s["justification_kind"] == "retraction")
+        .find(|s| s["extraction_rule"] == "reject")
         .unwrap_or_else(|| panic!("no retraction justification: {why}"));
     assert_eq!(retraction["intent"]["id"], intent["id"], "{why}");
     assert_eq!(retraction["current"], true);

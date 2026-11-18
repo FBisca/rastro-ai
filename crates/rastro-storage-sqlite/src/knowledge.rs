@@ -428,7 +428,7 @@ impl View<'_> {
                 .prepare(
                     "SELECT c.id, ij.id, ij.intent_id FROM claim c JOIN intent_justification ij ON ij.claim_id = c.id \
                      JOIN intent i ON i.id = ij.intent_id \
-                     WHERE i.kind NOT IN ('confirm', 'reject') AND c.subject = ?1 AND c.predicate = ?3 AND c.status IN ('observed', 'confirmed') AND ij.ended_at IS NULL \
+                     WHERE i.kind <> 'confirm' AND c.subject = ?1 AND c.predicate = ?3 AND c.status IN ('observed', 'confirmed') AND ij.ended_at IS NULL \
                      AND c.object_entity IN (SELECT value FROM json_each(?2)) ORDER BY c.id, ij.id",
                 )?
                 .query_map(
@@ -524,12 +524,11 @@ impl View<'_> {
         for ([id, intent, kind], version, [issued_at, issuer], current) in rows {
             supports.push(JustificationView {
                 justification_id: id,
-                // A confirmation or a retraction is the owner's word on a claim, not a claim the
-                // owner made.
-                justification_kind: match kind.as_str() {
-                    "confirm" => "confirmation".into(),
-                    "reject" => "retraction".into(),
-                    _ => rastro_core::identity::OWNER_INTENT.into(),
+                // A confirmation is the owner's word on a claim, not a claim the owner made.
+                justification_kind: if kind == "confirm" {
+                    "confirmation".into()
+                } else {
+                    rastro_core::identity::OWNER_INTENT.into()
                 },
                 extractor: rastro_core::identity::OWNER.into(),
                 extractor_version: version.to_string(),
