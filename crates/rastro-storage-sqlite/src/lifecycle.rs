@@ -641,14 +641,46 @@ pub(crate) fn standing(db: &Connection, id: &str) -> Result<Option<Standing>> {
     let Some((confirms, bound)) = latest_corrections(db, Some(id))?.remove(id) else {
         return Ok(None);
     };
-    holds(db, id, confirms, bound.as_deref()).map(Some)
-}
-fn holds(db: &Connection, id: &str, confirms: bool, bound: Option<&str>) -> Result<Standing> {
-    let current = fingerprint(db, id)?.map(|(fingerprint, _)| fingerprint);
-    Ok(Standing {
+    Ok(Some(Standing {
         confirms,
-        holds: bound.is_none_or(|bound| current.as_deref() == Some(bound)),
-    })
+        holds: holds(db, id, bound.as_deref())?,
+    }))
+}
+/// Whether the claim is still in the lifecycle state a correction bound to (ADR 0014). A
+/// correction that bound to nothing always holds. A scoped replay holds only what its scope
+/// sees, so its fingerprints are not the store's: it reads the decision the full store made
+/// (`carry_holds`) instead of recomputing it.
+fn holds(db: &Connection, id: &str, bound: Option<&str>) -> Result<bool> {
+    if db.query_row(
+        "SELECT EXISTS (SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'held_correction')",
+        [],
+        |r| r.get::<_, bool>(0),
+    )? {
+        return Ok(db
+            .query_row(
+                "SELECT holds FROM held_correction WHERE claim_id = ?1",
+                [id],
+                |r| r.get(0),
+            )
+            .optional()?
+            .unwrap_or(true));
+    }
+    let current = fingerprint(db, id)?.map(|(fingerprint, _)| fingerprint);
+    Ok(bound.is_none_or(|bound| current.as_deref() == Some(bound)))
+}
+/// Gives a scoped replay `scoped` the decision `full`, the store the replay was cut from, made
+/// for each correction on a claim the replay holds: whether it still holds. Scoped corrections
+/// then lapse and go stale exactly where the store's do, whatever the scope hides.
+pub(crate) fn carry_holds(full: &Connection, scoped: &Connection) -> Result<()> {
+    scoped.execute_batch(
+        "CREATE TABLE held_correction (claim_id TEXT PRIMARY KEY, holds INTEGER NOT NULL)",
+    )?;
+    let mut insert =
+        scoped.prepare("INSERT INTO held_correction SELECT id, ?2 FROM claim WHERE id = ?1")?;
+    for (claim, (_, bound)) in latest_corrections(full, None)? {
+        insert.execute(params![claim, holds(full, &claim, bound.as_deref())?])?;
+    }
+    Ok(())
 }
 /// Reads every claim an owner correction holds as the status it gives, `confirmed` or
 /// `retracted`, whatever status its evidence or its intents gave it (ADR 0014). The latest
@@ -660,8 +692,7 @@ fn holds(db: &Connection, id: &str, confirms: bool, bound: Option<&str>) -> Resu
 pub(crate) fn settle(db: &Connection) -> Result<()> {
     let mut latest: BTreeMap<String, &'static str> = BTreeMap::new();
     for (claim, (confirms, bound)) in latest_corrections(db, None)? {
-        let standing = holds(db, &claim, confirms, bound.as_deref())?;
-        if !confirms && !standing.holds {
+        if !confirms && !holds(db, &claim, bound.as_deref())? {
             continue;
         }
         latest.insert(

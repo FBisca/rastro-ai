@@ -327,6 +327,8 @@ fn build(
     let allowed = super::automatic::linked_windows(db)?;
     super::automatic::apply_within(&result, Some(&allowed))?;
     // The owner's corrections read as the status they give, in every scope that sees the claim.
+    // A correction holds or lapses as it does in the store, not by what the scope can see.
+    lifecycle::carry_holds(db, &result)?;
     lifecycle::settle(&result)?;
     result.execute_batch("COMMIT")?;
     Ok((result, work))

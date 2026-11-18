@@ -8,6 +8,7 @@
 mod support;
 use chrono::{DateTime, Utc};
 use rastro_core::claims::{self, Entity, Object, ObservedClaim, Support};
+use rastro_core::knowledge::AboutOptions;
 use rastro_core::{Evidence, Scope, Source, Storage, TrustClass};
 use rastro_storage_sqlite::SqliteStorage;
 use serde_json::Value;
@@ -59,8 +60,12 @@ impl Env {
     /// The login `value` of account 7, read at `location` by `source` on `day` (2026-11-<day>).
     /// A later capture at the same location replaces the earlier one.
     fn login(&self, source: &str, location: &str, value: &str, day: u32) {
+        self.login_in("personal", source, location, value, day);
+    }
+    /// [`Env::login`] read in `scope`.
+    fn login_in(&self, scope: &str, source: &str, location: &str, value: &str, day: u32) {
         let captured = time(&format!("2026-11-{day:02}T00:00:00Z"));
-        let source = Source::github(source.into(), "o/p".into(), Scope("personal".into()));
+        let source = Source::github(source.into(), "o/p".into(), Scope(scope.into()));
         let subject = Entity::new(ACCOUNT.into(), "code:Account".into());
         let object = Object::Literal {
             value: value.into(),
@@ -125,6 +130,31 @@ impl Env {
     fn seen(&self, value: &str) -> Value {
         self.listed(value)
             .unwrap_or_else(|| panic!("{value} is not listed"))
+    }
+    /// The claims a read scoped to `scope` lists for account 7, as (login, status, marks).
+    fn scoped(&self, scope: &str) -> Vec<(String, String, Vec<&'static str>)> {
+        let mut db = SqliteStorage::open(&self.home.path().join("data/rastro.sqlite3")).unwrap();
+        db.about_scoped_within(
+            ACCOUNT,
+            &AboutOptions::default(),
+            &[Scope(scope.into())],
+            1_000,
+        )
+        .unwrap()
+        .into_iter()
+        .filter(|c| c.claim.predicate == claims::ALIAS_PREDICATE)
+        .map(|c| {
+            let Object::Literal { value, .. } = c.claim.object else {
+                panic!("an alias is a literal")
+            };
+            let marks = [
+                (c.claim.earlier_retracted, "earlier_retracted"),
+                (c.claim.stale, "stale"),
+            ];
+            let marks = marks.into_iter().filter(|m| m.0).map(|m| m.1).collect();
+            (value, c.claim.status, marks)
+        })
+        .collect()
     }
     /// Records one correction of `claim` as the owner read it.
     fn correct(&self, verb: &str, claim: &Value) {
@@ -203,4 +233,60 @@ fn a_confirmed_claim_whose_only_evidence_ends_is_listed_confirmed_and_stale() {
         .collect();
     assert_eq!(provenance.len(), 1, "{why}");
     assert_eq!(provenance[0]["current"], false, "{why}");
+}
+
+// spec: A correction follows its claim's lifecycle state
+#[test]
+fn a_scope_that_sees_only_the_corroboration_still_leaves_a_retracted_claim_out() {
+    let env = Env::new();
+    // The retraction binds to the personal reading, the claim's primary justification. The work
+    // scope sees only the later one, whose own fingerprint is another.
+    env.login_in(
+        "personal",
+        "project",
+        "https://api.github.com/users/7",
+        "octocat",
+        1,
+    );
+    env.login_in(
+        "work",
+        "mirror",
+        "https://example.test/mirror/7",
+        "octocat",
+        2,
+    );
+    env.correct("reject", &env.seen("octocat"));
+    assert!(env.listed("octocat").is_none());
+
+    let work = env.scoped("work");
+    assert!(
+        work.iter().all(|(login, _, _)| login != "octocat"),
+        "a scope that sees only the corroboration lists the retracted claim: {work:?}"
+    );
+}
+
+// spec: A correction follows its claim's lifecycle state
+#[test]
+fn a_scope_that_sees_only_the_corroboration_does_not_read_a_confirmation_stale() {
+    let env = Env::new();
+    env.login_in(
+        "personal",
+        "project",
+        "https://api.github.com/users/7",
+        "octocat",
+        1,
+    );
+    env.login_in(
+        "work",
+        "mirror",
+        "https://example.test/mirror/7",
+        "octocat",
+        2,
+    );
+    env.correct("confirm", &env.seen("octocat"));
+
+    assert_eq!(
+        env.scoped("work"),
+        [("octocat".to_string(), "confirmed".to_string(), vec![])]
+    );
 }
