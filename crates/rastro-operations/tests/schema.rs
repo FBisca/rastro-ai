@@ -204,7 +204,8 @@ fn catalog_declares_claim_cli_read_paths_without_changing_existing_routes() {
                 "why",
                 "commitments",
                 "meeting.commitments",
-                "queue"
+                "queue",
+                "queue.outcomes"
             ]
             .contains(&spec.name)
         );
@@ -442,4 +443,97 @@ fn identity_operations_are_cli_only() {
             spec.name
         );
     }
+}
+
+/// One catalog entry per queue operation: the read is on the CLI and MCP, its five answers are
+/// CLI only, `queue outcomes` is a CLI-only read, MCP offers seven tools, and the queue read's
+/// result is a v2 envelope.
+#[test]
+fn the_queue_read_and_its_five_answers_are_cataloged_on_their_surfaces() {
+    use rastro_operations::Surface;
+    use rastro_operations::catalog::{CATALOG, find};
+    use serde_json::json;
+
+    let generated: serde_json::Value =
+        serde_json::from_str(&rastro_operations::schema::generate()).unwrap();
+    let committed: serde_json::Value =
+        serde_json::from_str(include_str!("../../../schema/operations-v2.schema.json")).unwrap();
+    let queue = |document: &serde_json::Value| -> Vec<serde_json::Value> {
+        (document["x-operations"].as_array().unwrap().iter())
+            .filter(|operation| operation["name"].as_str().unwrap().starts_with("queue"))
+            .cloned()
+            .collect()
+    };
+    assert_eq!(
+        queue(&generated),
+        queue(&committed),
+        "the committed schema lists the queue's operations; run `cargo run -p \
+         rastro-operations --bin gen-schema`"
+    );
+    let listed = queue(&generated);
+    let mut names: Vec<&str> = (listed.iter())
+        .map(|operation| operation["name"].as_str().unwrap())
+        .collect();
+    names.sort();
+    assert_eq!(
+        names,
+        [
+            "queue",
+            "queue.accept",
+            "queue.answer",
+            "queue.edit",
+            "queue.missed",
+            "queue.outcomes",
+            "queue.reject"
+        ]
+    );
+    for operation in queue(&generated) {
+        let name = operation["name"].as_str().unwrap();
+        let mut surfaces: Vec<&str> = (operation["surfaces"].as_array().unwrap().iter())
+            .map(|surface| surface.as_str().unwrap())
+            .collect();
+        surfaces.sort();
+        if name == "queue" {
+            assert_eq!(surfaces, ["cli", "mcp"], "{name}");
+            assert!(
+                operation["result"]["properties"].get("items").is_some(),
+                "{name}"
+            );
+        } else if name == "queue.outcomes" {
+            assert_eq!(surfaces, ["cli"], "{name}");
+            let spec = find(name).unwrap_or_else(|| panic!("no catalog entry {name}"));
+            assert!(!spec.exposed_on(Surface::Mcp), "{name}");
+            assert!(
+                spec.read_only,
+                "{name}: what happened is read, never recorded"
+            );
+        } else {
+            assert_eq!(surfaces, ["cli"], "{name}: an agent cannot answer");
+            // The catalog agrees with the schema about every one of the five.
+            let spec = find(name).unwrap_or_else(|| panic!("no catalog entry {name}"));
+            assert!(!spec.exposed_on(Surface::Mcp), "{name}");
+            assert!(!spec.read_only, "{name}");
+        }
+    }
+    // MCP offers exactly seven tools, the queue's read among them.
+    let mcp: Vec<String> = (CATALOG.iter())
+        .filter(|spec| spec.exposed_on(Surface::Mcp))
+        .map(|spec| spec.mcp_name())
+        .collect();
+    assert_eq!(mcp.len(), 7, "{mcp:?}");
+    assert!(mcp.contains(&"queue".to_string()), "{mcp:?}");
+
+    // The queue read's result is a v2 envelope.
+    assert_eq!(generated["properties"]["schema_version"]["const"], 2);
+    let operations = generated["properties"]["operation"]["enum"]
+        .as_array()
+        .unwrap();
+    assert!(operations.contains(&json!("queue")), "{operations:?}");
+    let branches = generated["oneOf"][1]["oneOf"].as_array().unwrap();
+    assert!(
+        branches
+            .iter()
+            .any(|branch| branch["properties"]["operation"]["const"] == json!("queue")),
+        "the envelope accepts a queue result"
+    );
 }

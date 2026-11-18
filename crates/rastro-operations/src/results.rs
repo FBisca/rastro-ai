@@ -62,6 +62,25 @@ pub type CommitmentsResult = rastro_core::commitments::Commitments;
 pub type MeetingResult = rastro_core::meeting::MeetingCommitments;
 /// Every pending proposal and question, oldest first, with each source's gap.
 pub type QueueResult = rastro_core::queue::Queue;
+/// Every outcome of the queue, newest first, with what was shown and what was acted on.
+pub type OutcomesResult = rastro_core::queue::Outcomes;
+/// What a queue answer recorded: the item it named and the owner intents it accepted.
+#[derive(Debug, JsonSchema, Serialize)]
+pub struct QueueAnswerResult {
+    /// The item's id as `queue` listed it; absent for a missed report about nothing queued.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub item: Option<String>,
+    /// The owner intents the answer accepted, in acceptance order.
+    pub intents: Vec<IntentView>,
+}
+impl QueueAnswerResult {
+    pub(crate) fn of(answered: rastro_core::queue::Answered) -> Self {
+        Self {
+            item: answered.item,
+            intents: views(&answered.intents),
+        }
+    }
+}
 /// What forgetting a meeting removed.
 pub type MeetingForgetResult = rastro_core::meeting::MeetingForgotten;
 /// A meeting as the owner supplied it, without recorded model output.
@@ -297,6 +316,27 @@ mod tests {
                 sources: vec![],
             }),
             Response::Queue(rastro_core::queue::Queue::empty()),
+            Response::QueueAccept(QueueAnswerResult {
+                item: None,
+                intents: vec![],
+            }),
+            Response::QueueEdit(QueueAnswerResult {
+                item: None,
+                intents: vec![],
+            }),
+            Response::QueueReject(QueueAnswerResult {
+                item: None,
+                intents: vec![],
+            }),
+            Response::QueueAnswer(QueueAnswerResult {
+                item: None,
+                intents: vec![],
+            }),
+            Response::QueueMissed(QueueAnswerResult {
+                item: None,
+                intents: vec![],
+            }),
+            Response::QueueOutcomes(OutcomesResult::empty()),
         ];
         let arguments = |name: &str| match name {
             "source.add" => {
@@ -318,6 +358,11 @@ mod tests {
             "identity.answer" => {
                 serde_json::json!({"account": "github:login/a", "other": "linear:user/u", "verdict": "no"})
             }
+            "queue.accept" => serde_json::json!({"item": "q_1"}),
+            "queue.edit" => serde_json::json!({"item": "q_1", "promise": "send it"}),
+            "queue.reject" => serde_json::json!({"item": "q_1", "reason": "not a promise"}),
+            "queue.answer" => serde_json::json!({"item": "q_1", "verdict": "no"}),
+            "queue.missed" => serde_json::json!({"text": "the budget"}),
             _ => serde_json::json!({}),
         };
         assert_eq!(CATALOG.len(), responses.len());

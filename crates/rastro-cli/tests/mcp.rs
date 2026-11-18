@@ -359,6 +359,7 @@ fn launch_migrates_recovers_and_turns_on_wal_before_the_first_answer() {
     let last = last_migration(&db);
     db.execute_batch(
         "DROP INDEX evidence_by_location;
+         DROP TABLE shown_report;
          DROP TABLE meeting_transcript; DROP TABLE meeting_speaker; DROP TABLE meeting_span;
          DROP TABLE meeting_output; DROP TABLE meeting_hypothesis; DROP TABLE meeting_run;
          DROP TABLE meeting;
@@ -3289,4 +3290,41 @@ fn S11_the_about_and_why_descriptions_say_label_text_is_untrusted_data() {
             "{name}: {description}"
         );
     }
+}
+
+/// S17: an MCP client can't answer a queue item: every queue write is a protocol error and
+/// nothing is recorded.
+#[test]
+fn S17_an_mcp_client_cannot_answer_a_queue_item() {
+    use rastro_operations::Surface;
+    let env = seeded();
+    let mut session = env.start();
+    session.initialize();
+    let intents = |env: &Env| -> i64 {
+        env.db()
+            .query_row("SELECT count(*) FROM intent", [], |row| row.get(0))
+            .unwrap()
+    };
+    let before = intents(&env);
+    let queue_before = session.call("queue", json!({}))["result"].clone();
+    let arguments = json!({"item": "q_00000000000000000000000000000000"});
+    for name in [
+        "queue.accept",
+        "queue.answer",
+        "queue.edit",
+        "queue.missed",
+        "queue.reject",
+    ] {
+        let spec = catalog::find(name).unwrap_or_else(|| panic!("no catalog entry {name}"));
+        assert!(!spec.exposed_on(Surface::Mcp), "{name}");
+        let response = session.call(&spec.mcp_name(), arguments.clone());
+        assert!(response.get("result").is_none(), "{name}: {response}");
+        assert_eq!(response["error"]["code"], -32602, "{name}: {response}");
+    }
+    assert_eq!(intents(&env), before, "nothing is recorded");
+    let queue_after = session.call("queue", json!({}))["result"].clone();
+    assert_eq!(
+        queue_before["structuredContent"], queue_after["structuredContent"],
+        "the queue reads the same"
+    );
 }

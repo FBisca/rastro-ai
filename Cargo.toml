@@ -13,3 +13,13 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
 schemars = { version = "1", features = ["chrono04"] }
+
+# Size and complexity lints every member inherits with `[lints] workspace = true`. They run at
+# clippy's own thresholds, tests included; a function over a limit carries an `#[expect]` with its
+# reason, so the expectation fails once the function is fixed and the debt leaves with it.
+[workspace.lints.clippy]
+too_many_lines = "warn"
+cognitive_complexity = "warn"
+too_many_arguments = "warn"
+fn_params_excessive_bools = "warn"
+struct_excessive_bools = "warn"
