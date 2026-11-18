@@ -261,6 +261,10 @@ fn terms(hypothesis: &Value) -> Vec<String> {
 /// its exact quote, its terms and its status, and the source's extraction, coverage and stale
 /// state.
 #[test]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "the list's source, kind, parties, date, quote, terms and status each need their own comparison against the seeded candidate"
+)]
 fn S1_the_list_shows_every_hypothesis_with_its_source_and_state() {
     let env = Env::new();
     let me = identifier(&env.ok(&["identity", "me"]));

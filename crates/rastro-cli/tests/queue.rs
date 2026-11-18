@@ -1010,6 +1010,10 @@ fn S5_a_mapped_partys_visible_claims_are_the_items_context() {
 /// leaves the queue on the CLI and on an MCP read, a rejection mints no claim, and a yes still
 /// creates and names the Person that holds a pair nobody held.
 #[test]
+#[expect(
+    clippy::too_many_lines,
+    reason = "the rejection and the answer each travel the CLI and the MCP read on one seeded queue, so both outcomes stay beside their intents"
+)]
 fn S6_a_rejection_and_an_answer_record_one_intent_and_leave_every_surface() {
     let env = Env::new();
     env.candidates(&good());

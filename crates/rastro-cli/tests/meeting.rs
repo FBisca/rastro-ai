@@ -776,6 +776,10 @@ fn S5_reimport_with_changed_text_marks_last_good_stale_on_failure_and_replaces_o
 /// S6: replay re-derives the results from the recorded output with no model call, and forgetting
 /// removes the meeting's retained spans, recorded output and results.
 #[test]
+#[expect(
+    clippy::cognitive_complexity,
+    reason = "the replay and the forgetting share one seeded meeting, so the run keeps both branches against the same recorded output"
+)]
 fn S6_replay_needs_no_model_call_and_forgetting_removes_what_was_retained() {
     let env = Env::new();
     env.ok(&["identity", "person", "create", "--name", "Bob"]);
