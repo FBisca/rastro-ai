@@ -347,7 +347,8 @@ fn account_visible(db: &Connection, id: &str, scopes: &str) -> Result<bool> {
 
 /// Copies the intent-backed claims a scope set can see, with their intents, into a private
 /// scoped projection: a Person's own claims where the Person is visible, a link where its
-/// account is, a merge where both Persons are. Endpoint entities are copied by the caller.
+/// account is, a merge where both Persons are, and a commitment an accepted proposal minted
+/// only where the scope set sees the item's source. Endpoint entities are copied by the caller.
 pub(crate) fn copy_visible(db: &Connection, target: &Connection, scopes: &[Scope]) -> Result<()> {
     target.execute_batch(
         "CREATE TABLE intent (append_seq INTEGER PRIMARY KEY, id TEXT, format_version INTEGER,
@@ -359,15 +360,34 @@ pub(crate) fn copy_visible(db: &Connection, target: &Connection, scopes: &[Scope
     let mut sight = Sight::new(db, scopes)?;
     let persons = sight.persons(&resolution)?;
     let mut account = |id: &str| sight.account(id);
-    let claims: Vec<(String, String, String, Option<String>)> = db
+    // A proposal's answer records the scope of the item's source; the claim it minted is shown
+    // only where that source is. Every other intent names no scope and is seen as its targets
+    // are.
+    let in_scope = |intent: &str| -> bool {
+        if scopes.is_empty() {
+            return true;
+        }
+        match (intents.iter())
+            .find(|known| known.id == intent)
+            .map(|known| &known.targets)
+        {
+            Some(Targets::Proposal {
+                scope: Some(scope), ..
+            }) => scopes.iter().any(|seen| &seen.0 == scope),
+            _ => true,
+        }
+    };
+    let claims: Vec<(String, String, String, Option<String>, String)> = db
         .prepare(
-            "SELECT c.id, c.predicate, c.subject, c.object_entity FROM claim c
-             WHERE EXISTS (SELECT 1 FROM intent_justification ij WHERE ij.claim_id = c.id)",
+            "SELECT c.id, c.predicate, c.subject, c.object_entity, ij.intent_id FROM claim c
+             JOIN intent_justification ij ON ij.claim_id = c.id",
         )?
-        .query_map([], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?)))?
+        .query_map([], |r| {
+            Ok((r.get(0)?, r.get(1)?, r.get(2)?, r.get(3)?, r.get(4)?))
+        })?
         .collect::<Result<_, _>>()?;
     let mut shown = Vec::new();
-    for (id, predicate, subject, object) in claims {
+    for (id, predicate, subject, object, intent) in claims {
         // A link or a merge only where both its ends are: an effective link makes its Person
         // visible, but an undone one doesn't.
         let seen = match (predicate.as_str(), object) {
@@ -375,7 +395,7 @@ pub(crate) fn copy_visible(db: &Connection, target: &Connection, scopes: &[Scope
             (SAME_AS, Some(other)) => persons.contains(&subject) && persons.contains(&other),
             _ => persons.contains(&subject),
         };
-        if seen {
+        if seen && in_scope(&intent) {
             shown.push(id);
         }
     }

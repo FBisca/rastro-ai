@@ -343,8 +343,8 @@ impl Queue {
 /// The standard statements a hypothesis expresses, in term order: `std:owes` and
 /// `std:waiting_on` name the responsible party, `std:owed_to` the recipient and `std:due` the
 /// stated date, each as the source said it. A term whose value the source left out states
-/// nothing and is skipped.
-fn statements(hypothesis: &Hypothesis) -> Vec<Statement> {
+/// nothing and is skipped. An accepted proposal records these as the claims its intent mints.
+pub(super) fn statements(hypothesis: &Hypothesis) -> Vec<Statement> {
     let mut statements = Vec::new();
     for term in &hypothesis.terms {
         let value = match term.as_str() {

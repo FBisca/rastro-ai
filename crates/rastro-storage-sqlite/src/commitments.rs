@@ -46,13 +46,16 @@ fn loaded(view: &View, scopes: &[Scope]) -> Result<Vec<StoredMeeting>> {
 
 /// The commitments observed `std:` claims hold, visible to `scopes` (empty: every scope), each
 /// with the statements its claims carry. Claims are grouped by their subject, so the queue only
-/// ever matches a hypothesis against one commitment; a name or a text match drops nothing.
+/// ever matches a hypothesis against one commitment; a name or a text match drops nothing. An
+/// accepted proposal's claims count too, in the scopes that see the item's source: what the owner
+/// accepted is knowledge the queue never proposes again.
 fn known(view: &View, scopes: &[Scope]) -> Result<Vec<KnownCommitment>> {
     let mut statement = view.0.prepare_cached(&format!(
         "SELECT subject, predicate, object_value FROM claim c
          WHERE predicate LIKE 'std:%' AND status = 'observed' AND object_value IS NOT NULL
-         AND (?1 OR {})",
-        scoped::VISIBLE_CLAIM
+         AND (?1 OR {} OR {})",
+        scoped::VISIBLE_CLAIM,
+        scoped::VISIBLE_INTENT_CLAIM
     ))?;
     let every = scopes.is_empty();
     let scopes = serde_json::to_string(scopes)?;
