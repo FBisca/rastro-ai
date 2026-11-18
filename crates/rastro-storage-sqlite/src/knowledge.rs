@@ -144,7 +144,6 @@ impl View<'_> {
                     .ok_or_else(|| anyhow::anyhow!("claim has no literal datatype"))?,
             }
         };
-        let standing = lifecycle::standing(self.0, id)?;
         let subject_aliases = self.aliases(&subject.id)?;
         let object_aliases = match &object {
             Object::Entity { id, .. } => self.aliases(id)?,
@@ -163,8 +162,6 @@ impl View<'_> {
                 conflicts_with: lifecycle::links(self.0, id, "conflicts_with", false)?,
                 supersedes: lifecycle::links(self.0, id, "supersedes", false)?,
                 superseded_by: lifecycle::links(self.0, id, "supersedes", true)?,
-                earlier_retracted: standing.is_some_and(|s| !s.confirms && !s.holds),
-                stale: standing.is_some_and(|s| s.confirms && !s.holds),
             },
             subject_aliases,
             object_aliases,

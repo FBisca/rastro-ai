@@ -33,19 +33,10 @@ fn property_names(schema: &serde_json::Value) -> Vec<&str> {
 }
 
 /// A claim's status gains `confirmed` and `retracted` (ADR 0014): every claim status enum is
-/// reduced to the two it had, after checking it holds the four. A claim also gains the optional
-/// marks `earlier_retracted` and `stale`, which are removed after checking they are booleans.
+/// reduced to the two it had, after checking it holds the four.
 fn remove_correction_statuses(value: &mut serde_json::Value) {
     match value {
         serde_json::Value::Object(map) => {
-            if let Some(properties) = map.get_mut("properties").and_then(|v| v.as_object_mut())
-                && properties.contains_key("stale")
-            {
-                for mark in ["earlier_retracted", "stale"] {
-                    let property = properties.remove(mark).unwrap();
-                    assert_eq!(property["type"], "boolean", "{mark}");
-                }
-            }
             if let Some(statuses) = map.get_mut("enum")
                 && *statuses
                     == serde_json::json!(["observed", "confirmed", "retracted", "superseded"])
