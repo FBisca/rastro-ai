@@ -352,6 +352,20 @@ fn about_and_why_change_only_additively_for_identity() {
             let kept = text.split_once(" A label (").unwrap().0.to_string();
             *description = serde_json::json!(kept);
         }
+        // Both inputs gain an optional `as_of` time (corrections §Reads as of a past time).
+        let as_of = new["input"]["properties"]
+            .as_object_mut()
+            .unwrap()
+            .remove("as_of")
+            .unwrap_or_else(|| panic!("{name} takes no as_of"));
+        assert_eq!(as_of["format"], "date-time", "{name}");
+        assert!(
+            !new["input"]["required"]
+                .as_array()
+                .unwrap()
+                .contains(&json!("as_of")),
+            "{name}"
+        );
         match name {
             "about" => {
                 let result = new["result"].as_object_mut().unwrap();

@@ -1,7 +1,10 @@
 #![allow(non_snake_case)]
 //! The read-only dispatch: the operations a server may offer without writing, run on a
 //! [`Reader`].
-use crate::{requests::*, results::*};
+use crate::{
+    requests::{refuse_as_of, *},
+    results::*,
+};
 use anyhow::Result;
 use rastro_core::{ReadStorage, Reader};
 
@@ -26,6 +29,7 @@ impl SearchRequest {
 
 impl AboutRequest {
     pub(crate) fn run_read<S: ReadStorage>(self, reader: &mut Reader<S>) -> Result<AboutResult> {
+        refuse_as_of(self.as_of)?;
         reader.about(&self.entity, &self.options())
     }
 }
@@ -59,6 +63,7 @@ impl MeetingCommitmentsRequest {
 
 impl WhyRequest {
     pub(crate) fn run_read<S: ReadStorage>(self, reader: &mut Reader<S>) -> Result<WhyResult> {
+        refuse_as_of(self.as_of)?;
         reader.explain(&self.claim, &self.options())
     }
 }

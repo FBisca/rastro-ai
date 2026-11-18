@@ -400,6 +400,9 @@ operations! {
         Edit(ClaimEditRequest => ClaimWriteResult) as ClaimEdit {
             slot: 32, name: "claim.edit", surfaces: [Cli], read_only: false
         },
+        Undo(ClaimUndoRequest => ClaimWriteResult) as ClaimUndo {
+            slot: 33, name: "claim.undo", surfaces: [Cli], read_only: false
+        },
     }
     /// Owner identity: Persons, links between accounts and Persons, and merges. Writes are CLI only.
     Identity / IdentityRequest {
