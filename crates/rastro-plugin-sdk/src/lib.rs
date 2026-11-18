@@ -1043,7 +1043,8 @@ evidence_requirement = "r"
         );
     }
 
-    /// identity/R32: a vocabulary declares which of its types are accounts by the core's supertype
+    /// spec: Only account types may be linked
+    /// A vocabulary declares which of its types are accounts by the core's supertype
     /// `rastro:Account`, the one core type it may name as a supertype
     #[test]
     fn a_vocabulary_declares_its_accounts_by_the_cores_account_supertype() {

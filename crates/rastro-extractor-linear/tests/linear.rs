@@ -107,7 +107,7 @@ fn cite(location: &str, field: &str, quote: &str, rule: &str) -> [String; 4] {
     [location, field, quote, rule].map(String::from)
 }
 
-/// identity/R18: WHEN a Linear source syncs against the scripted API, THEN users become
+/// WHEN a Linear source syncs against the scripted API, THEN users become
 /// `linear:user/<uuid>` entities typed `tracker:Account` with `email` and `name` aliases and
 /// their active state, the viewer's involved issues become `tracker:Issue` entities with
 /// creator and assignee claims, and `rastro search` finds issue text with citations
@@ -119,6 +119,7 @@ fn cite(location: &str, field: &str, quote: &str, rule: &str) -> [String; 4] {
     clippy::cognitive_complexity,
     reason = "each entity kind and its claims branch once, so the scenario reads as the shapes it proves"
 )]
+/// spec: A Linear sync records users and issues
 #[test]
 fn users_and_involved_issues_become_tracker_entities_and_search_cites_issue_text() {
     let fixture = Fixture::start(world());
@@ -260,7 +261,8 @@ fn users_and_involved_issues_become_tracker_entities_and_search_cites_issue_text
     assert_eq!(described["results"][0]["location"], json!(issue_id(DOCS)));
 }
 
-/// identity/R19: WHEN a Linear user is deactivated, THEN its account shows it, and its existing links
+/// spec: A deactivated user keeps its links
+/// WHEN a Linear user is deactivated, THEN its account shows it, and its existing links
 /// remain, marked deactivated: `about` on the account shows `rastro:held_by` its Person, still
 /// observed, beside `tracker:active false`. A re-sync keeps every other claim of the account
 /// and the claims that point at it
@@ -346,7 +348,8 @@ fn a_deactivated_user_shows_it_and_keeps_its_link_and_claims_across_a_resync() {
     )));
 }
 
-/// identity/R36: WHEN a Linear sync reads an app (integration) user, THEN it is typed `tracker:Bot`,
+/// spec: An app user is a bot and never links
+/// WHEN a Linear sync reads an app (integration) user, THEN it is typed `tracker:Bot`,
 /// never `tracker:Account` (neither from its user record nor from an issue it created), and a
 /// link to it is refused with an operation error, while a workspace member still links
 #[test]

@@ -241,7 +241,8 @@ fn claim_id(about: &Value, predicate: &str) -> String {
         .to_string()
 }
 
-/// identity/R12: verified email links only to an existing person
+/// spec: An equal verified email links the account
+/// Verified email links only to an existing person
 #[test]
 fn verified_email_links_only_to_an_existing_person() {
     let env = Env::new();
@@ -293,7 +294,8 @@ fn verified_email_links_only_to_an_existing_person() {
     );
 }
 
-/// identity/R13: nonoverlapping verified emails do not link
+/// spec: Equal emails must overlap in time to link
+/// Nonoverlapping verified emails do not link
 #[test]
 fn nonoverlapping_verified_emails_do_not_link() {
     let env = Env::new();
@@ -327,7 +329,8 @@ fn nonoverlapping_verified_emails_do_not_link() {
     );
 }
 
-/// identity/R15: cannot link blocks through merges until explicitly linked
+/// spec: A cannot-link blocks the automatic link
+/// Cannot link blocks through merges until explicitly linked
 #[test]
 fn cannot_link_blocks_through_merges_until_explicitly_linked() {
     let env = Env::new();
@@ -374,7 +377,8 @@ fn cannot_link_blocks_through_merges_until_explicitly_linked() {
     );
 }
 
-/// identity/R15: account to account cannot link blocks automatic join
+/// spec: A cannot-link blocks the automatic link
+/// Account to account cannot link blocks automatic join
 #[test]
 fn account_to_account_cannot_link_blocks_automatic_join() {
     use rastro_core::identity::{
@@ -450,7 +454,8 @@ fn account_to_account_cannot_link_blocks_automatic_join() {
     );
 }
 
-/// identity/R15: conflicting automatic links are order independent and neither joins
+/// spec: A cannot-link blocks the automatic link
+/// Conflicting automatic links are order independent and neither joins
 #[test]
 fn conflicting_automatic_links_are_order_independent_and_neither_joins() {
     use rastro_core::identity::{
@@ -550,7 +555,8 @@ fn conflicting_automatic_links_are_order_independent_and_neither_joins() {
     assert_eq!(second, first);
 }
 
-/// identity/R32: automatic links refuse entities without an account type
+/// spec: Only account types may be linked
+/// Automatic links refuse entities without an account type
 #[test]
 fn automatic_links_refuse_entities_without_an_account_type() {
     let env = Env::new();
@@ -587,7 +593,8 @@ fn automatic_links_refuse_entities_without_an_account_type() {
         "{about}"
     );
 }
-/// identity/R15: a cannot-link between B and P directly vetoes the automatic link; the owner's explicit
+/// spec: A cannot-link blocks the automatic link
+/// A cannot-link between B and P directly vetoes the automatic link; the owner's explicit
 /// link then holds it
 #[test]
 fn a_direct_cannot_link_blocks_the_automatic_link_until_explicitly_linked() {
@@ -740,7 +747,8 @@ fn qualify_apart(
     (p, at)
 }
 
-/// identity/R37: two accounts refused to each other that qualify for one Person over separate intervals
+/// spec: Cannot-linked accounts hold only their own intervals
+/// Two accounts refused to each other that qualify for one Person over separate intervals
 /// each hold it over its own interval
 #[test]
 fn cannot_linked_accounts_that_qualify_apart_each_hold_the_person() {
@@ -762,7 +770,8 @@ fn cannot_linked_accounts_that_qualify_apart_each_hold_the_person() {
     assert_eq!(shown, ["github:account/701", "github:account/703"]);
 }
 
-/// identity/R37: over the time two accounts refused to each other both qualify, neither holds the
+/// spec: Cannot-linked accounts hold only their own intervals
+/// Over the time two accounts refused to each other both qualify, neither holds the
 /// Person; outside it, each does
 #[test]
 fn over_their_overlap_neither_cannot_linked_account_holds_the_person() {
@@ -816,7 +825,8 @@ fn joined(
         .collect()
 }
 
-/// identity/R15: a conflict whose one side no longer qualifies stops blocking the other: blocked links
+/// spec: A cannot-link blocks the automatic link
+/// A conflict whose one side no longer qualifies stops blocking the other: blocked links
 /// are recomputed from each pass, not accumulated
 #[test]
 fn a_conflict_that_no_longer_qualifies_stops_blocking() {
@@ -839,7 +849,8 @@ fn a_conflict_that_no_longer_qualifies_stops_blocking() {
     assert_eq!(shown, ["github:account/901", "github:account/905"]);
 }
 
-/// identity/R15: when blocking one side would let the conflict come back, both stay blocked: a cycle
+/// spec: A cannot-link blocks the automatic link
+/// When blocking one side would let the conflict come back, both stay blocked: a cycle
 /// suppresses, it never picks
 #[test]
 fn a_conflict_that_returns_once_unblocked_keeps_both_blocked() {
@@ -873,7 +884,8 @@ fn kinds(history: &Value) -> Vec<(String, String)> {
         .collect()
 }
 
-/// identity/R1: `identity me` mints the owner's Person, `about me` resolves to it, and a second run
+/// spec: The owner's Person exists and resolves from me
+/// `identity me` mints the owner's Person, `about me` resolves to it, and a second run
 /// returns the same Person and records nothing
 #[test]
 fn identity_me_mints_one_person_that_about_me_resolves() {
@@ -907,7 +919,8 @@ fn identity_me_mints_one_person_that_about_me_resolves() {
     assert_eq!(fresh.about("me")["claims"], json!([]));
 }
 
-/// identity/R2: two Persons created with one name are two Persons, and the name is an ambiguous alias
+/// spec: A shared name is an ambiguous alias
+/// Two Persons created with one name are two Persons, and the name is an ambiguous alias
 #[test]
 fn two_persons_with_one_name_make_the_name_ambiguous() {
     let env = Env::new();
@@ -933,7 +946,8 @@ fn two_persons_with_one_name_make_the_name_ambiguous() {
     assert_eq!(env.intents(), 4);
 }
 
-/// identity/R3: a linked account shows `rastro:held_by` the Person, and `why` on the link shows an
+/// spec: A link names its Person and its intent
+/// A linked account shows `rastro:held_by` the Person, and `why` on the link shows an
 /// observed claim justified by the owner intent: its id, time and issuer
 #[test]
 fn a_link_shows_held_by_and_why_cites_the_owner_intent() {
@@ -982,7 +996,8 @@ fn a_link_shows_held_by_and_why_cites_the_owner_intent() {
     assert_eq!(env.intents(), 3);
 }
 
-/// identity/R4: undoing a link removes `held_by`, records a cannot-link, and the history lists the link,
+/// spec: Undoing a link removes it and records a cannot-link
+/// Undoing a link removes `held_by`, records a cannot-link, and the history lists the link,
 /// the undo and the cannot-link in acceptance order
 #[test]
 fn undoing_a_link_removes_it_and_records_a_cannot_link_in_history() {
@@ -1052,7 +1067,8 @@ fn undoing_a_link_removes_it_and_records_a_cannot_link_in_history() {
     );
 }
 
-/// identity/R5: a merge shows both Persons' claims on either one, equivalent claims grouped; undoing it
+/// spec: A merge groups both Persons' claims
+/// A merge shows both Persons' claims on either one, equivalent claims grouped; undoing it
 /// separates them and records a cannot-link
 #[test]
 fn a_merge_groups_both_persons_claims_and_its_undo_separates_them() {
@@ -1154,7 +1170,8 @@ fn a_merge_groups_both_persons_claims_and_its_undo_separates_them() {
     );
 }
 
-/// identity/R6: invalid intents are refused with an operation error naming the reason, and nothing is
+/// spec: An invalid intent is refused and stores nothing
+/// Invalid intents are refused with an operation error naming the reason, and nothing is
 /// stored
 #[test]
 fn invalid_intents_are_refused_and_store_nothing() {
@@ -1309,7 +1326,8 @@ fn a_rebuild_with_a_carried_pair_brings_intent_backed_claims_back_identically() 
     assert_eq!(rows(&env), before);
 }
 
-/// identity/R5: in a merge chain of three Persons, each merge stays its own claim: only claims that say
+/// spec: A merge groups both Persons' claims
+/// In a merge chain of three Persons, each merge stays its own claim: only claims that say
 /// the same thing group, never two different merges
 #[test]
 fn a_merge_chain_groups_equivalent_claims_but_never_two_merges() {
@@ -1375,10 +1393,11 @@ fn intent_id(written: &Value) -> String {
     written["intents"][0]["id"].as_str().unwrap().to_string()
 }
 
-/// identity/R26: `about me` with a linked GitHub account and a linked account of a second kind lists the
+/// `about me` with a linked GitHub account and a linked account of a second kind lists the
 /// Person, each linked account with its reason, and the accounts' claims, each citing its own
 /// account; equivalent claims (under a merge) group and count once toward `limit`. The second
 /// kind is a Linear-shaped account recorded through the scripted seam (Linear isn't merged yet).
+/// spec: About me lists accounts and their claims
 #[test]
 #[expect(
     clippy::too_many_lines,
@@ -1543,7 +1562,8 @@ fn about_me_lists_the_person_its_linked_accounts_and_their_claims() {
     );
 }
 
-/// identity/R27: `about` on an account linked to a Person shows `rastro:held_by` that Person, for either
+/// spec: An account's about shows its Person
+/// `about` on an account linked to a Person shows `rastro:held_by` that Person, for either
 /// account kind
 #[test]
 fn about_an_account_shows_the_person_holding_it() {
@@ -1592,7 +1612,8 @@ fn about_says_whether_the_identifier_resolved() {
     }
 }
 
-/// identity/R33: undoing a link or a merge keeps the undone claim as `superseded`, its interval closed at
+/// spec: An undone claim stays superseded
+/// Undoing a link or a merge keeps the undone claim as `superseded`, its interval closed at
 /// the undo; `about --history` shows it, plain `about` doesn't, and `why` cites the undone intent
 /// as no longer current
 #[test]
@@ -1672,7 +1693,8 @@ fn an_undone_link_or_merge_stays_as_a_superseded_claim() {
     assert_eq!(rows(&env), before);
 }
 
-/// identity/R35: an intent records the CLI's configured scopes as its issuer's, and `identity history`
+/// spec: An intent records its issuer's scopes
+/// An intent records the CLI's configured scopes as its issuer's, and `identity history`
 /// shows them
 #[test]
 fn an_intent_records_the_configured_scopes_of_its_issuer() {
@@ -1736,7 +1758,8 @@ fn candidates(env: &Env) -> Vec<(String, String, Vec<String>)> {
         .collect()
 }
 
-/// identity/R21: a GitHub account and a Linear account whose full names are equal after case and accent
+/// spec: One folded name makes a candidate
+/// A GitHub account and a Linear account whose full names are equal after case and accent
 /// folding are listed with reason `same name`, until one Person holds both
 #[test]
 fn accounts_with_one_folded_name_are_listed_as_same_name() {
@@ -1785,7 +1808,8 @@ fn accounts_with_one_folded_name_are_listed_as_same_name() {
     );
 }
 
-/// identity/R22: a Linear email whose local part equals a GitHub login is listed with reason
+/// spec: An email matching a login makes a candidate
+/// A Linear email whose local part equals a GitHub login is listed with reason
 /// `email matches login`
 #[test]
 fn a_linear_email_whose_local_part_is_a_github_login_is_listed() {
@@ -1805,7 +1829,8 @@ fn a_linear_email_whose_local_part_is_a_github_login_is_listed() {
     assert!(text.contains("Name: bcosta"), "{text}");
 }
 
-/// identity/R25: a pair within one namespace, or with a bot (a GitHub `code:Bot` or a Linear app user),
+/// spec: One namespace or a bot is never a candidate
+/// A pair within one namespace, or with a bot (a GitHub `code:Bot` or a Linear app user),
 /// is never a candidate, even when the names or the email and login match
 #[test]
 fn a_pair_in_one_namespace_or_with_a_bot_is_never_a_candidate() {
@@ -1858,7 +1883,8 @@ fn held_accounts(about: &Value) -> Vec<String> {
     found
 }
 
-/// identity/R23: a yes to a pair neither account of which is held creates one Person, named from the
+/// spec: A yes holds both accounts by one Person
+/// A yes to a pair neither account of which is held creates one Person, named from the
 /// candidate, holding both; a yes to a pair with one account held links the other to that
 /// Person; either way the pair no longer appears, and answering it again is refused
 #[test]
@@ -1905,7 +1931,8 @@ fn a_yes_holds_both_accounts_by_one_person() {
     assert_eq!(env.intents(), before);
 }
 
-/// identity/R24: a no records a cannot-link between the two accounts, never a claim; the pair never
+/// spec: A no records a cannot-link
+/// A no records a cannot-link between the two accounts, never a claim; the pair never
 /// appears again, including after `claims rebuild`
 #[test]
 fn a_no_records_a_cannot_link_and_the_pair_never_returns() {
@@ -1945,7 +1972,8 @@ fn a_no_records_a_cannot_link_and_the_pair_never_returns() {
     assert!(error.contains("not a candidate pair"), "{error}");
 }
 
-/// identity/R21: a name with a precomposed accent the old letter table missed (Romanian `Ș`) folds like
+/// spec: One folded name makes a candidate
+/// A name with a precomposed accent the old letter table missed (Romanian `Ș`) folds like
 /// its plain spelling, so the two accounts are listed as `same name`
 #[test]
 fn a_precomposed_accent_folds_like_its_plain_letter() {
@@ -1970,7 +1998,8 @@ fn a_precomposed_accent_folds_like_its_plain_letter() {
     assert_eq!(candidates(&env).len(), 1);
 }
 
-/// identity/R23: a yes to a pair whose one account is held by two Persons the owner has merged links the
+/// spec: A yes holds both accounts by one Person
+/// A yes to a pair whose one account is held by two Persons the owner has merged links the
 /// other account to that merged Person, and the pair no longer appears
 #[test]
 fn a_yes_links_to_a_holder_merged_with_another() {

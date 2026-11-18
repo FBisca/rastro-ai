@@ -547,7 +547,8 @@ fn intent_rows(path: &std::path::Path) -> Vec<String> {
     rows
 }
 
-/// identity/R33: opening a database that holds intents applies the intent-end migration, then replays
+/// spec: An undone claim stays superseded
+/// Opening a database that holds intents applies the intent-end migration, then replays
 /// the intents once, after every migration: a link undone before the upgrade is a superseded
 /// claim at once; the justification ids main wrote stay; an evidence claim and a claim no intent
 /// ever backed stay; the projection is published once, and a second open publishes nothing. The
@@ -642,7 +643,7 @@ fn the_intent_end_migration_replays_existing_intents() {
     assert_eq!(intent_rows(&path), intent_rows(&fresh));
 }
 
-/// identity/R33: a database without intents upgrades without a replay: nothing is published
+/// A database without intents upgrades without a replay: nothing is published
 #[test]
 fn the_intent_end_migration_publishes_nothing_without_intents() {
     let home = tempfile::tempdir().unwrap();
@@ -659,7 +660,8 @@ fn the_intent_end_migration_publishes_nothing_without_intents() {
     assert_eq!(count("SELECT count(*) FROM claim"), 2);
 }
 
-/// identity/R33: the replay runs after every migration of the open, so it meets the final schema: a later
+/// spec: An undone claim stays superseded
+/// The replay runs after every migration of the open, so it meets the final schema: a later
 /// migration that resets intent-backed projection rows doesn't undo it
 #[test]
 fn the_intent_replay_runs_after_every_migration() {

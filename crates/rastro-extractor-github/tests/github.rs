@@ -478,7 +478,8 @@ fn a_rename_across_many_labelled_pull_requests_projects_like_a_rebuild() {
     );
 }
 
-/// identity/R32: WHEN the owner links a pull request, a repository or a bot the GitHub extractor typed,
+/// spec: Only account types may be linked
+/// WHEN the owner links a pull request, a repository or a bot the GitHub extractor typed,
 /// THEN the link is refused with an operation error naming the reason and nothing is stored,
 /// while the `code:Account` that wrote them links as before. The `code` vocabulary declares
 /// `code:Account`, and no other type, an account

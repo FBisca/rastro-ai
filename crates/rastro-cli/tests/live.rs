@@ -411,7 +411,8 @@ fn half_configured_or_malformed_live_variables_fail_naming_them() {
     }
 }
 
-/// identity/R31: on a copy of the owner's database, after the owner synced a GitHub repository and
+/// spec: The owner's database answers about me
+/// On a copy of the owner's database, after the owner synced a GitHub repository and
 /// Linear and ran `rastro identity me`, `about me` lists a GitHub and a Linear account, and
 /// `rastro identity candidates` answers without error.
 ///
