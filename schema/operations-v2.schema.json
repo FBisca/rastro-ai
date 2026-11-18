@@ -1777,6 +1777,13 @@
       "additionalProperties": false,
       "description": "One pending proposal or question.",
       "properties": {
+        "context": {
+          "description": "What Rastro already knows about the parties the owner mapped: their visible claims, each\nonce. Context only — an item with claims beside it stays in the queue.",
+          "items": {
+            "$ref": "#/$defs/ClaimSummary"
+          },
+          "type": "array"
+        },
         "id": {
           "description": "The content address of the item's canonical encoding.",
           "type": "string"
@@ -3291,6 +3298,12 @@
               "additionalProperties": false,
               "description": "What `queue` returns.",
               "properties": {
+                "already_known": {
+                  "description": "How many proposals this read left out because one observed commitment already held\nexactly the standard statements they express.",
+                  "format": "uint",
+                  "minimum": 0,
+                  "type": "integer"
+                },
                 "gaps": {
                   "description": "What each source that showed no item, or fewer than it should, has to say.",
                   "items": {
@@ -3312,7 +3325,8 @@
               "required": [
                 "notice",
                 "items",
-                "gaps"
+                "gaps",
+                "already_known"
               ],
               "title": "Queue",
               "type": "object"
@@ -4681,6 +4695,12 @@
         "additionalProperties": false,
         "description": "What `queue` returns.",
         "properties": {
+          "already_known": {
+            "description": "How many proposals this read left out because one observed commitment already held\nexactly the standard statements they express.",
+            "format": "uint",
+            "minimum": 0,
+            "type": "integer"
+          },
           "gaps": {
             "description": "What each source that showed no item, or fewer than it should, has to say.",
             "items": {
@@ -4702,7 +4722,8 @@
         "required": [
           "notice",
           "items",
-          "gaps"
+          "gaps",
+          "already_known"
         ],
         "title": "Queue",
         "type": "object"
