@@ -1,0 +1,21 @@
+# Rastro's nextest configuration: the suite runs one process per test, a hung test fails its run
+# instead of holding it, and every failure of a run is kept. See
+# docs/adr/0013-cargo-nextest-runs-the-tests.md and docs/development.md.
+#
+# The checks, CI and the selector run this profile; scripts/nextest-config.test.sh proves it.
+
+[profile.default]
+# A test running past 20 seconds is reported SLOW, and three periods in a row terminate it at 60
+# seconds: a test that hangs fails the run with its name instead of waiting on the toolchain's limit.
+slow-timeout = { period = "20s", terminate-after = 3 }
+# One report holds every failure: the run keeps going after the first one, the JUnit report lists them
+# all, and the recorded run reruns them all.
+fail-fast = false
+# A failure is a failure: a test that only passes on a retry is a flake to fix, not to hide.
+retries = 0
+
+[profile.default.junit]
+# Relative to the target directory, so the report of a run lands at target/nextest/<profile>/junit.xml.
+path = "junit.xml"
+store-success-output = false
+store-failure-output = true

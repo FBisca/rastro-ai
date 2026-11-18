@@ -1,0 +1,8 @@
+[package]
+name = "nextest-suite-fixture"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# Its own workspace: the fixture must not join the repository's one.
+[workspace]
