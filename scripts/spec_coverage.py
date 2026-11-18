@@ -3,7 +3,8 @@
 
 The gate reads every spec under `docs/specs/` (subfolders included) for
 `### Requirement: <Title>` blocks and every source file in the workspace for a `// spec: <Title>`
-tag. It fails when a title has no tagged test, and when a tag names no title.
+tag that sits on a test. It fails when a title has no tagged test, and when a tag names no title.
+A tag above production code, or above a module rather than a test, covers nothing.
 """
 
 import argparse
@@ -19,6 +20,10 @@ TAGS = {
 }
 # Build output and tool caches hold copies of sources whose tags are not the workspace's.
 SKIP_DIRS = {"target", "node_modules", "__pycache__", ".venv"}
+# A test attribute is `#[test]` or its crate-qualified form, such as `#[tokio::test]`.
+ATTRIBUTE = re.compile(r"^#\[\s*([A-Za-z0-9_]+(?:::[A-Za-z0-9_]+)*)\s*(?:\(.*\))?\s*\]$")
+TEST_ATTRIBUTES = {"test", "rstest", "test_case"}
+PY_TEST = re.compile(r"^\s*(?:async\s+)?def\s+test\w*\s*\(")
 
 
 def relative(path, root):
@@ -34,17 +39,48 @@ def requirements(spec_root):
                 yield match.group(1), path, number
 
 
+def is_test_attribute(attribute):
+    match = ATTRIBUTE.match(attribute)
+    return bool(match) and match.group(1).split("::")[-1] in TEST_ATTRIBUTES
+
+
+def tag_marks_a_test(suffix, lines, index):
+    """Whether the tag on line `index` (0-based) heads a test, not a function or a module.
+
+    Only a tag on a test counts as coverage: a comment above production code vouches for nothing.
+    Blank lines, further comments, Python decorators and Rust attributes are read through, so a test
+    may carry several tags and its other attributes.
+    """
+    attributes = []
+    for line in lines[index + 1 :]:
+        stripped = line.strip()
+        comment = "//" if suffix == ".rs" else "#"
+        if not stripped or stripped.startswith(comment):
+            continue
+        if suffix == ".rs" and stripped.startswith("#[") and stripped.endswith("]"):
+            attributes.append(stripped)
+            continue
+        if suffix == ".py" and stripped.startswith("@"):
+            continue
+        if suffix == ".rs":
+            return any(is_test_attribute(attribute) for attribute in attributes)
+        return bool(PY_TEST.match(line))
+    return False
+
+
 def tags(root):
-    """Every spec tag, as (title, file path, line)."""
+    """Every spec tag that sits on a test, as (title, file path, line)."""
     for path in sorted(root.rglob("*")):
         if not path.is_file() or path.suffix not in TAGS:
             continue
         if SKIP_DIRS.intersection(path.relative_to(root).parts):
             continue
-        for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            match = TAGS[path.suffix].match(line)
-            if match:
-                yield match.group(1), path, number
+        pattern = TAGS[path.suffix]
+        lines = path.read_text(encoding="utf-8").splitlines()
+        for index, line in enumerate(lines):
+            match = pattern.match(line)
+            if match and tag_marks_a_test(path.suffix, lines, index):
+                yield match.group(1), path, index + 1
 
 
 def main() -> int:

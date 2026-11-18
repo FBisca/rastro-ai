@@ -129,7 +129,8 @@ One sentence saying what SHALL hold.
 
 A test that proves a requirement carries its exact title as a tag on the line above `#[test]`:
 `// spec: <Title>`. A Python test uses `# spec: <Title>`, and one test may carry several tags. A tag
-is a comment of its own line, so a string that mentions one is not a tag.
+is a comment of its own line, so a string that mentions one is not a tag, and only a tag on a test
+counts: one above production code, or above a module rather than a test function, covers nothing.
 
 `python3 scripts/spec_coverage.py` holds both directions together: it fails naming the spec file for a
 title no test tags, and naming the file, line and title for a tag no requirement holds. It reads every

@@ -23,12 +23,17 @@ python3 scripts/spec_coverage.py # specs and their tags agree
 | `cargo fmt --all --check` | Formatting |
 | `cargo clippy --workspace --all-targets -- -D warnings` | Lints |
 | `cargo check --workspace --all-targets` | Types, every target |
-| `cargo test --workspace` | The whole suite, which CI runs |
+| `cargo test --workspace` | The whole suite |
 | `scripts/affected-tests.sh <path>...` | Tests for the crates your paths touch, and their dependents |
 | `python3 scripts/spec_coverage.py` | Every titled requirement has a tagged test, and every tag a title |
 | `python3 scripts/test_spec_coverage.py` | The spec gate's own tests |
 
-`.github/workflows/ci.yml` runs all of them on every push and pull request.
+`.github/workflows/ci.yml` runs, on every push and pull request, `scripts/affected-tests.test.sh` (the
+selector's own tests), the spec gate and its tests, `cargo fmt --all --check`, `cargo clippy
+--workspace --all-targets -- -D warnings` and `cargo test --workspace`. `cargo check` and
+`scripts/affected-tests.sh` are the quicker checks to run on your own change before you push; the
+selector picks crates, so paths outside `crates/` — scripts, docs, workflows — select nothing and you
+run their consumers yourself.
 
 ## The loop
 
@@ -38,7 +43,8 @@ python3 scripts/spec_coverage.py # specs and their tags agree
    symbol.
 3. Make the smallest change that passes it, then run the affected selection.
 4. Tag the test with its requirement's exact title: `// spec: <Title>` on the line above `#[test]`, or
-   `# spec: <Title>` in a Python test. Run the spec gate after changing a requirement or a tag.
+   `# spec: <Title>` in a Python test. Only a tag on a test counts; one above production code covers
+   nothing. Run the spec gate after changing a requirement or a tag.
 5. Commit as a Conventional Commit (`feat(core): ...`, `fix(cli): ...`) and open a pull request
    against `main`.
 

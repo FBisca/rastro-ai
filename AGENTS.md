@@ -10,7 +10,7 @@
 ## Specs
 
 - A spec under `docs/specs/` states its requirements only as `### Requirement: <Title>` blocks: one sentence saying what SHALL hold, then `#### Scenario:` WHEN/THEN bullets. Nothing else is a requirement.
-- A test proving a requirement carries its exact title: `// spec: <Title>` on the line above `#[test]`, or `# spec: <Title>` in a Python test. Run `python3 scripts/spec_coverage.py` after changing a requirement or a tag; CI runs it, and its own tests are `python3 scripts/test_spec_coverage.py`.
+- A test proving a requirement carries its exact title: `// spec: <Title>` on the line above `#[test]`, or `# spec: <Title>` in a Python test. Only a tag on a test counts; one above production code covers nothing. Run `python3 scripts/spec_coverage.py` after changing a requirement or a tag; CI runs it, and its own tests are `python3 scripts/test_spec_coverage.py`.
 
 ## Product and architecture
 

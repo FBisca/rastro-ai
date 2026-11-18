@@ -72,6 +72,23 @@ class SpecCoverageGate(unittest.TestCase):
         self.assertRegex(gate.stderr, r"crates/alpha/src/stray\.rs[:\s]+3\b")
 
     # spec: Every requirement names its tests
+    def test_a_tag_above_something_that_is_not_a_test_covers_nothing(self):
+        self.write("docs/specs/alpha.md", requirement("A requirement only a comment names"))
+        self.write(
+            "crates/alpha/src/lib.rs",
+            "pub fn add(a: i32, b: i32) -> i32 { a + b }\n"
+            "\n"
+            "// spec: A requirement only a comment names\n"
+            "pub fn subtract(a: i32, b: i32) -> i32 { a - b }\n",
+        )
+
+        gate = self.run_gate()
+
+        self.assertNotEqual(gate.returncode, 0, f"the gate accepted it:\n{gate.stdout}")
+        self.assertIn("A requirement only a comment names", gate.stderr)
+        self.assertIn("docs/specs/alpha.md", gate.stderr)
+
+    # spec: Every requirement names its tests
     def test_a_src_unit_test_covers_a_requirement_in_a_spec_subfolder_and_build_output_is_ignored(self):
         self.write(
             "docs/specs/workspace/specs.md",
