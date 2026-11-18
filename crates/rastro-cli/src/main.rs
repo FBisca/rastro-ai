@@ -820,6 +820,18 @@ fn queue_answer_text(result: &rastro_operations::results::QueueAnswerResult) -> 
 /// The result of an operation, its human form, and whether it succeeded.
 type Outcome = (Response, String);
 
+/// What a claim correction says: what it did, or that the claim already was so.
+fn correction_text(r: &rastro_operations::results::ClaimWriteResult, did: &str) -> String {
+    match r.intents.first() {
+        Some(intent) => format!(
+            "{did} {} (intent {}, {})",
+            r.claim,
+            intent.id,
+            intent.issued_at.format("%Y-%m-%d %H:%M")
+        ),
+        None => format!("{} is already {did}; nothing recorded", r.claim),
+    }
+}
 fn human(response: &Response) -> String {
     let or_none = |lines: Vec<String>| {
         if lines.is_empty() {
@@ -895,15 +907,8 @@ fn human(response: &Response) -> String {
         | Response::IdentityAnswer(r) => {
             intents_text(&r.intents, "Already in force; nothing recorded")
         }
-        Response::ClaimConfirm(r) => match r.intents.first() {
-            Some(intent) => format!(
-                "confirmed {} (intent {}, {})",
-                r.claim,
-                intent.id,
-                intent.issued_at.format("%Y-%m-%d %H:%M")
-            ),
-            None => format!("{} is already confirmed; nothing recorded", r.claim),
-        },
+        Response::ClaimConfirm(r) => correction_text(r, "confirmed"),
+        Response::ClaimReject(r) => correction_text(r, "retracted"),
         Response::IdentityCandidates(r) => candidates_text(r),
         Response::IdentityHistory(r) => match &r.entity {
             Some(entity) => format!(
