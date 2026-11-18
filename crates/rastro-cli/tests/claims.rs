@@ -196,6 +196,7 @@ fn first_state_support() -> Value {
 
 /// claims/R1: a bound extractor runs over its source's pending evidence after ingestion, its claims
 /// read through `why`, its run is logged on its own, and coverage is as without it
+/// spec: A bound extractor runs over its source's pending evidence
 #[test]
 fn a_bound_extractor_turns_its_sources_evidence_into_claims_read_through_why() {
     let env = Env::new(Some("test-extractor"));
@@ -305,6 +306,7 @@ fn a_sync_result_carries_extraction_only_for_a_bound_source() {
 
 /// claims/R2: a claim whose support is untrusted, undelivered, outside its evidence or from a rule
 /// not declared deterministic is rejected, counted, and leaves nothing behind
+/// spec: A support that fails its check rejects the claim
 #[test]
 fn claims_with_untrusted_undelivered_outside_or_nondeterministic_supports_are_rejected() {
     let env = Env::new(Some("test-extractor"));
@@ -443,6 +445,7 @@ fn an_extractor_exceeding_the_claim_cap_fails_and_stores_nothing() {
 
 /// claims/R3: a predicate outside the vocabulary, or a subject or object outside its domain or
 /// range, is rejected and counted
+/// spec: A claim outside the vocabulary is rejected
 #[test]
 fn claims_outside_the_vocabulary_are_rejected() {
     let env = Env::new(Some("test-extractor"));
@@ -496,6 +499,7 @@ fn claims_outside_the_vocabulary_are_rejected() {
 
 /// claims/R5: an endpoint's type comes from a `rastro:type` claim in the same submission, even when an
 /// earlier submission typed the entity
+/// spec: A type must come from the submission that uses it
 #[test]
 fn an_endpoint_typed_only_by_an_earlier_submission_is_rejected_and_counted() {
     let env = Env::new(Some("test-extractor"));
@@ -532,6 +536,7 @@ fn an_endpoint_typed_only_by_an_earlier_submission_is_rejected_and_counted() {
 /// claims/R5: two submissions typing one entity differently leave both visible as a conflict, both
 /// ways, unless one type is a `supertype` ancestor of the other; a newer type read from the
 /// same field replaces the older
+/// spec: A type must come from the submission that uses it
 #[test]
 fn disagreeing_types_conflict_unless_related_by_supertype_and_a_newer_type_replaces() {
     let words = "definition = \"d\"\nnot_to_confuse_with = \"n\"\nexamples = [\"e\"]\n\
@@ -640,6 +645,7 @@ fn two_type_sources() -> Env {
 const ELSEWHERE: &str = "https://github.com/o/p/pull/2";
 
 /// claims/R48: unrelated types at different locations conflict both ways, neither supersedes
+/// spec: Unrelated types at different locations conflict
 #[test]
 fn unrelated_types_at_different_locations_conflict_and_neither_supersedes() {
     let env = two_type_sources();
@@ -659,6 +665,7 @@ fn unrelated_types_at_different_locations_conflict_and_neither_supersedes() {
 }
 
 /// claims/R48: replacing one location's type removes the conflict links on the refresh
+/// spec: Unrelated types at different locations conflict
 #[test]
 fn a_conflict_disappears_when_one_locations_type_is_replaced() {
     let env = two_type_sources();
@@ -677,6 +684,7 @@ fn a_conflict_disappears_when_one_locations_type_is_replaced() {
 
 /// claims/R49: a type and its supertype at different locations do not conflict; the most
 /// specific type is displayed whichever claim id sorts first
+/// spec: A type and its supertype never conflict
 #[test]
 fn a_type_and_its_supertype_do_not_conflict_and_the_most_specific_is_displayed() {
     for (first, second) in [
@@ -704,6 +712,7 @@ fn a_type_and_its_supertype_do_not_conflict_and_the_most_specific_is_displayed()
 }
 
 /// claims/R50: conflicting types display the one with the newest known time
+/// spec: A conflicted entity displays one type
 #[test]
 fn conflicting_types_display_the_newest_known_type() {
     for (first, second) in [
@@ -731,6 +740,7 @@ fn conflicting_types_display_the_newest_known_type() {
 
 /// claims/R50: a conflict next to a compatible family; the family with the newest member
 /// wins and shows its most specific type
+/// spec: A conflicted entity displays one type
 #[test]
 fn the_family_with_the_newest_member_wins_and_shows_its_most_specific_type() {
     let env = two_type_sources();
@@ -757,6 +767,7 @@ fn the_family_with_the_newest_member_wins_and_shows_its_most_specific_type() {
 }
 
 /// claims/R51: the same location's type changing supersedes the old type claim
+/// spec: A type changed at one location supersedes the old one
 #[test]
 fn a_changed_type_at_one_location_supersedes_the_old_one() {
     let env = two_type_sources();
@@ -775,6 +786,7 @@ fn a_changed_type_at_one_location_supersedes_the_old_one() {
 }
 
 /// claims/R20: a vocabulary the core refuses to load fails the run, and no claim is accepted under it
+/// spec: The core refuses a vocabulary it cannot hold
 #[test]
 fn a_refused_vocabulary_fails_the_extraction_and_accepts_no_claim() {
     let original = include_str!("../../rastro-test-extractor/vocabulary.toml");
@@ -810,6 +822,7 @@ fn a_refused_vocabulary_fails_the_extraction_and_accepts_no_claim() {
 
 /// claims/R6: a bound extractor that isn't installed reads `not_installed` and the sync succeeds;
 /// an installed extractor no source is bound to never runs
+/// spec: A pair without its extractor reads not installed
 #[test]
 fn a_missing_bound_extractor_reads_not_installed_and_an_unbound_one_never_runs() {
     let env = Env::new(Some("missing-extractor"));
@@ -848,6 +861,7 @@ fn a_missing_bound_extractor_reads_not_installed_and_an_unbound_one_never_runs()
 
 /// claims/R7: an existing GitHub source is bound to `rastro-extractor-github` by its connector,
 /// without the owner editing config
+/// spec: An existing GitHub source is bound to its extractor
 #[test]
 fn an_existing_github_source_is_bound_to_the_github_extractor() {
     let env = Env::new(None);
@@ -884,6 +898,7 @@ fn an_existing_github_source_is_bound_to_the_github_extractor() {
 
 /// claims/R8: two sources observing the same PR with the same state give one PR entity and one
 /// `code:state` claim with two supports
+/// spec: Two sources that see the same state share one claim
 #[test]
 fn two_sources_observing_the_same_pr_state_share_one_entity_and_one_claim() {
     let env = Env::new(Some("test-extractor"));
@@ -908,6 +923,7 @@ fn two_sources_observing_the_same_pr_state_share_one_entity_and_one_claim() {
 
 /// claims/R28: an extractor run left unfinished is marked interrupted at the next writing open,
 /// and no source coverage window is created for it
+/// spec: An unfinished extractor run is marked interrupted
 #[test]
 fn an_unfinished_extractor_run_is_marked_interrupted_without_a_coverage_window() {
     let env = Env::new(Some("test-extractor"));
@@ -976,6 +992,7 @@ fn sync_state(env: &Env, source: &str, value: &str) {
     env.json(&["sync", source]);
 }
 /// claims/R9: second support keeps id and changes revision
+/// spec: A second support keeps the id and moves the revision
 #[test]
 fn second_support_keeps_id_and_changes_revision() {
     let env = Env::new(Some("test-extractor"));
@@ -990,6 +1007,7 @@ fn second_support_keeps_id_and_changes_revision() {
     assert_eq!(second["supports"].as_array().unwrap().len(), 2);
 }
 /// claims/R11: open closed open reuses id and keeps intervals
+/// spec: A state that returns keeps its id across supersession
 #[test]
 fn open_closed_open_reuses_id_and_keeps_intervals() {
     let env = Env::new(Some("test-extractor"));
@@ -1021,6 +1039,7 @@ fn open_closed_open_reuses_id_and_keeps_intervals() {
 }
 
 /// claims/R13: missing null and not returned never supersede
+/// spec: A missing field supersedes nothing
 #[test]
 fn missing_null_and_not_returned_never_supersede() {
     let env = Env::new(Some("test-extractor"));
@@ -1039,6 +1058,7 @@ fn missing_null_and_not_returned_never_supersede() {
     }
 }
 /// claims/R16: known time uses evidence capture and valid time is unknown
+/// spec: A claim's known interval comes from its evidence
 #[test]
 fn known_time_uses_evidence_capture_and_valid_time_is_unknown() {
     let env = Env::new(Some("test-extractor"));
@@ -1064,6 +1084,7 @@ fn known_time_uses_evidence_capture_and_valid_time_is_unknown() {
     );
 }
 /// claims/R14: newer comparable source wins ties and unknown times conflict
+/// spec: The newer comparable observation wins its slot
 #[test]
 fn newer_comparable_source_wins_ties_and_unknown_times_conflict() {
     for (older, newer, expected) in [
@@ -1129,6 +1150,7 @@ fn lifecycle_projection(env: &Env) -> Vec<Value> {
         .collect()
 }
 /// claims/R22: rebuild matches incremental ids revisions supports and intervals
+/// spec: A rebuild equals the incremental projection
 #[test]
 fn rebuild_matches_incremental_ids_revisions_supports_and_intervals() {
     for connector in ["test", "github"] {
@@ -1162,6 +1184,7 @@ fn rebuild_matches_incremental_ids_revisions_supports_and_intervals() {
 }
 
 /// claims/R29: failed rebuild preserves projection and concurrent readers see complete generations
+/// spec: A failed rebuild leaves the previous projection
 #[test]
 fn failed_rebuild_preserves_projection_and_concurrent_readers_see_complete_generations() {
     let env = Env::new(Some("test-extractor"));
@@ -1225,6 +1248,7 @@ fn failed_rebuild_preserves_projection_and_concurrent_readers_see_complete_gener
 }
 
 /// claims/R4: one bad span rejects the entire bundle and counts it
+/// spec: One failing span rejects the whole claim
 #[test]
 fn one_bad_span_rejects_the_entire_bundle_and_counts_it() {
     let env = Env::new(Some("test-extractor"));
@@ -1259,12 +1283,14 @@ fn one_bad_span_rejects_the_entire_bundle_and_counts_it() {
 }
 
 /// claims/R23: version replay serves old claims until atomic retirement
+/// spec: A new extractor version replays before retiring the old claims
 #[test]
 fn version_replay_serves_old_claims_until_atomic_retirement() {
     assert_atomic_replay(false);
 }
 
 /// claims/R23: vocabulary only bump replays without new evidence and retires atomically
+/// spec: A new extractor version replays before retiring the old claims
 #[test]
 fn vocabulary_only_bump_replays_without_new_evidence_and_retires_atomically() {
     assert_atomic_replay(true);
@@ -1358,6 +1384,7 @@ fn assert_atomic_replay(vocabulary_only: bool) {
 }
 
 /// claims/R24: sync and rebuild publish receipts and fresh statistics
+/// spec: Every publication records its receipt
 #[test]
 fn sync_and_rebuild_publish_receipts_and_fresh_statistics() {
     let env = Env::new(Some("test-extractor"));
@@ -1401,6 +1428,7 @@ fn sync_and_rebuild_publish_receipts_and_fresh_statistics() {
 
 /// claims/R43: rebuild carries over missing extractors and forbidden historical pairs; the forbidden
 /// one fails the command
+/// spec: A forbidden or failing pair is carried over and fails the rebuild
 #[test]
 fn rebuild_carries_over_missing_extractors_and_forbidden_historical_pairs() {
     let env = Env::new(Some("test-extractor"));
@@ -1486,6 +1514,7 @@ fn failing_sync(env: &Env, source: &str) -> Value {
 }
 
 /// claims/R25: the next writing sync extracts evidence a failed sync kept even when it accepts nothing new
+/// spec: Evidence a failed sync kept is extracted next time
 #[test]
 fn the_next_writing_sync_extracts_evidence_a_failed_sync_kept_even_when_it_accepts_nothing_new() {
     let env = Env::new(Some("test-extractor"));
@@ -1512,6 +1541,7 @@ fn the_next_writing_sync_extracts_evidence_a_failed_sync_kept_even_when_it_accep
 }
 
 /// claims/R26: an extractor crash fails the sync keeps coverage and the last projection and resumes
+/// spec: A failed extraction fails the sync and keeps reads whole
 #[test]
 fn an_extractor_crash_fails_the_sync_keeps_coverage_and_the_last_projection_and_resumes() {
     let env = Env::new(Some("test-extractor"));
@@ -1558,6 +1588,7 @@ fn an_extractor_crash_fails_the_sync_keeps_coverage_and_the_last_projection_and_
 }
 
 /// claims/R27: a failed version replay keeps the old versions claims and reads failed
+/// spec: A failed version replay keeps the old version's claims
 #[test]
 fn a_failed_version_replay_keeps_the_old_versions_claims_and_reads_failed() {
     let env = Env::new(Some("test-extractor"));
@@ -1733,6 +1764,7 @@ fn not_installed_outranks_an_unfinished_run_and_a_failed_check_still_names_its_v
 }
 
 /// claims/R26: an extractor that reports failure after claims stores nothing and the next sync resumes
+/// spec: A failed extraction fails the sync and keeps reads whole
 #[test]
 fn an_extractor_that_reports_failure_after_claims_stores_nothing_and_the_next_sync_resumes() {
     let env = Env::new(Some("test-extractor"));
@@ -1769,6 +1801,7 @@ fn an_extractor_that_reports_failure_after_claims_stores_nothing_and_the_next_sy
 }
 
 /// claims/R25: evidence stored before the connector failed is extracted by the next sync
+/// spec: Evidence a failed sync kept is extracted next time
 #[test]
 fn evidence_stored_before_the_connector_failed_is_extracted_by_the_next_sync() {
     let env = Env::new(Some("test-extractor"));
@@ -1800,6 +1833,7 @@ fn evidence_stored_before_the_connector_failed_is_extracted_by_the_next_sync() {
 }
 
 /// claims/R26: a vocabulary version bump alone reads behind until the replay succeeds
+/// spec: Reads carry coverage and extraction state per pair
 #[test]
 fn a_vocabulary_version_bump_alone_reads_behind_until_the_replay_succeeds() {
     let env = Env::new(Some("test-extractor"));
@@ -1901,6 +1935,7 @@ fn pair_in<'a>(result: &'a Value, source: &str, scope: &str) -> &'a Value {
 
 /// claims/R42: a pair whose extractor is not installed is carried over, the rest is rebuilt, whichever
 /// of them replays first
+/// spec: A pair without its extractor is carried over
 #[test]
 fn a_pair_whose_extractor_is_not_installed_is_carried_over() {
     for carried in ["c", "0c"] {
@@ -1924,6 +1959,7 @@ fn a_pair_whose_extractor_is_not_installed_is_carried_over() {
 }
 
 /// claims/R43: a pair that fails its check or is forbidden is carried over and fails the command
+/// spec: A forbidden or failing pair is carried over and fails the rebuild
 #[test]
 fn a_failing_check_or_forbidden_scope_is_carried_over_and_exits_non_zero() {
     for reason in ["protocol", "forbidden"] {
@@ -1952,6 +1988,7 @@ fn a_failing_check_or_forbidden_scope_is_carried_over_and_exits_non_zero() {
 
 /// claims/R44: an extractor that starts and then fails aborts the rebuild and keeps the projection,
 /// also when a carried pair was staged before it
+/// spec: An extractor that fails mid-rebuild aborts it
 #[test]
 fn an_extractor_that_starts_and_fails_aborts_the_rebuild() {
     for carried in ["c", "0c"] {
@@ -1968,6 +2005,7 @@ fn an_extractor_that_starts_and_fails_aborts_the_rebuild() {
 
 /// claims/R45: a claim justified by a carried pair and a rebuilt pair equals the incremental one,
 /// whichever of them replays first
+/// spec: A claim carried and rebuilt reads as incremental
 #[test]
 fn a_claim_shared_by_a_carried_and_a_rebuilt_pair_equals_the_incremental_one() {
     for carried in ["c", "0c"] {
@@ -1988,6 +2026,7 @@ fn a_claim_shared_by_a_carried_and_a_rebuilt_pair_equals_the_incremental_one() {
 }
 
 /// claims/R46: rebuild lists every pair, and the CLI prints a line per carried-over pair
+/// spec: A rebuild lists every pair
 #[test]
 fn rebuild_lists_its_pairs_and_the_cli_prints_the_carried_over_ones() {
     let env = two_extractors();
@@ -2028,6 +2067,7 @@ fn rebuild_lists_its_pairs_and_the_cli_prints_the_carried_over_ones() {
 /// claims/R47: rebuilding a copy of the owner's database with the extractor hidden keeps its claims.
 /// Give `RASTRO_REAL_DB_COPY` the path of a copy; the test copies it again first, with
 /// `VACUUM INTO`, and only ever writes the second copy.
+/// spec: A rebuild keeps every claim of the owner's database
 #[test]
 #[ignore = "live: needs RASTRO_REAL_DB_COPY, the path of a copy of a real database"]
 fn rebuilding_a_copy_of_the_real_database_without_its_extractor_keeps_every_claim() {
@@ -2076,6 +2116,7 @@ fn entity_type(identifier: &str, kind: &str) -> Value {
 
 /// claims/R56: a claim whose subject or object identifier is outside the entity forms is
 /// rejected and counted
+/// spec: An identifier outside the entity forms is rejected
 #[test]
 fn a_claim_with_an_identifier_outside_the_accepted_forms_is_rejected_and_counted() {
     let env = Env::new(Some("test-extractor"));
@@ -2119,6 +2160,7 @@ fn a_claim_with_an_identifier_outside_the_accepted_forms_is_rejected_and_counted
 
 /// claims/R57: alias kinds and values are checked at load and submit; inner whitespace is
 /// accepted and resolves
+/// spec: Alias kinds and values are checked
 #[test]
 fn alias_kinds_and_values_are_checked_and_inner_whitespace_is_accepted() {
     let original = include_str!("../../rastro-test-extractor/vocabulary.toml");

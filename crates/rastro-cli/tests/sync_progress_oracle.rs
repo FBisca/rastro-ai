@@ -156,6 +156,7 @@ fn count_next_to(line: &str, word: &str) -> Option<u64> {
 
 /// S13: before the read, stderr names the source and why it reads what it reads: first read,
 /// incremental, re-read
+/// spec: Stderr names the source and its read reason
 #[test]
 fn S13_stderr_names_the_source_and_its_read_reason_before_the_read() {
     let env = Env::new();
@@ -208,6 +209,7 @@ fn S13_stderr_names_the_source_and_its_read_reason_before_the_read() {
 }
 
 /// S16: stderr ends each source with its counts; a rate-limited run gives its retry time
+/// spec: The result line gives counts and the retry time
 #[test]
 fn S16_stderr_result_line_gives_counts_and_the_rate_limit_retry_time() {
     let env = Env::new();
@@ -280,6 +282,7 @@ fn renamed(old: &str, new: &str) -> Env {
 /// S18: a configured source with no complete check, and a stored source no longer in config
 /// with the same connector and selector, in another scope: stderr warns before the read naming
 /// both, the result's `warnings` lists it, and the read still runs from `window_start`
+/// spec: A renamed source is warned about before its full read
 #[test]
 fn S18_a_renamed_source_is_warned_about_before_its_full_read() {
     let (old, new) = ("alpha-src", "beta-src");
@@ -323,6 +326,7 @@ fn S18_a_renamed_source_is_warned_about_before_its_full_read() {
 
 /// S17: `sync --json` prints exactly one envelope on stdout; a broken stderr changes neither
 /// the result nor the exit code
+/// spec: A broken stderr changes nothing
 #[test]
 fn S17_sync_json_stdout_is_one_envelope_and_a_broken_stderr_changes_nothing() {
     let bodies = [

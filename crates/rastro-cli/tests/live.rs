@@ -213,6 +213,7 @@ fn item_number(location: &str) -> &str {
 /// pull request or issue in that repository, usually the owner's) and `gh auth login` or
 /// `GH_TOKEN`; run with
 /// `cargo nextest run --profile live --run-ignored only`.
+/// spec: The owner's claims and receipts match GitHub
 #[test]
 #[ignore = "live: talks to GitHub; set RASTRO_LIVE_REPO and RASTRO_LIVE_GITHUB_LOGIN, and GH_TOKEN or gh auth login"]
 #[expect(

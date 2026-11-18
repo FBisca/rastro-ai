@@ -456,6 +456,7 @@ fn the_intent_table_is_insert_only() {
 }
 
 /// claims/R58: a sync that touches nothing intent-backed keeps every intent-backed claim
+/// spec: A rebuild reproduces every intent-backed claim
 #[test]
 fn a_sync_keeps_the_claims_intents_back() {
     let home = tempfile::tempdir().unwrap();
