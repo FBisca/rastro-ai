@@ -1213,6 +1213,10 @@ fn storage_reads_the_facts_the_candidate_rules_need() {
 }
 
 /// identity/R37: scoped token windows keep the longer token interval
+#[expect(
+    clippy::too_many_lines,
+    reason = "the scenario seeds an owner, an account and their overlapping windows and reads the scoped projection once"
+)]
 #[test]
 fn scoped_token_windows_keep_the_longer_token_interval() {
     fn viewer(
