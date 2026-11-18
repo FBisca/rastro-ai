@@ -47,6 +47,31 @@ cargo nextest run -p <package> --test <target>    # one test in crates/<package>
 
 The config reports a test running past 20 seconds as SLOW and kills it after three periods (60 seconds), never retries a failure, and keeps going after one so a single run holds every failure: `target/nextest/default/junit.xml` names each failing test with its captured output. See [ADR 0013](adr/0013-cargo-nextest-runs-the-tests.md).
 
+### Live and bench tests
+
+An ignored test is one the default run skips, and it earns that place only as a live test or a bench test: its `#[ignore]` reason starts with `live:` or `bench:`, and a live test names every environment variable it reads, so an operator can run it without reading the test.
+
+```rust
+#[ignore = "live: reads a copy of the owner's database; set RASTRO_LIVE_DB and RASTRO_LIVE_ENTITY"]
+#[ignore = "bench: release build only"]
+```
+
+[`scripts/ignored-tests.sh`](../scripts/ignored-tests.sh) reads every `#[ignore]` in the workspace and fails, naming the file and line, on one whose reason is missing or starts with anything else. An ignored test that says none of the two is a test nobody runs.
+
+Live tests talk to a real service or read a copy of the owner's data, so the default run never touches them: name every variable they read, and run them on request with the live run. The live run is one command, with no other form:
+
+```sh
+cargo nextest run --profile live --run-ignored only
+```
+
+Both halves are part of it, not one instead of the other: nextest reads the selection from the flag in that command, and the `live` profile gives that run a network round trip's timeouts instead of the default run's 20 and 60 seconds, each test's output as it lands, and a JUnit report at `target/nextest/live/junit.xml` that keeps a passing test's output too. A live test exists to print what it saw — an answer, a citation, a p95 — so the live run shows those figures where the default run keeps a passing test quiet.
+
+A bench test measures a release build, so its live run adds `--release`:
+
+```sh
+cargo nextest run --profile live --release --run-ignored only
+```
+
 ### Rerun only the last run's failures
 
 nextest's record-replay-rerun feature is experimental and reads the user config file, not the repository's, so point `NEXTEST_USER_CONFIG_FILE` at [.config/nextest-user.toml](../.config/nextest-user.toml) in your shell profile, or copy that file to `~/.config/nextest/config.toml`. Every run then leaves a recording:
@@ -114,5 +139,5 @@ The NUL-delimited list preserves spaces; disabling rename detection includes bot
 - During iteration, run the focused test. Once green, run the affected selection once; rerun only after further relevant changes or a failure.
 - For Rust changes, run `cargo fmt --all --check` and Clippy for the selected packages (`cargo clippy -p <package> --all-targets -- -D warnings`, repeat `-p` for dependents). Use workspace scope for global configuration or uncertain impact.
 - For documentation-only changes, check links, examples, and `git diff --check`; skip Rust compilation unless executable examples or behavior changed.
-- For selector changes, run `scripts/affected-tests.test.sh`. For role, manifest, or gate changes, run `scripts/crate-gate.sh` and `scripts/crate-gate.test.sh`. For changes to [.config/nextest.toml](../.config/nextest.toml), [.config/nextest-user.toml](../.config/nextest-user.toml) or the CI workflow, run `scripts/nextest-config.test.sh`. For toolchain, dependency, shared build, or cross-workspace changes, run the full CI commands from [.github/workflows/ci.yml](../.github/workflows/ci.yml). CI remains the full workspace gate for every PR.
+- For selector changes, run `scripts/affected-tests.test.sh`. For role, manifest, or gate changes, run `scripts/crate-gate.sh` and `scripts/crate-gate.test.sh`. For changes to an `#[ignore]`, [.config/nextest.toml](../.config/nextest.toml), [.config/nextest-user.toml](../.config/nextest-user.toml) or the CI workflow, run `scripts/ignored-tests.sh`, `scripts/ignored-tests.test.sh` and `scripts/nextest-config.test.sh`. For toolchain, dependency, shared build, or cross-workspace changes, run the full CI commands from [.github/workflows/ci.yml](../.github/workflows/ci.yml). CI remains the full workspace gate for every PR.
 - Report exact commands and outcomes, including the red/green observation for behavior changes. Separate focused or affected evidence from a full workspace pass; state anything left to CI.

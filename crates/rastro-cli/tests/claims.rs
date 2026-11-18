@@ -2029,7 +2029,7 @@ fn rebuild_lists_its_pairs_and_the_cli_prints_the_carried_over_ones() {
 /// Give `RASTRO_REAL_DB_COPY` the path of a copy; the test copies it again first, with
 /// `VACUUM INTO`, and only ever writes the second copy.
 #[test]
-#[ignore = "needs RASTRO_REAL_DB_COPY, the path of a copy of a real database"]
+#[ignore = "live: needs RASTRO_REAL_DB_COPY, the path of a copy of a real database"]
 fn rebuilding_a_copy_of_the_real_database_without_its_extractor_keeps_every_claim() {
     let source = std::env::var("RASTRO_REAL_DB_COPY").expect("RASTRO_REAL_DB_COPY");
     let home = TempDir::new().unwrap();
