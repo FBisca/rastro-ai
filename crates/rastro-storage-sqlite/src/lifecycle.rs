@@ -611,6 +611,16 @@ pub(crate) fn fingerprint(db: &Connection, id: &str) -> Result<Option<(String, b
         scalar,
     )))
 }
+/// The latest correction in force on a claim, and whether the claim is still in the lifecycle
+/// state it was bound to (ADR 0014).
+#[derive(Clone, Copy)]
+pub(crate) struct Standing {
+    /// A confirmation; otherwise a retraction (a rejection, or the retraction half of a fix).
+    pub confirms: bool,
+    /// The claim's lifecycle fingerprint is the one the correction bound to. A correction that
+    /// bound to nothing always holds.
+    pub holds: bool,
+}
 /// The latest correction that still holds its `intent_justification`, per claim (or for `only`),
 /// with the fingerprint it bound to. The latest wins whatever its state.
 fn latest_corrections(
@@ -626,23 +636,32 @@ fn latest_corrections(
         .map(|(claim, kind, bound)| (claim, (kind == "confirm", bound)))
         .collect())
 }
-/// Whether the claim is still in the lifecycle state a correction bound to (ADR 0014). A
-/// correction that bound to nothing always holds.
-fn holds(db: &Connection, id: &str, bound: Option<&str>) -> Result<bool> {
+/// Whether `id`'s latest correction in force still holds; `None` when it has none.
+pub(crate) fn standing(db: &Connection, id: &str) -> Result<Option<Standing>> {
+    let Some((confirms, bound)) = latest_corrections(db, Some(id))?.remove(id) else {
+        return Ok(None);
+    };
+    holds(db, id, confirms, bound.as_deref()).map(Some)
+}
+fn holds(db: &Connection, id: &str, confirms: bool, bound: Option<&str>) -> Result<Standing> {
     let current = fingerprint(db, id)?.map(|(fingerprint, _)| fingerprint);
-    Ok(bound.is_none_or(|bound| current.as_deref() == Some(bound)))
+    Ok(Standing {
+        confirms,
+        holds: bound.is_none_or(|bound| current.as_deref() == Some(bound)),
+    })
 }
 /// Reads every claim an owner correction holds as the status it gives, `confirmed` or
 /// `retracted`, whatever status its evidence or its intents gave it (ADR 0014). The latest
 /// correction that still holds wins. A retraction whose claim left the lifecycle state it was
 /// bound to has lapsed: the claim keeps the status its evidence gave it. A confirmation stays
-/// whatever the state. Runs last in every path that writes a
+/// whatever the state, and reads stale (`standing`). Runs last in every path that writes a
 /// status, so an incremental write, a rebuild and a scoped replay agree. A correction holds
 /// while its `intent_justification` does not end.
 pub(crate) fn settle(db: &Connection) -> Result<()> {
     let mut latest: BTreeMap<String, &'static str> = BTreeMap::new();
     for (claim, (confirms, bound)) in latest_corrections(db, None)? {
-        if !confirms && !holds(db, &claim, bound.as_deref())? {
+        let standing = holds(db, &claim, confirms, bound.as_deref())?;
+        if !confirms && !standing.holds {
             continue;
         }
         latest.insert(
