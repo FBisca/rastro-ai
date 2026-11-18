@@ -9,6 +9,8 @@ blocks, and every source file in the workspace for a `spec:` tag. It fails in tw
 - a `// spec:` tag in a Rust file that names no title, naming the file, line and title.
 
 Rust tags are checked whether they sit on a test or on production code, so a stale one cannot hide.
+A tag may name a title an open plan under `docs/plans/` holds, so a plan's tests can carry their tags
+before the archive writes them into a spec.
 Tags in script tests (`.py`, `.sh`) are only counted for coverage: a requirement proven there is
 covered, but a script tag that names nothing yet is not an error.
 """
@@ -19,6 +21,9 @@ import sys
 from pathlib import Path
 
 TITLE = re.compile(r"^###\s+Requirement:\s*(.+?)\s*$")
+# A plan states the requirements its archive will write as `- title: <Title>` under requirements.added.
+PLAN_TITLE = re.compile(r"^\s*-\s+title:\s*(.+?)\s*$")
+PLAN_SUFFIXES = {".yaml", ".yml"}
 # A tag is a comment of its own, so a string that mentions one is not a tag.
 TAGS = {
     ".rs": re.compile(r"^\s*//\s*spec:\s*(.+?)\s*$"),
@@ -47,6 +52,17 @@ def requirements(spec_root):
             match = TITLE.match(line)
             if match:
                 yield match.group(1), path, number
+
+
+def plan_titles(plans_root):
+    """Every requirement title an open plan holds; an archived plan leaves `docs/plans/`."""
+    for path in sorted(plans_root.rglob("*")):
+        if not path.is_file() or path.suffix not in PLAN_SUFFIXES:
+            continue
+        for line in path.read_text(encoding="utf-8").splitlines():
+            match = PLAN_TITLE.match(line)
+            if match:
+                yield match.group(1).strip("'\"")
 
 
 def is_test_attribute(attribute):
@@ -108,6 +124,7 @@ def main() -> int:
     required = list(requirements(root / "docs" / "specs"))
     found = list(tags(root))
     titles = {title for title, _, _ in required}
+    named = titles | set(plan_titles(root / "docs" / "plans"))
     covered = {title for title, _, _, on_test in found if on_test}
 
     failures = 0
@@ -119,9 +136,10 @@ def main() -> int:
             )
             failures += 1
     for title, path, line, _ in found:
-        if path.suffix in NAME_CHECKED and title not in titles:
+        if path.suffix in NAME_CHECKED and title not in named:
             print(
-                f'{relative(path, root)}:{line}: tag "{title}" names no requirement in docs/specs/',
+                f'{relative(path, root)}:{line}: tag "{title}" names no requirement in docs/specs/'
+                " or an open plan in docs/plans/",
                 file=sys.stderr,
             )
             failures += 1

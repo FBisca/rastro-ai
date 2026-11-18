@@ -134,7 +134,8 @@ A test that proves a requirement carries its exact title as a tag on the line ab
 a title no tag on a test covers; it reads every `.rs` file (a `#[cfg(test)]` module in `src/` counts),
 every `.py` and `.sh` script test, and every spec under `docs/specs/`, subfolders included, and skips
 `target/` and tool caches. **Name check**: every `// spec:` tag in a Rust file, on a test or on
-production code, must name a title some spec holds, and the failure names the file, line and title.
+production code, must name a title some spec or an open plan under `docs/plans/` holds (an archived plan
+leaves that directory), and the failure names the file, line and title.
 Tags in script tests are counted for coverage but not name-checked. `--root` points the gate at another
 tree; its own tests run with `python3 scripts/test_spec_coverage.py`. Run both after adding, renaming
 or removing a requirement or a tag; CI runs them too.

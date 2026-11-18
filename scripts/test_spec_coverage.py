@@ -147,6 +147,27 @@ class SpecCoverageGate(unittest.TestCase):
 
         self.assertEqual(gate.returncode, 0, gate.stderr)
 
+    # spec: Every requirement names its tests
+    def test_a_tag_may_name_a_title_an_open_plan_holds_before_its_archive_writes_the_spec(self):
+        self.write("docs/specs/alpha.md", requirement("A covered requirement"))
+        self.write("crates/alpha/src/lib.rs", tagged_test("A covered requirement"))
+        self.write(
+            "docs/plans/2026-01-01-later/plan.yaml",
+            "schema: plan/2\n"
+            "requirements:\n"
+            "  added:\n"
+            "    - title: A title only an open plan holds\n"
+            "      shall: The product SHALL land it.\n",
+        )
+        self.write(
+            "crates/alpha/src/later.rs",
+            "// spec: A title only an open plan holds\n#[test]\nfn later() {}\n",
+        )
+
+        gate = self.run_gate()
+
+        self.assertEqual(gate.returncode, 0, gate.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()
