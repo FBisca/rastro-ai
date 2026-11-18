@@ -193,7 +193,7 @@ pub struct WhyRequest {
     #[arg(long)]
     #[serde(default)]
     pub full: bool,
-    /// Read as of this RFC 3339 time. Not answered yet: a request that sets it is refused rather than answered with today's claims.
+    /// Read as of this RFC 3339 time: the answer is reconstructed from the evidence captured and the intents issued by then, under today's rules, and says so in `reconstruction`.
     #[arg(long)]
     #[serde(default)]
     pub as_of: Option<chrono::DateTime<chrono::Utc>>,
@@ -315,7 +315,6 @@ impl SearchRequest {
 }
 impl WhyRequest {
     pub(crate) fn run<S: Storage + StoredTwins>(self, rastro: &mut Rastro<S>) -> Result<WhyResult> {
-        refuse_as_of(self.as_of)?;
         rastro.explain(&self.claim, &self.options())
     }
 }
@@ -359,7 +358,7 @@ pub struct AboutRequest {
     #[arg(long = "state")]
     #[serde(default)]
     pub state: Vec<String>,
-    /// Read as of this RFC 3339 time. Not answered yet: a request that sets it is refused rather than answered with today's claims.
+    /// Read as of this RFC 3339 time: the answer is reconstructed from the evidence captured and the intents issued by then, under today's rules, and says so in `reconstruction`. A source with no evidence yet at that time is named there.
     #[arg(long)]
     #[serde(default)]
     pub as_of: Option<chrono::DateTime<chrono::Utc>>,
@@ -369,21 +368,8 @@ impl AboutRequest {
         self,
         rastro: &mut Rastro<S>,
     ) -> Result<AboutResult> {
-        refuse_as_of(self.as_of)?;
         rastro.about(&self.entity, &self.options())
     }
-}
-
-/// A read as of a past time is not reconstructed yet: refusing is better than answering with
-/// today's claims as though they were the past's.
-pub(crate) fn refuse_as_of(as_of: Option<chrono::DateTime<chrono::Utc>>) -> Result<()> {
-    if let Some(at) = as_of {
-        anyhow::bail!(
-            "reads as of {} are not answered yet; read without as_of for today's claims",
-            at.to_rfc3339()
-        );
-    }
-    Ok(())
 }
 
 impl AboutRequest {
@@ -393,6 +379,7 @@ impl AboutRequest {
             limit: self.limit.0,
             history: self.history,
             state: self.state.clone(),
+            as_of: self.as_of,
         }
     }
 }
@@ -402,6 +389,7 @@ impl WhyRequest {
         rastro_core::knowledge::WhyOptions {
             limit: self.limit.0,
             full: self.full,
+            as_of: self.as_of,
         }
     }
 }

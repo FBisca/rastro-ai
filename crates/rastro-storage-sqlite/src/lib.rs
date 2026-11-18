@@ -979,7 +979,7 @@ impl View<'_> {
         let projection =
             scoped::projection(self.0, scopes, scoped::Target::Entity(entity), budget)?;
         let projection = projection.lock().unwrap_or_else(|e| e.into_inner());
-        View(&projection).about_view(entity, options, budget)
+        View(&projection).about_view_scoped(entity, options, budget, self.0)
     }
 }
 impl Snapshot for View<'_> {
@@ -1029,7 +1029,7 @@ impl Snapshot for View<'_> {
             scoped::WORK_BUDGET,
         )?;
         let projection = projection.lock().unwrap_or_else(|e| e.into_inner());
-        View(&projection).explanation(claim, options)
+        View(&projection).explanation_scoped(claim, options, self.0)
     }
 
     fn explain(

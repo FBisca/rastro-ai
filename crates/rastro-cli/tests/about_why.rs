@@ -357,6 +357,7 @@ fn why_bounds_complete_justifications_and_clips_utf8_quotes() {
                 &WhyOptions {
                     limit: 50,
                     full: true,
+                    as_of: None,
                 },
             )
         })
