@@ -117,6 +117,41 @@ macro_rules! operations {
         $($groups)*
         operations!(@generate $($entries)*);
     };
+    // A leaf that also takes subcommands: `group(Read => Out) as Response { details } with Enum {
+    // leaves }`. The read runs when no subcommand is given; the leaves are its subcommands.
+    (@collect [$($variants:tt)*] [$($groups:tt)*] [$($entries:tt)*]
+        $(#[$meta:meta])* $group:ident($read:ident => $readout:ident) as $readresponse:ident {
+            $($readdetails:tt)*
+        } with $enum:ident {
+            $( $variant:ident($input:ident => $output:ident) as $response:ident {
+                $($details:tt)*
+            } ),* $(,)?
+        }
+        $($rest:tt)*
+    ) => {
+        operations!(@collect
+            [$($variants)* $(#[$meta])* $group {
+                #[command(flatten)]
+                read: $read,
+                #[command(subcommand)]
+                command: Option<$enum>,
+            },]
+            [$($groups)*
+             #[derive(clap::Subcommand, Debug)]
+             pub enum $enum { $( $variant($input), )* }]
+            [$($entries)*
+             ($read => $readout, $readresponse, value,
+              [Request::$group { read: value, command: None }],
+              [Request::$group { read: value, command: None }],
+              { $($readdetails)* })
+             $( ($input => $output, $response, value,
+              [Request::$group { read: _, command: Some($enum::$variant(value)) }],
+              [Request::$group { read: Default::default(), command: Some($enum::$variant(value)) }],
+              { $($details)* }) )*
+            ]
+            $($rest)*
+        );
+    };
     // A group with one level of subgroups: `group / Enum { leaves } with { Sub / SubEnum { leaves } }`.
     (@collect [$($variants:tt)*] [$($groups:tt)*] [$($entries:tt)*]
         $(#[$meta:meta])* $group:ident / $enum:ident {
@@ -314,8 +349,24 @@ operations! {
     Commitments(CommitmentsRequest => CommitmentsResult) {
         slot: 22, name: "commitments", surfaces: [Cli, Mcp], read_only: true, reader: run_read, cli_read_path: true
     }
-    Queue(QueueRequest => QueueResult) {
+    Queue(QueueRequest => QueueResult) as Queue {
         slot: 23, name: "queue", surfaces: [Cli, Mcp], read_only: true, reader: run_read, cli_read_path: true
+    } with QueueAnswer {
+        Accept(QueueAcceptRequest => QueueAnswerResult) as QueueAccept {
+            slot: 24, name: "queue.accept", surfaces: [Cli], read_only: false
+        },
+        Edit(QueueEditRequest => QueueAnswerResult) as QueueEdit {
+            slot: 25, name: "queue.edit", surfaces: [Cli], read_only: false
+        },
+        Reject(QueueRejectRequest => QueueAnswerResult) as QueueReject {
+            slot: 26, name: "queue.reject", surfaces: [Cli], read_only: false
+        },
+        Answer(QueueAnswerRequest => QueueAnswerResult) as QueueAnswer {
+            slot: 27, name: "queue.answer", surfaces: [Cli], read_only: false
+        },
+        Missed(QueueMissedRequest => QueueAnswerResult) as QueueMissed {
+            slot: 28, name: "queue.missed", surfaces: [Cli], read_only: false
+        },
     }
     /// Import a meeting transcript, read its commitment hypotheses, replay, forget or export it.
     Meeting / MeetingRequest {
@@ -439,6 +490,11 @@ pub fn command_names(command: &Command) -> Vec<String> {
         if nested.is_empty() {
             names.push(sub.get_name().to_string());
         } else {
+            // A command whose subcommand is optional also runs on its own, so it names an
+            // operation of its own beside the ones its subcommands name.
+            if !sub.is_subcommand_required_set() {
+                names.push(sub.get_name().to_string());
+            }
             names.extend(
                 nested
                     .into_iter()

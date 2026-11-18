@@ -202,7 +202,7 @@ pub fn candidate_pairs(accounts: &[AccountFacts], resolution: &Resolution) -> Ve
 /// `name` (the candidate's name by default). Refused when the pair isn't a candidate now, or
 /// when different, unmerged Persons hold its accounts. Merged Persons count as one: the one
 /// with the smallest id.
-fn plan_answer(
+pub(crate) fn plan_answer(
     a: EntityTarget,
     b: EntityTarget,
     facts: &[AccountFacts],
