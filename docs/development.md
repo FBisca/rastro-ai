@@ -49,7 +49,7 @@ The config reports a test running past 20 seconds as SLOW and kills it after thr
 
 ### Live and bench tests
 
-An ignored test is one the default run skips, and it earns that place only as a live test or a bench test: its `#[ignore]` reason starts with `live:` or `bench:`, and a live test names the environment variables it reads.
+An ignored test is one the default run skips, and it earns that place only as a live test or a bench test: its `#[ignore]` reason starts with `live:` or `bench:`, and a live test names every environment variable it reads, so an operator can run it without reading the test.
 
 ```rust
 #[ignore = "live: talks to GitHub; set RASTRO_LIVE_REPO and RASTRO_LIVE_PHRASE"]

@@ -1059,7 +1059,7 @@ fn an_injection_body_comes_back_verbatim_and_nothing_runs_or_changes() {
 /// run it on a copy: `cp -R ~/your-rastro-home /tmp/copy` and set `RASTRO_HOME=/tmp/copy`. The real Claude Code and Codex sessions stay the
 /// owner's own sign-off.
 #[test]
-#[ignore = "live: reads the owner's real RASTRO_HOME; set RASTRO_MCP_LIVE_PHRASE"]
+#[ignore = "live: reads the owner's real RASTRO_HOME; set RASTRO_MCP_LIVE_PHRASE, RASTRO_MCP_LIVE_NO_MATCH and RASTRO_MCP_LIVE_STALE_SOURCE"]
 fn a_scripted_client_gets_a_cited_answer_a_true_no_match_and_stale_reads_unknown() {
     let phrase = std::env::var("RASTRO_MCP_LIVE_PHRASE")
         .expect("set RASTRO_MCP_LIVE_PHRASE to a phrase your synced sources contain");
