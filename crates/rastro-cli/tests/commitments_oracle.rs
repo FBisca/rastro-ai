@@ -260,6 +260,7 @@ fn terms(hypothesis: &Value) -> Vec<String> {
 /// S1: the list shows every hypothesis with its source, its kind, its parties, its stated date,
 /// its exact quote, its terms and its status, and the source's extraction, coverage and stale
 /// state.
+// spec: The list shows every hypothesis with its source and state
 #[test]
 #[expect(
     clippy::cognitive_complexity,
@@ -350,6 +351,7 @@ fn S1_the_list_shows_every_hypothesis_with_its_source_and_state() {
 /// S2: one list holds every source's hypotheses, a source filter drops the other sources, a term
 /// filter keeps only the hypotheses expressing that term, and a filter that matches nothing is
 /// an empty list.
+// spec: One list holds every source, and the filters narrow it
 #[test]
 fn S2_the_list_holds_every_source_and_the_filters_narrow_it() {
     let env = Env::new();
@@ -409,6 +411,7 @@ fn S2_the_list_holds_every_source_and_the_filters_narrow_it() {
 }
 
 /// S3: a source with nothing to show, and a source whose last run failed, are both named.
+// spec: A gap is named, never left out
 #[test]
 fn S3_a_source_with_nothing_and_a_failed_run_are_both_named() {
     let env = Env::new();
@@ -441,6 +444,7 @@ fn S3_a_source_with_nothing_and_a_failed_run_are_both_named() {
 }
 
 /// S4: a scope that hides a source hides its hypotheses, and the list still succeeds.
+// spec: A scope that hides a source hides its hypotheses
 #[test]
 fn S4_a_scope_that_hides_a_source_hides_its_hypotheses() {
     let env = Env::new();
@@ -461,6 +465,7 @@ fn S4_a_scope_that_hides_a_source_hides_its_hypotheses() {
 
 /// S5: the standard vocabulary defines the commitment terms, and every hypothesis carries the
 /// terms it expresses.
+// spec: The standard vocabulary defines the commitment terms
 #[test]
 fn S5_every_hypothesis_carries_the_standard_terms_it_expresses() {
     let env = Env::new();
@@ -553,6 +558,7 @@ fn S5_every_hypothesis_carries_the_standard_terms_it_expresses() {
 /// S8: the interpretation is recorded with the spans it cites, a replay checks it again with no
 /// model call, a record that no longer validates fails and marks the results stale, and an export
 /// leaves the recorded output out.
+// spec: The interpretation is recorded, replayed without a model and kept out of exports
 #[test]
 fn S8_the_interpretation_is_recorded_replayed_without_a_model_and_never_exported() {
     let env = Env::new();

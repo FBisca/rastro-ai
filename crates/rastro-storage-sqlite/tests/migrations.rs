@@ -851,6 +851,7 @@ done
 
 /// commitments/S8: a successful run records the interpretation with the spans it cites, and
 /// nothing beyond them.
+// spec: The interpretation is recorded, replayed without a model and kept out of exports
 #[test]
 fn S8_the_interpretation_is_recorded_with_the_spans_it_cites() {
     let env = recorded::Env::new();
@@ -886,6 +887,7 @@ fn S8_the_interpretation_is_recorded_with_the_spans_it_cites() {
 
 /// commitments/S8: a replay checks the record again with no model call, and a replay of a record
 /// that no longer validates fails and marks the results stale.
+// spec: The interpretation is recorded, replayed without a model and kept out of exports
 #[test]
 fn S8_a_replay_checks_the_record_with_no_model_call_and_a_broken_record_fails_stale() {
     use rastro_core::{
@@ -944,6 +946,7 @@ fn S8_a_replay_checks_the_record_with_no_model_call_and_a_broken_record_fails_st
 
 /// commitments/S8: a rebuild never calls a model: the claims rebuild leaves the hypotheses and
 /// their record as they were, and re-deriving the hypotheses reads the record only.
+// spec: The interpretation is recorded, replayed without a model and kept out of exports
 #[test]
 fn S8_a_rebuild_never_calls_a_model() {
     let env = recorded::Env::new();
@@ -977,6 +980,7 @@ fn S8_a_rebuild_never_calls_a_model() {
 }
 
 /// commitments/S8: an export leaves the recorded output and the spans out.
+// spec: The interpretation is recorded, replayed without a model and kept out of exports
 #[test]
 fn S8_an_export_leaves_the_recorded_output_and_the_spans_out() {
     let env = recorded::Env::new();
