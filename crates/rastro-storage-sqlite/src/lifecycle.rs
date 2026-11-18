@@ -63,6 +63,10 @@ struct Replay {
     type_claims: BTreeMap<String, (String, BTreeSet<String>)>,
 }
 impl Replay {
+    #[expect(
+        clippy::too_many_lines,
+        reason = "the derivation graph is loaded in one read, so each field's dependents are collected as its rows arrive"
+    )]
     fn load(db: &Connection, subject: &str, predicate: &str) -> Result<Self> {
         let mut state = Self {
             derivations: vec![],
@@ -245,6 +249,10 @@ impl Replay {
         }
         self.groups[group].blocked = now;
     }
+    #[expect(
+        clippy::too_many_lines,
+        reason = "each pass recomputes the blocked counts and the changed set together; a split would let the two disagree"
+    )]
     fn run(&mut self, db: &Connection, selected: &BTreeSet<usize>) -> Result<()> {
         let mut delete = db.prepare_cached("DELETE FROM occurrence WHERE justification_id = ?1")?;
         let mut events = BTreeMap::<Event, Vec<(usize, usize)>>::new();

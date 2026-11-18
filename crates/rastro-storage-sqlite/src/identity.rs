@@ -211,6 +211,10 @@ pub(crate) fn types(db: &Connection, id: &str, scopes: &[Scope]) -> Result<Vec<S
 /// Recomputes every intent-backed claim of the projection the connection writes (the active one,
 /// or a staged rebuild) from the intent table. A pure function of the intents, so a rebuild and
 /// an incremental write give the same rows.
+#[expect(
+    clippy::too_many_lines,
+    reason = "a staged rebuild and an incremental write must run the same statements in the same order to give the same rows"
+)]
 pub(crate) fn apply(db: &Connection) -> Result<()> {
     let resolution = Resolution::of(&load(db)?);
     // The claims intents backed before; any of them nothing justifies afterwards goes. A claim
@@ -350,6 +354,10 @@ fn account_visible(db: &Connection, id: &str, scopes: &str) -> Result<bool> {
 /// account is, a merge where both Persons are, and a commitment an accepted proposal minted
 /// only where the scope set sees the item's source — its justifications, and the accept intent
 /// they rest on, filtered the same way. Endpoint entities are copied by the caller.
+#[expect(
+    clippy::too_many_lines,
+    reason = "every copy statement filters by the same scope set; keeping them in one function keeps those filters side by side"
+)]
 pub(crate) fn copy_visible(db: &Connection, target: &Connection, scopes: &[Scope]) -> Result<()> {
     target.execute_batch(
         "CREATE TABLE intent (append_seq INTEGER PRIMARY KEY, id TEXT, format_version INTEGER,
