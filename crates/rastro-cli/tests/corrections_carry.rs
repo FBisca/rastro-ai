@@ -379,7 +379,7 @@ fn a_link_the_owner_also_made_stands_when_its_premise_is_rejected() {
 }
 
 /// An accepted promise: returns the commitment entity's identifier and the id of the item it
-/// was accepted from. The commitment is typed `std:Commitment` by evidence, which is its anchor.
+/// was accepted from. The accept itself asserts the commitment's anchor, its `std:Commitment` type claim.
 fn accepted_commitment(env: &Env) -> (String, String) {
     env.import("weekly-1", "2026-11-10T10:00:00Z");
     let queue = env.queue();
@@ -391,17 +391,6 @@ fn accepted_commitment(env: &Env) -> (String, String) {
         .to_string();
     env.ok(&["queue", "accept", &proposal]);
     let identifier = format!("std:commitment/{proposal}");
-    let commitment = Entity::new(identifier.clone(), "std:Commitment".into());
-    let typed = Object::Literal {
-        value: "std:Commitment".into(),
-        datatype: claims::TYPE_DATATYPE.into(),
-    };
-    env.record(
-        &commitment,
-        claims::TYPE_PREDICATE,
-        typed,
-        ("https://meetings.test/weekly-1", "/type"),
-    );
     (identifier, proposal)
 }
 
@@ -432,17 +421,26 @@ fn rejecting_a_commitments_anchor_takes_the_slots_only_it_justified() {
             .collect()
     };
     let before = env.about(&commitment);
+    let anchor = env.claim(&commitment, claims::TYPE_PREDICATE, "std:Commitment");
     assert_eq!(
         slots(&before),
         BTreeSet::from(["std:owes".into(), "std:owed_to".into(), "std:due".into()]),
         "{before}"
     );
 
-    let anchor = env.claim(&commitment, claims::TYPE_PREDICATE, "std:Commitment");
     env.reject(&anchor);
 
     let after = env.about(&commitment);
     assert_eq!(slots(&after), BTreeSet::from(["std:due".into()]), "{after}");
+
+    // A rebuild replays the acceptance and the retraction: the same slots stay.
+    env.ok(&["claims", "rebuild"]);
+    let rebuilt = env.about(&commitment);
+    assert_eq!(
+        slots(&rebuilt),
+        BTreeSet::from(["std:due".into()]),
+        "{rebuilt}"
+    );
 }
 
 // spec: A retracted commitment is no longer known
@@ -470,4 +468,29 @@ fn a_proposal_for_a_retracted_commitment_returns_marked_earlier_retracted() {
         .find(|item| item["proposal"]["kind"] == "waiting_on")
         .unwrap();
     assert!(waiting.get("earlier_retracted").is_none(), "{queue}");
+}
+
+// spec: A retracted commitment is no longer known
+#[test]
+fn a_proposal_for_a_statement_the_owner_fixed_away_returns_marked_earlier_retracted() {
+    let env = Env::with_adapter();
+    let (commitment, _) = accepted_commitment(&env);
+    let due = env.claim(&commitment, "std:due", "by Friday");
+    env.ok(&[
+        "claim",
+        "edit",
+        due["id"].as_str().unwrap(),
+        "--seen",
+        due["revision"].as_str().unwrap(),
+        "--object",
+        "by Monday",
+    ]);
+    // Another conversation states the promise as it was first accepted, due Friday.
+    env.import("weekly-2", "2026-11-11T10:00:00Z");
+
+    let queue = env.queue();
+    let promise = (queue["items"].as_array().unwrap().iter())
+        .find(|item| item["source"]["name"] == "weekly-2" && item["proposal"]["kind"] == "promise")
+        .unwrap_or_else(|| panic!("the promise is proposed again: {queue}"));
+    assert_eq!(promise["earlier_retracted"], true, "{queue}");
 }

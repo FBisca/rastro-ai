@@ -1826,7 +1826,7 @@
           "type": "array"
         },
         "earlier_retracted": {
-          "description": "Set on a proposal whose statements are exactly those an observed commitment held until the\nowner retracted them: new evidence proposes the statement again, and the owner decides\nagain. Never set on a question.",
+          "description": "Set on a proposal that expresses a statement the owner retracted from a commitment: new\nevidence proposes it again, and the owner decides again. Never set on a question.",
           "type": "boolean"
         },
         "id": {
