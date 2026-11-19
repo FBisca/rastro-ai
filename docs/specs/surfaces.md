@@ -37,14 +37,14 @@ Every tool the MCP server lists SHALL carry the name, description and input sche
 - THEN each tool's name, description and input schema equal the catalog entry for that operation
 
 ### Requirement: Only the read-only operations are tools
-The MCP server SHALL list exactly `search`, `coverage`, `about`, `why`, `commitments`, `meeting_commitments` and `queue`, each marked read-only, and SHALL answer any other tool, or a write operation such as `sync`, `source.add`, `source.list`, `index.rebuild` or `claims rebuild`, with a JSON-RPC error while running nothing.
+The MCP server SHALL list exactly `search`, `coverage`, `about`, `why`, `commitments`, `meeting_commitments`, `queue`, `focus` and `actions`, each marked read-only, and SHALL answer any other tool, or a write operation such as `sync`, `source.add`, `source.list`, `index.rebuild`, `claims rebuild` or `actions.propose`, with a JSON-RPC error while running nothing.
 
 #### Scenario: exactly the read-only tools are listed
 - WHEN an MCP client lists tools
-- THEN exactly `search`, `coverage`, `about`, `why`, `commitments`, `meeting_commitments` and `queue` appear, each marked read-only
+- THEN exactly `search`, `coverage`, `about`, `why`, `commitments`, `meeting_commitments`, `queue`, `focus` and `actions` appear, each marked read-only
 
 #### Scenario: a write or an unknown tool runs nothing
-- WHEN it calls `sync`, `source.add`, `source.list`, `index.rebuild` or `claims rebuild`
+- WHEN it calls `sync`, `source.add`, `source.list`, `index.rebuild`, `claims rebuild` or `actions.propose`
 - THEN it gets a JSON-RPC error and nothing runs
 
 ### Requirement: One request gives one envelope on the CLI and over MCP
