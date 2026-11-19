@@ -774,7 +774,7 @@ impl QueueAcceptRequest {
     }
 }
 
-/// Accept a proposal with your edits: one owner intent snapshots both what you saw and what you made, and the item leaves the queue.
+/// Accept a proposal with your edits: one owner intent snapshots both what you saw and what you made, and the item leaves the queue. An action proposal takes `--title`, `--description`, `--team` and `--assignee`, and its run creates the issue as you edited it.
 #[derive(Args, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct QueueEditRequest {
@@ -788,6 +788,22 @@ pub struct QueueEditRequest {
     #[arg(long)]
     #[serde(default)]
     pub date: Option<String>,
+    /// An action proposal's title as you state it; omit to keep the one it says.
+    #[arg(long)]
+    #[serde(default)]
+    pub title: Option<String>,
+    /// An action proposal's description as you state it; omit to keep the one it says.
+    #[arg(long)]
+    #[serde(default)]
+    pub description: Option<String>,
+    /// An action proposal's team as you state it; omit to keep the one it says.
+    #[arg(long)]
+    #[serde(default)]
+    pub team: Option<String>,
+    /// An action proposal's assignee as you state it; omit to keep the one it says.
+    #[arg(long)]
+    #[serde(default)]
+    pub assignee: Option<String>,
 }
 impl QueueEditRequest {
     pub(crate) fn run<S: Storage + StoredTwins>(
@@ -798,11 +814,17 @@ impl QueueEditRequest {
             &self.item,
             self.promise.as_deref(),
             self.date.as_deref(),
+            &rastro_core::queue::ActionEdits {
+                title: self.title,
+                description: self.description,
+                team: self.team,
+                assignee: self.assignee,
+            },
         )?))
     }
 }
 
-/// Reject a proposal, with your reason: one owner intent records it, the item leaves the queue, and no claim is minted.
+/// Reject a proposal, with your reason: one owner intent records it, the item leaves the queue, and no claim is minted. A rejected action proposal starts no run and sends nothing to the outside system.
 #[derive(Args, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct QueueRejectRequest {

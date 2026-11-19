@@ -749,25 +749,8 @@ impl Intent {
                 // An accept or an edit mints the commitment it decided, so it names the entity
                 // its statements are about, the terms themselves and the source's scope.
                 IntentKind::Accept => check_accept(&self.targets)?,
-                IntentKind::Edit => {
-                    ensure!(
-                        seen.is_some() && edited.is_some(),
-                        "an edit snapshots the proposal it saw and the one it made"
-                    );
-                    ensure!(
-                        subject.is_some()
-                            && !parties.is_empty()
-                            && !terms.is_empty()
-                            && scope.is_some(),
-                        "an edit names the commitment it mints, its parties, its standard terms and its source's scope"
-                    );
-                    ensure!(
-                        (terms.iter()).all(|term| {
-                            term.predicate.starts_with("std:") && !term.value.trim().is_empty()
-                        }),
-                        "an edit's standard terms are `std:` predicates with a literal"
-                    );
-                }
+                // An edit of an action proposal mints no commitment; any other edit mints one.
+                IntentKind::Edit => check_edit(&self.targets)?,
                 // A rejection or a missed report is a decision about an item, not a commitment:
                 // it states no terms and mints no claim. It names its source's scope whenever it
                 // names an item, so its outcome is visible only where that source is.
@@ -821,6 +804,53 @@ impl Intent {
         }
         Ok(())
     }
+}
+
+/// An edit of an action proposal mints no commitment: what the owner changed is the run's own
+/// record, so the intent names only the item and its source's scope. Any other edit mints the
+/// commitment it decided, so it snapshots the proposal it saw and the one it made, and names
+/// the entity, its parties, the standard terms and the source's scope.
+fn check_edit(targets: &Targets) -> Result<()> {
+    let Targets::Proposal {
+        seen,
+        edited,
+        text,
+        subject,
+        parties,
+        terms,
+        scope,
+        ..
+    } = targets
+    else {
+        return Ok(());
+    };
+    if subject.is_some() {
+        ensure!(
+            seen.is_some() && edited.is_some(),
+            "an edit snapshots the proposal it saw and the one it made"
+        );
+        ensure!(
+            !parties.is_empty() && !terms.is_empty() && scope.is_some(),
+            "an edit names the commitment it mints, its parties, its standard terms and its source's scope"
+        );
+        ensure!(
+            (terms.iter()).all(|term| {
+                term.predicate.starts_with("std:") && !term.value.trim().is_empty()
+            }),
+            "an edit's standard terms are `std:` predicates with a literal"
+        );
+        return Ok(());
+    }
+    ensure!(
+        seen.is_none()
+            && edited.is_none()
+            && text.is_none()
+            && parties.is_empty()
+            && terms.is_empty()
+            && scope.is_some(),
+        "an edit of an action proposal mints no commitment and names its source's scope"
+    );
+    Ok(())
 }
 
 /// Where an intent stands once every later intent is read.
