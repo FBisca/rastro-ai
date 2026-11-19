@@ -26,12 +26,12 @@ const VIEWER: &str = "query Viewer { viewer { id name } }";
 /// The one document a read of an issue's comments sends, one page at a time.
 const ISSUE_COMMENTS: &str = "query IssueComments($id: String!, $after: String) { \
     issue(id: $id) { comments(first: 100, after: $after) { \
-    nodes { id body user { id name } } pageInfo { hasNextPage endCursor } } } }";
+    nodes { id body user { id name } botActor { name } } pageInfo { hasNextPage endCursor } } } }";
 
 /// The one document a read of an issue's change history sends, one page at a time.
 const ISSUE_HISTORY: &str = "query IssueHistory($id: String!, $after: String) { \
     issue(id: $id) { history(first: 100, after: $after) { \
-    nodes { id actor { id name } fromTitle toTitle updatedDescription fromStateId toStateId \
+    nodes { id actor { id name } botActor { name } descriptionUpdatedBy { id name } fromTitle toTitle updatedDescription fromStateId toStateId \
     fromAssigneeId toAssigneeId fromPriority toPriority addedLabelIds removedLabelIds } \
     pageInfo { hasNextPage endCursor } } } }";
 
@@ -167,7 +167,7 @@ impl Client {
             .pages(ISSUE_HISTORY, "history", id)
             .context(UNCHECKED)?;
         for comment in &comments {
-            if let Some(who) = stranger(&comment["user"], &owner) {
+            if let Some(who) = stranger(&comment["user"], &comment["botActor"], &owner) {
                 let body = comment["body"].as_str().unwrap_or_default();
                 bail!(
                     "{who} commented on the issue (\"{}\"), so it was left alone",
@@ -176,7 +176,15 @@ impl Client {
             }
         }
         for edit in &edits {
-            if let Some(who) = stranger(&edit["actor"], &owner) {
+            // A grouped entry names its actor and, apart, everyone whose description edits joined it.
+            let editors = edit["descriptionUpdatedBy"]
+                .as_array()
+                .into_iter()
+                .flatten();
+            let who = std::iter::once(&edit["actor"])
+                .chain(editors)
+                .find_map(|user| stranger(user, &edit["botActor"], &owner));
+            if let Some(who) = who {
                 bail!(
                     "{who} edited the issue ({}), so it was left alone",
                     change(edit)
@@ -272,12 +280,15 @@ fn confirmed(issue: &Value) -> Result<Created> {
     }
 }
 
-/// The name of `user` when they are not the owner, or a stand-in when Linear named no user.
-fn stranger(user: &Value, owner: &str) -> Option<String> {
-    match user["id"].as_str() {
-        Some(id) if id == owner => None,
-        Some(_) => Some(user["name"].as_str().unwrap_or("another user").into()),
-        None => Some("an unknown user".into()),
+/// The name of `user` when they are not the owner. Linear names no user for an automated or
+/// integration change, and credits a bot instead: the bot's name stands in, or a last stand-in
+/// when Linear names neither.
+fn stranger(user: &Value, bot: &Value, owner: &str) -> Option<String> {
+    match (user["id"].as_str(), bot["name"].as_str()) {
+        (Some(id), _) if id == owner => None,
+        (Some(_), _) => Some(user["name"].as_str().unwrap_or("another user").into()),
+        (None, Some(bot)) => Some(format!("the bot {bot}")),
+        (None, None) => Some("an unknown user".into()),
     }
 }
 

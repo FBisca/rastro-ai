@@ -151,6 +151,41 @@ fn undoing_a_run_whose_issue_a_colleague_edited_is_refused_naming_them_and_the_e
     );
 }
 
+// spec: The owner undoes an action
+#[test]
+fn undoing_a_run_whose_grouped_description_edit_includes_a_colleague_is_refused_naming_them() {
+    let env = Env::new();
+    let run = env.done_run();
+    env.owner_touches_issue();
+    env.linear
+        .edit_description_grouped(OWNER, &[OWNER, COLLEAGUE]);
+
+    let said = env.refused_undo(&run);
+
+    assert!(said.contains(COLLEAGUE.name), "{said}");
+    assert!(said.contains("description"), "{said}");
+}
+
+// spec: The owner undoes an action
+#[test]
+fn undoing_a_run_whose_issue_a_bot_commented_on_or_edited_is_refused_naming_the_bot() {
+    for bot_edits in [false, true] {
+        let env = Env::new();
+        let run = env.done_run();
+        env.owner_touches_issue();
+        if bot_edits {
+            env.linear.bot_edit("Cycle automation");
+        } else {
+            env.linear
+                .bot_comment("Cycle automation", "Added to cycle 4");
+        }
+
+        let said = env.refused_undo(&run);
+
+        assert!(said.contains("Cycle automation"), "{bot_edits}: {said}");
+    }
+}
+
 // spec: Undo deletes only what it can verify
 #[test]
 fn undoing_a_run_whose_history_cannot_be_read_on_any_page_is_refused_saying_so() {

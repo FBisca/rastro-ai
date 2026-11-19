@@ -368,6 +368,51 @@ impl Fixture {
         world.history.push((id, entry));
     }
 
+    /// `user` edits the issue's description in an entry Linear grouped with `also`'s edits: the
+    /// entry names only `user` as its actor, and `also` apart, as `descriptionUpdatedBy`.
+    pub fn edit_description_grouped(&self, user: User, also: &[User]) {
+        let mut world = self.world.lock().unwrap();
+        let id = world.issues[0]["id"].clone();
+        let n = world.history.len();
+        let also: Vec<Value> = also.iter().map(|user| user.json()).collect();
+        let entry = json!({
+            "id": format!("history_{n}"),
+            "actor": user.json(),
+            "updatedDescription": true,
+            "descriptionUpdatedBy": also,
+        });
+        world.history.push((id, entry));
+    }
+
+    /// A bot named `bot` comments on the issue, with no user.
+    pub fn bot_comment(&self, bot: &str, body: &str) {
+        let mut world = self.world.lock().unwrap();
+        let id = world.issues[0]["id"].clone();
+        let n = world.comments.len();
+        let entry = json!({
+            "id": format!("comment_{n}"),
+            "body": body,
+            "user": null,
+            "botActor": {"name": bot},
+        });
+        world.comments.push((id, entry));
+    }
+
+    /// An integration named `bot` moves the issue to another state, with no user as actor.
+    pub fn bot_edit(&self, bot: &str) {
+        let mut world = self.world.lock().unwrap();
+        let id = world.issues[0]["id"].clone();
+        let n = world.history.len();
+        let entry = json!({
+            "id": format!("history_{n}"),
+            "actor": null,
+            "botActor": {"name": bot},
+            "fromStateId": "state_todo",
+            "toStateId": "state_started",
+        });
+        world.history.push((id, entry));
+    }
+
     /// Fails the read of the given page (counted from 0) of the `operation`'s comments or history.
     pub fn fail_page(&self, operation: &'static str, page: usize) {
         self.world.lock().unwrap().failing_page = Some((operation, page));
