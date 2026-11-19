@@ -117,3 +117,16 @@ fn a_rules_grace_is_its_own_else_the_tables_else_the_default() {
         );
     }
 }
+
+// spec: Owner rules live in config
+#[test]
+fn a_grace_too_long_to_count_fails_the_check_naming_the_rule_and_field() {
+    let home = home(&rule("big", "grace = \"5124095576030432h\""));
+    let out = rastro(&home, &["rules", "check"]);
+    assert!(!out.status.success());
+    let error = stderr(&out);
+    assert!(
+        error.contains("rule big") && error.contains("grace") && !error.contains("panicked"),
+        "the error names neither the rule nor the field cleanly: {error}"
+    );
+}

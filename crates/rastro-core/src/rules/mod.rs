@@ -93,9 +93,12 @@ fn parse_duration(text: &str) -> Result<Duration, String> {
         "h" => 3600,
         _ => return Err(bad()),
     };
-    match number.parse::<u64>() {
-        Ok(number) if number > 0 => Ok(Duration::from_secs(number * unit)),
-        _ => Err(bad()),
+    match number.parse::<u64>().ok().filter(|number| *number > 0) {
+        Some(number) => number
+            .checked_mul(unit)
+            .map(Duration::from_secs)
+            .ok_or_else(bad),
+        None => Err(bad()),
     }
 }
 
