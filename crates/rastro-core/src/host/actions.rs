@@ -27,9 +27,10 @@ pub struct Offers {
     pub refused: Vec<String>,
 }
 
-/// Reads every installed manifest that declares the `action_provider` kind or any action, and
-/// sorts them into offers and refusals. A manifest that declares neither is no business of
-/// this role.
+/// Reads every installed manifest that declares the `action_provider` kind and sorts them into
+/// offers and refusals. A manifest of any other kind is no business of this role, even one that
+/// declares actions: it is skipped here, and refused, with the reason on stderr, when its own
+/// role loads it.
 pub fn offered(locations: &Locations) -> Offers {
     let mut offers = Offers::default();
     scan(locations, |manifest, dir| {
