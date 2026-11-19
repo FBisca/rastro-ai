@@ -36,3 +36,9 @@ Status: agreed 2026-11-04. North star: `../concept.md` §2. Terms: `../GLOSSARY.
 
    *short*, *medium* and *long* are durations the owner configures.
 12. **Budgets.** The owner can cap Acts per period ("at most 5 sent messages a day").
+
+## Added 2026-11-19 (roadmap slices 8a and 8b)
+13. **No rule, no Act.** A cell with no rule sits at Propose, and only a rule the owner writes raises it to Act. Trust, learned demotion and the trust view wait for slice 9.
+14. **Budgets start optional.** A rule may set a daily cap (calendar day, local time); unset means no cap, and a run past the cap falls back to Propose. The owner sees no value in it yet; it ships as a first iteration to learn from (slice 8b).
+15. **Grace defaults.** short = 2 min, medium = 10 min, long = 1 h, editable in `config.toml` `[grace]`; a rule may set its own.
+16. **Proposals carry a why.** An agent's proposal states why and may cite claims; both stay in Rastro with the run (§3). Undoing a created Linear issue deletes it, and is refused when anyone else commented on or edited it since, or when that history can't be read whole. A proposal lives in the scope of the source it writes to, and a citation that scope can't see is refused.
