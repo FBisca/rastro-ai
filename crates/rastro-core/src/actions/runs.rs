@@ -9,6 +9,11 @@
 //! `failed`, and `tick` executes it again until it has made [`MAX_ATTEMPTS`]. A run with neither
 //! reads `accepted`.
 //!
+//! Undoing a done run asks the provider to delete the issue and then records the owner's undo
+//! intent, in the insert-only intent table: a run with such an intent reads `undone`, whatever else
+//! it holds. An undo whose delete response was lost recorded nothing, so the run still reads `done`
+//! and undoing it again finds the issue gone and records the intent once.
+//!
 //! Only [`crate::actions::IssueFields`], the content the owner accepted, and the run's random
 //! issue id go to the provider: the why, the citations and every Rastro id stay here.
 use super::IssueFields;
@@ -37,6 +42,8 @@ pub enum RunStatus {
     /// An execution failed and the run has no issue: it holds the error, and `tick` retries it
     /// until it has made 3 attempts.
     Failed,
+    /// The owner undid it: the provider deleted the issue, and the run holds the undo intent.
+    Undone,
 }
 
 impl RunStatus {
@@ -46,6 +53,7 @@ impl RunStatus {
             Self::Accepted => "accepted",
             Self::Done => "done",
             Self::Failed => "failed",
+            Self::Undone => "undone",
         }
     }
 }
@@ -81,6 +89,17 @@ pub struct Run {
     /// The error of the last failed execution; present while the run reads `failed`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub error: Option<String>,
+    /// The owner's undo; present once the run reads `undone`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub undo: Option<Undo>,
+}
+
+/// The owner's undo of a run: the intent that recorded it and when.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
+#[schemars(rename = "ActionUndo")]
+pub struct Undo {
+    pub intent: String,
+    pub at: DateTime<Utc>,
 }
 
 /// How many times a run is executed before `tick` leaves it failed.
@@ -163,7 +182,7 @@ fn call_fields(fields: &IssueFields) -> BTreeMap<String, String> {
 
 /// The lock that lets one process at a time execute a run: a file under the data directory named
 /// for the run, held while it executes.
-fn lock_path(locations: &crate::Locations, run: &str) -> std::path::PathBuf {
+pub(super) fn lock_path(locations: &crate::Locations, run: &str) -> std::path::PathBuf {
     locations.data.join(format!("action-{run}.lock"))
 }
 
@@ -177,7 +196,7 @@ impl<S: Storage> Rastro<S> {
             .filter(|run| match run.status {
                 RunStatus::Accepted => true,
                 RunStatus::Failed => run.attempts < MAX_ATTEMPTS,
-                RunStatus::Done => false,
+                RunStatus::Done | RunStatus::Undone => false,
             })
             .collect())
     }
@@ -202,7 +221,8 @@ impl<S: Storage> Rastro<S> {
             Err(TryLockError::Error(error)) => return Err(error.into()),
         }
         let current = self.stored_run(&run.id)?;
-        if current.status == RunStatus::Done {
+        // A run the owner undid is finished: executing it again must not create its issue anew.
+        if matches!(current.status, RunStatus::Done | RunStatus::Undone) {
             return Ok(Some(current));
         }
         if current.attempts >= MAX_ATTEMPTS {
@@ -254,7 +274,12 @@ impl<S: Storage> Rastro<S> {
         })
     }
 
-    fn ask_provider(&self, run: &Run, method: &str, call: &ActionCall) -> Result<ActionResult> {
+    pub(super) fn ask_provider(
+        &self,
+        run: &Run,
+        method: &str,
+        call: &ActionCall,
+    ) -> Result<ActionResult> {
         host::actions::call(
             &self.locations,
             &run.provider,
@@ -265,7 +290,7 @@ impl<S: Storage> Rastro<S> {
     }
 
     /// The run `id`, as it reads now.
-    fn stored_run(&self, id: &str) -> Result<Run> {
+    pub(super) fn stored_run(&self, id: &str) -> Result<Run> {
         let runs = self.storage.snapshot(|view| view.action_runs(&[]))?;
         runs.into_iter()
             .find(|run| run.id == id)

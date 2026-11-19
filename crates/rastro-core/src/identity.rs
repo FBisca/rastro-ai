@@ -36,6 +36,8 @@ pub const OWNER_INTENT: &str = "owner_intent";
 const PERSON_PREFIX: &str = "rastro:person/";
 /// The prefix of the domain of an intent about one claim: `claim/<claim id>`.
 const CLAIM_DOMAIN: &str = "claim/";
+/// The prefix of the domain of an intent about one action run: `action_run/<run id>`.
+pub const ACTION_RUN_DOMAIN: &str = "action_run/";
 /// The identifier prefix of the `std:Commitment` an accepted queue item becomes.
 const COMMITMENT_PREFIX: &str = "std:commitment/";
 /// The type of the commitment an accepted queue item becomes, asserted by the acceptance.
@@ -68,9 +70,12 @@ pub enum IntentKind {
     Answer,
     /// Confirm a claim the owner read: it stays alive on the owner's word and reads `confirmed`.
     Confirm,
+    /// Undo an action run: the owner had the provider delete what the run created. It names the
+    /// run and its source's scope, and is what makes the run read `undone`.
+    UndoAction,
 }
 impl IntentKind {
-    pub const ALL: [Self; 12] = [
+    pub const ALL: [Self; 13] = [
         Self::CreatePerson,
         Self::Name,
         Self::Link,
@@ -83,6 +88,7 @@ impl IntentKind {
         Self::Missed,
         Self::Answer,
         Self::Confirm,
+        Self::UndoAction,
     ];
     pub fn as_str(self) -> &'static str {
         match self {
@@ -98,6 +104,7 @@ impl IntentKind {
             Self::Missed => "missed",
             Self::Answer => "answer",
             Self::Confirm => "confirm",
+            Self::UndoAction => "undo_action",
         }
     }
     /// The core validates kinds; storage keeps them as text with no SQL enum.
@@ -493,6 +500,10 @@ impl Intent {
                 .targets
                 .claim()
                 .map(|claim| format!("{CLAIM_DOMAIN}{}", claim.id)),
+            IntentKind::UndoAction => self
+                .targets
+                .queue_item()
+                .map(|run| format!("{ACTION_RUN_DOMAIN}{run}")),
             // A missed report needs no item, so its domain names only what it is.
             IntentKind::Missed => Some(match self.targets.queue_item() {
                 Some(item) => format!("queue/{item}"),
@@ -670,7 +681,8 @@ impl Intent {
                 true
             }
             IntentKind::Confirm => false,
-            IntentKind::Accept | IntentKind::Edit | IntentKind::Reject => {
+            // The run's id sits where a queue item's does: the item an undo names is the run.
+            IntentKind::Accept | IntentKind::Edit | IntentKind::Reject | IntentKind::UndoAction => {
                 matches!(&self.targets, Targets::Proposal { item: Some(item), .. } if plain(item))
             }
             IntentKind::Missed => match &self.targets {
@@ -751,6 +763,9 @@ impl Intent {
                 IntentKind::Accept => check_accept(&self.targets)?,
                 // An edit of an action proposal mints no commitment; any other edit mints one.
                 IntentKind::Edit => check_edit(&self.targets)?,
+                // The undo of a run names the run and its source's scope, and nothing else, so
+                // its outcome is visible only where the run is.
+                IntentKind::UndoAction => check_undo_action(&self.targets)?,
                 // A rejection or a missed report is a decision about an item, not a commitment:
                 // it states no terms and mints no claim. It names its source's scope whenever it
                 // names an item, so its outcome is visible only where that source is.
@@ -786,7 +801,8 @@ impl Intent {
                 self.kind != IntentKind::Accept
                     && (!matches!(self.kind, IntentKind::Edit | IntentKind::Reject)
                         || self.targets.claim().is_some())
-                    && self.kind != IntentKind::Missed,
+                    && self.kind != IntentKind::Missed
+                    && self.kind != IntentKind::UndoAction,
                 "a {} intent takes a queue proposal",
                 self.kind.as_str()
             ),
@@ -804,6 +820,34 @@ impl Intent {
         }
         Ok(())
     }
+}
+
+/// The undo of an action run names the run and its source's scope, and nothing else.
+fn check_undo_action(targets: &Targets) -> Result<()> {
+    let Targets::Proposal {
+        text,
+        seen,
+        edited,
+        subject,
+        parties,
+        terms,
+        scope,
+        ..
+    } = targets
+    else {
+        return Ok(());
+    };
+    ensure!(
+        seen.is_none()
+            && edited.is_none()
+            && text.is_none()
+            && subject.is_none()
+            && parties.is_empty()
+            && terms.is_empty()
+            && scope.is_some(),
+        "an undo of an action run names the run and its source's scope, and nothing else"
+    );
+    Ok(())
 }
 
 /// An edit of an action proposal mints no commitment: what the owner changed is the run's own
@@ -1024,7 +1068,7 @@ impl Resolution {
                 }
                 // A proposal's answer is the owner's record of what they decided; its item
                 // leaves the queue by that record alone and it backs no claim.
-                IntentKind::Accept | IntentKind::Missed => {}
+                IntentKind::Accept | IntentKind::Missed | IntentKind::UndoAction => {}
                 IntentKind::Edit if intent.targets.claim().is_none() => {}
                 // The latest valid correction of a claim is the one in force.
                 IntentKind::Confirm => {
@@ -1131,6 +1175,7 @@ impl Resolution {
             | IntentKind::Edit
             | IntentKind::Reject
             | IntentKind::Missed
+            | IntentKind::UndoAction
             | IntentKind::Confirm => {}
             IntentKind::Undo => {
                 let undone = intent.undo_of.as_deref().unwrap_or_default();
@@ -1205,6 +1250,7 @@ impl Resolution {
                     | IntentKind::Edit
                     | IntentKind::Reject
                     | IntentKind::Missed => bail!("a proposal's answer can't be undone"),
+                    IntentKind::UndoAction => bail!("an undo of an action run can't be undone"),
                     IntentKind::Confirm => {
                         bail!("a confirmation can only be undone with `rastro claim undo`")
                     }

@@ -11,8 +11,14 @@ const ISSUE_CREATE: &str = "mutation IssueCreate($input: IssueCreateInput!) { \
     issueCreate(input: $input) { success issue { id identifier url } } }";
 
 /// The one document an issue lookup sends: the issue by the id it was created under.
+/// It also reads `trashed`: Linear keeps a deleted issue in its trash, and still answers a lookup of
+/// it by id.
 const ISSUE_LOOKUP: &str =
-    "query IssueLookup($id: String!) { issue(id: $id) { id identifier url } }";
+    "query IssueLookup($id: String!) { issue(id: $id) { id identifier url trashed } }";
+
+/// The one document an issue delete sends: Linear moves the issue to its trash.
+const ISSUE_DELETE: &str =
+    "mutation IssueDelete($id: String!) { issueDelete(id: $id) { success } }";
 
 /// Linear's answer to an id it holds no entity for. A lookup reads it as "no such issue"; any
 /// other document reads it as the refusal it is.
@@ -30,6 +36,8 @@ impl std::error::Error for NotFound {}
 pub struct Created {
     pub identifier: String,
     pub url: String,
+    /// Whether the issue is in Linear's trash: deleted, though a lookup still finds it.
+    pub trashed: bool,
 }
 
 /// The content an issue is created with: what the owner accepted, and nothing else.
@@ -108,6 +116,21 @@ impl Client {
         }
     }
 
+    /// Deletes the issue created under `id`, unless Linear already holds none by that id. Returns
+    /// whether it deleted one: `false` means the issue was already gone, and nothing was sent but
+    /// the lookup. Fails when Linear cannot be asked or does not confirm the delete.
+    pub fn delete_issue(&self, id: &str) -> Result<bool> {
+        // A trashed issue is already deleted: a second delete would be one too many.
+        if self.find_issue(id)?.is_none_or(|issue| issue.trashed) {
+            return Ok(false);
+        }
+        let data = self.query(ISSUE_DELETE, json!({"id": id}))?;
+        if data["issueDelete"]["success"] != true {
+            bail!("Linear did not confirm the delete");
+        }
+        Ok(true)
+    }
+
     /// Runs one document and returns its `data`. A response with GraphQL `errors` is a failure,
     /// even when it carries partial data.
     fn query(&self, query: &str, variables: Value) -> Result<Value> {
@@ -152,7 +175,12 @@ impl Client {
 fn confirmed(issue: &Value) -> Result<Created> {
     let text = |field: &str| issue[field].as_str().map(String::from);
     match (text("identifier"), text("url")) {
-        (Some(identifier), Some(url)) => Ok(Created { identifier, url }),
+        (Some(identifier), Some(url)) => Ok(Created {
+            identifier,
+            url,
+            // Only `trashed` says deleted: Linear archives a closed issue too, and it is still there.
+            trashed: issue["trashed"] == true,
+        }),
         _ => bail!("Linear confirmed the issue without its identifier and url"),
     }
 }

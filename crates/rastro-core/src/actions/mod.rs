@@ -9,9 +9,10 @@
 //! cited claims and the id stay in Rastro: [`IssueFields`] is the only part written for the
 //! outside system.
 mod runs;
+mod undo;
 mod why;
 pub use rastro_plugin_sdk::{Reach, Reversibility};
-pub use runs::{MAX_ATTEMPTS, NewRun, Run, RunFailure, RunResult, RunStatus};
+pub use runs::{MAX_ATTEMPTS, NewRun, Run, RunFailure, RunResult, RunStatus, Undo};
 pub(crate) use runs::{random_issue_id, run_id};
 pub use why::{Accept, Cell, RunWhy};
 

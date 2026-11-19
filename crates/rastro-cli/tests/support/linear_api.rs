@@ -1,8 +1,10 @@
 //! A fake Linear GraphQL API on loopback: it answers an issue create and records every request it
 //! receives, so a test sees exactly what reached Linear. It holds the issues it created by the id
 //! the caller gave, and numbers them `ENG-1`, `ENG-2`, … in creation order. It answers a lookup of
-//! an issue by id, and can turn the response to the next create into an error or hold every create's response
-//! until a test lets it go: the issue exists either way.
+//! an issue by id, and can turn the response to the next create into an error or hold every
+//! create's response until a test lets it go: the issue exists either way. It answers an issue
+//! delete by moving the issue to the trash (`trashed`, `archivedAt`), where a lookup by id still
+//! finds it, and can lose the response to the next delete.
 #![allow(dead_code)]
 use serde_json::{Value, json};
 use std::{
@@ -39,8 +41,10 @@ impl Req {
 #[derive(Default)]
 struct World {
     issues: Vec<Value>,
-    /// The next create is made, but what the caller gets back is an error.
-    lose_next_create: bool,
+    /// How many issues were ever created, so a deleted one's number is never reused.
+    created: usize,
+    /// The operation whose next request is made, but what the caller gets back is an error.
+    lose_next: Option<&'static str>,
     /// A create is made, but its response waits for [`Fixture::release_creates`].
     hold_creates: bool,
     /// Every create is refused with a server error and makes no issue.
@@ -50,7 +54,7 @@ struct World {
 /// What happens to the response to a request, once the fake has done what it was asked.
 enum Fate {
     Respond,
-    /// The create is answered with a server error, so the caller cannot tell the issue was made.
+    /// The request is answered with a server error, so the caller cannot tell what it did.
     Lose,
     /// The response waits until the fake's creates are released.
     Hold,
@@ -90,7 +94,8 @@ impl World {
             ),
             "IssueCreate" => {
                 let input = req.input();
-                let number = self.issues.len() + 1;
+                self.created += 1;
+                let number = self.created;
                 let issue = json!({
                     "id": input["id"],
                     "identifier": format!("ENG-{number}"),
@@ -98,7 +103,7 @@ impl World {
                     "title": input["title"],
                 });
                 self.issues.push(issue.clone());
-                if std::mem::take(&mut self.lose_next_create) {
+                if self.lose_next.take_if(|op| *op == "IssueCreate").is_some() {
                     fate = Fate::Lose;
                 } else if self.hold_creates {
                     fate = Fate::Hold;
@@ -108,12 +113,38 @@ impl World {
                     json!({"data": {"issueCreate": {"success": true, "issue": issue}}}),
                 )
             }
+            "IssueDelete" => {
+                let id = &req.body["variables"]["id"];
+                // As Linear does: the issue goes to the trash, archived, and is still held by id.
+                let live = (self.issues.iter_mut())
+                    .find(|issue| issue["id"] == *id && issue["trashed"] != true);
+                let found = live.is_some();
+                if let Some(issue) = live {
+                    issue["trashed"] = true.into();
+                    issue["archivedAt"] = "2026-11-19T10:00:00.000Z".into();
+                }
+                if found && self.lose_next.take_if(|op| *op == "IssueDelete").is_some() {
+                    fate = Fate::Lose;
+                }
+                (200, json!({"data": {"issueDelete": {"success": found}}}))
+            }
             "IssueLookup" => match self
                 .issues
                 .iter()
                 .find(|issue| issue["id"] == req.body["variables"]["id"])
             {
-                Some(issue) => (200, json!({"data": {"issue": issue}})),
+                Some(issue) => {
+                    // Only the fields the document selects, as GraphQL answers.
+                    let mut issue = issue.clone();
+                    if !req.body["query"]
+                        .as_str()
+                        .is_some_and(|q| q.contains("trashed"))
+                    {
+                        issue.as_object_mut().unwrap().remove("trashed");
+                        issue.as_object_mut().unwrap().remove("archivedAt");
+                    }
+                    (200, json!({"data": {"issue": issue}}))
+                }
                 // As Linear answers an id it does not hold.
                 None => (
                     200,
@@ -189,7 +220,12 @@ impl Fixture {
 
     /// The next issue create is made, but the caller gets an error back instead of the issue.
     pub fn lose_next_create_response(&self) {
-        self.world.lock().unwrap().lose_next_create = true;
+        self.world.lock().unwrap().lose_next = Some("IssueCreate");
+    }
+
+    /// The next issue delete is made, but the caller gets an error back instead of the answer.
+    pub fn lose_next_delete_response(&self) {
+        self.world.lock().unwrap().lose_next = Some("IssueDelete");
     }
 
     /// Refuses every issue create with a server error, making no issue, until
@@ -232,6 +268,21 @@ impl Fixture {
     pub fn creates(&self) -> Vec<Req> {
         (self.requests().into_iter())
             .filter(|req| req.operation == "IssueCreate")
+            .collect()
+    }
+
+    /// Archives every issue the fake holds without trashing it, as Linear does to a closed issue
+    /// after a while or when a user archives one by hand: it is still there to delete.
+    pub fn archive_issues(&self) {
+        for issue in &mut self.world.lock().unwrap().issues {
+            issue["archivedAt"] = "2026-11-18T10:00:00.000Z".into();
+        }
+    }
+
+    /// The issue deletes received so far.
+    pub fn deletes(&self) -> Vec<Req> {
+        (self.requests().into_iter())
+            .filter(|req| req.operation == "IssueDelete")
             .collect()
     }
 

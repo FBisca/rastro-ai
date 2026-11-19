@@ -6,14 +6,16 @@
 //! description, team and assignee the owner accepted and nothing else: the why, the citations and
 //! every Rastro id stay in Rastro. `action.lookup` finds the issue under that id, so a run
 //! executed again, or whose answer was lost, learns what the first execution did before it creates
-//! anything. Any other action message is answered with an error.
+//! anything. `action.undo` deletes the issue under that id, unless Linear already holds none, so
+//! an undo whose answer was lost deletes nothing the second time. Any other action message is
+//! answered with an error.
 mod linear;
 
 use anyhow::{Context, Result, bail};
 use linear::{Client, Issue};
 use rastro_plugin_sdk::{
-    ACTION_EXECUTE, ACTION_LOOKUP, ActionCall, ActionInitializeParams, ActionResult, Envelope,
-    INITIALIZE, InitializeResult, PROTOCOL_VERSION, Transport,
+    ACTION_EXECUTE, ACTION_LOOKUP, ACTION_UNDO, ActionCall, ActionInitializeParams, ActionResult,
+    Envelope, INITIALIZE, InitializeResult, PROTOCOL_VERSION, Transport,
 };
 use serde_json::json;
 use std::io;
@@ -45,6 +47,10 @@ fn main() -> Result<()> {
             Some(ACTION_LOOKUP) => request
                 .params::<ActionCall>()
                 .and_then(|call| lookup(&call))
+                .and_then(|result| Envelope::response(Some(id.clone()), result)),
+            Some(ACTION_UNDO) => request
+                .params::<ActionCall>()
+                .and_then(|call| undo(&call))
                 .and_then(|result| Envelope::response(Some(id.clone()), result)),
             other => Err(anyhow::anyhow!(
                 "this provider does not handle {}",
@@ -78,6 +84,18 @@ fn lookup(call: &ActionCall) -> Result<ActionResult> {
             url: Some(issue.url),
         },
         None => ActionResult::default(),
+    })
+}
+
+/// Deletes the issue the call's key names: `found` is true when it deleted one, and false when
+/// Linear already held none, so a repeated undo sends no second delete.
+fn undo(call: &ActionCall) -> Result<ActionResult> {
+    if call.action != LINEAR_CREATE_ISSUE {
+        bail!("this provider does not offer {}", call.action);
+    }
+    Ok(ActionResult {
+        found: Client::from_env()?.delete_issue(&call.key)?,
+        ..ActionResult::default()
     })
 }
 

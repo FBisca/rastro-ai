@@ -374,7 +374,7 @@ operations! {
             slot: 29, name: "queue.outcomes", surfaces: [Cli], read_only: true, reader: run_read, cli_read_path: true
         },
     }
-    /// Actions in outside systems: list the runs the owner's accepts started, read why one ran, or propose an action. Proposing is CLI only, and nothing runs until the owner accepts.
+    /// Actions in outside systems: list the runs the owner's accepts started, read why one ran, propose an action, or undo a done run. Proposing and undoing are CLI only, and nothing runs until the owner accepts.
     Actions(ActionsRequest => ActionsResult) as Actions {
         slot: 36, name: "actions", surfaces: [Cli, Mcp], read_only: true, reader: run_read, cli_read_path: true
     } with ActionsWrite {
@@ -383,6 +383,9 @@ operations! {
         },
         Show(ActionsShowRequest => ActionsResult) as ActionsShow {
             slot: 37, name: "actions.show", surfaces: [Cli], read_only: true, reader: run_read, cli_read_path: true
+        },
+        Undo(ActionsUndoRequest => ActionsUndoResult) as ActionsUndo {
+            slot: 38, name: "actions.undo", surfaces: [Cli], read_only: false
         },
     }
     /// Import a meeting transcript, read its commitment hypotheses, replay, forget or export it.
