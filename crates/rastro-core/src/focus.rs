@@ -7,7 +7,8 @@
 //! # Ranking
 //! Candidates fall in bands, in this order (decisions D10):
 //! 1. overdue or due today (the due date's day in the owner's local offset),
-//! 2. a meeting promise or ask the owner is responsible for, so it waits on the owner,
+//! 2. a meeting promise or ask the owner is responsible for that still waits in the queue, so it
+//!    waits on the owner (one the owner accepted, edited or rejected is decided and leaves),
 //! 3. the next action of a Linear task in progress.
 //!
 //! Inside a band the earlier due time ranks first, then the higher urgency, then the item id.
@@ -241,6 +242,7 @@ pub fn report(input: &Input) -> Report {
             items.extend(
                 (source.hypotheses.iter())
                     .filter(|hypothesis| owner_owes(hypothesis, input.owner_id))
+                    .filter(|hypothesis| input.queue.holds_proposal(source, hypothesis))
                     .map(|hypothesis| promise_item(source, hypothesis, observed)),
             );
         }

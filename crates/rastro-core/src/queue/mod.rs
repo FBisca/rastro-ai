@@ -321,6 +321,17 @@ impl Queue {
         }
     }
 
+    /// Whether the queue still holds this meeting hypothesis as a pending proposal: false once
+    /// the owner accepted, edited or rejected it, or the queue left it out as already known.
+    pub fn holds_proposal(
+        &self,
+        source: &commitments::Source,
+        hypothesis: &commitments::Hypothesis,
+    ) -> bool {
+        let id = proposal_id(&Source::of(source), hypothesis);
+        self.items.iter().any(|item| item.id == id)
+    }
+
     /// Assembles the queue from the sources storage keeps and the identity graph's candidates.
     /// An item whose source is hidden never reaches here: storage filters the sources before
     /// this reads them. Identical items collapse to one, so no candidate is shown twice. A
