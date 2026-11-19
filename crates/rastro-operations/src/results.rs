@@ -69,6 +69,8 @@ pub type OutcomesResult = rastro_core::queue::Outcomes;
 /// The runs `actions` lists, oldest first.
 pub type ActionsResult = rastro_core::actions::Runs;
 /// The action proposal `actions propose` recorded, as it now waits in the queue.
+/// The run `actions undo` undid, as it now reads: `undone`, with the owner's undo intent.
+pub type ActionsUndoResult = rastro_core::actions::Run;
 pub type ActionsProposeResult = rastro_core::actions::Proposed;
 /// What a queue answer recorded: the item it named and the owner intents it accepted.
 #[derive(Debug, JsonSchema, Serialize)]
@@ -440,6 +442,35 @@ mod tests {
                 runs: vec![],
                 why: None,
             }),
+            Response::ActionsUndo(rastro_core::actions::Run {
+                id: "r_1".into(),
+                proposal: "q_1".into(),
+                accept_intent: "i_1".into(),
+                action: "linear.create_issue".into(),
+                fields: rastro_core::actions::IssueFields {
+                    title: "t".into(),
+                    description: None,
+                    team: "ENG".into(),
+                    assignee: "me".into(),
+                },
+                source: rastro_core::queue::Source {
+                    kind: rastro_core::queue::SourceKind::Linear,
+                    name: "linear-work".into(),
+                    scope: "work".into(),
+                },
+                provider: "p".into(),
+                issue_id: "00000000-0000-4000-8000-000000000000".into(),
+                accepted_at: "2026-11-19T09:00:00Z".parse().unwrap(),
+                status: rastro_core::actions::RunStatus::Undone,
+                identifier: Some("ENG-1".into()),
+                url: Some("https://linear.example/ENG-1".into()),
+                attempts: 0,
+                error: None,
+                undo: Some(rastro_core::actions::Undo {
+                    intent: "i_2".into(),
+                    at: "2026-11-19T09:05:00Z".parse().unwrap(),
+                }),
+            }),
         ];
         let arguments = |name: &str| match name {
             "source.add" => {
@@ -471,7 +502,7 @@ mod tests {
             "actions.propose" => {
                 serde_json::json!({"action": "linear.create_issue", "why": "w"})
             }
-            "actions.show" => serde_json::json!({"run": "r_1"}),
+            "actions.show" | "actions.undo" => serde_json::json!({"run": "r_1"}),
             "queue.accept" => serde_json::json!({"item": "q_1"}),
             "queue.edit" => serde_json::json!({"item": "q_1", "promise": "send it"}),
             "queue.reject" => serde_json::json!({"item": "q_1", "reason": "not a promise"}),

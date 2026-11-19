@@ -991,6 +991,13 @@ fn action_run_text(run: &rastro_core::actions::Run) -> String {
             run.attempts
         );
     }
+    if let Some(undo) = &run.undo {
+        line += &format!(
+            " | Undone: intent {}, {}",
+            display_safe(&undo.intent),
+            undo.at.format("%Y-%m-%d %H:%M")
+        );
+    }
     line
 }
 
@@ -1119,6 +1126,7 @@ fn human(response: &Response) -> String {
         Response::Queue(r) => queue_text(r),
         Response::Actions(r) => actions_text(r),
         Response::ActionsShow(r) => actions_text(r),
+        Response::ActionsUndo(r) => format!("Undone: {}", action_run_text(r)),
         Response::ActionsPropose(r) => actions_propose_text(r),
         Response::Focus(r) => focus_text(r),
         Response::QueueOutcomes(r) => outcomes_text(r),

@@ -2,7 +2,8 @@
 //! receives, so a test sees exactly what reached Linear. It holds the issues it created by the id
 //! the caller gave, and numbers them `ENG-1`, `ENG-2`, … in creation order. It answers a lookup of
 //! an issue by id, and can turn the response to the next create into an error or hold every create's response
-//! until a test lets it go: the issue exists either way.
+//! until a test lets it go: the issue exists either way. It answers an issue delete by removing the
+//! issue, so a lookup of it no longer finds it, and can lose the response to the next delete.
 #![allow(dead_code)]
 use serde_json::{Value, json};
 use std::{
@@ -39,8 +40,10 @@ impl Req {
 #[derive(Default)]
 struct World {
     issues: Vec<Value>,
-    /// The next create is made, but what the caller gets back is an error.
-    lose_next_create: bool,
+    /// How many issues were ever created, so a deleted one's number is never reused.
+    created: usize,
+    /// The operation whose next request is made, but what the caller gets back is an error.
+    lose_next: Option<&'static str>,
     /// A create is made, but its response waits for [`Fixture::release_creates`].
     hold_creates: bool,
     /// Every create is refused with a server error and makes no issue.
@@ -50,7 +53,7 @@ struct World {
 /// What happens to the response to a request, once the fake has done what it was asked.
 enum Fate {
     Respond,
-    /// The create is answered with a server error, so the caller cannot tell the issue was made.
+    /// The request is answered with a server error, so the caller cannot tell what it did.
     Lose,
     /// The response waits until the fake's creates are released.
     Hold,
@@ -90,7 +93,8 @@ impl World {
             ),
             "IssueCreate" => {
                 let input = req.input();
-                let number = self.issues.len() + 1;
+                self.created += 1;
+                let number = self.created;
                 let issue = json!({
                     "id": input["id"],
                     "identifier": format!("ENG-{number}"),
@@ -98,7 +102,7 @@ impl World {
                     "title": input["title"],
                 });
                 self.issues.push(issue.clone());
-                if std::mem::take(&mut self.lose_next_create) {
+                if self.lose_next.take_if(|op| *op == "IssueCreate").is_some() {
                     fate = Fate::Lose;
                 } else if self.hold_creates {
                     fate = Fate::Hold;
@@ -107,6 +111,16 @@ impl World {
                     200,
                     json!({"data": {"issueCreate": {"success": true, "issue": issue}}}),
                 )
+            }
+            "IssueDelete" => {
+                let id = &req.body["variables"]["id"];
+                let before = self.issues.len();
+                self.issues.retain(|issue| issue["id"] != *id);
+                let found = self.issues.len() < before;
+                if found && self.lose_next.take_if(|op| *op == "IssueDelete").is_some() {
+                    fate = Fate::Lose;
+                }
+                (200, json!({"data": {"issueDelete": {"success": found}}}))
             }
             "IssueLookup" => match self
                 .issues
@@ -189,7 +203,12 @@ impl Fixture {
 
     /// The next issue create is made, but the caller gets an error back instead of the issue.
     pub fn lose_next_create_response(&self) {
-        self.world.lock().unwrap().lose_next_create = true;
+        self.world.lock().unwrap().lose_next = Some("IssueCreate");
+    }
+
+    /// The next issue delete is made, but the caller gets an error back instead of the answer.
+    pub fn lose_next_delete_response(&self) {
+        self.world.lock().unwrap().lose_next = Some("IssueDelete");
     }
 
     /// Refuses every issue create with a server error, making no issue, until
@@ -232,6 +251,13 @@ impl Fixture {
     pub fn creates(&self) -> Vec<Req> {
         (self.requests().into_iter())
             .filter(|req| req.operation == "IssueCreate")
+            .collect()
+    }
+
+    /// The issue deletes received so far.
+    pub fn deletes(&self) -> Vec<Req> {
+        (self.requests().into_iter())
+            .filter(|req| req.operation == "IssueDelete")
             .collect()
     }
 

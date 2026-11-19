@@ -7,7 +7,7 @@ use rastro_core::{
     Scope,
     actions::{
         Filed, IssueFields, NewRun, ObservedIssue, Proposal, Reach, Reversibility, Run, RunFailure,
-        RunResult, RunStatus,
+        RunResult, RunStatus, Undo,
     },
     queue::{Source, SourceKind},
 };
@@ -184,6 +184,7 @@ pub(crate) fn record_run(
         url: None,
         attempts: 0,
         error: None,
+        undo: None,
     })
 }
 
@@ -232,7 +233,11 @@ pub(crate) fn runs(view: &View, scopes: &[Scope]) -> Result<Vec<Run>> {
                 r.scope, r.issue_id, r.accepted_at, d.identifier, d.url,
                 (SELECT count(*) FROM action_attempt a WHERE a.run_id = r.id),
                 (SELECT a.error FROM action_attempt a WHERE a.run_id = r.id
-                 ORDER BY a.attempt DESC LIMIT 1)
+                 ORDER BY a.attempt DESC LIMIT 1),
+                (SELECT i.id FROM intent i WHERE i.kind = 'undo_action'
+                   AND i.domain_key = 'action_run/' || r.id ORDER BY i.append_seq LIMIT 1),
+                (SELECT i.issued_at FROM intent i WHERE i.kind = 'undo_action'
+                   AND i.domain_key = 'action_run/' || r.id ORDER BY i.append_seq LIMIT 1)
          FROM action_run r LEFT JOIN action_result d ON d.run_id = r.id
          WHERE ?1 IS NULL OR r.scope IN (SELECT value FROM json_each(?1))
          ORDER BY r.append_seq",
@@ -255,11 +260,13 @@ pub(crate) fn runs(view: &View, scopes: &[Scope]) -> Result<Vec<Run>> {
             row.get::<_, Option<String>>(11)?,
             row.get::<_, u32>(12)?,
             row.get::<_, Option<String>>(13)?,
+            row.get::<_, Option<String>>(14)?,
+            row.get::<_, Option<String>>(15)?,
         ))
     })?;
     let mut runs = Vec::new();
     for row in rows {
-        let (text, identifier, url, attempts, error) = row?;
+        let (text, identifier, url, attempts, error, undo_intent, undone_at) = row?;
         let [
             id,
             proposal,
@@ -272,7 +279,16 @@ pub(crate) fn runs(view: &View, scopes: &[Scope]) -> Result<Vec<Run>> {
             issue_id,
             accepted_at,
         ] = text;
-        let status = if identifier.is_some() {
+        let undo = match (undo_intent, undone_at) {
+            (Some(intent), Some(at)) => Some(Undo {
+                intent,
+                at: parse_time(at)?,
+            }),
+            _ => None,
+        };
+        let status = if undo.is_some() {
+            RunStatus::Undone
+        } else if identifier.is_some() {
             RunStatus::Done
         } else if attempts > 0 {
             RunStatus::Failed
@@ -299,6 +315,7 @@ pub(crate) fn runs(view: &View, scopes: &[Scope]) -> Result<Vec<Run>> {
             attempts,
             // A run that went on to finish no longer carries the error of an earlier attempt.
             error: error.filter(|_| status == RunStatus::Failed),
+            undo,
         });
     }
     Ok(runs)
