@@ -4,7 +4,9 @@
 //! an issue by id, and can turn the response to the next create into an error or hold every
 //! create's response until a test lets it go: the issue exists either way. It answers an issue
 //! delete by moving the issue to the trash (`trashed`, `archivedAt`), where a lookup by id still
-//! finds it, and can lose the response to the next delete.
+//! finds it, and can lose the response to the next delete. It answers who the key belongs to, and
+//! reads an issue's comments and change history a page of [`PAGE`] at a time, as seeded by the test:
+//! each page can be made to fail.
 #![allow(dead_code)]
 use serde_json::{Value, json};
 use std::{
@@ -18,6 +20,34 @@ use std::{
 
 /// The API key the fake accepts, as the test sets it in the provider's environment.
 pub const KEY: &str = "lin_api_fixture_secret_key";
+
+/// The user the API key belongs to: the owner.
+pub const OWNER: User = User {
+    id: "user_owner",
+    name: "Olivia Owner",
+};
+
+/// A colleague who is not the owner.
+pub const COLLEAGUE: User = User {
+    id: "user_colleague",
+    name: "Casey Colleague",
+};
+
+/// A Linear user.
+#[derive(Clone, Copy)]
+pub struct User {
+    pub id: &'static str,
+    pub name: &'static str,
+}
+impl User {
+    fn json(self) -> Value {
+        json!({"id": self.id, "name": self.name})
+    }
+}
+
+/// How many comments or history entries the fake gives a page, whatever the caller asks for, so
+/// a read of a few of them takes several pages.
+pub const PAGE: usize = 2;
 
 /// One request the fake received.
 #[derive(Clone, Debug)]
@@ -49,6 +79,11 @@ struct World {
     hold_creates: bool,
     /// Every create is refused with a server error and makes no issue.
     refuse_creates: bool,
+    /// The comments and history entries of each issue, by the issue's id and in order.
+    comments: Vec<(Value, Value)>,
+    history: Vec<(Value, Value)>,
+    /// A read of this operation's page (counted from 0) fails with a server error.
+    failing_page: Option<(&'static str, usize)>,
 }
 
 /// What happens to the response to a request, once the fake has done what it was asked.
@@ -85,6 +120,35 @@ fn operation(query: &str) -> String {
 }
 
 impl World {
+    /// One page of an issue's comments or history, from the entry the request's `after` cursor names.
+    fn page(&self, req: &Req) -> (u16, Value) {
+        let operation = req.operation.as_str();
+        let (field, entries) = match operation {
+            "IssueComments" => ("comments", &self.comments),
+            _ => ("history", &self.history),
+        };
+        let start = (req.body["variables"]["after"].as_str())
+            .and_then(|cursor| cursor.parse::<usize>().ok())
+            .unwrap_or(0);
+        if self.failing_page == Some((operation, start / PAGE)) {
+            let error = json!({"errors": [{"message": "Linear is down", "extensions": {"code": "INTERNAL_SERVER_ERROR"}}]});
+            return (500, error);
+        }
+        let id = &req.body["variables"]["id"];
+        let all: Vec<&Value> = (entries.iter())
+            .filter(|(issue, _)| issue == id)
+            .map(|(_, entry)| entry)
+            .collect();
+        let end = (start + PAGE).min(all.len());
+        let nodes = all.get(start..end).unwrap_or_default();
+        let page = json!({
+            "nodes": nodes,
+            "pageInfo": {"hasNextPage": end < all.len(), "endCursor": end.to_string()},
+        });
+        let reply = json!({"data": {"issue": {field: page}}});
+        (200, reply)
+    }
+
     fn reply(&mut self, req: &Req) -> (u16, Value, Fate) {
         let mut fate = Fate::Respond;
         let (status, body) = match req.operation.as_str() {
@@ -128,6 +192,8 @@ impl World {
                 }
                 (200, json!({"data": {"issueDelete": {"success": found}}}))
             }
+            "Viewer" => (200, json!({"data": {"viewer": OWNER.json()}})),
+            "IssueComments" | "IssueHistory" => self.page(req),
             "IssueLookup" => match self
                 .issues
                 .iter()
@@ -277,6 +343,86 @@ impl Fixture {
         for issue in &mut self.world.lock().unwrap().issues {
             issue["archivedAt"] = "2026-11-18T10:00:00.000Z".into();
         }
+    }
+
+    /// `user` comments on the issue the fake holds, in order.
+    pub fn comment(&self, user: User, body: &str) {
+        let mut world = self.world.lock().unwrap();
+        let id = world.issues[0]["id"].clone();
+        let n = world.comments.len();
+        let entry = json!({"id": format!("comment_{n}"), "body": body, "user": user.json()});
+        world.comments.push((id, entry));
+    }
+
+    /// `user` edits the title of the issue the fake holds.
+    pub fn edit_title(&self, user: User, to: &str) {
+        let mut world = self.world.lock().unwrap();
+        let id = world.issues[0]["id"].clone();
+        let n = world.history.len();
+        let entry = json!({
+            "id": format!("history_{n}"),
+            "actor": user.json(),
+            "fromTitle": "Flaky sync test",
+            "toTitle": to,
+        });
+        world.history.push((id, entry));
+    }
+
+    /// `user` edits the issue's description in an entry Linear grouped with `also`'s edits: the
+    /// entry names only `user` as its actor, and `also` apart, as `descriptionUpdatedBy`.
+    pub fn edit_description_grouped(&self, user: User, also: &[User]) {
+        let mut world = self.world.lock().unwrap();
+        let id = world.issues[0]["id"].clone();
+        let n = world.history.len();
+        let also: Vec<Value> = also.iter().map(|user| user.json()).collect();
+        let entry = json!({
+            "id": format!("history_{n}"),
+            "actor": user.json(),
+            "updatedDescription": true,
+            "descriptionUpdatedBy": also,
+        });
+        world.history.push((id, entry));
+    }
+
+    /// A bot named `bot` comments on the issue, with no user.
+    pub fn bot_comment(&self, bot: &str, body: &str) {
+        let mut world = self.world.lock().unwrap();
+        let id = world.issues[0]["id"].clone();
+        let n = world.comments.len();
+        let entry = json!({
+            "id": format!("comment_{n}"),
+            "body": body,
+            "user": null,
+            "botActor": {"name": bot},
+        });
+        world.comments.push((id, entry));
+    }
+
+    /// An integration named `bot` moves the issue to another state, with no user as actor.
+    pub fn bot_edit(&self, bot: &str) {
+        let mut world = self.world.lock().unwrap();
+        let id = world.issues[0]["id"].clone();
+        let n = world.history.len();
+        let entry = json!({
+            "id": format!("history_{n}"),
+            "actor": null,
+            "botActor": {"name": bot},
+            "fromStateId": "state_todo",
+            "toStateId": "state_started",
+        });
+        world.history.push((id, entry));
+    }
+
+    /// Fails the read of the given page (counted from 0) of the `operation`'s comments or history.
+    pub fn fail_page(&self, operation: &'static str, page: usize) {
+        self.world.lock().unwrap().failing_page = Some((operation, page));
+    }
+
+    /// The comment and history reads received so far.
+    pub fn history_reads(&self) -> Vec<Req> {
+        (self.requests().into_iter())
+            .filter(|req| matches!(req.operation.as_str(), "IssueComments" | "IssueHistory"))
+            .collect()
     }
 
     /// The issue deletes received so far.

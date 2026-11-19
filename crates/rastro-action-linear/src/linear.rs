@@ -20,6 +20,27 @@ const ISSUE_LOOKUP: &str =
 const ISSUE_DELETE: &str =
     "mutation IssueDelete($id: String!) { issueDelete(id: $id) { success } }";
 
+/// The one document that asks whose key this is: the owner's.
+const VIEWER: &str = "query Viewer { viewer { id name } }";
+
+/// The one document a read of an issue's comments sends, one page at a time.
+const ISSUE_COMMENTS: &str = "query IssueComments($id: String!, $after: String) { \
+    issue(id: $id) { comments(first: 100, after: $after) { \
+    nodes { id body user { id name } botActor { name } } pageInfo { hasNextPage endCursor } } } }";
+
+/// The one document a read of an issue's change history sends, one page at a time.
+const ISSUE_HISTORY: &str = "query IssueHistory($id: String!, $after: String) { \
+    issue(id: $id) { history(first: 100, after: $after) { \
+    nodes { id actor { id name } botActor { name } descriptionUpdatedBy { id name } fromTitle toTitle updatedDescription fromStateId toStateId \
+    fromAssigneeId toAssigneeId fromPriority toPriority addedLabelIds removedLabelIds } \
+    pageInfo { hasNextPage endCursor } } } }";
+
+/// How many pages of one read are followed before the read is given up as not ending.
+const MAX_PAGES: usize = 1000;
+
+/// What an undo says when it can't tell whether anyone else touched the issue.
+const UNCHECKED: &str = "the issue's history could not be checked, so it was left alone";
+
 /// Linear's answer to an id it holds no entity for. A lookup reads it as "no such issue"; any
 /// other document reads it as the refusal it is.
 #[derive(Debug)]
@@ -118,17 +139,91 @@ impl Client {
 
     /// Deletes the issue created under `id`, unless Linear already holds none by that id. Returns
     /// whether it deleted one: `false` means the issue was already gone, and nothing was sent but
-    /// the lookup. Fails when Linear cannot be asked or does not confirm the delete.
+    /// the lookup. Fails, sending no delete, when anyone but the key's owner commented on or
+    /// edited the issue, or when its comments and history cannot be read whole. Fails when Linear
+    /// cannot be asked or does not confirm the delete.
     pub fn delete_issue(&self, id: &str) -> Result<bool> {
         // A trashed issue is already deleted: a second delete would be one too many.
         if self.find_issue(id)?.is_none_or(|issue| issue.trashed) {
             return Ok(false);
         }
+        self.refuse_if_touched(id)?;
         let data = self.query(ISSUE_DELETE, json!({"id": id}))?;
         if data["issueDelete"]["success"] != true {
             bail!("Linear did not confirm the delete");
         }
         Ok(true)
+    }
+
+    /// Reads the issue's whole comment and change history, page by page, and fails naming the
+    /// first user other than the key's owner who commented on or edited it. Fails as unchecked
+    /// when the owner, or any page, cannot be read.
+    fn refuse_if_touched(&self, id: &str) -> Result<()> {
+        let owner = self.owner().context(UNCHECKED)?;
+        let comments = self
+            .pages(ISSUE_COMMENTS, "comments", id)
+            .context(UNCHECKED)?;
+        let edits = self
+            .pages(ISSUE_HISTORY, "history", id)
+            .context(UNCHECKED)?;
+        for comment in &comments {
+            if let Some(who) = stranger(&comment["user"], &comment["botActor"], &owner) {
+                let body = comment["body"].as_str().unwrap_or_default();
+                bail!(
+                    "{who} commented on the issue (\"{}\"), so it was left alone",
+                    excerpt(body)
+                );
+            }
+        }
+        for edit in &edits {
+            // A grouped entry names its actor and, apart, everyone whose description edits joined it.
+            let editors = edit["descriptionUpdatedBy"]
+                .as_array()
+                .into_iter()
+                .flatten();
+            let who = std::iter::once(&edit["actor"])
+                .chain(editors)
+                .find_map(|user| stranger(user, &edit["botActor"], &owner));
+            if let Some(who) = who {
+                bail!(
+                    "{who} edited the issue ({}), so it was left alone",
+                    change(edit)
+                );
+            }
+        }
+        Ok(())
+    }
+
+    /// The id of the user the key belongs to.
+    fn owner(&self) -> Result<String> {
+        let data = self.query(VIEWER, json!({}))?;
+        match data["viewer"]["id"].as_str() {
+            Some(id) => Ok(id.into()),
+            None => bail!("Linear did not say whose key this is"),
+        }
+    }
+
+    /// Every node of the issue's connection `field`, following its pages to the last. Fails when a
+    /// page cannot be read or says there is more without saying where.
+    fn pages(&self, document: &str, field: &str, id: &str) -> Result<Vec<Value>> {
+        let mut nodes = Vec::new();
+        let mut after = Value::Null;
+        for _ in 0..MAX_PAGES {
+            let data = self.query(document, json!({"id": id, "after": after}))?;
+            let page = &data["issue"][field];
+            let Some(found) = page["nodes"].as_array() else {
+                bail!("Linear answered without the issue's {field}");
+            };
+            nodes.extend(found.iter().cloned());
+            if page["pageInfo"]["hasNextPage"] != true {
+                return Ok(nodes);
+            }
+            after = match page["pageInfo"]["endCursor"].as_str() {
+                Some(cursor) => cursor.into(),
+                None => bail!("Linear did not say where the issue's {field} go on"),
+            };
+        }
+        bail!("the issue's {field} did not end")
     }
 
     /// Runs one document and returns its `data`. A response with GraphQL `errors` is a failure,
@@ -182,5 +277,53 @@ fn confirmed(issue: &Value) -> Result<Created> {
             trashed: issue["trashed"] == true,
         }),
         _ => bail!("Linear confirmed the issue without its identifier and url"),
+    }
+}
+
+/// The name of `user` when they are not the owner. Linear names no user for an automated or
+/// integration change, and credits a bot instead: the bot's name stands in, or a last stand-in
+/// when Linear names neither.
+fn stranger(user: &Value, bot: &Value, owner: &str) -> Option<String> {
+    match (user["id"].as_str(), bot["name"].as_str()) {
+        (Some(id), _) if id == owner => None,
+        (Some(_), _) => Some(user["name"].as_str().unwrap_or("another user").into()),
+        (None, Some(bot)) => Some(format!("the bot {bot}")),
+        (None, None) => Some("an unknown user".into()),
+    }
+}
+
+/// The start of a comment's text, on one line.
+fn excerpt(text: &str) -> String {
+    let line = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    match line.char_indices().nth(80) {
+        Some((end, _)) => format!("{}…", &line[..end]),
+        None => line,
+    }
+}
+
+/// What one history entry changed, as far as the history document selects it.
+fn change(entry: &Value) -> String {
+    let changed = |field: &str| !entry[field].is_null();
+    let mut what = Vec::new();
+    if let Some(title) = entry["toTitle"].as_str() {
+        what.push(format!("title to \"{}\"", excerpt(title)));
+    }
+    for (name, fields) in [
+        ("state", &["fromStateId", "toStateId"]),
+        ("assignee", &["fromAssigneeId", "toAssigneeId"]),
+        ("priority", &["fromPriority", "toPriority"]),
+        ("labels", &["addedLabelIds", "removedLabelIds"]),
+    ] {
+        if fields.iter().any(|field| changed(field)) {
+            what.push(name.into());
+        }
+    }
+    if entry["updatedDescription"] == true {
+        what.push("description".into());
+    }
+    if what.is_empty() {
+        "a change to it".into()
+    } else {
+        format!("changed the {}", what.join(", "))
     }
 }
