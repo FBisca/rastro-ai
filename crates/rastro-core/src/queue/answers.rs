@@ -9,13 +9,15 @@
 //! lapsed retraction or a stale confirmation records the earlier correction again, bound to the
 //! lifecycle state the claim has now.
 use super::{CorrectionKind, CorrectionQuestion, Item, read};
+use crate::actions::{self, NewRun, Run, RunStatus};
 use crate::identity::{
-    self, AnswerPerson, ClaimStatement, ClaimTarget, EntityTarget, Intent, IntentKind, Payload,
-    StandardTerm, StatementSnapshot, Targets, commitment_target, plan_answer, resolve,
+    self, AnswerPerson, ClaimStatement, ClaimTarget, EntityTarget, Intent, IntentKind,
+    IssuerContext, Payload, StandardTerm, StatementSnapshot, Targets, commitment_target,
+    plan_answer, resolve,
 };
 use crate::read_only::Snapshot;
 use crate::{Rastro, Storage, commitments};
-use anyhow::{Result, bail, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use std::collections::BTreeSet;
 
 /// What an answer recorded: the item it named and the owner intents it accepted.
@@ -25,6 +27,8 @@ pub struct Answered {
     pub item: Option<String>,
     /// The intents the answer accepted, in acceptance order.
     pub intents: Vec<Intent>,
+    /// The run an accepted action proposal started, as it stands after the provider answered.
+    pub run: Option<Run>,
 }
 
 /// The item ids an answer has taken out of the queue: an accepted, edited or rejected proposal.
@@ -207,6 +211,14 @@ impl<S: Storage> Rastro<S> {
     /// commitment it becomes.
     pub fn queue_accept(&mut self, item: &str) -> Result<Answered> {
         let id = item.to_string();
+        if self
+            .storage
+            .snapshot(|view| still_queued(view, &id))?
+            .action
+            .is_some()
+        {
+            return self.accept_action(&id);
+        }
         let issued = self.issue(|view, _| {
             let pending = still_queued(view, &id)?;
             let (subject, parties) = commitment(&pending)?;
@@ -228,6 +240,58 @@ impl<S: Storage> Rastro<S> {
         Ok(Answered {
             item: Some(id),
             intents: issued.intents,
+            run: None,
+        })
+    }
+
+    /// Accepts an action proposal: the accept intent and the run it starts are recorded in one
+    /// transaction, then the provider is asked to create the issue and the run records what it
+    /// created. When the provider fails, the accept and the run stay recorded and the run is not
+    /// done; the error says so.
+    fn accept_action(&mut self, item: &str) -> Result<Answered> {
+        let issuer = IssuerContext::owner_cli(&self.config.sources);
+        let id = item.to_string();
+        let (intent, mut run) = self.storage.accept_action(|view| {
+            let pending = still_queued(view, &id)?;
+            let filed = (view.action_proposals(&[])?)
+                .into_iter()
+                .find(|filed| filed.id == pending.id)
+                .ok_or_else(|| anyhow::anyhow!("{} is not an action proposal", pending.id))?;
+            let mut intent = proposal_intent(
+                IntentKind::Accept,
+                Some(pending.id.clone()),
+                None,
+                ProposalAnswer {
+                    scope: Some(pending.source.scope.clone()),
+                    ..ProposalAnswer::default()
+                },
+            )?;
+            intent.issuer_context = issuer;
+            let run = NewRun {
+                id: actions::run_id(&intent.id),
+                proposal: pending.id,
+                accept_intent: intent.id.clone(),
+                action: filed.proposal.action,
+                provider: filed.provider,
+                fields: filed.proposal.fields,
+                source: filed.source,
+                issue_id: actions::random_issue_id()?,
+            };
+            Ok((intent, run))
+        })?;
+        let result = self.execute_run(&run).with_context(|| {
+            format!(
+                "the accept is recorded as run {}, but its issue was not created",
+                run.id
+            )
+        })?;
+        run.status = RunStatus::Done;
+        run.identifier = Some(result.identifier);
+        run.url = Some(result.url);
+        Ok(Answered {
+            item: Some(id),
+            intents: vec![intent],
+            run: Some(run),
         })
     }
 
@@ -273,6 +337,7 @@ impl<S: Storage> Rastro<S> {
         Ok(Answered {
             item: Some(id),
             intents: issued.intents,
+            run: None,
         })
     }
 
@@ -299,6 +364,7 @@ impl<S: Storage> Rastro<S> {
         Ok(Answered {
             item: Some(id),
             intents: issued.intents,
+            run: None,
         })
     }
 
@@ -333,6 +399,7 @@ impl<S: Storage> Rastro<S> {
         Ok(Answered {
             item: id,
             intents: issued.intents,
+            run: None,
         })
     }
 
@@ -422,6 +489,7 @@ impl<S: Storage> Rastro<S> {
         Ok(Answered {
             item: Some(id),
             intents: issued.intents,
+            run: None,
         })
     }
 }

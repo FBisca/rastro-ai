@@ -7,7 +7,9 @@ use std::{
 };
 
 pub mod binaries;
+pub mod linear_api;
 pub mod provider;
+pub mod seed;
 
 /// The `rastro` binary under test, as a private copy.
 pub fn rastro() -> &'static Path {
@@ -43,6 +45,25 @@ pub fn test_extractor() -> &'static Path {
         assert!(status.success(), "building the test extractor failed");
         let original =
             Path::new(env!("CARGO_BIN_EXE_rastro")).with_file_name("rastro-test-extractor");
+        binaries::private_copy(&original)
+    })
+}
+
+/// The real Linear action provider, built next to `rastro` and copied.
+pub fn action_linear() -> &'static Path {
+    static BINARY: OnceLock<PathBuf> = OnceLock::new();
+    BINARY.get_or_init(|| {
+        let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+        let status = Command::new(cargo)
+            .args(["build", "--quiet", "-p", "rastro-action-linear"])
+            .status()
+            .unwrap();
+        assert!(
+            status.success(),
+            "building the Linear action provider failed"
+        );
+        let original =
+            Path::new(env!("CARGO_BIN_EXE_rastro")).with_file_name("rastro-action-linear");
         binaries::private_copy(&original)
     })
 }

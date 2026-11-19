@@ -466,6 +466,22 @@ pub trait Storage {
     fn record_action_proposal(&mut self, _filed: &actions::Filed) -> Result<()> {
         anyhow::bail!("storage does not support action proposals")
     }
+    /// Records the owner's accept of an action proposal and the run it starts in one transaction:
+    /// the accept intent, checked and applied as `issue_intents` does for the owner's own
+    /// surface, and the run, holding the random issue id and the intent's id. `plan` reads the
+    /// queue and returns both; nothing is stored when it or any check fails. Returns the stored
+    /// intent and the run, which reads `accepted`.
+    fn accept_action(
+        &mut self,
+        _plan: impl FnOnce(&dyn Snapshot) -> Result<(identity::Intent, actions::NewRun)>,
+    ) -> Result<(identity::Intent, actions::Run)> {
+        anyhow::bail!("storage does not support action runs")
+    }
+    /// Records the issue a run created, which makes the run `done`. A run that already holds a
+    /// result keeps it, and nothing is added.
+    fn record_action_result(&mut self, _run: &str, _result: &actions::RunResult) -> Result<()> {
+        anyhow::bail!("storage does not support action runs")
+    }
 }
 
 pub struct Rastro<S> {

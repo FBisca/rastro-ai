@@ -8,8 +8,15 @@
 //! The action must be one an installed provider declares ([`crate::host::actions`]). The why, the
 //! cited claims and the id stay in Rastro: [`IssueFields`] is the only part written for the
 //! outside system.
+mod runs;
+pub use runs::{NewRun, Run, RunResult, RunStatus};
+pub(crate) use runs::{random_issue_id, run_id};
+
 use crate::queue::{self, Source as QueueSource, SourceKind};
-use crate::{Config, Rastro, Scope, Snapshot, Source, Storage, host, knowledge::WhyOptions};
+use crate::{
+    Config, Rastro, ReadStorage, Reader, Scope, Snapshot, Source, Storage, host,
+    knowledge::WhyOptions,
+};
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
@@ -260,5 +267,42 @@ impl<S: Storage> Rastro<S> {
             .snapshot(|view| check_citations(view, &filed.proposal.cites, &filed.source))?;
         self.storage.record_action_proposal(&filed)?;
         Ok(filed)
+    }
+}
+
+/// What `actions` lists: the runs the reader sees, oldest first, each with its status.
+#[derive(Clone, Debug, JsonSchema, Serialize)]
+#[schemars(rename = "ActionRuns")]
+pub struct Runs {
+    pub runs: Vec<Run>,
+}
+
+impl<S: Storage> Rastro<S> {
+    /// The runs over every scope, on a writing open.
+    pub fn action_runs(&mut self) -> Result<Runs> {
+        Ok(Runs {
+            runs: self.storage.snapshot(|view| view.action_runs(&[]))?,
+        })
+    }
+}
+
+impl<S: ReadStorage> Reader<S> {
+    /// The runs of the sources the reader's scopes see: a run in another scope is absent, and the
+    /// read still succeeds.
+    pub fn action_runs(&mut self) -> Result<Runs> {
+        let Self {
+            locations,
+            storage,
+            scopes,
+            ..
+        } = self;
+        crate::read_only::snapshot(locations, storage, scopes, |view, _| {
+            Ok(Runs {
+                runs: match view {
+                    Some(view) => view.action_runs(scopes)?,
+                    None => Vec::new(),
+                },
+            })
+        })
     }
 }

@@ -374,8 +374,10 @@ operations! {
             slot: 29, name: "queue.outcomes", surfaces: [Cli], read_only: true, reader: run_read, cli_read_path: true
         },
     }
-    /// Propose actions in outside systems. Writes are CLI only, and nothing runs until the owner accepts.
-    Actions / ActionsRequest {
+    /// Actions in outside systems: list the runs the owner's accepts started, or propose an action. Proposing is CLI only, and nothing runs until the owner accepts.
+    Actions(ActionsRequest => ActionsResult) as Actions {
+        slot: 36, name: "actions", surfaces: [Cli], read_only: true, reader: run_read, cli_read_path: true
+    } with ActionsWrite {
         Propose(ActionsProposeRequest => ActionsProposeResult) as ActionsPropose {
             slot: 35, name: "actions.propose", surfaces: [Cli], read_only: false
         },

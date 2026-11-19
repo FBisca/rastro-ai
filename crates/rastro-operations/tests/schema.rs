@@ -246,7 +246,8 @@ fn catalog_declares_claim_cli_read_paths_without_changing_existing_routes() {
                 "meeting.commitments",
                 "queue",
                 "queue.outcomes",
-                "focus"
+                "focus",
+                "actions"
             ]
             .contains(&spec.name)
         );

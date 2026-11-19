@@ -225,6 +225,11 @@ pub trait Snapshot {
     fn action_proposals(&self, _scopes: &[Scope]) -> Result<Vec<crate::actions::Filed>> {
         Ok(Vec::new())
     }
+    /// The action runs whose source is in `scopes` (empty: every scope), oldest first: a run is
+    /// visible only in the scopes that see the source it writes to.
+    fn action_runs(&self, _scopes: &[Scope]) -> Result<Vec<crate::actions::Run>> {
+        Ok(Vec::new())
+    }
     /// What storage recorded for the source, before the freshness rule is applied.
     fn coverage(&self, pair: &Pair, all_windows: bool) -> Result<Coverage>;
     /// Allowed (source, scope) pairs storage holds anything for, with stored freshness rules.

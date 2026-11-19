@@ -748,25 +748,7 @@ impl Intent {
             } => match self.kind {
                 // An accept or an edit mints the commitment it decided, so it names the entity
                 // its statements are about, the terms themselves and the source's scope.
-                IntentKind::Accept => {
-                    ensure!(
-                        seen.is_some() && edited.is_none(),
-                        "an accept snapshots the proposal it saw, and no edit"
-                    );
-                    ensure!(
-                        subject.is_some()
-                            && !parties.is_empty()
-                            && !terms.is_empty()
-                            && scope.is_some(),
-                        "an accept names the commitment it mints, its parties, its standard terms and its source's scope"
-                    );
-                    ensure!(
-                        (terms.iter()).all(|term| {
-                            term.predicate.starts_with("std:") && !term.value.trim().is_empty()
-                        }),
-                        "an accept's standard terms are `std:` predicates with a literal"
-                    );
-                }
+                IntentKind::Accept => check_accept(&self.targets)?,
                 IntentKind::Edit => {
                     ensure!(
                         seen.is_some() && edited.is_some(),
@@ -1665,6 +1647,51 @@ fn mint_person() -> Result<EntityTarget> {
         identifier,
         role: "person".into(),
     })
+}
+/// Checks an accept's targets. An accept of an action proposal states no commitment: it names the
+/// item and its source's scope, and what the run does is the run's own record. Any other accept
+/// mints the commitment it decided, so it snapshots the proposal it saw and names the entity its
+/// statements are about, its parties, the standard terms and the source's scope.
+fn check_accept(targets: &Targets) -> Result<()> {
+    let Targets::Proposal {
+        seen,
+        edited,
+        text,
+        subject,
+        parties,
+        terms,
+        scope,
+        ..
+    } = targets
+    else {
+        return Ok(());
+    };
+    if subject.is_none() {
+        ensure!(
+            seen.is_none()
+                && edited.is_none()
+                && text.is_none()
+                && parties.is_empty()
+                && terms.is_empty()
+                && scope.is_some(),
+            "an accept of an action proposal mints no commitment and names its source's scope"
+        );
+        return Ok(());
+    }
+    ensure!(
+        seen.is_some() && edited.is_none(),
+        "an accept snapshots the proposal it saw, and no edit"
+    );
+    ensure!(
+        !parties.is_empty() && !terms.is_empty() && scope.is_some(),
+        "an accept names the commitment it mints, its parties, its standard terms and its source's scope"
+    );
+    ensure!(
+        (terms.iter())
+            .all(|term| { term.predicate.starts_with("std:") && !term.value.trim().is_empty() }),
+        "an accept's standard terms are `std:` predicates with a literal"
+    );
+    Ok(())
 }
 pub(crate) fn new_intent(
     kind: IntentKind,

@@ -1,0 +1,20 @@
+id = "rastro-action-linear"
+name = "Rastro Linear action provider"
+version = "0.1.0"
+author = "Rastro"
+kinds = ["action_provider"]
+protocol = 1
+command = "rastro-action-linear"
+
+# Reads no evidence, so it holds no `submit` permission. It writes to Linear with the key in its own
+# environment, which no other plugin is given.
+[permissions]
+submit = []
+scopes = []
+env = ["LINEAR_API_KEY", "RASTRO_LINEAR_API_URL"]
+actions = ["linear.create_issue"]
+
+[[action]]
+name = "linear.create_issue"
+reach = "others_see_it"
+reversibility = "can_be_undone"
