@@ -323,3 +323,23 @@ fn a_proposal_with_no_team_anywhere_is_refused_naming_both_places() {
     assert_eq!(env.queue_items()[0]["id"], proposed["id"]);
     assert_eq!(env.queue_items()[0]["action"]["fields"]["team"], "OPS");
 }
+
+// spec: An agent proposes an action
+#[test]
+fn two_linear_sources_make_the_proposal_ambiguous_and_nothing_is_recorded() {
+    let env = Env::configured(Some("ENG"));
+    let config = env.locations().config.join("config.toml");
+    let mut text = fs::read_to_string(&config).unwrap();
+    text.push_str(
+        "\n[[sources]]\nname = \"linear-personal\"\nconnector = \"linear\"\nselector = {}\n\
+         scope = \"personal\"\nfreshness_rule = \"1h\"\nwindow_start = \"2026-08-01T00:00:00Z\"\n\
+         keep_original = false\n",
+    );
+    fs::write(config, text).unwrap();
+    let out = env.rastro(&propose("Flaky sync test", &["--why", "W"]));
+    assert_eq!(out.status.code(), Some(1), "{}", stderr(&out));
+    let message = stderr(&out);
+    assert!(message.contains("linear-work"), "{message}");
+    assert!(message.contains("linear-personal"), "{message}");
+    assert!(env.queue_items().is_empty());
+}

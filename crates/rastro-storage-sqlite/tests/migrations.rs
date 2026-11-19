@@ -211,6 +211,43 @@ fn projection_publication_receipts_reject_updates_and_deletes() {
     );
 }
 
+/// An action proposal is never revised: an update, a delete, and a replace by the same id or the
+/// same sequence number are all refused, and the recorded row stays as it was.
+#[test]
+fn recorded_action_proposals_are_never_rewritten() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("rastro.sqlite3");
+    SqliteStorage::open(&path).unwrap();
+    let db = Connection::open(path).unwrap();
+    let insert = |verb: &str, id: &str, seq: &str, why: &str| {
+        db.execute(
+            &format!(
+                "{verb} INTO action_proposal
+                 (append_seq, id, action, provider, fields, why, cites, source, scope, proposed_at)
+                 VALUES ({seq}, '{id}', 'linear.create_issue', 'p', '{{}}', '{why}', '[]',
+                         'linear-work', 'work', '2026-11-19T09:00:00.000Z')"
+            ),
+            [],
+        )
+    };
+    insert("INSERT", "q_1", "NULL", "first").unwrap();
+    assert!(insert("INSERT OR REPLACE", "q_1", "NULL", "second").is_err());
+    assert!(insert("INSERT OR REPLACE", "q_2", "1", "second").is_err());
+    assert!(
+        db.execute("UPDATE action_proposal SET why = 'second'", [])
+            .is_err()
+    );
+    assert!(db.execute("DELETE FROM action_proposal", []).is_err());
+    let rows: Vec<String> = db
+        .prepare("SELECT why FROM action_proposal")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .collect::<Result<_, _>>()
+        .unwrap();
+    assert_eq!(rows, ["first"]);
+}
+
 /// claims/R17: entity types are never stored as a column
 /// spec: A renamed account keeps its entity and both logins
 #[test]

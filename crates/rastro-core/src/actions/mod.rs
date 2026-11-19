@@ -133,14 +133,7 @@ fn plan(
             "{LINEAR_CREATE_ISSUE} needs a team: pass --team, or set [actions.linear] default_team in config.toml"
         )
     })?;
-    let source = (config.sources.iter())
-        .find(|source| source.connector == LINEAR_CONNECTOR)
-        .map(source_of)
-        .with_context(|| {
-            format!(
-                "{LINEAR_CREATE_ISSUE} writes to a Linear source, and none is registered: add one with `rastro source add`"
-            )
-        })?;
+    let source = linear_source(&config.sources)?;
     let mut cites = request.cites.clone();
     cites.sort();
     cites.dedup();
@@ -164,6 +157,33 @@ fn plan(
         provider: offer.provider.clone(),
         proposed_at,
     })
+}
+
+/// The one source of the Linear connector, which `linear.create_issue` writes to. Fails when none
+/// is registered, and when several are: a proposal is bound to the source it writes to and its
+/// scope, so Rastro never picks one for the owner.
+fn linear_source(sources: &[Source]) -> Result<QueueSource> {
+    let mut linear = sources
+        .iter()
+        .filter(|source| source.connector == LINEAR_CONNECTOR);
+    match (linear.next(), linear.next()) {
+        (Some(source), None) => Ok(source_of(source)),
+        (None, _) => bail!(
+            "{LINEAR_CREATE_ISSUE} writes to a Linear source, and none is registered: add one with `rastro source add`"
+        ),
+        (Some(first), Some(second)) => {
+            let names: Vec<&str> = [first, second]
+                .into_iter()
+                .chain(linear)
+                .map(|source| source.name.as_str())
+                .collect();
+            bail!(
+                "{LINEAR_CREATE_ISSUE} writes to a Linear source, and {} are registered ({}): keep one",
+                names.len(),
+                names.join(", ")
+            )
+        }
+    }
 }
 
 /// The queue's name for the source an action writes to.

@@ -20,5 +20,5 @@ BEGIN SELECT RAISE(ABORT, 'action proposals are insert-only'); END;
 CREATE TRIGGER action_proposal_no_delete BEFORE DELETE ON action_proposal
 BEGIN SELECT RAISE(ABORT, 'action proposals are insert-only'); END;
 CREATE TRIGGER action_proposal_no_replace BEFORE INSERT ON action_proposal
-WHEN EXISTS (SELECT 1 FROM action_proposal WHERE append_seq = NEW.append_seq)
+WHEN EXISTS (SELECT 1 FROM action_proposal WHERE append_seq = NEW.append_seq OR id = NEW.id)
 BEGIN SELECT RAISE(ABORT, 'action proposals are insert-only'); END;

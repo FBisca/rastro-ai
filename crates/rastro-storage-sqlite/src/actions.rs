@@ -10,13 +10,14 @@ use rastro_core::{
 use rusqlite::{Connection, params};
 
 /// Records a proposal. One already recorded with the same content address is the same proposal,
-/// so it is left as it is and nothing is added.
+/// so it is left as it is and nothing is added: the insert selects no row, so the table's
+/// insert-only guard (which refuses a repeated id) is never reached.
 pub(crate) fn record(connection: &mut Connection, filed: &Filed) -> Result<()> {
     connection.execute(
         "INSERT INTO action_proposal
              (id, action, provider, fields, why, cites, source, scope, proposed_at)
-         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9)
-         ON CONFLICT (id) DO NOTHING",
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9
+         WHERE NOT EXISTS (SELECT 1 FROM action_proposal WHERE id = ?1)",
         params![
             filed.id,
             filed.proposal.action,
