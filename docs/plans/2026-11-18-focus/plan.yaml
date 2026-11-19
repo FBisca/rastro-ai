@@ -86,10 +86,16 @@ tickets:
     paths: [docs/specs/focus.md, docs/roadmap.md, README.md, docs/plans/2026-11-18-focus/brief.md]
     owner: owner
     blocked_by: [T3]
+  - id: T5
+    delivers: Plans and Focus tabs — the workbench mod gains a focus-only instance (props focus:true) that reads only rastro focus --json and draws the report full-width with its failures shown; the space gets a Plans tab (the workbench) and a Focus tab (the focus-only instance).
+    satisfies: [S10]
+    paths: [herdr/agent-workbench/main.js, herdr/agent-workbench/data.js, herdr/agent-workbench/model.js, herdr/agent-workbench/views/focus.js, herdr/agent-workbench/views/home.js, herdr/agent-workbench/test/, herdr/agent-workbench/RECIPE.md, docs/specs/agent-workbench.md, tests/test_workbench_mod.py]
+    owner: owner
+    repo: ../agent-runtime
 approval:
   by: felippe.bisca@gmail.com
-  at: '2026-11-19T09:09:08.974215+00:00'
-  base: 0dcc7702606cf3a1a7045900bd6b0414ad0d9520
-  digest: 9e94f277e5d16dd4acdb95134febb329c6bdcdeafe5054fadfe0d045e5fed23d
-  reason: Owner approved via /orchestrate; decisions D1-D16 settled, prototype agreed
-    2026-11-18
+  at: '2026-11-19T13:19:59.584728+00:00'
+  base: 0c4313eed7a9f479d60992b0d7d51010df86a64c
+  digest: 1ae70f3aeb0cfce0abdc11ebe7c11f2ae96986ce559addae63e739e6ec9f8664
+  reason: Owner requested Plans and Focus tabs (D18); T5 added for the focus-only
+    mod instance, owner-owned in agent-runtime

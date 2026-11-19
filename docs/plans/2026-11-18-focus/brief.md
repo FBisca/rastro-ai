@@ -80,6 +80,8 @@ D13 Visual = variant B content (one focus + flat needs-you rows) in the workbenc
 D14 Repo split: the generic `focus` read + ranking + --json lives in open-source rastro; the personal workbench FOCUS card lives outside rastro, over putting the Herdr glue in rastro: owner Q2 "very personal for now, lets keep out of the rastro which is a opensource" (interview).
 D15 Visual prototype agreed: owner "agreed both" to the workbench card (2026-11-18), satisfying D9 (prototype/workbench.html).
 D16 Workbench frontend home = agent-runtime/herdr/agent-workbench (the agent-workbench mod, per the archived herdr-app-mods README); the personal-side ticket T3 names repo ../agent-runtime.
+D17 FOCUS sits below the week's KPI cards on home, over above them: owner "focus should be under the KPI Cards" (2026-11-19, after seeing the card live).
+D18 Two tabs in the workbench space, Plans and Focus, over one mixed home: owner "let's do something even better, create tabs, Plans and Focus" (2026-11-19). The Focus tab is the mod with props {focus:true}: it reads only rastro focus --json (no orchestrator dependency, works in a space with no plans) and draws the report full-width; Plans is the workbench as-is.
 
 ## Risks / Trade-offs
 - Noise in the focus line → deterministic bands, cap of three items, queue as count only (S4, S8); the ranking is the product and is tunable without a model.
