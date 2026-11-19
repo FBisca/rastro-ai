@@ -31,8 +31,9 @@ Status: `todo` · `planning` · `doing` · `done`
 
 | # | Slice | Outcome: from here on you can… | Builds on | Concept / decisions | Status |
 |---|---|---|---|---|---|
-| 8 | **First Act** | Let one real action (e.g. create a task in your tracker) run at Propose, then at Act through a rule you write. Each Action run stores its justification and undo, with a grace window | 7 | levels (all) | todo |
-| 9 | **Learned trust and usefulness** | See trust per cell grow from your outcomes: promotion is proposed to you, demotion is automatic. Includes a trust view, a learning journal, and usefulness and cost per plugin, so dead parts are visible | 8 | learning (all); plugins §9 | todo |
+| 8a | **First action, proposed** | Have an agent in any session propose a Linear issue through Rastro, accept it in one step, and get it created once, with its justification kept in Rastro (never in Linear), `actions show` to ask why, and an undo. One idempotent `rastro tick`, called by launchd, keeps sources fresh and retries failed runs. Switch day: the next Linear issue you have an agent create goes through Rastro | 7 | levels §1–6, §9; knowledge §43, §74; plugins §34–36 | planning (`plans/2026-11-19-first-act/plan.yaml`) |
+| 8b | **First Act** | Let that action run at Act through a rule you write, with a grace window you can stop, an optional daily budget, and `rules check` to see what a rule would do now | 8a | levels (all), §13–15; open question #13 | todo |
+| 9 | **Learned trust and usefulness** | See trust per cell grow from your outcomes: promotion is proposed to you, demotion is automatic. Includes a trust view, a learning journal, and usefulness and cost per plugin, so dead parts are visible | 8b | learning (all); plugins §9 | todo |
 
 ## M4: Where I already am
 **Client use: daily rituals** in your vault and terminal, with interruptions you control.
@@ -56,6 +57,7 @@ Status: `todo` · `planning` · `doing` · `done`
 ## Parking lot
 - News radar, project updates in the owner's voice, "find agent work a plain rule could do": workflows after 12.
 - Windows support.
+- Plugins that call agents go through agent-runtime, so the harness is a config choice (`decisions/plugins.md` §36): the Claude Code commitment adapter moves over.
 - Commitments from GitHub and Linear comments: the slice-5 extractor bound to those sources, once their connectors read comments.
 - Slack and mail through the work companion, once commitments prove useful; Slack per approved channel, each with its own coverage. Meetings already shipped as slice 5's first source (`specs/meetings.md`, `adr/0011`): a local transcript import, not a work-companion integration.
 - A versioned structured read contract from the work companion (asked of its maintainers), then a generic MCP bridge with private mapping packs.
