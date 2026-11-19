@@ -1,6 +1,8 @@
 //! A fake Linear GraphQL API on loopback: it answers an issue create and records every request it
 //! receives, so a test sees exactly what reached Linear. It holds the issues it created by the id
-//! the caller gave, and numbers them `ENG-1`, `ENG-2`, … in creation order.
+//! the caller gave, and numbers them `ENG-1`, `ENG-2`, … in creation order. It answers a lookup of
+//! an issue by id, and can turn the response to the next create into an error or hold every create's response
+//! until a test lets it go: the issue exists either way.
 #![allow(dead_code)]
 use serde_json::{Value, json};
 use std::{
@@ -37,6 +39,19 @@ impl Req {
 #[derive(Default)]
 struct World {
     issues: Vec<Value>,
+    /// The next create is made, but what the caller gets back is an error.
+    lose_next_create: bool,
+    /// A create is made, but its response waits for [`Fixture::release_creates`].
+    hold_creates: bool,
+}
+
+/// What happens to the response to a request, once the fake has done what it was asked.
+enum Fate {
+    Respond,
+    /// The create is answered with a server error, so the caller cannot tell the issue was made.
+    Lose,
+    /// The response waits until the fake's creates are released.
+    Hold,
 }
 
 pub struct Fixture {
@@ -45,6 +60,13 @@ pub struct Fixture {
     log: Arc<Mutex<Vec<Req>>>,
     stop: Arc<AtomicBool>,
     thread: Option<JoinHandle<()>>,
+}
+
+/// Answers `request` with `status` and `reply`.
+fn respond(request: tiny_http::Request, status: u16, reply: &Value) {
+    let mut response = tiny_http::Response::from_string(reply.to_string()).with_status_code(status);
+    response.add_header(tiny_http::Header::from_bytes("Content-Type", "application/json").unwrap());
+    let _ = request.respond(response);
 }
 
 fn operation(query: &str) -> String {
@@ -57,8 +79,9 @@ fn operation(query: &str) -> String {
 }
 
 impl World {
-    fn reply(&mut self, req: &Req) -> (u16, Value) {
-        match req.operation.as_str() {
+    fn reply(&mut self, req: &Req) -> (u16, Value, Fate) {
+        let mut fate = Fate::Respond;
+        let (status, body) = match req.operation.as_str() {
             "IssueCreate" => {
                 let input = req.input();
                 let number = self.issues.len() + 1;
@@ -69,16 +92,37 @@ impl World {
                     "title": input["title"],
                 });
                 self.issues.push(issue.clone());
+                if std::mem::take(&mut self.lose_next_create) {
+                    fate = Fate::Lose;
+                } else if self.hold_creates {
+                    fate = Fate::Hold;
+                }
                 (
                     200,
                     json!({"data": {"issueCreate": {"success": true, "issue": issue}}}),
                 )
             }
+            "IssueLookup" => match self
+                .issues
+                .iter()
+                .find(|issue| issue["id"] == req.body["variables"]["id"])
+            {
+                Some(issue) => (200, json!({"data": {"issue": issue}})),
+                // As Linear answers an id it does not hold.
+                None => (
+                    200,
+                    json!({"data": null, "errors": [{
+                        "message": "Entity not found: Issue - Could not find referenced Issue.",
+                        "extensions": {"type": "invalid input", "code": "INPUT_ERROR"}
+                    }]}),
+                ),
+            },
             _ => (
                 400,
                 json!({"errors": [{"message": "no", "extensions": {"code": "GRAPHQL_VALIDATION_FAILED"}}]}),
             ),
-        }
+        };
+        (status, body, fate)
     }
 }
 
@@ -110,13 +154,22 @@ impl Fixture {
                     body,
                 };
                 thread_log.lock().unwrap().push(req.clone());
-                let (status, reply) = thread_world.lock().unwrap().reply(&req);
-                let mut response =
-                    tiny_http::Response::from_string(reply.to_string()).with_status_code(status);
-                response.add_header(
-                    tiny_http::Header::from_bytes("Content-Type", "application/json").unwrap(),
-                );
-                let _ = request.respond(response);
+                let (status, reply, fate) = thread_world.lock().unwrap().reply(&req);
+                match fate {
+                    Fate::Respond => respond(request, status, &reply),
+                    Fate::Lose => respond(request, 502, &json!({})),
+                    Fate::Hold => {
+                        let (world, stop) = (thread_world.clone(), thread_stop.clone());
+                        std::thread::spawn(move || {
+                            while world.lock().unwrap().hold_creates
+                                && !stop.load(Ordering::Relaxed)
+                            {
+                                std::thread::sleep(Duration::from_millis(5));
+                            }
+                            respond(request, status, &reply);
+                        });
+                    }
+                }
             }
         });
         Self {
@@ -126,6 +179,32 @@ impl Fixture {
             stop,
             thread: Some(thread),
         }
+    }
+
+    /// The next issue create is made, but the caller gets an error back instead of the issue.
+    pub fn lose_next_create_response(&self) {
+        self.world.lock().unwrap().lose_next_create = true;
+    }
+
+    /// Holds the response to every issue create, though each issue is made, until
+    /// [`Fixture::release_creates`].
+    pub fn hold_create_responses(&self) {
+        self.world.lock().unwrap().hold_creates = true;
+    }
+
+    pub fn release_creates(&self) {
+        self.world.lock().unwrap().hold_creates = false;
+    }
+
+    /// Waits until the fake has received `count` issue creates; panics if they do not come.
+    pub fn wait_for_creates(&self, count: usize) {
+        for _ in 0..2000 {
+            if self.creates().len() >= count {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        panic!("the fake Linear never received {count} issue create(s)");
     }
 
     /// Every request received so far, oldest first.

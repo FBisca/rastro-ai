@@ -10,6 +10,21 @@ const DEFAULT_API: &str = "https://api.linear.app";
 const ISSUE_CREATE: &str = "mutation IssueCreate($input: IssueCreateInput!) { \
     issueCreate(input: $input) { success issue { id identifier url } } }";
 
+/// The one document an issue lookup sends: the issue by the id it was created under.
+const ISSUE_LOOKUP: &str =
+    "query IssueLookup($id: String!) { issue(id: $id) { id identifier url } }";
+
+/// Linear's answer to an id it holds no entity for. A lookup reads it as "no such issue"; any
+/// other document reads it as the refusal it is.
+#[derive(Debug)]
+struct NotFound(String);
+impl std::fmt::Display for NotFound {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Linear refused the request: {}", self.0)
+    }
+}
+impl std::error::Error for NotFound {}
+
 /// What Linear says of an issue it created.
 #[derive(Debug, Eq, PartialEq)]
 pub struct Created {
@@ -79,10 +94,17 @@ impl Client {
         if created["success"] != true {
             bail!("Linear did not confirm the issue");
         }
-        let text = |field: &str| created["issue"][field].as_str().map(String::from);
-        match (text("identifier"), text("url")) {
-            (Some(identifier), Some(url)) => Ok(Created { identifier, url }),
-            _ => bail!("Linear confirmed the issue without its identifier and url"),
+        confirmed(&created["issue"])
+    }
+
+    /// The issue created under `id`, or `None` when Linear holds no issue by that id. Fails when
+    /// Linear cannot be asked, or answers with anything but the issue or its absence.
+    pub fn find_issue(&self, id: &str) -> Result<Option<Created>> {
+        match self.query(ISSUE_LOOKUP, json!({"id": id})) {
+            Ok(data) if data["issue"].is_null() => Ok(None),
+            Ok(data) => confirmed(&data["issue"]).map(Some),
+            Err(error) if error.is::<NotFound>() => Ok(None),
+            Err(error) => Err(error),
         }
     }
 
@@ -106,6 +128,11 @@ impl Client {
             .and_then(|errors| errors.first())
         {
             let code = message["extensions"]["code"].as_str().unwrap_or("unknown");
+            let not_found = (message["message"].as_str())
+                .is_some_and(|text| text.to_lowercase().starts_with("entity not found"));
+            if not_found {
+                return Err(NotFound(code.into()).into());
+            }
             bail!("Linear refused the request: {code}");
         }
         if !(200..300).contains(&status) {
@@ -118,5 +145,14 @@ impl Client {
             },
             _ => bail!("Linear answered with something that is not JSON"),
         }
+    }
+}
+
+/// The identifier and URL of an issue Linear confirmed.
+fn confirmed(issue: &Value) -> Result<Created> {
+    let text = |field: &str| issue[field].as_str().map(String::from);
+    match (text("identifier"), text("url")) {
+        (Some(identifier), Some(url)) => Ok(Created { identifier, url }),
+        _ => bail!("Linear confirmed the issue without its identifier and url"),
     }
 }

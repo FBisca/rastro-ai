@@ -9,7 +9,7 @@
 //! lapsed retraction or a stale confirmation records the earlier correction again, bound to the
 //! lifecycle state the claim has now.
 use super::{CorrectionKind, CorrectionQuestion, Item, read};
-use crate::actions::{self, NewRun, Run, RunStatus};
+use crate::actions::{self, NewRun, Run};
 use crate::identity::{
     self, AnswerPerson, ClaimStatement, ClaimTarget, EntityTarget, Intent, IntentKind,
     IssuerContext, Payload, StandardTerm, StatementSnapshot, Targets, commitment_target,
@@ -298,7 +298,7 @@ impl<S: Storage> Rastro<S> {
         } else {
             IntentKind::Accept
         };
-        let (intent, mut run) = self.storage.accept_action(|view| {
+        let (intent, run) = self.storage.accept_action(|view| {
             let pending = still_queued(view, &id)?;
             let filed = (view.action_proposals(&[])?)
                 .into_iter()
@@ -330,15 +330,14 @@ impl<S: Storage> Rastro<S> {
             };
             Ok((intent, run))
         })?;
-        let result = self.execute_run(&run).with_context(|| {
+        // Another process already executing the run leaves it to that process: it reads as accepted.
+        let finished = self.execute_run(&run).with_context(|| {
             format!(
                 "the accept is recorded as run {}, but its issue was not created",
                 run.id
             )
         })?;
-        run.status = RunStatus::Done;
-        run.identifier = Some(result.identifier);
-        run.url = Some(result.url);
+        let run = finished.unwrap_or(run);
         Ok(Answered {
             item: Some(id),
             intents: vec![intent],

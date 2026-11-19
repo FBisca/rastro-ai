@@ -89,7 +89,13 @@ fn an_edited_action_proposal_creates_the_issue_with_the_edited_title() {
 
     let creates = env.linear.creates();
     assert_eq!(creates.len(), 1, "{creates:?}");
-    assert_eq!(env.linear.requests().len(), 1, "only the create was sent");
+    // Besides the create, only the lookup of the run's id before it.
+    assert_eq!(
+        env.linear.requests().len(),
+        2,
+        "{:?}",
+        env.linear.requests()
+    );
     let input = creates[0].input();
     assert_eq!(input["title"], "Sync test flakes in CI");
     assert_eq!(input["teamId"], "ENG");

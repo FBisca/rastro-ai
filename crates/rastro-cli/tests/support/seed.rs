@@ -3,12 +3,38 @@
 #![allow(dead_code)]
 use chrono::{DateTime, Utc};
 use rastro_core::claims::{self, Entity, Object, ObservedClaim, Support};
-use rastro_core::{Appended, Evidence, Scope, Source, Storage, TrustClass};
+use rastro_core::{
+    Appended, CoverageRecord, CoverageState, Evidence, Scope, Source, Storage, TrustClass,
+};
 use rastro_storage_sqlite::SqliteStorage;
 use std::{collections::BTreeSet, path::Path};
 
 fn time() -> DateTime<Utc> {
     "2026-11-18T00:00:00Z".parse().unwrap()
+}
+
+/// Records that `source`, in `scope`, was completely checked just now, so a tick finds it fresh and
+/// does not sync it. `home` is the `RASTRO_HOME`.
+pub fn checked_now(home: &Path, source: &str, scope: &str) {
+    let mut db = SqliteStorage::open(&home.join("data/rastro.sqlite3")).unwrap();
+    let source = Source::github(source.into(), "o/p".into(), Scope(scope.into()));
+    db.project_sources(std::slice::from_ref(&source)).unwrap();
+    let now = Utc::now();
+    let run = db
+        .start_run(&source, ("fixture", "1"), now, (time(), now))
+        .unwrap();
+    db.record_coverage(&CoverageRecord {
+        run_id: run,
+        source: source.name.clone(),
+        scope: source.scope.clone(),
+        window: (time(), now),
+        selection: "all".into(),
+        state: CoverageState::Empty,
+        reason: None,
+        retry_at: None,
+        checked_at: now,
+    })
+    .unwrap();
 }
 
 /// A claim observed in `scope` only, about `subject`, and its id. `home` is the `RASTRO_HOME`.
