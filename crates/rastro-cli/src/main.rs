@@ -984,6 +984,13 @@ fn action_run_text(run: &rastro_core::actions::Run) -> String {
             display_safe(url)
         );
     }
+    if let Some(error) = &run.error {
+        line += &format!(
+            " | Error: {} | Attempts: {}",
+            display_safe(error),
+            run.attempts
+        );
+    }
     line
 }
 

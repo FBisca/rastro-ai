@@ -160,7 +160,7 @@ fn tick_executes_an_accepted_run_that_was_cut_off_before_any_request_was_sent() 
         .unwrap();
     assert!(!out.status.success());
     assert!(env.linear.requests().is_empty());
-    assert_eq!(env.runs()[0]["status"], "accepted");
+    assert_eq!(env.runs()[0]["status"], "failed");
 
     env.tick();
 
@@ -180,7 +180,7 @@ fn tick_finds_the_issue_by_the_runs_id_when_the_create_response_was_lost() {
     let out = env.rastro(&["queue", "accept", &item]);
     assert!(!out.status.success());
     assert_eq!(env.linear.issues().len(), 1, "Linear made the issue");
-    assert_eq!(env.runs()[0]["status"], "accepted");
+    assert_eq!(env.runs()[0]["status"], "failed");
     let issue_id = env.runs()[0]["issue_id"].as_str().unwrap().to_string();
 
     env.tick();

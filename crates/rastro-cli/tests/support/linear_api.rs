@@ -43,6 +43,8 @@ struct World {
     lose_next_create: bool,
     /// A create is made, but its response waits for [`Fixture::release_creates`].
     hold_creates: bool,
+    /// Every create is refused with a server error and makes no issue.
+    refuse_creates: bool,
 }
 
 /// What happens to the response to a request, once the fake has done what it was asked.
@@ -82,6 +84,10 @@ impl World {
     fn reply(&mut self, req: &Req) -> (u16, Value, Fate) {
         let mut fate = Fate::Respond;
         let (status, body) = match req.operation.as_str() {
+            "IssueCreate" if self.refuse_creates => (
+                500,
+                json!({"errors": [{"message": "Linear is down", "extensions": {"code": "INTERNAL_SERVER_ERROR"}}]}),
+            ),
             "IssueCreate" => {
                 let input = req.input();
                 let number = self.issues.len() + 1;
@@ -184,6 +190,16 @@ impl Fixture {
     /// The next issue create is made, but the caller gets an error back instead of the issue.
     pub fn lose_next_create_response(&self) {
         self.world.lock().unwrap().lose_next_create = true;
+    }
+
+    /// Refuses every issue create with a server error, making no issue, until
+    /// [`Fixture::accept_creates`].
+    pub fn refuse_creates(&self) {
+        self.world.lock().unwrap().refuse_creates = true;
+    }
+
+    pub fn accept_creates(&self) {
+        self.world.lock().unwrap().refuse_creates = false;
     }
 
     /// Holds the response to every issue create, though each issue is made, until

@@ -231,6 +231,16 @@
         "action": {
           "type": "string"
         },
+        "attempts": {
+          "description": "How many executions of the run have failed. Zero until one does.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "error": {
+          "description": "The error of the last failed execution; present while the run reads `failed`.",
+          "type": "string"
+        },
         "fields": {
           "$ref": "#/$defs/ActionIssueFields",
           "description": "The fields the owner accepted: the content written for the outside system."
@@ -276,7 +286,8 @@
         "provider",
         "issue_id",
         "accepted_at",
-        "status"
+        "status",
+        "attempts"
       ],
       "type": "object"
     },
@@ -2841,6 +2852,11 @@
         {
           "const": "done",
           "description": "The provider created the issue, and the run holds its identifier and URL.",
+          "type": "string"
+        },
+        {
+          "const": "failed",
+          "description": "An execution failed and the run has no issue: it holds the error, and `tick` retries it\nuntil it has made 3 attempts.",
           "type": "string"
         }
       ]

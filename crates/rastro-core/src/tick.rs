@@ -37,7 +37,7 @@ pub struct TickReport {
     /// Action runs this tick executed to `done`. A run another process was executing is left to
     /// it and is not listed.
     pub runs_finished: Vec<String>,
-    /// Action runs whose execution failed, each with why. They stay accepted.
+    /// Action runs whose execution failed, each with why. Each reads `failed` with that error until it has made 3 attempts.
     pub runs_failed: Vec<(String, String)>,
     /// Sources synced.
     pub synced: Vec<String>,
@@ -48,7 +48,7 @@ pub struct TickReport {
 }
 
 impl<S: Storage + StoredTwins> Rastro<S> {
-    /// Executes each accepted Action run that is not done, then syncs each source past its
+    /// Executes each Action run that is not done and has made fewer than 3 failed attempts, then syncs each source past its
     /// freshness rule, one after another, and skips the fresh ones. A run or a source that fails
     /// is recorded in the report and the next one still goes.
     ///
