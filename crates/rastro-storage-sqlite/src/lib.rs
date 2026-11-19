@@ -15,6 +15,7 @@ const BUSY_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(5);
 /// What `PRAGMA user_version` 1 and 2 meant, before migrations were tracked by name. Frozen.
 const LEGACY: [&str; 2] = ["202611041200_initial", "202611041500_evidence_insert_guard"];
 
+mod actions;
 mod automatic;
 mod commitments;
 mod identity;
@@ -33,7 +34,7 @@ const INTENT_END: &str = "202611081000_intent_justification_end";
 /// A migration that starts with this line rebuilds a table other tables name, so the open runs
 /// it with foreign keys off and checks them before it commits.
 const FOREIGN_KEYS_OFF: &str = "-- foreign_keys = off";
-const MIGRATIONS: [(&str, &str); 19] = [
+const MIGRATIONS: [(&str, &str); 20] = [
     (
         "202611041200_initial",
         include_str!("../migrations/202611041200_initial.sql"),
@@ -109,6 +110,10 @@ const MIGRATIONS: [(&str, &str); 19] = [
     (
         "202611181000_claim_statuses",
         include_str!("../migrations/202611181000_claim_statuses.sql"),
+    ),
+    (
+        "202611191000_action_proposals",
+        include_str!("../migrations/202611191000_action_proposals.sql"),
     ),
 ];
 
@@ -400,6 +405,9 @@ impl rastro_core::runs::StoredTwins for SqliteStorage {
     }
 }
 impl Storage for SqliteStorage {
+    fn record_action_proposal(&mut self, filed: &rastro_core::actions::Filed) -> Result<()> {
+        actions::record(&mut self.connection, filed)
+    }
     fn record_meeting_run(&mut self, run: &rastro_core::meeting::RunRecord) -> Result<i64> {
         meeting::record(&mut self.connection, run)
     }
@@ -1005,6 +1013,9 @@ impl Snapshot for View<'_> {
     }
     fn queue_sources(&self, scopes: &[Scope]) -> Result<Vec<rastro_core::queue::Origin>> {
         commitments::origins(self, scopes)
+    }
+    fn action_proposals(&self, scopes: &[Scope]) -> Result<Vec<rastro_core::actions::Filed>> {
+        actions::proposals(self, scopes)
     }
     fn meeting_recording(&self, meeting: &str) -> Result<Option<rastro_core::meeting::Recording>> {
         meeting::recording(self, meeting)

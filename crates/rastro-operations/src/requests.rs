@@ -692,6 +692,53 @@ impl FocusRequest {
     }
 }
 
+/// Propose an action for the owner to accept: it waits in the queue with its why and runs nothing. The action must be one an installed provider declares, such as `linear.create_issue`, which needs a title and a team (`--team`, else `[actions.linear] default_team` in config.toml) and is assigned to the owner unless `--assignee` says otherwise. The why and the cited claims stay in Rastro: only the title, description, team and assignee are ever written to the outside system.
+#[derive(Args, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ActionsProposeRequest {
+    /// The action, as an installed provider declares it, such as `linear.create_issue`.
+    pub action: String,
+    /// The issue's title; `linear.create_issue` needs one.
+    #[arg(long)]
+    #[serde(default)]
+    pub title: Option<String>,
+    /// The issue's description.
+    #[arg(long)]
+    #[serde(default)]
+    pub description: Option<String>,
+    /// The Linear team's key; `[actions.linear] default_team` when omitted.
+    #[arg(long)]
+    #[serde(default)]
+    pub team: Option<String>,
+    /// Who the issue is assigned to; the owner when omitted.
+    #[arg(long)]
+    #[serde(default)]
+    pub assignee: Option<String>,
+    /// Why you propose it, in your words. Required; it stays in Rastro and is never written to the outside system.
+    #[arg(long)]
+    pub why: String,
+    /// A claim id that supports the proposal, as `about` and `why` show it; repeatable.
+    #[arg(long = "cite")]
+    #[serde(default)]
+    pub cites: Vec<String>,
+}
+impl ActionsProposeRequest {
+    pub(crate) fn run<S: Storage + StoredTwins>(
+        self,
+        rastro: &mut Rastro<S>,
+    ) -> Result<ActionsProposeResult> {
+        rastro.propose_action(&rastro_core::actions::ProposeRequest {
+            action: self.action,
+            title: self.title,
+            description: self.description,
+            team: self.team,
+            assignee: self.assignee,
+            why: self.why,
+            cites: self.cites,
+        })
+    }
+}
+
 /// Accept a proposal unchanged: one owner intent snapshots what you saw, and the item leaves the queue.
 #[derive(Args, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
