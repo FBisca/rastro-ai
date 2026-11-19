@@ -93,7 +93,14 @@ fn accepting_an_action_proposal_creates_the_issue_once_and_the_run_reads_done() 
 
     let creates = env.linear.creates();
     assert_eq!(creates.len(), 1, "{creates:?}");
-    assert_eq!(env.linear.requests().len(), 1, "only the create was sent");
+    let sent: Vec<_> = (env.linear.requests().into_iter())
+        .map(|req| req.operation)
+        .collect();
+    assert_eq!(
+        sent,
+        ["IssueLookup", "IssueCreate"],
+        "the id is looked up first"
+    );
     let create = &creates[0];
     assert_eq!(create.method, "POST");
     assert_eq!(create.path, "/graphql");

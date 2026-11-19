@@ -2,23 +2,24 @@
 //!
 //! Accepting records the accept intent and one run in a single transaction. The run holds the
 //! random issue id the outside system is asked to create the issue under, fixed before any
-//! request is sent, so what the run did can always be found by it. Executing a run asks the
-//! provider to do the action and records the issue's identifier and URL; a run with such a result
-//! reads `done`, and one without reads `accepted`.
+//! request is sent, so what the run did can always be found by it. Executing a run takes the run's
+//! lock, asks the provider whether the issue under that id exists and only if it does not to create
+//! it, and records the issue's identifier and URL; a run with such a result reads `done`, and one
+//! without reads `accepted`.
 //!
 //! Only [`crate::actions::IssueFields`], the content the owner accepted, and the run's random
 //! issue id go to the provider: the why, the citations and every Rastro id stay here.
 use super::IssueFields;
 use crate::queue::Source as QueueSource;
-use crate::{Rastro, Storage, host};
+use crate::{Rastro, Storage, files, host};
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
-use rastro_plugin_sdk::{ACTION_EXECUTE, ActionCall};
+use rastro_plugin_sdk::{ACTION_EXECUTE, ACTION_LOOKUP, ActionCall, ActionResult};
 use schemars::JsonSchema;
 use serde::Serialize;
 use sha2::{Digest, Sha256};
-use std::collections::BTreeMap;
 use std::time::Duration;
+use std::{collections::BTreeMap, fs::TryLockError};
 
 /// How long a provider may take to answer one action message.
 const PROVIDER_TIMEOUT: Duration = Duration::from_secs(60);
@@ -139,23 +140,52 @@ fn call_fields(fields: &IssueFields) -> BTreeMap<String, String> {
     sent
 }
 
+/// The lock that lets one process at a time execute a run: a file under the data directory named
+/// for the run, held while it executes.
+fn lock_path(locations: &crate::Locations, run: &str) -> std::path::PathBuf {
+    locations.data.join(format!("action-{run}.lock"))
+}
+
 impl<S: Storage> Rastro<S> {
-    /// Asks the run's provider to create its issue and records the identifier and URL it gives,
-    /// which makes the run `done`. Fails, recording nothing, when the provider is refused, fails
-    /// or does not confirm the issue.
-    pub(crate) fn execute_run(&mut self, run: &Run) -> Result<RunResult> {
+    /// The runs that were accepted and have not finished, oldest first: what `tick` finishes.
+    pub(crate) fn unfinished_runs(&self) -> Result<Vec<Run>> {
+        let runs = self.storage.snapshot(|view| view.action_runs(&[]))?;
+        Ok(runs
+            .into_iter()
+            .filter(|run| run.status == RunStatus::Accepted)
+            .collect())
+    }
+
+    /// Executes `run` so that its issue exists once and the run reads `done`, and returns the run
+    /// as it then reads. Only one process executes a run at a time: when another holds it, this
+    /// leaves the run untouched and returns `None`.
+    ///
+    /// Under the lock it reads the run again, and a run already done is returned as it is. Then it
+    /// asks the provider whether the issue under the run's id exists, and only when it does not
+    /// asks it to create it, so a run cut off before it sent anything is created, and one whose
+    /// answer was lost is found, never created twice. Fails, recording nothing, when the provider
+    /// is refused, fails or does not confirm the issue.
+    pub(crate) fn execute_run(&mut self, run: &Run) -> Result<Option<Run>> {
+        files::private_directory(&self.locations.data)?;
+        let lock = files::private_file(&lock_path(&self.locations, &run.id))?;
+        match lock.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => return Ok(None),
+            Err(TryLockError::Error(error)) => return Err(error.into()),
+        }
+        let current = self.stored_run(&run.id)?;
+        if current.status == RunStatus::Done {
+            return Ok(Some(current));
+        }
         let call = ActionCall {
             action: run.action.clone(),
             key: run.issue_id.clone(),
             fields: call_fields(&run.fields),
         };
-        let answer = host::actions::call(
-            &self.locations,
-            &run.provider,
-            ACTION_EXECUTE,
-            &call,
-            PROVIDER_TIMEOUT,
-        )?;
+        let mut answer = self.ask_provider(run, ACTION_LOOKUP, &call)?;
+        if !answer.found {
+            answer = self.ask_provider(run, ACTION_EXECUTE, &call)?;
+        }
         let (true, Some(identifier), Some(url)) = (answer.found, answer.identifier, answer.url)
         else {
             bail!(
@@ -170,6 +200,26 @@ impl<S: Storage> Rastro<S> {
             finished_at: crate::coverage::now()?,
         };
         self.storage.record_action_result(&run.id, &result)?;
-        Ok(result)
+        let done = self.stored_run(&run.id)?;
+        drop(lock);
+        Ok(Some(done))
+    }
+
+    fn ask_provider(&self, run: &Run, method: &str, call: &ActionCall) -> Result<ActionResult> {
+        host::actions::call(
+            &self.locations,
+            &run.provider,
+            method,
+            call,
+            PROVIDER_TIMEOUT,
+        )
+    }
+
+    /// The run `id`, as it reads now.
+    fn stored_run(&self, id: &str) -> Result<Run> {
+        let runs = self.storage.snapshot(|view| view.action_runs(&[]))?;
+        runs.into_iter()
+            .find(|run| run.id == id)
+            .with_context(|| format!("run {id} is not recorded"))
     }
 }

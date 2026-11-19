@@ -4,14 +4,16 @@
 //!
 //! `action.execute` creates the issue with the run's random id as the issue's own, from the title,
 //! description, team and assignee the owner accepted and nothing else: the why, the citations and
-//! every Rastro id stay in Rastro. Any other action message is answered with an error.
+//! every Rastro id stay in Rastro. `action.lookup` finds the issue under that id, so a run
+//! executed again, or whose answer was lost, learns what the first execution did before it creates
+//! anything. Any other action message is answered with an error.
 mod linear;
 
 use anyhow::{Context, Result, bail};
 use linear::{Client, Issue};
 use rastro_plugin_sdk::{
-    ACTION_EXECUTE, ActionCall, ActionInitializeParams, ActionResult, Envelope, INITIALIZE,
-    InitializeResult, PROTOCOL_VERSION, Transport,
+    ACTION_EXECUTE, ACTION_LOOKUP, ActionCall, ActionInitializeParams, ActionResult, Envelope,
+    INITIALIZE, InitializeResult, PROTOCOL_VERSION, Transport,
 };
 use serde_json::json;
 use std::io;
@@ -40,6 +42,10 @@ fn main() -> Result<()> {
                 .params::<ActionCall>()
                 .and_then(|call| execute(&call))
                 .and_then(|result| Envelope::response(Some(id.clone()), result)),
+            Some(ACTION_LOOKUP) => request
+                .params::<ActionCall>()
+                .and_then(|call| lookup(&call))
+                .and_then(|result| Envelope::response(Some(id.clone()), result)),
             other => Err(anyhow::anyhow!(
                 "this provider does not handle {}",
                 other.unwrap_or("that message")
@@ -58,6 +64,21 @@ fn failure(id: serde_json::Value, error: &anyhow::Error) -> Envelope {
         error: Some(json!({"code": -32000, "message": format!("{error:#}")})),
         ..Envelope::default()
     }
+}
+
+/// Finds the issue the call's key names: `found` is false when Linear holds none.
+fn lookup(call: &ActionCall) -> Result<ActionResult> {
+    if call.action != LINEAR_CREATE_ISSUE {
+        bail!("this provider does not offer {}", call.action);
+    }
+    Ok(match Client::from_env()?.find_issue(&call.key)? {
+        Some(issue) => ActionResult {
+            found: true,
+            identifier: Some(issue.identifier),
+            url: Some(issue.url),
+        },
+        None => ActionResult::default(),
+    })
 }
 
 /// Creates the issue the call names.

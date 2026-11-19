@@ -1,5 +1,6 @@
-//! `tick`: the one entry point a schedule calls. It syncs every source whose last complete
-//! check is older than its freshness rule, and runs at most once at a time.
+//! `tick`: the one entry point a schedule calls. It finishes every accepted Action run that never
+//! completed, syncs every source whose last complete check is older than its freshness rule, and
+//! runs at most once at a time.
 use crate::{
     CompleteCheck, Locations, Rastro, Source, Storage, coverage, files,
     runs::{Silent, StoredTwins},
@@ -30,9 +31,14 @@ pub enum Tick {
     Ran(TickReport),
 }
 
-/// The sources a tick that ran went over.
+/// What a tick that ran went over: the Action runs it finished and the sources.
 #[derive(Debug, Default)]
 pub struct TickReport {
+    /// Action runs this tick executed to `done`. A run another process was executing is left to
+    /// it and is not listed.
+    pub runs_finished: Vec<String>,
+    /// Action runs whose execution failed, each with why. They stay accepted.
+    pub runs_failed: Vec<(String, String)>,
     /// Sources synced.
     pub synced: Vec<String>,
     /// Sources within their freshness rule, left alone.
@@ -42,8 +48,9 @@ pub struct TickReport {
 }
 
 impl<S: Storage + StoredTwins> Rastro<S> {
-    /// Syncs each source past its freshness rule, one after another, and skips the fresh ones.
-    /// A source whose sync fails is recorded in the report and the next one still syncs.
+    /// Executes each accepted Action run that is not done, then syncs each source past its
+    /// freshness rule, one after another, and skips the fresh ones. A run or a source that fails
+    /// is recorded in the report and the next one still goes.
     ///
     /// Returns [`Tick::AlreadyRunning`] without recording anything when another tick holds
     /// the tick lock. Fails only when the lock or the source list cannot be read.
@@ -58,6 +65,13 @@ impl<S: Storage + StoredTwins> Rastro<S> {
         let now = coverage::now()?;
         let sources: Vec<Source> = self.config.sources.clone();
         let mut report = TickReport::default();
+        for run in self.unfinished_runs()? {
+            match self.execute_run(&run) {
+                Ok(Some(_)) => report.runs_finished.push(run.id),
+                Ok(None) => {}
+                Err(error) => report.runs_failed.push((run.id, format!("{error:#}"))),
+            }
+        }
         for source in &sources {
             let check = self.storage.last_complete_check(source)?;
             if !is_stale(check.as_ref(), source.freshness(), now) {
