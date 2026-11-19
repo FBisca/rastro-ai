@@ -62,6 +62,8 @@ pub type CommitmentsResult = rastro_core::commitments::Commitments;
 pub type MeetingResult = rastro_core::meeting::MeetingCommitments;
 /// Every pending proposal and question, oldest first, with each source's gap.
 pub type QueueResult = rastro_core::queue::Queue;
+/// What `focus` returns.
+pub type FocusResult = rastro_core::focus::Report;
 /// Every outcome of the queue, newest first, with what was shown and what was acted on.
 pub type OutcomesResult = rastro_core::queue::Outcomes;
 /// What a queue answer recorded: the item it named and the owner intents it accepted.
@@ -386,6 +388,14 @@ mod tests {
                 intents: vec![],
                 asserted: None,
             }),
+            Response::Focus(rastro_core::focus::report(&rastro_core::focus::Input {
+                now: "2026-11-19T09:00:00Z".parse().unwrap(),
+                offset: chrono::FixedOffset::east_opt(0).unwrap(),
+                linear: None,
+                owner_id: "",
+                meetings: &[],
+                queue: &rastro_core::queue::Queue::empty(),
+            })),
         ];
         let arguments = |name: &str| match name {
             "source.add" => {

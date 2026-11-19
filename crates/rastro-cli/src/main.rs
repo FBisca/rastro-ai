@@ -675,6 +675,57 @@ fn commitments_text(list: &rastro_core::commitments::Commitments) -> String {
     }
     lines.join("\n")
 }
+/// The focus report for a terminal: the recommended focus, the needs-you items with their
+/// citations, the queue count, the gaps and the as-of time.
+fn focus_text(report: &rastro_core::focus::Report) -> String {
+    use rastro_core::focus::{GapReason, Item, SourceKind};
+    let cited = |item: &Item| {
+        format!(
+            "{} ({} {} | observed {})",
+            display_safe(&item.title),
+            match item.citation.source {
+                SourceKind::Linear => "linear",
+                SourceKind::Meeting => "meeting",
+            },
+            display_safe(&item.citation.location),
+            item.citation.observed_at.to_rfc3339()
+        )
+    };
+    let mut lines = Vec::new();
+    match &report.focus {
+        Some(item) => lines.push(format!("Focus: {}", cited(item))),
+        None => lines.push(display_safe(
+            report
+                .notice
+                .as_deref()
+                .unwrap_or(rastro_core::focus::NOTHING_NEEDS_YOU),
+        )),
+    }
+    lines.extend(
+        report
+            .needs_you
+            .iter()
+            .map(|item| format!("Needs you: {}", cited(item))),
+    );
+    lines.push(format!("Queue: {} waiting", report.queue_count));
+    for gap in &report.gaps {
+        let why = match gap.reason {
+            GapReason::SyncFailed => "its last sync failed".to_string(),
+            GapReason::ExtractionFailed { .. } => "its extraction failed".to_string(),
+        };
+        let as_of = gap.as_of.map_or_else(
+            || "never read".to_string(),
+            |t| format!("as of {}", t.to_rfc3339()),
+        );
+        lines.push(format!(
+            "Gap: {} | {why} | {as_of}",
+            display_safe(&gap.name)
+        ));
+    }
+    lines.push(format!("As of {}", report.as_of.to_rfc3339()));
+    lines.join("\n")
+}
+
 /// The queue: each proposal or question with its id and source, then each source's gap.
 #[expect(
     clippy::too_many_lines,
@@ -933,6 +984,7 @@ fn human(response: &Response) -> String {
         Response::About(r) => about_text(r),
         Response::Commitments(r) => commitments_text(r),
         Response::Queue(r) => queue_text(r),
+        Response::Focus(r) => focus_text(r),
         Response::QueueOutcomes(r) => outcomes_text(r),
         Response::QueueAccept(r)
         | Response::QueueEdit(r)

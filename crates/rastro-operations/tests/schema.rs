@@ -245,7 +245,8 @@ fn catalog_declares_claim_cli_read_paths_without_changing_existing_routes() {
                 "commitments",
                 "meeting.commitments",
                 "queue",
-                "queue.outcomes"
+                "queue.outcomes",
+                "focus"
             ]
             .contains(&spec.name)
         );
@@ -533,7 +534,7 @@ fn identity_operations_are_cli_only() {
 
 /// spec: The queue's operations are in the catalog
 /// One catalog entry per queue operation: the read is on the CLI and MCP, its five answers are
-/// CLI only, `queue outcomes` is a CLI-only read, MCP offers seven tools, and the queue read's
+/// CLI only, `queue outcomes` is a CLI-only read, MCP offers eight tools, and the queue read's
 /// result is a v2 envelope.
 #[test]
 fn the_queue_read_and_its_five_answers_are_cataloged_on_their_surfaces() {
@@ -602,12 +603,12 @@ fn the_queue_read_and_its_five_answers_are_cataloged_on_their_surfaces() {
             assert!(!spec.read_only, "{name}");
         }
     }
-    // MCP offers exactly seven tools, the queue's read among them.
+    // MCP offers exactly eight tools, the queue's read among them.
     let mcp: Vec<String> = (CATALOG.iter())
         .filter(|spec| spec.exposed_on(Surface::Mcp))
         .map(|spec| spec.mcp_name())
         .collect();
-    assert_eq!(mcp.len(), 7, "{mcp:?}");
+    assert_eq!(mcp.len(), 8, "{mcp:?}");
     assert!(mcp.contains(&"queue".to_string()), "{mcp:?}");
 
     // The queue read's result is a v2 envelope.
