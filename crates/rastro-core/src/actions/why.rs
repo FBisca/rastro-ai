@@ -1,6 +1,8 @@
 //! Why an action ran: one run with its proposal, the claims it cited and their evidence, the
-//! owner's accept, its level, its cell and the risk its provider declared when the action was
-//! proposed: recorded with the proposal, so no plugin has to be installed to read it.
+//! owner's accept when one authorized it, its level, its cell and the risk its provider declared
+//! when the action was proposed: recorded with the proposal, so no plugin has to be installed to
+//! read it. An Act run a rule authorized holds no accept; the rule copy on the run says what
+//! authorized it instead.
 //!
 //! Only a reader whose scopes see the source the run writes to gets the run: for any other
 //! reader the run does not exist, and so is its why.
@@ -11,9 +13,6 @@ use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
 use serde::Serialize;
-
-/// Every cell sits at Propose until the owner writes a rule that raises it (the glossary's Level).
-const PROPOSE: &str = "propose";
 
 /// The owner's accept of the proposal: the intent that recorded it and when.
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
@@ -39,8 +38,10 @@ pub struct RunWhy {
     pub proposal: Proposal,
     /// Each cited claim as `why` explains it, with its evidence.
     pub cited: Vec<Explanation>,
-    pub accept: Accept,
-    /// The level the cell sat at when the owner accepted: `propose`.
+    /// The owner's accept; absent for an Act run, which a rule authorized.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accept: Option<Accept>,
+    /// The level the run started at: `propose` or `act`.
     pub level: &'static str,
     pub cell: Cell,
     /// Who the action affects, in the owner's words.
@@ -80,11 +81,11 @@ pub(crate) fn explain(view: &dyn Snapshot, scopes: &[Scope], id: &str) -> Result
     let why = RunWhy {
         proposal: filed.proposal,
         cited,
-        accept: Accept {
-            intent: run.accept_intent.clone(),
+        accept: run.accept_intent.as_ref().map(|intent| Accept {
+            intent: intent.clone(),
             at: run.accepted_at,
-        },
-        level: PROPOSE,
+        }),
+        level: run.level.as_str(),
         cell: Cell {
             action: run.action.clone(),
             team: run.fields.team.clone(),

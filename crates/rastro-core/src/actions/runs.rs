@@ -1,6 +1,8 @@
-//! Action runs: what the owner's accept of an action proposal starts.
+//! Action runs: what an owner's accept or a matching owner rule starts.
 //!
-//! Accepting records the accept intent and one run in a single transaction. The run holds the
+//! Accepting records the accept intent and one run in a single transaction. A rule the owner
+//! wrote starts a run at level `act` with no accept intent: the run stores a copy of the rule as
+//! it was, and waits `pending` until its grace ends. The run holds the
 //! random issue id the outside system is asked to create the issue under, fixed before any
 //! request is sent, so what the run did can always be found by it. Executing a run takes the run's
 //! lock, asks the provider whether the issue under that id exists and only if it does not to create
@@ -18,6 +20,7 @@
 //! issue id go to the provider: the why, the citations and every Rastro id stay here.
 use super::IssueFields;
 use crate::queue::Source as QueueSource;
+use crate::rules::RuleCopy;
 use crate::{Rastro, Storage, files, host};
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
@@ -37,6 +40,8 @@ const PROVIDER_TIMEOUT: Duration = Duration::from_secs(60);
 pub enum RunStatus {
     /// The accept is recorded and the issue has not been created.
     Accepted,
+    /// A rule started the run and its grace has not ended: nothing has been sent.
+    Pending,
     /// The provider created the issue, and the run holds its identifier and URL.
     Done,
     /// An execution failed and the run has no issue: it holds the error, and `tick` retries it
@@ -51,9 +56,28 @@ impl RunStatus {
     pub fn as_str(self) -> &'static str {
         match self {
             Self::Accepted => "accepted",
+            Self::Pending => "pending",
             Self::Done => "done",
             Self::Failed => "failed",
             Self::Undone => "undone",
+        }
+    }
+}
+
+/// The level a run started at: `propose` for an owner's accept, `act` for a matching owner rule.
+#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RunLevel {
+    Propose,
+    Act,
+}
+
+impl RunLevel {
+    /// The word the owner reads and the JSON carries.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Propose => "propose",
+            Self::Act => "act",
         }
     }
 }
@@ -63,10 +87,11 @@ impl RunStatus {
 #[schemars(rename = "ActionRun")]
 pub struct Run {
     pub id: String,
-    /// The queue item the owner accepted.
+    /// The queue item the run started from: the one the owner accepted, or the one a rule matched.
     pub proposal: String,
-    /// The owner intent that accepted it.
-    pub accept_intent: String,
+    /// The owner intent that accepted it; absent for an Act run, which a rule authorized.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub accept_intent: Option<String>,
     pub action: String,
     /// The fields the owner accepted: the content written for the outside system.
     pub fields: IssueFields,
@@ -76,8 +101,17 @@ pub struct Run {
     pub provider: String,
     /// The random id the issue is created under. UUID v4.
     pub issue_id: String,
+    /// When the run started: the owner's accept, or the proposal a rule matched.
     pub accepted_at: DateTime<Utc>,
     pub status: RunStatus,
+    /// The level the run started at.
+    pub level: RunLevel,
+    /// The rule as it was when the run started under it; present for an Act run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rule: Option<RuleCopy>,
+    /// When the run's grace ends and it executes unless stopped; present for an Act run.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub due_at: Option<DateTime<Utc>>,
     /// The created issue's identifier; present once the run is done.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identifier: Option<String>,
@@ -119,6 +153,21 @@ pub struct NewRun {
     pub issue_id: String,
 }
 
+/// What a matching rule records beside the proposal: the Act run it starts. No accept intent:
+/// the rule the owner wrote authorizes it, and its copy is stored with the run.
+#[derive(Clone, Debug)]
+pub struct NewAct {
+    pub id: String,
+    pub proposal: String,
+    pub action: String,
+    pub provider: String,
+    pub fields: IssueFields,
+    pub source: QueueSource,
+    pub issue_id: String,
+    pub rule: RuleCopy,
+    pub due_at: DateTime<Utc>,
+}
+
 /// What a run records once its issue exists.
 #[derive(Clone, Debug)]
 pub struct RunResult {
@@ -137,9 +186,19 @@ pub struct RunFailure {
 /// The id of the run an accept intent starts: its content address, so the same accept is the same
 /// run.
 pub(crate) fn run_id(accept_intent: &str) -> String {
+    content_run_id(b"rastro/action-run/v1", accept_intent)
+}
+
+/// The id of the Act run a proposal starts: its content address, so the same proposal is the same
+/// run.
+pub(crate) fn act_run_id(proposal: &str) -> String {
+    content_run_id(b"rastro/action-act-run/v1", proposal)
+}
+
+fn content_run_id(domain: &[u8], key: &str) -> String {
     let mut hash = Sha256::new();
-    hash.update(b"rastro/action-run/v1");
-    hash.update(accept_intent.as_bytes());
+    hash.update(domain);
+    hash.update(key.as_bytes());
     let hex: String = hash.finalize()[..16]
         .iter()
         .map(|b| format!("{b:02x}"))
@@ -196,6 +255,8 @@ impl<S: Storage> Rastro<S> {
             .filter(|run| match run.status {
                 RunStatus::Accepted => true,
                 RunStatus::Failed => run.attempts < MAX_ATTEMPTS,
+                // A pending Act waits out its grace window; nothing executes it before it is due.
+                RunStatus::Pending => false,
                 RunStatus::Done | RunStatus::Undone => false,
             })
             .collect())

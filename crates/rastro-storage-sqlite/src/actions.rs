@@ -6,10 +6,11 @@ use chrono::{DateTime, Utc};
 use rastro_core::{
     Scope,
     actions::{
-        Filed, IssueFields, NewRun, ObservedIssue, Proposal, Reach, Reversibility, Run, RunFailure,
-        RunResult, RunStatus, Undo,
+        Filed, IssueFields, NewAct, NewRun, ObservedIssue, Proposal, Reach, Reversibility, Run,
+        RunFailure, RunLevel, RunResult, RunStatus, Undo,
     },
     queue::{Source, SourceKind},
+    rules::RuleCopy,
 };
 use rusqlite::{Connection, params};
 
@@ -172,7 +173,7 @@ pub(crate) fn record_run(
     Ok(Run {
         id: run.id.clone(),
         proposal: run.proposal.clone(),
-        accept_intent: run.accept_intent.clone(),
+        accept_intent: Some(run.accept_intent.clone()),
         action: run.action.clone(),
         fields: run.fields.clone(),
         source: run.source.clone(),
@@ -180,6 +181,57 @@ pub(crate) fn record_run(
         issue_id: run.issue_id.clone(),
         accepted_at,
         status: RunStatus::Accepted,
+        level: RunLevel::Propose,
+        rule: None,
+        due_at: None,
+        identifier: None,
+        url: None,
+        attempts: 0,
+        error: None,
+        undo: None,
+    })
+}
+
+/// Records the Act run a matching rule starts: no accept intent, the rule copy and the due time.
+/// Returns it as it reads then: `pending`, with no issue.
+pub(crate) fn record_act(
+    connection: &Connection,
+    act: &NewAct,
+    started_at: DateTime<Utc>,
+) -> Result<Run> {
+    connection.execute(
+        "INSERT INTO action_run
+             (id, proposal, accept_intent, action, provider, fields, source, scope, issue_id,
+              accepted_at, level, rule, due_at)
+         VALUES (?1, ?2, NULL, ?3, ?4, ?5, ?6, ?7, ?8, ?9, 'act', ?10, ?11)",
+        params![
+            act.id,
+            act.proposal,
+            act.action,
+            act.provider,
+            serde_json::to_string(&act.fields)?,
+            act.source.name,
+            act.source.scope,
+            act.issue_id,
+            stamp(started_at),
+            serde_json::to_string(&act.rule)?,
+            stamp(act.due_at),
+        ],
+    )?;
+    Ok(Run {
+        id: act.id.clone(),
+        proposal: act.proposal.clone(),
+        accept_intent: None,
+        action: act.action.clone(),
+        fields: act.fields.clone(),
+        source: act.source.clone(),
+        provider: act.provider.clone(),
+        issue_id: act.issue_id.clone(),
+        accepted_at: started_at,
+        status: RunStatus::Pending,
+        level: RunLevel::Act,
+        rule: Some(act.rule.clone()),
+        due_at: Some(act.due_at),
         identifier: None,
         url: None,
         attempts: 0,
@@ -227,6 +279,10 @@ pub(crate) fn record_failure(
 
 /// Every run whose source is in `scopes` (empty: every scope), oldest first, with the issue it
 /// created when it did.
+#[expect(
+    clippy::too_many_lines,
+    reason = "one pass reads each run with its result, attempts, undo, level, rule copy and due time, so the status derivation stays in sight of what it rests on"
+)]
 pub(crate) fn runs(view: &View, scopes: &[Scope]) -> Result<Vec<Run>> {
     let mut statement = view.0.prepare(
         "SELECT r.id, r.proposal, r.accept_intent, r.action, r.provider, r.fields, r.source,
@@ -237,7 +293,8 @@ pub(crate) fn runs(view: &View, scopes: &[Scope]) -> Result<Vec<Run>> {
                 (SELECT i.id FROM intent i WHERE i.kind = 'undo_action'
                    AND i.domain_key = 'action_run/' || r.id ORDER BY i.append_seq LIMIT 1),
                 (SELECT i.issued_at FROM intent i WHERE i.kind = 'undo_action'
-                   AND i.domain_key = 'action_run/' || r.id ORDER BY i.append_seq LIMIT 1)
+                   AND i.domain_key = 'action_run/' || r.id ORDER BY i.append_seq LIMIT 1),
+                r.level, r.rule, r.due_at
          FROM action_run r LEFT JOIN action_result d ON d.run_id = r.id
          WHERE ?1 IS NULL OR r.scope IN (SELECT value FROM json_each(?1))
          ORDER BY r.append_seq",
@@ -247,7 +304,6 @@ pub(crate) fn runs(view: &View, scopes: &[Scope]) -> Result<Vec<Run>> {
             [
                 row.get::<_, String>(0)?,
                 row.get(1)?,
-                row.get(2)?,
                 row.get(3)?,
                 row.get(4)?,
                 row.get(5)?,
@@ -256,21 +312,36 @@ pub(crate) fn runs(view: &View, scopes: &[Scope]) -> Result<Vec<Run>> {
                 row.get(8)?,
                 row.get(9)?,
             ],
+            row.get::<_, Option<String>>(2)?,
             row.get::<_, Option<String>>(10)?,
             row.get::<_, Option<String>>(11)?,
             row.get::<_, u32>(12)?,
             row.get::<_, Option<String>>(13)?,
             row.get::<_, Option<String>>(14)?,
             row.get::<_, Option<String>>(15)?,
+            row.get::<_, String>(16)?,
+            row.get::<_, Option<String>>(17)?,
+            row.get::<_, Option<String>>(18)?,
         ))
     })?;
     let mut runs = Vec::new();
     for row in rows {
-        let (text, identifier, url, attempts, error, undo_intent, undone_at) = row?;
+        let (
+            text,
+            accept_intent,
+            identifier,
+            url,
+            attempts,
+            error,
+            undo_intent,
+            undone_at,
+            level,
+            rule,
+            due_at,
+        ) = row?;
         let [
             id,
             proposal,
-            accept_intent,
             action,
             provider,
             fields,
@@ -279,6 +350,14 @@ pub(crate) fn runs(view: &View, scopes: &[Scope]) -> Result<Vec<Run>> {
             issue_id,
             accepted_at,
         ] = text;
+        let level = match level.as_str() {
+            "act" => RunLevel::Act,
+            _ => RunLevel::Propose,
+        };
+        let rule = rule
+            .map(|text| serde_json::from_str::<RuleCopy>(&text))
+            .transpose()?;
+        let due_at = due_at.map(parse_time).transpose()?;
         let undo = match (undo_intent, undone_at) {
             (Some(intent), Some(at)) => Some(Undo {
                 intent,
@@ -292,6 +371,8 @@ pub(crate) fn runs(view: &View, scopes: &[Scope]) -> Result<Vec<Run>> {
             RunStatus::Done
         } else if attempts > 0 {
             RunStatus::Failed
+        } else if level == RunLevel::Act {
+            RunStatus::Pending
         } else {
             RunStatus::Accepted
         };
@@ -310,6 +391,9 @@ pub(crate) fn runs(view: &View, scopes: &[Scope]) -> Result<Vec<Run>> {
             issue_id,
             accepted_at: parse_time(accepted_at)?,
             status,
+            level,
+            rule,
+            due_at,
             identifier,
             url,
             attempts,

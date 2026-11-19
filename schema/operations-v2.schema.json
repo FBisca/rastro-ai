@@ -216,15 +216,54 @@
       ],
       "type": "object"
     },
+    "ActionRule": {
+      "additionalProperties": false,
+      "description": "The rule as it stood when a run started under it: copied into the run, so a later change to\n`config.toml` never revises what authorized it.",
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "assignee": {
+          "type": "string"
+        },
+        "daily_cap": {
+          "description": "The rule's daily cap when it set one; absent otherwise.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "grace_seconds": {
+          "description": "How long the run waits before it executes, in seconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "team": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "action",
+        "team",
+        "assignee",
+        "grace_seconds"
+      ],
+      "type": "object"
+    },
     "ActionRun": {
       "additionalProperties": false,
       "description": "An action run, with its status and, once done, the issue it created.",
       "properties": {
         "accept_intent": {
-          "description": "The owner intent that accepted it.",
+          "description": "The owner intent that accepted it; absent for an Act run, which a rule authorized.",
           "type": "string"
         },
         "accepted_at": {
+          "description": "When the run started: the owner's accept, or the proposal a rule matched.",
           "format": "date-time",
           "type": "string"
         },
@@ -236,6 +275,11 @@
           "format": "uint32",
           "minimum": 0,
           "type": "integer"
+        },
+        "due_at": {
+          "description": "When the run's grace ends and it executes unless stopped; present for an Act run.",
+          "format": "date-time",
+          "type": "string"
         },
         "error": {
           "description": "The error of the last failed execution; present while the run reads `failed`.",
@@ -256,13 +300,28 @@
           "description": "The random id the issue is created under. UUID v4.",
           "type": "string"
         },
+        "level": {
+          "$ref": "#/$defs/RunLevel",
+          "description": "The level the run started at."
+        },
         "proposal": {
-          "description": "The queue item the owner accepted.",
+          "description": "The queue item the run started from: the one the owner accepted, or the one a rule matched.",
           "type": "string"
         },
         "provider": {
           "description": "The plugin id of the provider that executes it.",
           "type": "string"
+        },
+        "rule": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActionRule"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The rule as it was when the run started under it; present for an Act run."
         },
         "source": {
           "$ref": "#/$defs/QueueSource",
@@ -290,7 +349,6 @@
       "required": [
         "id",
         "proposal",
-        "accept_intent",
         "action",
         "fields",
         "source",
@@ -298,6 +356,7 @@
         "issue_id",
         "accepted_at",
         "status",
+        "level",
         "attempts"
       ],
       "type": "object"
@@ -307,7 +366,15 @@
       "description": "What explains one run. The why and the citations live here and nowhere in the outside system.",
       "properties": {
         "accept": {
-          "$ref": "#/$defs/ActionAccept"
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActionAccept"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The owner's accept; absent for an Act run, which a rule authorized."
         },
         "cell": {
           "$ref": "#/$defs/ActionCell"
@@ -320,7 +387,7 @@
           "type": "array"
         },
         "level": {
-          "description": "The level the cell sat at when the owner accepted: `propose`.",
+          "description": "The level the run started at: `propose` or `act`.",
           "type": "string"
         },
         "proposal": {
@@ -339,7 +406,6 @@
       "required": [
         "proposal",
         "cited",
-        "accept",
         "level",
         "cell",
         "reach",
@@ -2821,6 +2887,14 @@
       ],
       "type": "object"
     },
+    "RunLevel": {
+      "description": "The level a run started at: `propose` for an owner's accept, `act` for a matching owner rule.",
+      "enum": [
+        "propose",
+        "act"
+      ],
+      "type": "string"
+    },
     "RunReport": {
       "additionalProperties": false,
       "properties": {
@@ -2913,6 +2987,11 @@
         {
           "const": "accepted",
           "description": "The accept is recorded and the issue has not been created.",
+          "type": "string"
+        },
+        {
+          "const": "pending",
+          "description": "A rule started the run and its grace has not ended: nothing has been sent.",
           "type": "string"
         },
         {
@@ -4624,7 +4703,7 @@
             },
             "result": {
               "additionalProperties": false,
-              "description": "A recorded proposal: its content address, the source it writes to with that source's scope,\nthe provider that declares its action, and when it was proposed.",
+              "description": "What `actions propose` returns: the proposal as it now waits in the queue, and the Act run a\nmatching rule started for it, when one did.",
               "properties": {
                 "id": {
                   "description": "The queue item's id: the content address of everything below except `proposed_at`.",
@@ -4641,6 +4720,17 @@
                   "description": "The plugin id of the provider that declares the action.",
                   "type": "string"
                 },
+                "run": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ActionRun"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The Act run the proposal started; absent when it waits in the queue for the owner. Boxed\nso the answer stays the size of the proposal it carries."
+                },
                 "source": {
                   "$ref": "#/$defs/QueueSource"
                 }
@@ -4652,7 +4742,7 @@
                 "provider",
                 "proposed_at"
               ],
-              "title": "FiledActionProposal",
+              "title": "ActionProposed",
               "type": "object"
             }
           }
@@ -4735,10 +4825,11 @@
               "description": "An action run, with its status and, once done, the issue it created.",
               "properties": {
                 "accept_intent": {
-                  "description": "The owner intent that accepted it.",
+                  "description": "The owner intent that accepted it; absent for an Act run, which a rule authorized.",
                   "type": "string"
                 },
                 "accepted_at": {
+                  "description": "When the run started: the owner's accept, or the proposal a rule matched.",
                   "format": "date-time",
                   "type": "string"
                 },
@@ -4750,6 +4841,11 @@
                   "format": "uint32",
                   "minimum": 0,
                   "type": "integer"
+                },
+                "due_at": {
+                  "description": "When the run's grace ends and it executes unless stopped; present for an Act run.",
+                  "format": "date-time",
+                  "type": "string"
                 },
                 "error": {
                   "description": "The error of the last failed execution; present while the run reads `failed`.",
@@ -4770,13 +4866,28 @@
                   "description": "The random id the issue is created under. UUID v4.",
                   "type": "string"
                 },
+                "level": {
+                  "$ref": "#/$defs/RunLevel",
+                  "description": "The level the run started at."
+                },
                 "proposal": {
-                  "description": "The queue item the owner accepted.",
+                  "description": "The queue item the run started from: the one the owner accepted, or the one a rule matched.",
                   "type": "string"
                 },
                 "provider": {
                   "description": "The plugin id of the provider that executes it.",
                   "type": "string"
+                },
+                "rule": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ActionRule"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The rule as it was when the run started under it; present for an Act run."
                 },
                 "source": {
                   "$ref": "#/$defs/QueueSource",
@@ -4804,7 +4915,6 @@
               "required": [
                 "id",
                 "proposal",
-                "accept_intent",
                 "action",
                 "fields",
                 "source",
@@ -4812,6 +4922,7 @@
                 "issue_id",
                 "accepted_at",
                 "status",
+                "level",
                 "attempts"
               ],
               "title": "ActionRun",
@@ -7040,7 +7151,7 @@
       "name": "actions.propose",
       "result": {
         "additionalProperties": false,
-        "description": "A recorded proposal: its content address, the source it writes to with that source's scope,\nthe provider that declares its action, and when it was proposed.",
+        "description": "What `actions propose` returns: the proposal as it now waits in the queue, and the Act run a\nmatching rule started for it, when one did.",
         "properties": {
           "id": {
             "description": "The queue item's id: the content address of everything below except `proposed_at`.",
@@ -7057,6 +7168,17 @@
             "description": "The plugin id of the provider that declares the action.",
             "type": "string"
           },
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ActionRun"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The Act run the proposal started; absent when it waits in the queue for the owner. Boxed\nso the answer stays the size of the proposal it carries."
+          },
           "source": {
             "$ref": "#/$defs/QueueSource"
           }
@@ -7068,7 +7190,7 @@
           "provider",
           "proposed_at"
         ],
-        "title": "FiledActionProposal",
+        "title": "ActionProposed",
         "type": "object"
       },
       "surfaces": [
@@ -7198,10 +7320,11 @@
         "description": "An action run, with its status and, once done, the issue it created.",
         "properties": {
           "accept_intent": {
-            "description": "The owner intent that accepted it.",
+            "description": "The owner intent that accepted it; absent for an Act run, which a rule authorized.",
             "type": "string"
           },
           "accepted_at": {
+            "description": "When the run started: the owner's accept, or the proposal a rule matched.",
             "format": "date-time",
             "type": "string"
           },
@@ -7213,6 +7336,11 @@
             "format": "uint32",
             "minimum": 0,
             "type": "integer"
+          },
+          "due_at": {
+            "description": "When the run's grace ends and it executes unless stopped; present for an Act run.",
+            "format": "date-time",
+            "type": "string"
           },
           "error": {
             "description": "The error of the last failed execution; present while the run reads `failed`.",
@@ -7233,13 +7361,28 @@
             "description": "The random id the issue is created under. UUID v4.",
             "type": "string"
           },
+          "level": {
+            "$ref": "#/$defs/RunLevel",
+            "description": "The level the run started at."
+          },
           "proposal": {
-            "description": "The queue item the owner accepted.",
+            "description": "The queue item the run started from: the one the owner accepted, or the one a rule matched.",
             "type": "string"
           },
           "provider": {
             "description": "The plugin id of the provider that executes it.",
             "type": "string"
+          },
+          "rule": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ActionRule"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The rule as it was when the run started under it; present for an Act run."
           },
           "source": {
             "$ref": "#/$defs/QueueSource",
@@ -7267,7 +7410,6 @@
         "required": [
           "id",
           "proposal",
-          "accept_intent",
           "action",
           "fields",
           "source",
@@ -7275,6 +7417,7 @@
           "issue_id",
           "accepted_at",
           "status",
+          "level",
           "attempts"
         ],
         "title": "ActionRun",

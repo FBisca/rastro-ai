@@ -759,15 +759,30 @@ fn action_proposal_lines(action: &rastro_core::actions::Proposal) -> Vec<String>
     lines
 }
 
-/// What `actions propose` recorded: the proposal's id, what it would do and where it waits.
-fn actions_propose_text(filed: &rastro_core::actions::Filed) -> String {
-    let mut lines = vec![format!(
-        "Proposed {} | Source: {} {} | Scope: {} | Waiting in the queue; nothing has run",
+/// What `actions propose` recorded: the proposal's id, what it would do, and the run a matching
+/// rule started or the queue it waits in.
+fn actions_propose_text(proposed: &rastro_core::actions::Proposed) -> String {
+    let filed = &proposed.filed;
+    let head = format!(
+        "Proposed {} | Source: {} {} | Scope: {}",
         filed.id,
         queue_source_kind(filed.source.kind),
         display_safe(&filed.source.name),
         display_safe(&filed.source.scope)
-    )];
+    );
+    let mut lines = match &proposed.run {
+        Some(run) if run.status == rastro_core::actions::RunStatus::Pending => match run.due_at {
+            Some(due) => vec![format!(
+                "{head} | Run {} runs at {} unless stopped: rastro actions stop {}",
+                run.id,
+                due.format("%Y-%m-%d %H:%M"),
+                run.id
+            )],
+            None => vec![format!("{head} | Run {}", run.id)],
+        },
+        Some(run) => vec![format!("{head} | Already has a run"), action_run_text(run)],
+        None => vec![format!("{head} | Waiting in the queue; nothing has run")],
+    };
     lines.extend(action_proposal_lines(&filed.proposal));
     lines.join("\n")
 }
@@ -963,12 +978,13 @@ fn queue_answer_text(result: &rastro_operations::results::QueueAnswerResult) -> 
     lines.join("\n")
 }
 
-/// One action run: its id, status, the action and where it wrote, and the issue it created.
+/// One action run: its id, status, level, the action and where it wrote, and the issue it created.
 fn action_run_text(run: &rastro_core::actions::Run) -> String {
     let mut line = format!(
-        "Run {} | {} | {} | Source: {} {} | Scope: {} | Title: {} | Team: {} | Assignee: {}",
+        "Run {} | {} | Level: {} | {} | Source: {} {} | Scope: {} | Title: {} | Team: {} | Assignee: {}",
         run.id,
         run.status.as_str(),
+        run.level.as_str(),
         display_safe(&run.action),
         queue_source_kind(run.source.kind),
         display_safe(&run.source.name),
@@ -983,6 +999,14 @@ fn action_run_text(run: &rastro_core::actions::Run) -> String {
             display_safe(identifier),
             display_safe(url)
         );
+    }
+    if let Some(due) = run.due_at {
+        let label = if run.status == rastro_core::actions::RunStatus::Pending {
+            "Runs at"
+        } else {
+            "Grace ended"
+        };
+        line += &format!(" | {label}: {}", stamp(due));
     }
     if let Some(error) = &run.error {
         line += &format!(
@@ -1011,13 +1035,17 @@ fn actions_text(runs: &rastro_core::actions::Runs) -> String {
         .collect::<Vec<_>>()
         .join("\n");
     if let Some(why) = &runs.why {
-        text += &action_why_text(why);
+        text += &action_why_text(why, runs.runs.first().and_then(|run| run.rule.as_ref()));
     }
     text
 }
 
-/// Why one run happened, under its line: the why, each cited claim, the accept and the risk.
-fn action_why_text(why: &rastro_core::actions::RunWhy) -> String {
+/// Why one run happened, under its line: the why, each cited claim, the rule or the accept that
+/// authorized it, and the risk.
+fn action_why_text(
+    why: &rastro_core::actions::RunWhy,
+    rule: Option<&rastro_core::rules::RuleCopy>,
+) -> String {
     let mut text = format!("\nWhy: {}", display_safe(&why.proposal.why));
     for claim in &why.cited {
         text += &format!(
@@ -1031,10 +1059,28 @@ fn action_why_text(why: &rastro_core::actions::RunWhy) -> String {
             }
         );
     }
+    if let Some(rule) = rule {
+        text += &format!(
+            "\nRule: {} | {} | team {} | assignee {} | grace {}",
+            display_safe(&rule.name),
+            display_safe(&rule.action),
+            display_safe(&rule.team),
+            display_safe(&rule.assignee),
+            grace_text(rule.grace_seconds)
+        );
+        if let Some(cap) = rule.daily_cap {
+            text += &format!(" | cap {cap} a day");
+        }
+    }
+    if let Some(accept) = &why.accept {
+        text += &format!(
+            "\nAccepted: intent {}, {}",
+            accept.intent,
+            accept.at.format("%Y-%m-%d %H:%M")
+        );
+    }
     text += &format!(
-        "\nAccepted: intent {}, {}\nLevel: {} | Cell: {} x {} | Reach: {} | Reversibility: {}",
-        why.accept.intent,
-        why.accept.at.format("%Y-%m-%d %H:%M"),
+        "\nLevel: {} | Cell: {} x {} | Reach: {} | Reversibility: {}",
         why.level,
         display_safe(&why.cell.action),
         display_safe(&why.cell.team),
@@ -1084,6 +1130,14 @@ fn edit_text(r: &rastro_operations::results::ClaimWriteResult) -> String {
         _ => format!("{} already says that; nothing recorded", r.claim),
     }
 }
+/// A grace window in the owner's words: whole minutes, else seconds.
+fn grace_text(seconds: u64) -> String {
+    if seconds >= 60 && seconds.is_multiple_of(60) {
+        format!("{} min", seconds / 60)
+    } else {
+        format!("{seconds} s")
+    }
+}
 /// One line per rule, in the order the owner wrote them.
 fn rules_check_text(r: &rastro_operations::results::RulesCheckResult) -> String {
     if r.rules.is_empty() {
@@ -1092,18 +1146,13 @@ fn rules_check_text(r: &rastro_operations::results::RulesCheckResult) -> String 
     r.rules
         .iter()
         .map(|rule| {
-            let seconds = rule.grace_seconds;
-            let grace = if seconds >= 60 && seconds % 60 == 0 {
-                format!("{} min", seconds / 60)
-            } else {
-                format!("{seconds} s")
-            };
             format!(
-                "{} | {} | team {} | assignee {} | grace {grace}",
+                "{} | {} | team {} | assignee {} | grace {}",
                 display_safe(&rule.name),
                 display_safe(&rule.action),
                 display_safe(&rule.team),
                 display_safe(&rule.assignee),
+                grace_text(rule.grace_seconds)
             )
         })
         .collect::<Vec<_>>()

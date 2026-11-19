@@ -51,7 +51,7 @@ fn stored_evidence_rejects_updates_and_deletes() {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 23);
+        assert_eq!(version, 24);
     }
 }
 
@@ -94,7 +94,7 @@ fn migrations_apply_once_in_timestamp_order_and_unknown_ones_are_refused() {
         .unwrap();
     connection.pragma_update(None, "user_version", 1).unwrap();
     SqliteStorage::open(&legacy).unwrap();
-    assert_eq!(names(&connection).len(), 23);
+    assert_eq!(names(&connection).len(), 24);
 }
 
 /// spec: Every migration applies once in timestamp order
@@ -308,6 +308,76 @@ fn recorded_action_runs_and_their_results_are_never_rewritten() {
         .query_row("SELECT identifier FROM action_result", [], |row| row.get(0))
         .unwrap();
     assert_eq!(identifier, "ENG-1");
+}
+
+/// The Act-run migration rebuilds the run table with foreign keys off: every accepted run keeps
+/// its accept intent, result and attempts at level `propose`, the keys still hold, and the table
+/// takes an Act run with no accept intent.
+// spec: Accepting a proposal runs the action once
+#[test]
+fn the_act_run_migration_keeps_every_accepted_run_and_what_names_it() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("rastro.sqlite3");
+    let before = before_migration("202611191400_action_act_runs");
+    let before: Vec<(&str, &str)> = before
+        .iter()
+        .map(|(name, sql)| (name.as_str(), sql.as_str()))
+        .collect();
+    assert_eq!(before.len(), 23);
+    drop(SqliteStorage::open_with(&path, &before).unwrap());
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "PRAGMA foreign_keys = ON;
+             INSERT INTO action_proposal (id, action, provider, fields, why, cites, source, scope, proposed_at)
+             VALUES ('q_1', 'linear.create_issue', 'p', '{}', 'owner asked', '[]', 'linear-work', 'work', '2026-11-19T09:00:00.000Z'),
+                    ('q_2', 'linear.create_issue', 'p', '{}', 'owner asked again', '[]', 'linear-work', 'work', '2026-11-19T10:00:00.000Z');
+             INSERT INTO intent (id, format_version, kind, owner_id, issuer_context, issued_at, domain_key, targets_json, payload_json)
+             VALUES ('i_1', 1, 'accept', 'me', '{}', '2026-11-19T09:00:00.000Z', 'queue_item/q_1', '{}', '{}');
+             INSERT INTO action_run (id, proposal, accept_intent, action, provider, fields, source, scope, issue_id, accepted_at)
+             VALUES ('r_1', 'q_1', 'i_1', 'linear.create_issue', 'p', '{}', 'linear-work', 'work', 'u_1', '2026-11-19T09:00:00.000Z');
+             INSERT INTO action_result (run_id, identifier, url, finished_at)
+             VALUES ('r_1', 'ENG-1', 'https://linear.example/ENG-1', '2026-11-19T09:00:01.000Z');
+             INSERT INTO action_attempt (run_id, attempt, error, failed_at)
+             VALUES ('r_1', 1, 'Linear is down', '2026-11-19T09:00:00.500Z');",
+        )
+        .unwrap();
+    drop(connection);
+
+    drop(SqliteStorage::open(&path).unwrap());
+    let connection = Connection::open(&path).unwrap();
+    let count = |sql: &str| -> i64 { connection.query_row(sql, [], |r| r.get(0)).unwrap() };
+    assert_eq!(
+        count(
+            "SELECT count(*) FROM action_run WHERE id = 'r_1' AND proposal = 'q_1'
+             AND accept_intent = 'i_1' AND level = 'propose' AND rule IS NULL AND due_at IS NULL"
+        ),
+        1
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM action_result WHERE run_id = 'r_1' AND identifier = 'ENG-1'"),
+        1
+    );
+    assert_eq!(
+        count("SELECT count(*) FROM action_attempt WHERE run_id = 'r_1' AND attempt = 1"),
+        1
+    );
+    assert_eq!(count("SELECT count(*) FROM pragma_foreign_key_check"), 0);
+    // The rebuilt table still refuses a rewrite, and takes an Act run with no accept intent.
+    assert!(
+        connection
+            .execute("UPDATE action_run SET issue_id = 'u_9'", [])
+            .is_err()
+    );
+    connection
+        .execute(
+            "INSERT INTO action_run (id, proposal, accept_intent, action, provider, fields,
+                 source, scope, issue_id, accepted_at, level, rule, due_at)
+             VALUES ('r_2', 'q_2', NULL, 'linear.create_issue', 'p', '{}', 'linear-work', 'work',
+                 'u_2', '2026-11-19T10:00:00.000Z', 'act', '{}', '2026-11-19T10:10:00.000Z')",
+            [],
+        )
+        .unwrap();
 }
 
 /// claims/R17: entity types are never stored as a column
@@ -1108,8 +1178,8 @@ fn S8_an_export_leaves_the_recorded_output_and_the_spans_out() {
     }
 }
 
-/// Every migration but the newest one, read from the directory, in name order.
-fn before_claim_statuses() -> Vec<(String, String)> {
+/// Every migration before the one named, read from the directory, in name order.
+fn before_migration(name: &str) -> Vec<(String, String)> {
     let mut names: Vec<_> = fs::read_dir(concat!(env!("CARGO_MANIFEST_DIR"), "/migrations"))
         .unwrap()
         .map(|entry| entry.unwrap().path())
@@ -1124,7 +1194,7 @@ fn before_claim_statuses() -> Vec<(String, String)> {
                 fs::read_to_string(&path).unwrap(),
             )
         })
-        .take_while(|(name, _)| name != "202611181000_claim_statuses")
+        .take_while(|(known, _)| known != name)
         .collect()
 }
 
@@ -1136,7 +1206,7 @@ fn before_claim_statuses() -> Vec<(String, String)> {
 fn the_claim_status_migration_keeps_every_claim_and_what_names_it() {
     let home = tempfile::tempdir().unwrap();
     let path = home.path().join("rastro.sqlite3");
-    let before = before_claim_statuses();
+    let before = before_migration("202611181000_claim_statuses");
     let before: Vec<(&str, &str)> = before
         .iter()
         .map(|(name, sql)| (name.as_str(), sql.as_str()))
