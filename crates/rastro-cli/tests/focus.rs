@@ -440,3 +440,26 @@ fn a_promise_the_owner_already_decided_leaves_the_focus() {
     let report = report_with_queue(good(vec![]), &meetings, &queue);
     assert_eq!(ids(&report), ["the pending deck"]);
 }
+
+// spec: Focus cites and tells the truth about gaps
+#[test]
+fn the_as_of_rests_only_on_the_reads_the_items_rest_on() {
+    // A stale Linear read holds no item on the report; the meeting's item rests on a newer read.
+    let stale_linear = Some(LinearRead {
+        read: Read::Good {
+            at: at("2026-11-10T08:00:00Z"),
+        },
+        tasks: vec![],
+    });
+    let meetings = [meeting(
+        RunState::Succeeded,
+        vec![hypothesis(Kind::Ask, "the budget")],
+    )];
+    let report = report(stale_linear.clone(), &meetings);
+    assert_eq!(report.as_of, at("2026-11-19T07:40:00Z"));
+
+    // No item rests on any read: the report stands as of now, not as of the stale read.
+    let empty = self::report(stale_linear, &[]);
+    assert!(empty.focus.is_none());
+    assert_eq!(empty.as_of, now());
+}
