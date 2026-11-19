@@ -14,6 +14,7 @@ use rastro_core::{
     meeting::{Cause, RunState},
     queue::{Origin, Queue},
 };
+use std::collections::BTreeSet;
 
 fn at(text: &str) -> DateTime<Utc> {
     text.parse().unwrap()
@@ -136,7 +137,19 @@ fn meeting(state: RunState, hypotheses: Vec<Hypothesis>) -> commitments::Source 
 }
 
 fn report(linear: Option<LinearRead>, meetings: &[commitments::Source]) -> focus::Report {
-    report_with_queue(linear, meetings, &Queue::empty())
+    report_with_queue(linear, meetings, &queue_of(meetings, &BTreeSet::new()))
+}
+
+/// The queue the meetings' proposals make, less those whose ids are in `answered`.
+fn queue_of(meetings: &[commitments::Source], answered: &BTreeSet<String>) -> Queue {
+    let origins = (meetings.iter())
+        .map(|source| Origin {
+            at: at("2026-11-18T10:00:00Z"),
+            source: source.clone(),
+            known: vec![],
+        })
+        .collect();
+    Queue::new(origins, vec![], vec![], answered)
 }
 
 fn report_with_queue(
@@ -405,4 +418,25 @@ fn the_queue_is_a_count_and_never_its_text() {
     assert_eq!(report.queue_count, 2);
     let json = serde_json::to_string(&report).unwrap();
     assert!(!json.contains("SECRET-PROPOSAL"), "{json}");
+}
+
+// spec: A focus report ranks what needs the owner
+#[test]
+fn a_promise_the_owner_already_decided_leaves_the_focus() {
+    let meetings = [meeting(
+        RunState::Succeeded,
+        vec![
+            hypothesis(Kind::Promise, "the decided doc"),
+            hypothesis(Kind::Promise, "the pending deck"),
+        ],
+    )];
+    let pending = queue_of(&meetings, &BTreeSet::new());
+    let decided = (pending.items.iter())
+        .find(|item| item.proposal.as_ref().unwrap().promise == "the decided doc")
+        .unwrap()
+        .id
+        .clone();
+    let queue = queue_of(&meetings, &BTreeSet::from([decided]));
+    let report = report_with_queue(good(vec![]), &meetings, &queue);
+    assert_eq!(ids(&report), ["the pending deck"]);
 }
