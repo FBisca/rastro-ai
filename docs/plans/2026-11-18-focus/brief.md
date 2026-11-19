@@ -84,6 +84,7 @@ D17 FOCUS sits below the week's KPI cards on home, over above them: owner "focus
 D18 Two tabs in the workbench space, Plans and Focus, over one mixed home: owner "let's do something even better, create tabs, Plans and Focus" (2026-11-19). The Focus tab is the mod with props {focus:true}: it reads only rastro focus --json (no orchestrator dependency, works in a space with no plans) and draws the report full-width; Plans is the workbench as-is.
 D19 The Plans/Focus tabs live inside the workbench home, below the KPI cards, over Herdr window tabs: owner "the tabs should live below the KPI Cards" (2026-11-19). Focus is the default tab; the focus-only mod instance (D18) stays available as a whole-pane Focus surface.
 D20 Focus band 2 holds only meeting promises still pending in the queue; a hypothesis whose proposal was accepted, edited or rejected leaves the report: owner "clear ... current focus" (2026-11-19) surfaced that the Nov-13 switch day's rejections kept haunting the card. A decided promise no longer waits on the owner.
+D21 Code decides lapsed retractions the source's evidence settles (merged/closed PR vs stale open claim), over owner questions: owner "merged PRs can be determinated by code don't need me" (2026-11-19). Recorded in docs/decisions/queue.md; the two pending questions answered yes as stopgap; the behavior change is a separate slice via start-planning.
 
 ## Risks / Trade-offs
 - Noise in the focus line → deterministic bands, cap of three items, queue as count only (S4, S8); the ranking is the product and is tunable without a model.
