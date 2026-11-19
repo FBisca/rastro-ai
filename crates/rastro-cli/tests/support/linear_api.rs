@@ -1,9 +1,10 @@
 //! A fake Linear GraphQL API on loopback: it answers an issue create and records every request it
 //! receives, so a test sees exactly what reached Linear. It holds the issues it created by the id
 //! the caller gave, and numbers them `ENG-1`, `ENG-2`, … in creation order. It answers a lookup of
-//! an issue by id, and can turn the response to the next create into an error or hold every create's response
-//! until a test lets it go: the issue exists either way. It answers an issue delete by removing the
-//! issue, so a lookup of it no longer finds it, and can lose the response to the next delete.
+//! an issue by id, and can turn the response to the next create into an error or hold every
+//! create's response until a test lets it go: the issue exists either way. It answers an issue
+//! delete by moving the issue to the trash (`trashed`, `archivedAt`), where a lookup by id still
+//! finds it, and can lose the response to the next delete.
 #![allow(dead_code)]
 use serde_json::{Value, json};
 use std::{
@@ -114,9 +115,14 @@ impl World {
             }
             "IssueDelete" => {
                 let id = &req.body["variables"]["id"];
-                let before = self.issues.len();
-                self.issues.retain(|issue| issue["id"] != *id);
-                let found = self.issues.len() < before;
+                // As Linear does: the issue goes to the trash, archived, and is still held by id.
+                let live = (self.issues.iter_mut())
+                    .find(|issue| issue["id"] == *id && issue["trashed"] != true);
+                let found = live.is_some();
+                if let Some(issue) = live {
+                    issue["trashed"] = true.into();
+                    issue["archivedAt"] = "2026-11-19T10:00:00.000Z".into();
+                }
                 if found && self.lose_next.take_if(|op| *op == "IssueDelete").is_some() {
                     fate = Fate::Lose;
                 }
@@ -127,7 +133,18 @@ impl World {
                 .iter()
                 .find(|issue| issue["id"] == req.body["variables"]["id"])
             {
-                Some(issue) => (200, json!({"data": {"issue": issue}})),
+                Some(issue) => {
+                    // Only the fields the document selects, as GraphQL answers.
+                    let mut issue = issue.clone();
+                    if !req.body["query"]
+                        .as_str()
+                        .is_some_and(|q| q.contains("trashed"))
+                    {
+                        issue.as_object_mut().unwrap().remove("trashed");
+                        issue.as_object_mut().unwrap().remove("archivedAt");
+                    }
+                    (200, json!({"data": {"issue": issue}}))
+                }
                 // As Linear answers an id it does not hold.
                 None => (
                     200,

@@ -116,7 +116,11 @@ fn undoing_a_done_run_deletes_its_issue_and_the_run_reads_undone_with_the_undo_i
     let deletes = env.linear.deletes();
     assert_eq!(deletes.len(), 1, "one delete for the issue");
     assert_eq!(deletes[0].body["variables"]["id"], issue_id);
-    assert!(env.linear.issues().is_empty());
+    assert_eq!(
+        env.linear.issues()[0]["trashed"],
+        true,
+        "the issue is in the trash"
+    );
     for run in [env.run(), undone] {
         assert_eq!(run["status"], "undone", "{run}");
         assert!(
@@ -179,7 +183,11 @@ fn undoing_again_after_a_lost_delete_response_sends_no_second_delete_and_records
     env.linear.lose_next_delete_response();
     let lost = env.rastro(&["actions", "undo", &run]);
     assert!(!lost.status.success());
-    assert!(env.linear.issues().is_empty(), "Linear deleted the issue");
+    assert_eq!(
+        env.linear.issues()[0]["trashed"],
+        true,
+        "Linear trashed the issue"
+    );
     assert_eq!(env.run()["status"], "done", "the owner never saw it go");
     assert_eq!(env.undo_intents(), 0);
 

@@ -11,8 +11,10 @@ const ISSUE_CREATE: &str = "mutation IssueCreate($input: IssueCreateInput!) { \
     issueCreate(input: $input) { success issue { id identifier url } } }";
 
 /// The one document an issue lookup sends: the issue by the id it was created under.
+/// It also reads `trashed`: Linear keeps a deleted issue in its trash, archived, and still answers
+/// a lookup of it by id.
 const ISSUE_LOOKUP: &str =
-    "query IssueLookup($id: String!) { issue(id: $id) { id identifier url } }";
+    "query IssueLookup($id: String!) { issue(id: $id) { id identifier url trashed archivedAt } }";
 
 /// The one document an issue delete sends: Linear moves the issue to its trash.
 const ISSUE_DELETE: &str =
@@ -34,6 +36,8 @@ impl std::error::Error for NotFound {}
 pub struct Created {
     pub identifier: String,
     pub url: String,
+    /// Whether the issue is in Linear's trash: deleted, though a lookup still finds it.
+    pub trashed: bool,
 }
 
 /// The content an issue is created with: what the owner accepted, and nothing else.
@@ -116,7 +120,8 @@ impl Client {
     /// whether it deleted one: `false` means the issue was already gone, and nothing was sent but
     /// the lookup. Fails when Linear cannot be asked or does not confirm the delete.
     pub fn delete_issue(&self, id: &str) -> Result<bool> {
-        if self.find_issue(id)?.is_none() {
+        // A trashed issue is already deleted: a second delete would be one too many.
+        if self.find_issue(id)?.is_none_or(|issue| issue.trashed) {
             return Ok(false);
         }
         let data = self.query(ISSUE_DELETE, json!({"id": id}))?;
@@ -170,7 +175,11 @@ impl Client {
 fn confirmed(issue: &Value) -> Result<Created> {
     let text = |field: &str| issue[field].as_str().map(String::from);
     match (text("identifier"), text("url")) {
-        (Some(identifier), Some(url)) => Ok(Created { identifier, url }),
+        (Some(identifier), Some(url)) => Ok(Created {
+            identifier,
+            url,
+            trashed: issue["trashed"] == true || !issue["archivedAt"].is_null(),
+        }),
         _ => bail!("Linear confirmed the issue without its identifier and url"),
     }
 }
