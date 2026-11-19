@@ -5,9 +5,11 @@ use anyhow::Result;
 use rastro_core::{
     Scope,
     commitments::Source,
+    focus::LinearRead,
     meeting::StoredMeeting,
     queue::{KnownCommitment, Origin, Statement},
 };
+use rusqlite::OptionalExtension;
 use std::collections::{BTreeMap, BTreeSet};
 
 /// Every source visible to `scopes` (empty: every scope), most recently captured first.
@@ -91,4 +93,91 @@ fn known(view: &View, scopes: &[Scope]) -> Result<Vec<KnownCommitment>> {
             retracted,
         })
         .collect())
+}
+
+/// A Linear source's latest connector read and its issues as the latest evidence of each field
+/// says them. A run that never finished is not a read; the last good read stamps a failed one.
+pub(crate) fn linear_read(
+    view: &View,
+    source: &str,
+    scopes: &[Scope],
+) -> Result<Option<LinearRead>> {
+    use rastro_core::focus::{GapReason, Read, Task, TaskState, Urgency};
+    let latest: Option<(String, String)> = view
+        .0
+        .query_row(
+            "SELECT status, finished_at FROM runs
+             WHERE role = 'connector' AND source = ?1 AND finished_at IS NOT NULL
+             ORDER BY id DESC LIMIT 1",
+            [source],
+            |row| Ok((row.get(0)?, row.get(1)?)),
+        )
+        .optional()?;
+    let Some((status, finished)) = latest else {
+        return Ok(None);
+    };
+    let last_good: Option<String> = view.0.query_row(
+        "SELECT max(finished_at) FROM runs
+         WHERE role = 'connector' AND source = ?1 AND status = 'ok' AND finished_at IS NOT NULL",
+        [source],
+        |row| row.get(0),
+    )?;
+    let at = |text: String| -> Result<chrono::DateTime<chrono::Utc>> { Ok(text.parse()?) };
+    let last_good = last_good.map(at).transpose()?;
+    let read = if status == "failed" {
+        Read::Failed {
+            reason: GapReason::SyncFailed,
+            last_good,
+        }
+    } else {
+        Read::Good { at: at(finished)? }
+    };
+    let mut statement = view.0.prepare(
+        "SELECT e.location, e.field, e.quote FROM evidence e
+         WHERE e.source = ?1 AND e.location LIKE 'linear:issue/%'
+           AND e.field IN ('/identifier', '/url', '/title', '/state/type')
+           AND (?2 IS NULL OR e.scope IN (SELECT value FROM json_each(?2)))
+           AND e.id = (SELECT max(x.id) FROM evidence x WHERE x.source = e.source
+                       AND x.scope = e.scope AND x.location = e.location AND x.field = e.field)
+         ORDER BY e.location, e.field",
+    )?;
+    let rows = statement.query_map(
+        rusqlite::params![source, crate::scope_parameter(scopes)?],
+        |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        },
+    )?;
+    let mut tasks: BTreeMap<String, Task> = BTreeMap::new();
+    for row in rows {
+        let (location, field, quote) = row?;
+        let task = tasks.entry(location.clone()).or_insert_with(|| Task {
+            location: location.clone(),
+            identifier: String::new(),
+            title: String::new(),
+            url: None,
+            state: TaskState::Open,
+            due: None,
+            urgency: Urgency::None,
+        });
+        match field.as_str() {
+            "/identifier" => task.identifier = quote,
+            "/url" => task.url = Some(quote),
+            "/title" => task.title = quote,
+            _ => {
+                task.state = match quote.as_str() {
+                    "started" => TaskState::InProgress,
+                    "completed" | "canceled" => TaskState::Closed,
+                    _ => TaskState::Open,
+                };
+            }
+        }
+    }
+    Ok(Some(LinearRead {
+        read,
+        tasks: tasks.into_values().collect(),
+    }))
 }

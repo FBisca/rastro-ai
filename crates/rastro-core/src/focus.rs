@@ -345,11 +345,21 @@ fn rank(a: &Item, b: &Item) -> Ordering {
 }
 
 /// The focus report for what a snapshot holds, judged at the coverage clock and the owner's local
-/// offset. No Linear read is stored yet, so the report rests on meeting commitments and the queue.
-fn read_report(view: &dyn crate::Snapshot, scopes: &[crate::Scope]) -> anyhow::Result<Report> {
+/// offset. Linear issues carry no due date or urgency in the evidence, so they rank by state alone.
+fn read_report(
+    view: &dyn crate::Snapshot,
+    sources: &[crate::Source],
+    scopes: &[crate::Scope],
+) -> anyhow::Result<Report> {
     let now = crate::coverage::now()?;
     let meetings = view.commitment_sources(scopes)?;
     let queue = crate::queue::read(view, scopes)?;
+    // The first Linear source the owner may see: its read, or its gap when the last sync failed.
+    let linear = sources
+        .iter()
+        .filter(|s| s.connector == LINEAR && (scopes.is_empty() || scopes.contains(&s.scope)))
+        .find_map(|s| view.linear_read(&s.name, scopes).transpose())
+        .transpose()?;
     // The owner's Person, when one exists; without it no meeting ask is the owner's.
     let owner_id = view
         .resolve_entity(crate::identity::ME)
@@ -361,7 +371,7 @@ fn read_report(view: &dyn crate::Snapshot, scopes: &[crate::Scope]) -> anyhow::R
     Ok(report(&Input {
         now,
         offset,
-        linear: None,
+        linear,
         owner_id: &owner_id,
         meetings: &meetings,
         queue: &queue,
@@ -371,7 +381,9 @@ fn read_report(view: &dyn crate::Snapshot, scopes: &[crate::Scope]) -> anyhow::R
 impl<S: crate::Storage> crate::Rastro<S> {
     /// The focus report over every scope, on a writing open.
     pub fn focus(&mut self) -> anyhow::Result<Report> {
-        self.storage.snapshot(|view| read_report(view, &[]))
+        let sources = &self.config.sources;
+        self.storage
+            .snapshot(|view| read_report(view, sources, &[]))
     }
 }
 
@@ -382,10 +394,10 @@ impl<S: crate::ReadStorage> crate::Reader<S> {
             locations,
             storage,
             scopes,
-            ..
+            config,
         } = self;
         crate::read_only::snapshot(locations, storage, scopes, |view, _| match view {
-            Some(view) => read_report(view, scopes),
+            Some(view) => read_report(view, &config.sources, scopes),
             None => {
                 let queue = Queue::empty();
                 let now = crate::coverage::now()?;
