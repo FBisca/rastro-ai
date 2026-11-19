@@ -7,7 +7,9 @@
 //! every Rastro id stay in Rastro. `action.lookup` finds the issue under that id, so a run
 //! executed again, or whose answer was lost, learns what the first execution did before it creates
 //! anything. `action.undo` deletes the issue under that id, unless Linear already holds none, so
-//! an undo whose answer was lost deletes nothing the second time. Any other action message is
+//! an undo whose answer was lost deletes nothing the second time. Before it deletes, it reads the
+//! issue's whole comment and change history page by page, and refuses, sending no delete, when
+//! anyone but the key's owner commented or edited, or when the history cannot be read whole. Any other action message is
 //! answered with an error.
 mod linear;
 
