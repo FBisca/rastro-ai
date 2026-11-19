@@ -7,7 +7,7 @@
 //! # Ranking
 //! Candidates fall in bands, in this order (decisions D10):
 //! 1. overdue or due today (the due date's day in the owner's local offset),
-//! 2. a meeting promise or ask that waits on the owner,
+//! 2. a meeting promise or ask the owner is responsible for, so it waits on the owner,
 //! 3. the next action of a Linear task in progress.
 //!
 //! Inside a band the earlier due time ranks first, then the higher urgency, then the item id.
@@ -116,6 +116,9 @@ pub struct Input<'a> {
     pub offset: FixedOffset,
     /// `None` when no Linear source is configured: no items and no gap.
     pub linear: Option<LinearRead>,
+    /// The owner's entity id: a meeting hypothesis waits on the owner only when this identity is
+    /// its responsible party.
+    pub owner_id: &'a str,
     pub meetings: &'a [commitments::Source],
     pub queue: &'a Queue,
 }
@@ -237,7 +240,7 @@ pub fn report(input: &Input) -> Report {
         if let Some(observed) = observed {
             items.extend(
                 (source.hypotheses.iter())
-                    .filter(|hypothesis| hypothesis.kind != Kind::WaitingOn)
+                    .filter(|hypothesis| owner_owes(hypothesis, input.owner_id))
                     .map(|hypothesis| promise_item(source, hypothesis, observed)),
             );
         }
@@ -283,6 +286,14 @@ fn task_item(input: &Input, task: &Task, observed_at: DateTime<Utc>) -> Option<I
             observed_at,
         },
     })
+}
+
+/// Whether a hypothesis is the owner's to do: an ask or a promise whose responsible party, the one
+/// who acts, is the owner. What another owes the owner, or the owner is waiting on, is not: a
+/// `waiting_on` is the owner waiting for someone else's action (`std:waiting_on`).
+fn owner_owes(hypothesis: &Hypothesis, owner_id: &str) -> bool {
+    hypothesis.kind != Kind::WaitingOn
+        && (hypothesis.responsible.identity.as_ref()).is_some_and(|party| party.id == owner_id)
 }
 
 /// A meeting ask or promise as a candidate. Its stated date stays the speaker's words, so it has

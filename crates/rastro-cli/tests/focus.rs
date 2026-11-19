@@ -5,7 +5,7 @@ use chrono::{DateTime, FixedOffset, Utc};
 use rastro_core::{
     CoverageState,
     commitments::{
-        self, Extraction, Hypothesis, Kind, Known, Party, PartyState, Quote, ResultsFrom,
+        self, Extraction, Hypothesis, Identity, Kind, Known, Party, PartyState, Quote, ResultsFrom,
         SourceCoverage, SourceKind as CommitmentSourceKind, StatedDate,
     },
     focus::{
@@ -45,19 +45,39 @@ fn good(tasks: Vec<Task>) -> Option<LinearRead> {
     })
 }
 
-fn party(label: &str) -> Party {
+/// The owner's id in the identity graph, as a mapped party carries it.
+const OWNER_ID: &str = "person:owner";
+
+fn owner() -> Party {
+    Party {
+        state: PartyState::Mapped,
+        label: Some("Me".into()),
+        identity: Some(Identity {
+            id: OWNER_ID.into(),
+            identifier: "rastro:person/owner".into(),
+        }),
+    }
+}
+
+fn ana() -> Party {
     Party {
         state: PartyState::Unknown,
-        label: Some(label.into()),
+        label: Some("Ana".into()),
         identity: None,
     }
 }
 
-fn hypothesis(kind: Kind, promise: &str) -> Hypothesis {
+/// `responsible` owes `recipient` the `promise`.
+fn hypothesis_between(
+    kind: Kind,
+    responsible: Party,
+    recipient: Party,
+    promise: &str,
+) -> Hypothesis {
     Hypothesis::new(
         kind,
-        party("Me"),
-        party("Ana"),
+        responsible,
+        recipient,
         promise.into(),
         StatedDate {
             state: Known::Unknown,
@@ -71,6 +91,11 @@ fn hypothesis(kind: Kind, promise: &str) -> Hypothesis {
             end: 10,
         },
     )
+}
+
+/// A hypothesis the owner owes Ana.
+fn hypothesis(kind: Kind, promise: &str) -> Hypothesis {
+    hypothesis_between(kind, owner(), ana(), promise)
 }
 
 /// A meeting source whose latest extraction ended as `state`, holding `hypotheses`.
@@ -123,6 +148,7 @@ fn report_with_queue(
         now: now(),
         offset: FixedOffset::east_opt(3600).unwrap(),
         linear,
+        owner_id: OWNER_ID,
         meetings,
         queue,
     })
@@ -180,6 +206,34 @@ fn a_waiting_promise_is_the_focus_when_nothing_is_due() {
     assert_eq!(focus.reason, Reason::WaitingOnOwner);
     assert_eq!(focus.citation.source, SourceKind::Meeting);
     assert_eq!(report.needs_you[0].title, "Work on H-8095");
+}
+
+// spec: A focus report ranks what needs the owner
+#[test]
+fn what_others_owe_the_owner_is_not_the_owners_to_do() {
+    let meetings = [meeting(
+        RunState::Succeeded,
+        vec![
+            hypothesis_between(Kind::Promise, ana(), owner(), "the doc from Ana"),
+            hypothesis_between(Kind::Ask, ana(), owner(), "the budget from Ana"),
+            hypothesis_between(Kind::WaitingOn, ana(), owner(), "Ana's numbers"),
+            hypothesis_between(Kind::Ask, owner(), ana(), "the review for Ana"),
+        ],
+    )];
+    let report = report(
+        good(vec![task(
+            "H-8095",
+            TaskState::InProgress,
+            None,
+            Urgency::Low,
+        )]),
+        &meetings,
+    );
+    assert_eq!(
+        ids(&report),
+        ["the review for Ana", "Work on H-8095"],
+        "only what the owner owes is waiting on the owner"
+    );
 }
 
 // spec: A focus report ranks what needs the owner
