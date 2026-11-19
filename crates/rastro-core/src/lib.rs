@@ -4,6 +4,7 @@ pub mod coverage;
 pub mod entity_form;
 pub mod evidence;
 pub mod files;
+pub mod focus;
 pub mod host;
 pub mod identity;
 pub mod knowledge;
