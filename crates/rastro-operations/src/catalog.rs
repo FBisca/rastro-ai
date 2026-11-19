@@ -349,6 +349,9 @@ operations! {
     Commitments(CommitmentsRequest => CommitmentsResult) {
         slot: 22, name: "commitments", surfaces: [Cli, Mcp], read_only: true, reader: run_read, cli_read_path: true
     }
+    Focus(FocusRequest => FocusResult) {
+        slot: 34, name: "focus", surfaces: [Cli, Mcp], read_only: true, reader: run_read, cli_read_path: true
+    }
     Queue(QueueRequest => QueueResult) as Queue {
         slot: 23, name: "queue", surfaces: [Cli, Mcp], read_only: true, reader: run_read, cli_read_path: true
     } with QueueAnswer {

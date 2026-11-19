@@ -287,9 +287,9 @@ fn listed_tools_equal_the_catalog_entries() {
 }
 
 /// spec: Only the read-only operations are tools
-/// exactly search, coverage, about, why, commitments, meeting_commitments and queue, read-only; any other tool is a JSON-RPC error and runs nothing
+/// exactly search, coverage, about, why, commitments, meeting_commitments, queue and focus, read-only; any other tool is a JSON-RPC error and runs nothing
 #[test]
-fn exactly_seven_read_only_tools_and_writes_are_protocol_errors() {
+fn exactly_eight_read_only_tools_and_writes_are_protocol_errors() {
     let env = seeded();
     let config = env.home.path().join("config/config.toml");
     let config_before = fs::read(&config).unwrap();
@@ -304,6 +304,7 @@ fn exactly_seven_read_only_tools_and_writes_are_protocol_errors() {
             "about",
             "commitments",
             "coverage",
+            "focus",
             "meeting_commitments",
             "queue",
             "search",
@@ -572,7 +573,7 @@ fn an_unsupported_revision_is_answered_with_the_pinned_revision() {
         let init = session.initialize_as(asked, "scripted-client");
         assert_eq!(init["result"]["protocolVersion"], PINNED, "asked {asked}");
         // Codex's default request (2025-06-18) proceeds: it lists tools and calls one.
-        assert_eq!(session.list_tools().len(), 7, "asked {asked}");
+        assert_eq!(session.list_tools().len(), 8, "asked {asked}");
         let call = session.call("coverage", json!({}));
         ok_result(&call["result"]);
     }
@@ -627,7 +628,7 @@ fn server_discover_first_does_not_end_the_session_and_initialize_then_works() {
     }
     let init = session.initialize();
     assert_eq!(init["result"]["protocolVersion"], PINNED);
-    assert_eq!(session.list_tools().len(), 7);
+    assert_eq!(session.list_tools().len(), 8);
 }
 
 /// spec: A client's name changes no result and is stored nowhere
@@ -783,6 +784,29 @@ fn a_cli_envelope_equals_the_tool_result_for_the_same_request() {
             .unwrap()
             .is_empty()
     );
+}
+
+/// spec: Focus is a read in the catalog
+/// `rastro focus --json` prints the focus report the MCP focus tool answers, byte for byte
+#[test]
+fn the_cli_focus_json_equals_the_mcp_focus_tool_answer() {
+    let env = parity_env();
+    let at = "2026-11-19T09:00:00Z";
+    let mut serve = env.command(&["mcp"]);
+    serve.env("RASTRO_NOW", at);
+    let mut session = Session::start(serve);
+    session.initialize();
+    let output = env
+        .command(&["--json", "focus"])
+        .env("RASTRO_NOW", at)
+        .output()
+        .unwrap();
+    let cli: Value =
+        serde_json::from_slice(&output.stdout).unwrap_or_else(|e| panic!("{e}: {output:?}"));
+    let call = session.call("focus", json!({}));
+    assert_eq!(call["result"]["structuredContent"], cli);
+    assert_eq!(cli["operation"], "focus");
+    assert_eq!(cli["schema_version"], 2);
 }
 
 /// spec: A search hit is cited with a bounded excerpt
@@ -2364,7 +2388,7 @@ fn a_person_is_visible_only_where_one_of_its_linked_accounts_is() {
 }
 
 /// claims/R78: one morning's standup comes from a single `about me` over MCP — both linked accounts and
-/// their own claims arrive in that one read, and the server offers only its seven read-only tools, so
+/// their own claims arrive in that one read, and the server offers only its eight read-only tools, so
 /// the read reaches neither GitHub nor Linear
 /// spec: The owner preps a standup from about me
 #[test]
@@ -2397,7 +2421,7 @@ fn about_me_over_mcp_answers_one_morning_from_both_accounts() {
         assert!(shown.contains(login), "{login} missing: {about}");
     }
 
-    // Nothing on this server could reach GitHub or Linear: seven read-only tools and no write.
+    // Nothing on this server could reach GitHub or Linear: eight read-only tools and no write.
     let mut names: Vec<String> = everywhere
         .list_tools()
         .iter()
@@ -2410,6 +2434,7 @@ fn about_me_over_mcp_answers_one_morning_from_both_accounts() {
             "about",
             "commitments",
             "coverage",
+            "focus",
             "meeting_commitments",
             "queue",
             "search",

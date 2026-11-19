@@ -996,6 +996,13 @@ impl Snapshot for View<'_> {
     ) -> Result<Vec<rastro_core::commitments::Source>> {
         commitments::sources(self, scopes)
     }
+    fn linear_read(
+        &self,
+        source: &str,
+        scopes: &[Scope],
+    ) -> Result<Option<rastro_core::focus::LinearRead>> {
+        commitments::linear_read(self, source, scopes)
+    }
     fn queue_sources(&self, scopes: &[Scope]) -> Result<Vec<rastro_core::queue::Origin>> {
         commitments::origins(self, scopes)
     }

@@ -198,6 +198,15 @@ pub trait Snapshot {
     }
     /// The same sources as [`Snapshot::commitment_sources`], each with the time its content
     /// belongs to: a meeting's capture time, for the queue's oldest-first order.
+    /// The Linear source `source`'s latest connector read and the issues its evidence holds
+    /// (title, state), in the scopes given (empty: every scope); `None` when it never ran.
+    fn linear_read(
+        &self,
+        _source: &str,
+        _scopes: &[Scope],
+    ) -> Result<Option<crate::focus::LinearRead>> {
+        Ok(None)
+    }
     fn queue_sources(&self, _scopes: &[Scope]) -> Result<Vec<crate::queue::Origin>> {
         anyhow::bail!("storage does not support the queue")
     }

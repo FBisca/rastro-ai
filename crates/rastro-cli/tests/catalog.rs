@@ -129,6 +129,7 @@ fn every_envelope_is_version_2_and_schema_valid() {
         &["search", "anything", "--history"],
         &["index", "rebuild"],
         &["search"],
+        &["focus"],
     ];
     for args in commands {
         let mut full = args.to_vec();
@@ -218,3 +219,42 @@ fn every_envelope_is_version_2_and_schema_valid() {
     assert_eq!(hash, V1_FNV, "schema/operations-v1.schema.json changed");
 }
 const V1_FNV: u64 = 0x6976af6cc700be4;
+
+/// spec: Focus is a read in the catalog
+/// the focus answer holds the recommended focus, the needs-you items (each cited), the queue
+/// count, the gaps and the as-of time, and nothing a terminal alone would use
+#[test]
+fn the_focus_answer_holds_exactly_what_a_renderer_reads() {
+    let home = tempfile::tempdir().unwrap();
+    let out = run(home.path(), &["focus", "--json"]);
+    let answer: Value = serde_json::from_slice(&out.stdout).unwrap();
+    assert_eq!(answer["operation"], "focus", "{answer}");
+    let mut keys: Vec<_> = answer["result"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .cloned()
+        .collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        [
+            "as_of",
+            "focus",
+            "gaps",
+            "needs_you",
+            "notice",
+            "queue_count"
+        ]
+    );
+    assert_eq!(answer["result"]["queue_count"], 0);
+    assert_eq!(answer["result"]["notice"], "Nothing needs you.");
+    let spec = catalog::find("focus").unwrap();
+    assert!(spec.read_only && spec.surfaces.contains(&Surface::Mcp));
+    // an item's citation is part of the schema a renderer reads
+    let schema = spec.output_schema();
+    assert!(
+        schema["$defs"]["FocusItem"]["properties"]["citation"].is_object(),
+        "{schema}"
+    );
+}
