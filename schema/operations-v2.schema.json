@@ -2139,6 +2139,13 @@
         "kind": {
           "$ref": "#/$defs/QueueItemKind"
         },
+        "possible_duplicates": {
+          "description": "The identifiers of the open observed Linear issues whose title is exactly an action\nproposal's: a warning that never takes the item out of the queue.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "proposal": {
           "anyOf": [
             {

@@ -1011,6 +1011,13 @@ impl Snapshot for View<'_> {
     ) -> Result<Option<rastro_core::focus::LinearRead>> {
         commitments::linear_read(self, source, scopes)
     }
+    fn linear_issues(
+        &self,
+        source: &str,
+        scopes: &[Scope],
+    ) -> Result<Vec<rastro_core::actions::ObservedIssue>> {
+        actions::linear_issues(self, source, scopes)
+    }
     fn queue_sources(&self, scopes: &[Scope]) -> Result<Vec<rastro_core::queue::Origin>> {
         commitments::origins(self, scopes)
     }

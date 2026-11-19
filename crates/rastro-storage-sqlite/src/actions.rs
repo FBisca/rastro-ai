@@ -4,7 +4,7 @@ use crate::{View, parse_time, scope_parameter, stamp};
 use anyhow::Result;
 use rastro_core::{
     Scope,
-    actions::{Filed, IssueFields, Proposal},
+    actions::{Filed, IssueFields, ObservedIssue, Proposal},
     queue::{Source, SourceKind},
 };
 use rusqlite::{Connection, params};
@@ -75,4 +75,47 @@ pub(crate) fn proposals(view: &View, scopes: &[Scope]) -> Result<Vec<Filed>> {
         });
     }
     Ok(filed)
+}
+
+/// The issues a Linear source observed: the latest evidence of each field of each
+/// `linear:issue/…` location, in the scopes given (empty: every scope).
+pub(crate) fn linear_issues(
+    view: &View,
+    source: &str,
+    scopes: &[Scope],
+) -> Result<Vec<ObservedIssue>> {
+    let mut statement = view.0.prepare(
+        "SELECT e.location, e.field, e.quote FROM evidence e
+         WHERE e.source = ?1 AND e.location LIKE 'linear:issue/%'
+           AND e.field IN ('/identifier', '/title', '/state/type')
+           AND (?2 IS NULL OR e.scope IN (SELECT value FROM json_each(?2)))
+           AND e.id = (SELECT max(x.id) FROM evidence x WHERE x.source = e.source
+                       AND x.scope = e.scope AND x.location = e.location AND x.field = e.field)
+         ORDER BY e.location, e.field",
+    )?;
+    let rows = statement.query_map(params![source, scope_parameter(scopes)?], |row| {
+        Ok((
+            row.get::<_, String>(0)?,
+            row.get::<_, String>(1)?,
+            row.get::<_, String>(2)?,
+        ))
+    })?;
+    let mut issues: std::collections::BTreeMap<String, ObservedIssue> = Default::default();
+    for row in rows {
+        let (location, field, quote) = row?;
+        let issue = issues.entry(location).or_insert_with(|| ObservedIssue {
+            identifier: String::new(),
+            title: String::new(),
+            state: String::new(),
+        });
+        match field.as_str() {
+            "/identifier" => issue.identifier = quote,
+            "/title" => issue.title = quote,
+            _ => issue.state = quote,
+        }
+    }
+    Ok(issues
+        .into_values()
+        .filter(|issue| !issue.identifier.is_empty() && !issue.title.is_empty())
+        .collect())
 }
