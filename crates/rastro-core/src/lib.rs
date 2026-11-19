@@ -12,6 +12,7 @@ pub mod knowledge;
 pub mod meeting;
 pub mod queue;
 pub mod read_only;
+pub mod rules;
 pub mod runs;
 pub mod search;
 pub mod tick;
@@ -187,6 +188,12 @@ pub struct Config {
     /// `[actions]`: what a proposal takes when it names nothing.
     #[serde(default, skip_serializing_if = "actions::ActionsConfig::is_empty")]
     pub actions: actions::ActionsConfig,
+    /// `[grace]`: how long a rule waits before it runs, by its action's sensitivity.
+    #[serde(default, skip_serializing_if = "rules::GraceTable::is_empty")]
+    pub grace: rules::GraceTable,
+    /// `[[rules]]`: what the owner lets Rastro do without asking.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub rules: Vec<rules::Rule>,
 }
 impl Config {
     pub fn load(locations: &Locations) -> Result<Self> {
@@ -205,6 +212,7 @@ impl Config {
                 source.name
             );
         }
+        rules::validate(&config, locations)?;
         Ok(config)
     }
     fn save(&self, locations: &Locations) -> Result<()> {

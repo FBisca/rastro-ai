@@ -1084,6 +1084,31 @@ fn edit_text(r: &rastro_operations::results::ClaimWriteResult) -> String {
         _ => format!("{} already says that; nothing recorded", r.claim),
     }
 }
+/// One line per rule, in the order the owner wrote them.
+fn rules_check_text(r: &rastro_operations::results::RulesCheckResult) -> String {
+    if r.rules.is_empty() {
+        return "No rules in config.toml".into();
+    }
+    r.rules
+        .iter()
+        .map(|rule| {
+            let seconds = rule.grace_seconds;
+            let grace = if seconds >= 60 && seconds % 60 == 0 {
+                format!("{} min", seconds / 60)
+            } else {
+                format!("{seconds} s")
+            };
+            format!(
+                "{} | {} | team {} | assignee {} | grace {grace}",
+                display_safe(&rule.name),
+                display_safe(&rule.action),
+                display_safe(&rule.team),
+                display_safe(&rule.assignee),
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 fn human(response: &Response) -> String {
     let or_none = |lines: Vec<String>| {
         if lines.is_empty() {
@@ -1128,6 +1153,7 @@ fn human(response: &Response) -> String {
         Response::ActionsShow(r) => actions_text(r),
         Response::ActionsUndo(r) => format!("Undone: {}", action_run_text(r)),
         Response::ActionsPropose(r) => actions_propose_text(r),
+        Response::RulesCheck(r) => rules_check_text(r),
         Response::Focus(r) => focus_text(r),
         Response::QueueOutcomes(r) => outcomes_text(r),
         Response::QueueAccept(r)

@@ -2789,6 +2789,38 @@
       ],
       "type": "object"
     },
+    "RuleCheck": {
+      "additionalProperties": false,
+      "description": "One rule as `rules check` shows it.",
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "assignee": {
+          "type": "string"
+        },
+        "grace_seconds": {
+          "description": "How long a run this rule starts waits before it executes, in seconds.",
+          "format": "uint64",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "name": {
+          "type": "string"
+        },
+        "team": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "name",
+        "action",
+        "team",
+        "assignee",
+        "grace_seconds"
+      ],
+      "type": "object"
+    },
     "RunReport": {
       "additionalProperties": false,
       "properties": {
@@ -4786,6 +4818,30 @@
               "type": "object"
             }
           }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "rules.check"
+            },
+            "result": {
+              "additionalProperties": false,
+              "description": "What `rules check` returns: every rule in `config.toml`, in the order the owner wrote them.",
+              "properties": {
+                "rules": {
+                  "items": {
+                    "$ref": "#/$defs/RuleCheck"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "rules"
+              ],
+              "title": "RulesCheck",
+              "type": "object"
+            }
+          }
         }
       ],
       "required": [
@@ -4838,7 +4894,8 @@
         "actions.propose",
         "actions",
         "actions.show",
-        "actions.undo"
+        "actions.undo",
+        "rules.check"
       ]
     },
     "result": {
@@ -7221,6 +7278,36 @@
           "attempts"
         ],
         "title": "ActionRun",
+        "type": "object"
+      },
+      "surfaces": [
+        "cli"
+      ]
+    },
+    {
+      "description": "Check the owner's rules in `config.toml`: each rule's action, team, assignee and grace window, the window resolved from the rule's own `grace`, else the `[grace]` table, else the default. An invalid rule fails the command, naming the rule and its bad field. Records nothing.",
+      "input": {
+        "additionalProperties": false,
+        "description": "Check the owner's rules in `config.toml`: each rule's action, team, assignee and grace window, the window resolved from the rule's own `grace`, else the `[grace]` table, else the default. An invalid rule fails the command, naming the rule and its bad field. Records nothing.",
+        "title": "RulesCheckRequest",
+        "type": "object"
+      },
+      "name": "rules.check",
+      "result": {
+        "additionalProperties": false,
+        "description": "What `rules check` returns: every rule in `config.toml`, in the order the owner wrote them.",
+        "properties": {
+          "rules": {
+            "items": {
+              "$ref": "#/$defs/RuleCheck"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "rules"
+        ],
+        "title": "RulesCheck",
         "type": "object"
       },
       "surfaces": [

@@ -71,6 +71,8 @@ pub type ActionsResult = rastro_core::actions::Runs;
 /// The action proposal `actions propose` recorded, as it now waits in the queue.
 /// The run `actions undo` undid, as it now reads: `undone`, with the owner's undo intent.
 pub type ActionsUndoResult = rastro_core::actions::Run;
+/// What `rules check` returns: each rule with its resolved grace.
+pub type RulesCheckResult = rastro_core::rules::Check;
 pub type ActionsProposeResult = rastro_core::actions::Proposed;
 /// What a queue answer recorded: the item it named and the owner intents it accepted.
 #[derive(Debug, JsonSchema, Serialize)]
@@ -471,6 +473,7 @@ mod tests {
                     at: "2026-11-19T09:05:00Z".parse().unwrap(),
                 }),
             }),
+            Response::RulesCheck(rastro_core::rules::Check { rules: vec![] }),
         ];
         let arguments = |name: &str| match name {
             "source.add" => {
