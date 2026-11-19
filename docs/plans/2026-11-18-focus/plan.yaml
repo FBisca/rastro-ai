@@ -1,0 +1,95 @@
+schema: plan/2
+slug: focus
+goal: The owner glances at a FOCUS section in their Herdr workbench and knows exactly where to put their focus — one recommended focus and up to three cited needs-you items, ranked deterministically — without opening the tracker to decide.
+spec: docs/specs/focus.md
+archive: promote
+
+requirements:
+  added:
+    - title: A focus report ranks what needs the owner
+      shall: The focus report SHALL name one recommended focus and up to three needs-you items, each carrying its citation and observed time, ranked deterministically.
+      scenarios:
+        - id: S1
+          when: a Linear task is overdue and another task is in progress
+          then: the overdue task is the recommended focus and ranks above the in-progress one
+        - id: S2
+          when: nothing is overdue or due today but a meeting promise waits on the owner
+          then: that promise is the recommended focus
+        - id: S3
+          when: no candidate exists in any source
+          then: the report names no focus and states nothing needs the owner, as an empty report and not an error
+    - title: Focus ranking is deterministic and ordered
+      shall: Focus SHALL rank candidates by overdue or due-today, then waiting-on-owner, then in-progress next action, and produce the same report for the same evidence without a model call.
+      scenarios:
+        - id: S4
+          when: two candidates share a rank band
+          then: the earlier due time, else higher urgency, else stable id order ranks first
+        - id: S5
+          when: the same evidence is read twice
+          then: the two focus reports are identical
+    - title: Focus cites and tells the truth about gaps
+      shall: Every focus item SHALL carry its source, location and observed time, and the report SHALL show a typed gap for a source that could not look, stamped as-of the latest good read.
+      scenarios:
+        - id: S6
+          when: a source's last sync failed
+          then: the report carries that source's gap with its typed reason and stamps the items as-of the last good read
+        - id: S7
+          when: a source returned empty
+          then: the report shows no gap for that source
+    - title: Focus shows the queue as a count
+      shall: Focus SHALL report waiting proposals and questions as a count only, never their content.
+      scenarios:
+        - id: S8
+          when: the queue holds two proposals
+          then: the report shows a queue count of two and no proposal text
+    - title: Focus is a read in the catalog
+      shall: Focus SHALL be exposed read-only through the CLI and MCP from one catalog schema, with a schema-versioned JSON answer a renderer can consume.
+      scenarios:
+        - id: S9
+          when: rastro focus --json runs
+          then: it prints a schema-versioned focus report equal to the MCP focus tool's answer
+        - id: S10
+          when: a renderer reads the JSON answer
+          then: it holds the recommended focus, each item's citation, the queue count, the gaps and the as-of time, with no terminal-only field
+    - title: Focus serves a real morning
+      shall: The owner SHALL be able to start their day from the focus report and act on it without opening the tracker to decide what to work on.
+      scenarios:
+        - id: S11
+          when: the owner glances at their focus surface on a real morning
+          then: they pick the recommended focus and act on it, and the switch day is recorded
+
+tickets:
+  - id: T1
+    delivers: The core focus report — deterministic ranking over the existing Linear claim, meeting commitment and queue reads, with citations, typed gaps, as-of stamp, queue count and the empty case.
+    satisfies: [S1, S2, S3, S4, S5, S6, S7, S8]
+    paths: [crates/rastro-core/src/focus.rs, crates/rastro-core/src/lib.rs, crates/rastro-cli/tests/focus.rs]
+    size: regular
+    difficulty: complex
+    risk: [state]
+  - id: T2
+    delivers: Focus in the catalog — a read-only focus operation with request/result types and schema, the rastro focus CLI command and the MCP focus tool, one schema-versioned --json answer.
+    satisfies: [S9, S10]
+    paths: [crates/rastro-operations/src/catalog.rs, crates/rastro-operations/src/requests.rs, crates/rastro-operations/src/results.rs, crates/rastro-cli/src/main.rs, schema/operations-v2.schema.json, crates/rastro-cli/tests/catalog.rs]
+    size: regular
+    difficulty: simple
+    blocked_by: [T1]
+  - id: T3
+    delivers: The personal FOCUS card in the Herdr workbench, reading rastro focus --json and matching the agreed prototype (workbench.html); lives outside open-source rastro. Requires the workbench space-folder fix (agent-runtime branch fix/workbench-space-folder) merged first.
+    satisfies: [S10]
+    paths: [herdr/agent-workbench/views/home.js, herdr/agent-workbench/model.js, herdr/agent-workbench/data.js, herdr/agent-workbench/test/]
+    owner: owner
+    repo: ../agent-runtime
+    blocked_by: [T2]
+  - id: T4
+    delivers: Switch day — the owner glances at the workbench FOCUS card on a real morning, picks the recommended focus and acts without opening the tracker to decide; records it, and marks the slice done in the roadmap and README diagram.
+    satisfies: [S11]
+    paths: [docs/specs/focus.md, docs/roadmap.md, README.md, docs/plans/2026-11-18-focus/brief.md]
+    owner: owner
+    blocked_by: [T3]
+approval:
+  by: felippe.bisca@gmail.com
+  at: '2026-11-19T09:09:08.974215+00:00'
+  base: 0dcc7702606cf3a1a7045900bd6b0414ad0d9520
+  digest: 9e94f277e5d16dd4acdb95134febb329c6bdcdeafe5054fadfe0d045e5fed23d
+  reason: Owner approved via /orchestrate; decisions D1-D16 settled, prototype agreed
+    2026-11-18

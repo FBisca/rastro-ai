@@ -1,0 +1,84 @@
+<!doctype html>
+<!-- PROTOTYPE — throwaway. Question: what should the FOCUS section look like INSIDE the Herdr workbench?
+     Medium corrected from terminal pane to workbench card (owner: "toggle like workbench, can live inside it").
+     Content = variant B (Today strip) agreed in the terminal prototype, now in the workbench's card language.
+     Synthetic data. Not production. -->
+<html lang="en">
+<head>
+<meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rastro focus — workbench prototype</title>
+<style>
+  :root{--bg:#0a0c10;--card:#12151c;--border:#232833;--fg:#e6edf3;--dim:#7d8590;
+    --red:#f85149;--amber:#d29922;--green:#3fb950;--purple:#a371f7;--cyan:#58a6ff;}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);font-family:-apple-system,system-ui,"Segoe UI",sans-serif;font-size:14px}
+  .wb{max-width:640px;margin:0 auto;padding:0 0 80px}
+  .top{display:flex;justify-content:space-between;align-items:center;padding:14px 18px;color:var(--dim);border-bottom:1px solid var(--border)}
+  .top .exp{cursor:pointer}
+  .sec{padding:16px 18px}
+  .sechead{display:flex;align-items:center;gap:10px;color:var(--dim);font-size:12px;letter-spacing:.08em;text-transform:uppercase;margin-bottom:12px}
+  .chip{font-size:11px;padding:2px 8px;border-radius:999px;border:1px solid var(--red);color:var(--red);text-transform:none;letter-spacing:0}
+  .chip.dim{border-color:var(--border);color:var(--dim)}
+  /* hero focus card */
+  .hero{background:var(--card);border:1px solid var(--border);border-left:3px solid var(--red);border-radius:10px;padding:14px 16px;margin-bottom:10px}
+  .hero .k{color:var(--dim);font-size:11px;letter-spacing:.08em;text-transform:uppercase}
+  .hero .t{font-size:18px;font-weight:650;margin:4px 0 6px}
+  .hero .why{color:var(--red);font-size:13px}
+  .hero .cite{color:var(--dim);font-size:12px;margin-top:6px}
+  /* needs-you rows, screenshot language */
+  .row{display:flex;align-items:center;gap:12px;background:var(--card);border:1px solid var(--border);border-left:3px solid var(--border);border-radius:10px;padding:11px 14px;margin-bottom:8px}
+  .row.late{border-left-color:var(--red)} .row.wait{border-left-color:var(--amber)} .row.move{border-left-color:var(--green)}
+  .row .ic{width:22px;height:22px;border-radius:50%;flex:none;display:flex;align-items:center;justify-content:center;font-size:12px}
+  .row.late .ic{background:rgba(248,81,73,.15);color:var(--red)}
+  .row.wait .ic{background:rgba(210,153,34,.15);color:var(--amber)}
+  .row.move .ic{background:rgba(63,185,80,.15);color:var(--green)}
+  .row .main{flex:1;min-width:0}
+  .row .title{font-weight:600}
+  .row .sub{color:var(--dim);font-size:12px;margin-top:2px}
+  .row .tag{font-size:12px;flex:none}
+  .row.late .tag{color:var(--red)} .row.wait .tag{color:var(--amber)} .row.move .tag{color:var(--green)}
+  .foot{display:flex;gap:8px;align-items:center;color:var(--dim);font-size:12px;margin-top:12px;flex-wrap:wrap}
+  .gap{color:var(--amber)}
+  .plans{opacity:.4}
+  .pcard{background:var(--card);border:1px solid var(--border);border-radius:10px;padding:14px 16px;margin-bottom:8px}
+  .pcard .n{font-weight:600}.pcard .m{color:var(--dim);font-size:12px;margin-top:6px}
+  .note{position:fixed;top:10px;left:50%;transform:translateX(-50%);color:var(--dim);font-size:12px;background:var(--card);border:1px solid var(--border);padding:4px 12px;border-radius:999px}
+</style>
+</head>
+<body>
+<div class="note">PROTOTYPE · synthetic · FOCUS section inside the workbench "home"</div>
+<div class="wb">
+  <div class="top"><span>home</span><span class="exp">Expand ⌄</span></div>
+
+  <div class="sec">
+    <div class="sechead">Focus <span class="chip">1 overdue</span> <span class="chip dim">as of 07:35</span></div>
+    <div class="hero">
+      <div class="k">Put your focus here</div>
+      <div class="t">Ship rate-limiter config <span style="color:var(--dim);font-weight:400">· H-8102</span></div>
+      <div class="why">overdue 1d · you're already in progress</div>
+      <div class="cite">linear:H-8102 · observed 07:35</div>
+    </div>
+    <div class="row wait">
+      <div class="ic">✋</div>
+      <div class="main"><div class="title">RBAC design doc for Ana</div><div class="sub">you promised · “I'll send the doc before Friday”</div></div>
+      <div class="tag">due Fri</div>
+    </div>
+    <div class="row move">
+      <div class="ic">▸</div>
+      <div class="main"><div class="title">RBAC extraction <span style="color:var(--dim);font-weight:400">· H-8095</span></div><div class="sub">next: split auth middleware</div></div>
+      <div class="tag">moving</div>
+    </div>
+    <div class="foot">
+      <span class="chip dim">2 proposals waiting — say “work the queue”</span>
+      <span class="gap">⚠ Linear couldn't look 07:40 (token expired)</span>
+    </div>
+  </div>
+
+  <div class="sec plans">
+    <div class="sechead">Plans <span class="chip dim">2 active</span></div>
+    <div class="pcard"><div class="n">correct-anything</div><div class="m">8/9 done · T8 in progress · last active today</div></div>
+    <div class="pcard"><div class="n">focus</div><div class="m">planning · this slice</div></div>
+  </div>
+</div>
+</body>
+</html>

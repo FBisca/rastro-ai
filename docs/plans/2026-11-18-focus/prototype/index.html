@@ -1,0 +1,126 @@
+<!doctype html>
+<!-- PROTOTYPE — throwaway. Question: what should the rastro focus pane look like?
+     Three variants switchable via ?variant=A|B|C, in a mock Herdr side-pane frame.
+     Synthetic data. Not production. Capture on a throwaway branch when a winner is picked. -->
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>rastro focus — prototype</title>
+<style>
+  :root{
+    --bg:#0d1117; --pane:#161b22; --border:#30363d; --fg:#c9d1d9; --dim:#8b949e;
+    --red:#f85149; --amber:#d29922; --green:#3fb950; --cyan:#58a6ff; --focus:#ffa657;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font-family:"SF Mono",ui-monospace,Menlo,Consolas,monospace;font-size:14px;line-height:1.5}
+  .layout{display:flex;gap:8px;padding:16px;height:100vh}
+  .pane{background:var(--pane);border:1px solid var(--border);border-radius:8px;overflow:hidden;display:flex;flex-direction:column}
+  .main{flex:1;opacity:.45}
+  .side{width:520px;flex:none}
+  .titlebar{display:flex;align-items:center;gap:8px;padding:6px 12px;border-bottom:1px solid var(--border);color:var(--dim);font-size:12px}
+  .dot{width:10px;height:10px;border-radius:50%}
+  .body{padding:12px 14px;white-space:pre;overflow:auto}
+  .dim{color:var(--dim)} .red{color:var(--red)} .amber{color:var(--amber)}
+  .green{color:var(--green)} .cyan{color:var(--cyan)} .focus{color:var(--focus);font-weight:700}
+  .b{font-weight:700}
+  .fake{color:var(--dim)}
+  /* floating switcher — obviously not part of the design */
+  #switcher{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);
+    display:flex;align-items:center;gap:12px;background:#fff;color:#000;
+    padding:8px 16px;border-radius:999px;box-shadow:0 4px 16px rgba(0,0,0,.5);
+    font-family:system-ui,sans-serif;font-size:14px;font-weight:600;z-index:10}
+  #switcher button{border:none;background:#000;color:#fff;width:28px;height:28px;border-radius:50%;font-size:16px;cursor:pointer}
+  #switcher .label{min-width:220px;text-align:center}
+  .hint{position:fixed;top:12px;left:50%;transform:translateX(-50%);color:var(--dim);font-size:12px;font-family:system-ui,sans-serif}
+</style>
+</head>
+<body>
+<div class="hint">PROTOTYPE · synthetic data · ← → or the bar to switch · pick a winner (or steal bits)</div>
+<div class="layout">
+  <div class="pane main">
+    <div class="titlebar"><span class="dot" style="background:#f85149"></span><span class="dot" style="background:#d29922"></span><span class="dot" style="background:#3fb950"></span> claude · svc-platform (your agent session, unchanged)</div>
+    <div class="body fake">
+> refactor the rate limiter middleware
+⏺ I'll start by reading the current middleware…
+  (the focus pane is a side thing — it never injects into this session)
+    </div>
+  </div>
+  <div class="pane side">
+    <div class="titlebar"><span class="dot" style="background:#3fb950"></span> rastro focus · refreshed 08:05</div>
+    <div class="body" id="out"></div>
+  </div>
+</div>
+<div id="switcher">
+  <button id="prev" aria-label="previous">←</button>
+  <span class="label" id="label"></span>
+  <button id="next" aria-label="next">→</button>
+</div>
+<script>
+// ---- synthetic data (v1 sources: Linear + meeting commitments + queue) ----
+const D = {
+  now: "08:05",
+  focus: {id:"H-8102", title:"Ship rate-limiter config", why:"overdue 1d · in progress", cite:"linear:H-8102", seen:"07:35"},
+  items: [
+    {rank:1, tag:"overdue 1d", cls:"red",   id:"H-8102", title:"rate-limiter config", cite:"linear:H-8102", seen:"07:35"},
+    {rank:2, tag:"due Fri",   cls:"amber", id:"ana-doc", title:"RBAC design doc for Ana", cite:"rbac-q4#t142", seen:"10-23"},
+    {rank:3, tag:"moving",    cls:"green", id:"H-8095", title:"RBAC extraction", next:"split auth middleware", cite:"linear:H-8095", seen:"07:35"},
+  ],
+  queue: 2,
+  gap: "Linear couldn't look 07:40 (token expired)",
+  asof: "07:35",
+};
+const cite = s => `<span class="dim">${s}</span>`;
+
+// ---- Variant A: Briefing — one dominant recommendation, then the list ----
+function A(){
+  return `<span class="dim">rastro focus · ${D.now}</span>
+<span class="focus">▸ FOCUS  ${D.focus.title} (${D.focus.id})</span>
+  <span class="red">${D.focus.why}</span> · ${cite(D.focus.cite+" "+D.focus.seen)}
+<span class="dim">─ needs you ─────────────────────────────</span>
+ <span class="b">1</span> <span class="red">H-8102</span> rate-limiter config    <span class="red">overdue 1d</span>  ${cite("linear 07:35")}
+ <span class="b">2</span> <span class="amber">doc</span> for Ana · RBAC design    <span class="amber">due Fri</span>     ${cite("rbac-q4#t142 10-23")}
+ <span class="b">3</span> <span class="green">H-8095</span> RBAC extraction      <span class="dim">next: split auth middleware</span>
+<span class="dim">${D.queue} proposals waiting · say "work the queue"</span>
+<span class="amber">⚠ ${D.gap} — items as of ${D.asof}</span>`;
+}
+
+// ---- Variant B: Today strip — flat, one line per item, first line is the focus ----
+function B(){
+  return `<span class="dim">rastro focus · ${D.now} · 3 need you</span>
+<span class="focus">▸</span> <span class="red">overdue 1d</span>  H-8102 rate-limiter config        ${cite("linear:H-8102 07:35")}
+  <span class="amber">due Fri</span>     doc for Ana — RBAC design         ${cite("rbac-q4#t142 10-23")}
+  <span class="green">moving</span>      H-8095 RBAC extraction <span class="dim">→ split auth middleware</span>
+<span class="dim">────────────────────────────────────────</span>
+<span class="dim">queue ${D.queue}</span> · <span class="amber">gap: Linear 07:40 token</span> · <span class="dim">as of ${D.asof}</span>`;
+}
+
+// ---- Variant C: Signal buckets — group-first, focus = top of the hottest bucket ----
+function C(){
+  return `<span class="dim">rastro focus · ${D.now}</span>
+<span class="red b">LATE (1)</span>   <span class="focus">▸</span> H-8102 rate-limiter config · <span class="red">overdue 1d</span> · ${cite("linear 07:35")}
+<span class="amber b">WAITING (1)</span> doc for Ana · <span class="amber">due Fri</span> · ${cite("rbac-q4#t142")}
+<span class="green b">MOVING (1)</span>  H-8095 RBAC extraction · <span class="dim">next: split auth middleware</span>
+<span class="dim">────────────────────────────────────────</span>
+<span class="dim">queue ${D.queue} · </span><span class="amber">gap: Linear 07:40 token</span><span class="dim"> · as of ${D.asof}</span>`;
+}
+
+const V = {A:{name:"Briefing (recommendation first)",fn:A},
+           B:{name:"Today strip (flat, scan top-down)",fn:B},
+           C:{name:"Signal buckets (LATE / WAITING / MOVING)",fn:C}};
+const keys = Object.keys(V);
+function cur(){ const p=new URLSearchParams(location.search).get("variant"); return keys.includes(p)?p:"A"; }
+function render(){ const k=cur(); document.getElementById("out").innerHTML=V[k].fn();
+  document.getElementById("label").textContent=`${k} · ${V[k].name}`; }
+function go(d){ const i=(keys.indexOf(cur())+d+keys.length)%keys.length;
+  const u=new URL(location.href); u.searchParams.set("variant",keys[i]); history.replaceState(null,"",u); render(); }
+document.getElementById("prev").onclick=()=>go(-1);
+document.getElementById("next").onclick=()=>go(1);
+addEventListener("keydown",e=>{ const t=e.target.tagName;
+  if(t==="INPUT"||t==="TEXTAREA"||e.target.isContentEditable) return;
+  if(e.key==="ArrowLeft")go(-1); if(e.key==="ArrowRight")go(1); });
+render();
+</script>
+</body>
+</html>
