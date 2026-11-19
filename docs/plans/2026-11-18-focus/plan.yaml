@@ -92,10 +92,16 @@ tickets:
     paths: [herdr/agent-workbench/main.js, herdr/agent-workbench/data.js, herdr/agent-workbench/model.js, herdr/agent-workbench/views/focus.js, herdr/agent-workbench/views/home.js, herdr/agent-workbench/test/, herdr/agent-workbench/RECIPE.md, docs/specs/agent-workbench.md, tests/test_workbench_mod.py]
     owner: owner
     repo: ../agent-runtime
+  - id: T6
+    delivers: Focus respects queue decisions — a meeting hypothesis whose proposal was accepted, edited or rejected leaves the focus report; only promises still pending in the queue rank as waiting-on-owner, so a decided promise never haunts the card.
+    satisfies: [S2]
+    paths: [crates/rastro-core/src/focus.rs, crates/rastro-core/src/queue/mod.rs, crates/rastro-cli/tests/focus.rs]
+    size: regular
+    difficulty: simple
 approval:
   by: felippe.bisca@gmail.com
-  at: '2026-11-19T13:19:59.584728+00:00'
-  base: 0c4313eed7a9f479d60992b0d7d51010df86a64c
-  digest: 1ae70f3aeb0cfce0abdc11ebe7c11f2ae96986ce559addae63e739e6ec9f8664
-  reason: Owner requested Plans and Focus tabs (D18); T5 added for the focus-only
-    mod instance, owner-owned in agent-runtime
+  at: '2026-11-19T13:51:54.323641+00:00'
+  base: 7dbcc38d4005c50e4cf8549a078056bb5034ef10
+  digest: 2c40636b69a9f6f0af69d0501dff35803298788b9fbcf59ef89f099a8f57813e
+  reason: "Owner: clear the stale focus \u2014 T6 fixes band 2 to respect queue decisions\
+    \ (D20)"
