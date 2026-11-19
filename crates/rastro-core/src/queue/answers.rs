@@ -31,6 +31,47 @@ pub struct Answered {
     pub run: Option<Run>,
 }
 
+/// The owner's changes to an action proposal's fields; each keeps the proposal's own when none.
+#[derive(Clone, Debug, Default)]
+pub struct ActionEdits {
+    pub title: Option<String>,
+    pub description: Option<String>,
+    pub team: Option<String>,
+    pub assignee: Option<String>,
+}
+
+impl ActionEdits {
+    /// Whether the owner changed nothing.
+    pub fn is_empty(&self) -> bool {
+        self.title.is_none()
+            && self.description.is_none()
+            && self.team.is_none()
+            && self.assignee.is_none()
+    }
+
+    /// The fields as the owner leaves them: a change replaces, and a title, team or assignee
+    /// can't be blank.
+    fn apply(&self, mut fields: actions::IssueFields) -> Result<actions::IssueFields> {
+        for (name, value) in [
+            ("title", &self.title),
+            ("team", &self.team),
+            ("assignee", &self.assignee),
+        ] {
+            ensure!(
+                value.as_ref().is_none_or(|value| !value.trim().is_empty()),
+                "an edit can't leave the {name} blank"
+            );
+        }
+        fields.title = self.title.clone().unwrap_or(fields.title);
+        fields.team = self.team.clone().unwrap_or(fields.team);
+        fields.assignee = self.assignee.clone().unwrap_or(fields.assignee);
+        if let Some(description) = &self.description {
+            fields.description = Some(description.clone()).filter(|text| !text.trim().is_empty());
+        }
+        Ok(fields)
+    }
+}
+
 /// The item ids an answer has taken out of the queue: an accepted, edited or rejected proposal.
 /// An answered question leaves because the identity graph no longer holds its pair as a
 /// candidate, and a missed report leaves its item waiting.
@@ -59,11 +100,12 @@ fn still_queued(view: &dyn Snapshot, item: &str) -> Result<Item> {
         })
 }
 
-/// Refuses a question where a proposal was expected.
+/// Refuses a question, and an action proposal, where a commitment proposal was expected.
 fn proposal(item: &Item) -> Result<()> {
     if item.action.is_some() {
         bail!(
-            "{} is an action proposal, which `rastro queue` doesn't run yet",
+            "{} is an action proposal: change it with --title, --description, --team or \
+             --assignee, or accept or reject it",
             item.id
         )
     }
@@ -217,7 +259,7 @@ impl<S: Storage> Rastro<S> {
             .action
             .is_some()
         {
-            return self.accept_action(&id);
+            return self.accept_action(&id, None);
         }
         let issued = self.issue(|view, _| {
             let pending = still_queued(view, &id)?;
@@ -248,17 +290,26 @@ impl<S: Storage> Rastro<S> {
     /// transaction, then the provider is asked to create the issue and the run records what it
     /// created. When the provider fails, the accept and the run stay recorded and the run is not
     /// done; the error says so.
-    fn accept_action(&mut self, item: &str) -> Result<Answered> {
+    fn accept_action(&mut self, item: &str, edits: Option<&ActionEdits>) -> Result<Answered> {
         let issuer = IssuerContext::owner_cli(&self.config.sources);
         let id = item.to_string();
+        let kind = if edits.is_some() {
+            IntentKind::Edit
+        } else {
+            IntentKind::Accept
+        };
         let (intent, mut run) = self.storage.accept_action(|view| {
             let pending = still_queued(view, &id)?;
             let filed = (view.action_proposals(&[])?)
                 .into_iter()
                 .find(|filed| filed.id == pending.id)
                 .ok_or_else(|| anyhow::anyhow!("{} is not an action proposal", pending.id))?;
+            let fields = match edits {
+                Some(edits) => edits.apply(filed.proposal.fields)?,
+                None => filed.proposal.fields,
+            };
             let mut intent = proposal_intent(
-                IntentKind::Accept,
+                kind,
                 Some(pending.id.clone()),
                 None,
                 ProposalAnswer {
@@ -273,7 +324,7 @@ impl<S: Storage> Rastro<S> {
                 accept_intent: intent.id.clone(),
                 action: filed.proposal.action,
                 provider: filed.provider,
-                fields: filed.proposal.fields,
+                fields,
                 source: filed.source,
                 issue_id: actions::random_issue_id()?,
             };
@@ -295,21 +346,44 @@ impl<S: Storage> Rastro<S> {
         })
     }
 
-    /// Accepts a proposal with the owner's edits. `promise` and `date` replace what the item
-    /// says; each keeps the item's own when it is none. At least one must be given, or there is
+    /// Accepts a proposal with the owner's edits. `promise` and `date` replace what a commitment
+    /// proposal says; each keeps the item's own when it is none. `fields` change an action
+    /// proposal's title, description, team or assignee, and the run it starts creates the issue
+    /// as edited. At least one change must be given, of the kind the item takes, or there is
     /// nothing to edit.
     pub fn queue_edit(
         &mut self,
         item: &str,
         promise: Option<&str>,
         date: Option<&str>,
+        fields: &ActionEdits,
     ) -> Result<Answered> {
+        let id = item.to_string();
+        let is_action = (self.storage.snapshot(|view| still_queued(view, &id)))?
+            .action
+            .is_some();
+        if is_action {
+            ensure!(
+                promise.is_none() && date.is_none(),
+                "{id} is an action proposal: it takes --title, --description, --team and \
+                 --assignee, not a promise or a date"
+            );
+            ensure!(
+                !fields.is_empty(),
+                "an edit changes the title, description, team or assignee; to accept the item \
+                 unchanged, accept it"
+            );
+            return self.accept_action(&id, Some(fields));
+        }
+        ensure!(
+            fields.is_empty(),
+            "{id} is a commitment proposal: it takes --promise and --date, not an action's fields"
+        );
         ensure!(
             promise.is_some() || date.is_some(),
             "an edit changes the promise, the stated date, or both; to accept the item unchanged, \
              accept it"
         );
-        let id = item.to_string();
         let (promise, date) = (promise.map(String::from), date.map(String::from));
         let issued = self.issue(|view, _| {
             let pending = still_queued(view, &id)?;
@@ -349,7 +423,9 @@ impl<S: Storage> Rastro<S> {
         let reason = reason.to_string();
         let issued = self.issue(|view, _| {
             let pending = still_queued(view, &id)?;
-            proposal(&pending)?;
+            if pending.action.is_none() {
+                proposal(&pending)?;
+            }
             let intent = proposal_intent(
                 IntentKind::Reject,
                 Some(pending.id.clone()),

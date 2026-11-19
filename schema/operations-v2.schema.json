@@ -5975,14 +5975,30 @@
       ]
     },
     {
-      "description": "Accept a proposal with your edits: one owner intent snapshots both what you saw and what you made, and the item leaves the queue.",
+      "description": "Accept a proposal with your edits: one owner intent snapshots both what you saw and what you made, and the item leaves the queue. An action proposal takes `--title`, `--description`, `--team` and `--assignee`, and its run creates the issue as you edited it.",
       "input": {
         "additionalProperties": false,
-        "description": "Accept a proposal with your edits: one owner intent snapshots both what you saw and what you made, and the item leaves the queue.",
+        "description": "Accept a proposal with your edits: one owner intent snapshots both what you saw and what you made, and the item leaves the queue. An action proposal takes `--title`, `--description`, `--team` and `--assignee`, and its run creates the issue as you edited it.",
         "properties": {
+          "assignee": {
+            "default": null,
+            "description": "An action proposal's assignee as you state it; omit to keep the one it says.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "date": {
             "default": null,
             "description": "The stated date as you state it; omit to keep the one it says.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "description": {
+            "default": null,
+            "description": "An action proposal's description as you state it; omit to keep the one it says.",
             "type": [
               "string",
               "null"
@@ -5995,6 +6011,22 @@
           "promise": {
             "default": null,
             "description": "The promise as you state it; omit to keep the one it says.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "team": {
+            "default": null,
+            "description": "An action proposal's team as you state it; omit to keep the one it says.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "default": null,
+            "description": "An action proposal's title as you state it; omit to keep the one it says.",
             "type": [
               "string",
               "null"
@@ -6046,10 +6078,10 @@
       ]
     },
     {
-      "description": "Reject a proposal, with your reason: one owner intent records it, the item leaves the queue, and no claim is minted.",
+      "description": "Reject a proposal, with your reason: one owner intent records it, the item leaves the queue, and no claim is minted. A rejected action proposal starts no run and sends nothing to the outside system.",
       "input": {
         "additionalProperties": false,
-        "description": "Reject a proposal, with your reason: one owner intent records it, the item leaves the queue, and no claim is minted.",
+        "description": "Reject a proposal, with your reason: one owner intent records it, the item leaves the queue, and no claim is minted. A rejected action proposal starts no run and sends nothing to the outside system.",
         "properties": {
           "item": {
             "description": "The item's id as `queue` lists it.",

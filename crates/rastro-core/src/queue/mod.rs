@@ -37,7 +37,7 @@
 //! claims as the item's context, and the item stays.
 
 mod answers;
-pub use answers::{Answered, answered_items};
+pub use answers::{ActionEdits, Answered, answered_items};
 mod outcomes;
 pub use outcomes::{NOTICE as OUTCOMES_NOTICE, Outcome, OutcomeKind, Outcomes, Totals};
 
