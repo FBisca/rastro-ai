@@ -246,17 +246,18 @@ pub(super) fn lock_path(locations: &crate::Locations, run: &str) -> std::path::P
 }
 
 impl<S: Storage> Rastro<S> {
-    /// The runs `tick` executes, oldest first: the ones accepted and not done, and the failed ones
-    /// that have not yet made [`MAX_ATTEMPTS`].
-    pub(crate) fn unfinished_runs(&self) -> Result<Vec<Run>> {
+    /// The runs `tick` executes at `now`, oldest first: the ones accepted and not done, the
+    /// pending Acts whose grace has ended, and the failed ones that have not yet made
+    /// [`MAX_ATTEMPTS`].
+    pub(crate) fn unfinished_runs(&self, now: DateTime<Utc>) -> Result<Vec<Run>> {
         let runs = self.storage.snapshot(|view| view.action_runs(&[]))?;
         Ok(runs
             .into_iter()
             .filter(|run| match run.status {
                 RunStatus::Accepted => true,
                 RunStatus::Failed => run.attempts < MAX_ATTEMPTS,
-                // A pending Act waits out its grace window; nothing executes it before it is due.
-                RunStatus::Pending => false,
+                // A pending Act waits out its grace window; it executes once its grace has ended.
+                RunStatus::Pending => run.due_at.is_some_and(|due| now >= due),
                 RunStatus::Done | RunStatus::Undone => false,
             })
             .collect())
