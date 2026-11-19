@@ -9,8 +9,10 @@
 //! cited claims and the id stay in Rastro: [`IssueFields`] is the only part written for the
 //! outside system.
 mod runs;
+mod why;
 pub use runs::{NewRun, Run, RunResult, RunStatus};
 pub(crate) use runs::{random_issue_id, run_id};
+pub use why::{Accept, Cell, RunWhy};
 
 use crate::queue::{self, Source as QueueSource, SourceKind};
 use crate::{
@@ -270,39 +272,71 @@ impl<S: Storage> Rastro<S> {
     }
 }
 
-/// What `actions` lists: the runs the reader sees, oldest first, each with its status.
-#[derive(Clone, Debug, JsonSchema, Serialize)]
+/// What `actions` lists: the runs the reader sees, oldest first, each with its status. Given a
+/// run, `runs` holds that run alone and `why` explains it.
+#[derive(Debug, JsonSchema, Serialize)]
 #[schemars(rename = "ActionRuns")]
 pub struct Runs {
     pub runs: Vec<Run>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub why: Option<RunWhy>,
+}
+
+impl Runs {
+    /// The runs `scopes` see, or the one run `run` names with its why.
+    fn read(
+        view: &dyn Snapshot,
+        locations: &crate::Locations,
+        scopes: &[Scope],
+        run: Option<&str>,
+    ) -> Result<Self> {
+        Ok(match run {
+            None => Self {
+                runs: view.action_runs(scopes)?,
+                why: None,
+            },
+            Some(id) => {
+                let (run, why) = why::explain(view, locations, scopes, id)?;
+                Self {
+                    runs: vec![run],
+                    why: Some(why),
+                }
+            }
+        })
+    }
 }
 
 impl<S: Storage> Rastro<S> {
-    /// The runs over every scope, on a writing open.
-    pub fn action_runs(&mut self) -> Result<Runs> {
-        Ok(Runs {
-            runs: self.storage.snapshot(|view| view.action_runs(&[]))?,
-        })
+    /// The runs over every scope, on a writing open; or the one run `run` names, explained.
+    pub fn action_runs(&mut self, run: Option<&str>) -> Result<Runs> {
+        let locations = &self.locations;
+        self.storage
+            .snapshot(|view| Runs::read(view, locations, &[], run))
     }
 }
 
 impl<S: ReadStorage> Reader<S> {
     /// The runs of the sources the reader's scopes see: a run in another scope is absent, and the
-    /// read still succeeds.
-    pub fn action_runs(&mut self) -> Result<Runs> {
+    /// read still succeeds. With `run`, the one run it names and why it ran; a run these scopes
+    /// do not see is an error.
+    pub fn action_runs(&mut self, run: Option<&str>) -> Result<Runs> {
         let Self {
             locations,
             storage,
             scopes,
             ..
         } = self;
-        crate::read_only::snapshot(locations, storage, scopes, |view, _| {
-            Ok(Runs {
-                runs: match view {
-                    Some(view) => view.action_runs(scopes)?,
-                    None => Vec::new(),
-                },
-            })
+        crate::read_only::snapshot(locations, storage, scopes, |view, _| match view {
+            Some(view) => Runs::read(view, locations, scopes, run),
+            None => match run {
+                None => Ok(Runs {
+                    runs: Vec::new(),
+                    why: None,
+                }),
+                Some(id) => {
+                    bail!("no action run {id} is visible here: list the runs with `actions`")
+                }
+            },
         })
     }
 }

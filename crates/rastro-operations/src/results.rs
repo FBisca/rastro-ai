@@ -430,7 +430,10 @@ mod tests {
                 provider: "p".into(),
                 proposed_at: "2026-11-19T09:00:00Z".parse().unwrap(),
             }),
-            Response::Actions(rastro_core::actions::Runs { runs: vec![] }),
+            Response::Actions(rastro_core::actions::Runs {
+                runs: vec![],
+                why: None,
+            }),
         ];
         let arguments = |name: &str| match name {
             "source.add" => {
