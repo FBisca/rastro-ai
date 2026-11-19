@@ -486,6 +486,16 @@ pub trait Storage {
     ) -> Result<(identity::Intent, actions::Run)> {
         anyhow::bail!("storage does not support action runs")
     }
+    /// Records the Act run a matching rule starts for a proposal: level `act`, the rule copy and
+    /// due time, and no accept intent. A proposal that already has a run keeps it: that run is
+    /// returned as it reads and nothing is added.
+    fn start_act(
+        &mut self,
+        _act: &actions::NewAct,
+        _started_at: DateTime<Utc>,
+    ) -> Result<actions::Run> {
+        anyhow::bail!("storage does not support action runs")
+    }
     /// Records the issue a run created, which makes the run `done`. A run that already holds a
     /// result keeps it, and nothing is added.
     fn record_action_result(&mut self, _run: &str, _result: &actions::RunResult) -> Result<()> {

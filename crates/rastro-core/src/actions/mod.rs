@@ -2,8 +2,10 @@
 //!
 //! `rastro actions propose` records one pending proposal bound to the source it writes to and
 //! that source's scope. It carries the action, the fields written for the outside system, the
-//! proposer's why and the claims it cited, and it runs nothing: the proposal waits in the queue as
-//! an item whose content-addressed id names all of that, so the same proposal is the same item.
+//! proposer's why and the claims it cited. When an owner rule matches it, the proposal starts a
+//! pending Act run that waits out the rule's grace window; otherwise it runs nothing and waits
+//! in the queue as an item whose content-addressed id names all of that, so the same proposal is
+//! the same item.
 //!
 //! The action must be one an installed provider declares ([`crate::host::actions`]). The why, the
 //! cited claims and the id stay in Rastro: [`IssueFields`] is the only part written for the
@@ -12,8 +14,10 @@ mod runs;
 mod undo;
 mod why;
 pub use rastro_plugin_sdk::{Reach, Reversibility};
-pub use runs::{MAX_ATTEMPTS, NewRun, Run, RunFailure, RunResult, RunStatus, Undo};
-pub(crate) use runs::{random_issue_id, run_id};
+pub use runs::{
+    MAX_ATTEMPTS, NewAct, NewRun, Run, RunFailure, RunLevel, RunResult, RunStatus, Undo,
+};
+pub(crate) use runs::{act_run_id, random_issue_id, run_id};
 pub use why::{Accept, Cell, RunWhy};
 
 use crate::queue::{self, Source as QueueSource, SourceKind};
@@ -148,8 +152,18 @@ pub(crate) fn duplicates(
     Ok(identifiers)
 }
 
-/// What `actions propose` returns: the proposal as it now waits in the queue.
-pub type Proposed = Filed;
+/// What `actions propose` returns: the proposal as it now waits in the queue, and the Act run a
+/// matching rule started for it, when one did.
+#[derive(Debug, JsonSchema, Serialize)]
+#[schemars(rename = "ActionProposed")]
+pub struct Proposed {
+    #[serde(flatten)]
+    pub filed: Filed,
+    /// The Act run the proposal started; absent when it waits in the queue for the owner. Boxed
+    /// so the answer stays the size of the proposal it carries.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run: Option<Box<Run>>,
+}
 
 /// The proposal `request` makes, once checked against what the host offers and the config says:
 /// the action must be offered and named `linear.create_issue`, the why and the title must say
@@ -273,15 +287,56 @@ fn source_of(source: &Source) -> QueueSource {
 }
 
 impl<S: Storage> Rastro<S> {
-    /// Records one pending action proposal and runs nothing. Fails, recording nothing, when no
-    /// installed provider offers the action, or [`plan`]'s checks fail.
+    /// Records one pending action proposal. When an owner rule matches it on action, team and
+    /// assignee and no open observed issue holds its title, starts the pending Act run the rule
+    /// authorizes, due when its grace ends, and sends nothing; otherwise the proposal waits in
+    /// the queue. A proposal that already has an Act run keeps it. Fails, recording nothing,
+    /// when no installed provider offers the action, or [`plan`]'s checks fail.
     pub fn propose_action(&mut self, request: &ProposeRequest) -> Result<Proposed> {
         let offer = host::actions::offer(&self.locations, &request.action)?;
-        let filed = plan(request, &offer, &self.config, crate::coverage::now()?)?;
+        let now = crate::coverage::now()?;
+        let filed = plan(request, &offer, &self.config, now)?;
         self.storage
             .snapshot(|view| check_citations(view, &filed.proposal.cites, &filed.source))?;
         self.storage.record_action_proposal(&filed)?;
-        Ok(filed)
+        let (dups, existing) = self.storage.snapshot(|view| {
+            Ok((
+                duplicates(view, &filed.source, &filed.proposal)?,
+                view.action_runs(&[])?
+                    .into_iter()
+                    .find(|run| run.proposal == filed.id),
+            ))
+        })?;
+        // One proposal never has two runs: one that already has an Act run keeps it.
+        if let Some(run) = existing {
+            let run = (run.level == RunLevel::Act).then_some(Box::new(run));
+            return Ok(Proposed { filed, run });
+        }
+        let rule = match self.config.matching_rule(&filed.proposal) {
+            Some(rule) if dups.is_empty() => rule,
+            _ => return Ok(Proposed { filed, run: None }),
+        };
+        let grace = chrono::Duration::from_std(self.config.grace_of(rule))
+            .context("the rule's grace is too long to count")?;
+        let due_at = now
+            .checked_add_signed(grace)
+            .context("the rule's grace ends beyond the calendar")?;
+        let act = NewAct {
+            id: act_run_id(&filed.id),
+            proposal: filed.id.clone(),
+            action: filed.proposal.action.clone(),
+            provider: filed.provider.clone(),
+            fields: filed.proposal.fields.clone(),
+            source: filed.source.clone(),
+            issue_id: random_issue_id()?,
+            rule: self.config.rule_copy(rule),
+            due_at,
+        };
+        let run = self.storage.start_act(&act, filed.proposed_at)?;
+        Ok(Proposed {
+            filed,
+            run: Some(Box::new(run)),
+        })
     }
 }
 

@@ -68,12 +68,13 @@ pub type FocusResult = rastro_core::focus::Report;
 pub type OutcomesResult = rastro_core::queue::Outcomes;
 /// The runs `actions` lists, oldest first.
 pub type ActionsResult = rastro_core::actions::Runs;
-/// The action proposal `actions propose` recorded, as it now waits in the queue.
+/// The action proposal `actions propose` recorded, as it now waits in the queue, with the Act
+/// run a matching rule started for it.
+pub type ActionsProposeResult = rastro_core::actions::Proposed;
 /// The run `actions undo` undid, as it now reads: `undone`, with the owner's undo intent.
 pub type ActionsUndoResult = rastro_core::actions::Run;
 /// What `rules check` returns: each rule with its resolved grace.
 pub type RulesCheckResult = rastro_core::rules::Check;
-pub type ActionsProposeResult = rastro_core::actions::Proposed;
 /// What a queue answer recorded: the item it named and the owner intents it accepted.
 #[derive(Debug, JsonSchema, Serialize)]
 pub struct QueueAnswerResult {
@@ -413,28 +414,31 @@ mod tests {
                 meetings: &[],
                 queue: &rastro_core::queue::Queue::empty(),
             })),
-            Response::ActionsPropose(rastro_core::actions::Filed {
-                id: "q_1".into(),
-                proposal: rastro_core::actions::Proposal {
-                    action: "linear.create_issue".into(),
-                    fields: rastro_core::actions::IssueFields {
-                        title: "t".into(),
-                        description: None,
-                        team: "ENG".into(),
-                        assignee: "me".into(),
+            Response::ActionsPropose(rastro_core::actions::Proposed {
+                filed: rastro_core::actions::Filed {
+                    id: "q_1".into(),
+                    proposal: rastro_core::actions::Proposal {
+                        action: "linear.create_issue".into(),
+                        fields: rastro_core::actions::IssueFields {
+                            title: "t".into(),
+                            description: None,
+                            team: "ENG".into(),
+                            assignee: "me".into(),
+                        },
+                        why: "w".into(),
+                        cites: vec![],
                     },
-                    why: "w".into(),
-                    cites: vec![],
+                    source: rastro_core::queue::Source {
+                        kind: rastro_core::queue::SourceKind::Linear,
+                        name: "linear-work".into(),
+                        scope: "work".into(),
+                    },
+                    provider: "p".into(),
+                    reach: rastro_core::actions::Reach::OthersSeeIt,
+                    reversibility: rastro_core::actions::Reversibility::CanBeUndone,
+                    proposed_at: "2026-11-19T09:00:00Z".parse().unwrap(),
                 },
-                source: rastro_core::queue::Source {
-                    kind: rastro_core::queue::SourceKind::Linear,
-                    name: "linear-work".into(),
-                    scope: "work".into(),
-                },
-                provider: "p".into(),
-                reach: rastro_core::actions::Reach::OthersSeeIt,
-                reversibility: rastro_core::actions::Reversibility::CanBeUndone,
-                proposed_at: "2026-11-19T09:00:00Z".parse().unwrap(),
+                run: None,
             }),
             Response::Actions(rastro_core::actions::Runs {
                 runs: vec![],
@@ -447,7 +451,7 @@ mod tests {
             Response::ActionsUndo(rastro_core::actions::Run {
                 id: "r_1".into(),
                 proposal: "q_1".into(),
-                accept_intent: "i_1".into(),
+                accept_intent: Some("i_1".into()),
                 action: "linear.create_issue".into(),
                 fields: rastro_core::actions::IssueFields {
                     title: "t".into(),
@@ -464,6 +468,9 @@ mod tests {
                 issue_id: "00000000-0000-4000-8000-000000000000".into(),
                 accepted_at: "2026-11-19T09:00:00Z".parse().unwrap(),
                 status: rastro_core::actions::RunStatus::Undone,
+                level: rastro_core::actions::RunLevel::Propose,
+                rule: None,
+                due_at: None,
                 identifier: Some("ENG-1".into()),
                 url: Some("https://linear.example/ENG-1".into()),
                 attempts: 0,

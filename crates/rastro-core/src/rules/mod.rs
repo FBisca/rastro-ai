@@ -179,9 +179,31 @@ pub(crate) fn validate(config: &Config, locations: &Locations) -> Result<()> {
 }
 
 impl Config {
+    /// The first rule that matches `proposal` on action, team and assignee. A rule acts for the
+    /// owner only, so a proposal naming another assignee matches none.
+    pub(crate) fn matching_rule(&self, proposal: &actions::Proposal) -> Option<&Rule> {
+        self.rules.iter().find(|rule| {
+            rule.action.as_deref() == Some(proposal.action.as_str())
+                && rule.team.as_deref() == Some(proposal.fields.team.as_str())
+                && rule.assignee.as_deref() == Some(proposal.fields.assignee.as_str())
+        })
+    }
+
+    /// The rule as a run stores it: its match and resolved grace, as they are now.
+    pub(crate) fn rule_copy(&self, rule: &Rule) -> RuleCopy {
+        RuleCopy {
+            name: rule.name.clone(),
+            action: rule.action.clone().unwrap_or_default(),
+            team: rule.team.clone().unwrap_or_default(),
+            assignee: rule.assignee.clone().unwrap_or_default(),
+            grace_seconds: self.grace_of(rule).as_secs(),
+            daily_cap: None,
+        }
+    }
+
     /// The grace window of a rule: its own `grace`, else its action's sensitivity in `[grace]`,
     /// else the default table. A loaded config has passed [`validate`], so the text parses.
-    fn grace_of(&self, rule: &Rule) -> Duration {
+    pub(crate) fn grace_of(&self, rule: &Rule) -> Duration {
         let window = rule
             .grace
             .as_deref()
@@ -195,6 +217,22 @@ impl Config {
             .unwrap_or_else(|| Ok(Sensitivity::Medium.default_grace()));
         window.unwrap_or_else(|_| Sensitivity::Medium.default_grace())
     }
+}
+
+/// The rule as it stood when a run started under it: copied into the run, so a later change to
+/// `config.toml` never revises what authorized it.
+#[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
+#[schemars(rename = "ActionRule")]
+pub struct RuleCopy {
+    pub name: String,
+    pub action: String,
+    pub team: String,
+    pub assignee: String,
+    /// How long the run waits before it executes, in seconds.
+    pub grace_seconds: u64,
+    /// The rule's daily cap when it set one; absent otherwise.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daily_cap: Option<u32>,
 }
 
 /// One rule as `rules check` shows it.

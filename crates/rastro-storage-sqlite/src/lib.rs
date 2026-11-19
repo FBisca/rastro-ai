@@ -34,7 +34,7 @@ const INTENT_END: &str = "202611081000_intent_justification_end";
 /// A migration that starts with this line rebuilds a table other tables name, so the open runs
 /// it with foreign keys off and checks them before it commits.
 const FOREIGN_KEYS_OFF: &str = "-- foreign_keys = off";
-const MIGRATIONS: [(&str, &str); 23] = [
+const MIGRATIONS: [(&str, &str); 24] = [
     (
         "202611041200_initial",
         include_str!("../migrations/202611041200_initial.sql"),
@@ -126,6 +126,10 @@ const MIGRATIONS: [(&str, &str); 23] = [
     (
         "202611191300_action_attempts",
         include_str!("../migrations/202611191300_action_attempts.sql"),
+    ),
+    (
+        "202611191400_action_act_runs",
+        include_str!("../migrations/202611191400_action_act_runs.sql"),
     ),
 ];
 
@@ -468,6 +472,25 @@ impl Storage for SqliteStorage {
         result: &rastro_core::actions::RunResult,
     ) -> Result<()> {
         actions::record_result(&mut self.connection, run, result)
+    }
+    fn start_act(
+        &mut self,
+        act: &rastro_core::actions::NewAct,
+        started_at: DateTime<Utc>,
+    ) -> Result<rastro_core::actions::Run> {
+        // One immediate transaction: a proposal that already has a run keeps it.
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        if let Some(run) = actions::runs(&View(&transaction), &[])?
+            .into_iter()
+            .find(|run| run.proposal == act.proposal)
+        {
+            return Ok(run);
+        }
+        let run = actions::record_act(&transaction, act, started_at)?;
+        transaction.commit()?;
+        Ok(run)
     }
     fn record_action_failure(
         &mut self,
