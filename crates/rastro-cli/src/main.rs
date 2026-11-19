@@ -13,6 +13,7 @@ use rastro_storage_sqlite::SqliteStorage;
 use std::ffi::OsString;
 
 mod mcp;
+mod tick;
 
 #[derive(Parser)]
 #[command(
@@ -37,6 +38,8 @@ enum Command {
         #[arg(long = "scope")]
         scopes: Vec<String>,
     },
+    /// Sync every source past its freshness rule; a schedule calls this.
+    Tick,
 }
 fn stamp(time: DateTime<Utc>) -> String {
     time.to_rfc3339_opts(SecondsFormat::Millis, true)
@@ -1202,6 +1205,7 @@ fn parse() -> (Cli, &'static str) {
             let operation = match &cli.command {
                 Command::Operation(request) => request.name(),
                 Command::Mcp { .. } => "mcp",
+                Command::Tick => "tick",
             };
             (cli, operation)
         }
@@ -1238,6 +1242,7 @@ fn main() {
     let (cli, operation) = parse();
     let request = match cli.command {
         Command::Operation(request) => request,
+        Command::Tick => std::process::exit(tick::run()),
         Command::Mcp { scopes } => match mcp::run(scopes) {
             Ok(()) => return,
             Err(error) => {

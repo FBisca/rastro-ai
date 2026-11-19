@@ -14,6 +14,7 @@ pub mod queue;
 pub mod read_only;
 pub mod runs;
 pub mod search;
+pub mod tick;
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Duration, Utc};
 use schemars::JsonSchema;
