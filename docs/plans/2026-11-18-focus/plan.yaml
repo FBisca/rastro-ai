@@ -98,10 +98,16 @@ tickets:
     paths: [crates/rastro-core/src/focus.rs, crates/rastro-core/src/queue/mod.rs, crates/rastro-cli/tests/focus.rs]
     size: regular
     difficulty: simple
+  - id: T7
+    delivers: Focus card text hierarchy — the title owns its line; opaque ids (UUIDs) are never shown as names, the citation reads source and observed time plus only human-readable locators; reason and tag carry the tone, sub-lines stay dim.
+    satisfies: [S10]
+    paths: [herdr/agent-workbench/model.js, herdr/agent-workbench/views/focus.js, herdr/agent-workbench/test/]
+    owner: owner
+    repo: ../agent-runtime
 approval:
   by: felippe.bisca@gmail.com
-  at: '2026-11-19T13:51:54.323641+00:00'
-  base: 7dbcc38d4005c50e4cf8549a078056bb5034ef10
-  digest: 2c40636b69a9f6f0af69d0501dff35803298788b9fbcf59ef89f099a8f57813e
-  reason: "Owner: clear the stale focus \u2014 T6 fixes band 2 to respect queue decisions\
-    \ (D20)"
+  at: '2026-11-19T14:16:41.746829+00:00'
+  base: a9a653889b66f51fec4af9f94482ac9ae203aeec
+  digest: e0d127d0d4ac33e103668f1dfa91e6437ad3d508d1e62a60e038659c0940d9fe
+  reason: 'Owner: improve focus card text hierarchy (D22); T7 added, owner-owned in
+    agent-runtime'
