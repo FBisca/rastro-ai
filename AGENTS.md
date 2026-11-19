@@ -14,6 +14,7 @@
 
 ## Product and architecture
 
+- **Hard rule: nothing about Rastro is exposed to a source.** Whatever Rastro writes to an outside system (an issue, a comment, a state) carries only the content written for that system: no Rastro ids, links, justifications, citations, footers, labels or markers. Justification and undo stay in Rastro. A change that breaks this is rejected.
 - `docs/concept.md` is the north star. A change that contradicts it is either rejected or comes with an edit to the concept that the owner agreed to.
 - Product decisions (what Rastro does and why) live in `docs/decisions/<scope>.md`, one file per scope. Record a new decision in the file for its scope, with the date. Move a question out of `docs/open-questions.md` once it's decided.
 - Architectural decisions (language, storage, protocols, process model: anything hard to reverse, with real alternatives) are ADRs in `docs/adr/NNNN-<slug>.md`, numbered in sequence, with a status (`proposed`, `accepted`, `superseded by ADR-NNNN`). A decision file links to its ADR instead of restating it.
