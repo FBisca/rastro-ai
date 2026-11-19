@@ -202,7 +202,6 @@ pub struct Report {
 pub fn report(input: &Input) -> Report {
     let mut items = Vec::new();
     let mut gaps = Vec::new();
-    let mut read_times = Vec::new();
     if let Some(linear) = &input.linear {
         let observed = match linear.read {
             Read::Good { at } => Some(at),
@@ -216,7 +215,6 @@ pub fn report(input: &Input) -> Report {
                 last_good
             }
         };
-        read_times.extend(observed);
         if let Some(observed) = observed {
             items.extend((linear.tasks.iter()).filter_map(|task| task_item(input, task, observed)));
         }
@@ -237,7 +235,6 @@ pub fn report(input: &Input) -> Report {
                 results
             }
         };
-        read_times.extend(observed);
         if let Some(observed) = observed {
             items.extend(
                 (source.hypotheses.iter())
@@ -251,11 +248,16 @@ pub fn report(input: &Input) -> Report {
     let mut ranked = items.into_iter();
     let focus = ranked.next();
     gaps.sort_by(|a, b| (a.source, &a.name).cmp(&(b.source, &b.name)));
+    let needs_you: Vec<Item> = ranked.take(MAX_NEEDS_YOU).collect();
+    let as_of = (focus.iter().chain(&needs_you))
+        .map(|item| item.citation.observed_at)
+        .min()
+        .unwrap_or(input.now);
     Report {
-        as_of: read_times.into_iter().min().unwrap_or(input.now),
+        as_of,
         notice: focus.is_none().then(|| NOTHING_NEEDS_YOU.to_string()),
         focus,
-        needs_you: ranked.take(MAX_NEEDS_YOU).collect(),
+        needs_you,
         queue_count: input.queue.items.len(),
         gaps,
     }
