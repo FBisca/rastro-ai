@@ -374,6 +374,12 @@ operations! {
             slot: 29, name: "queue.outcomes", surfaces: [Cli], read_only: true, reader: run_read, cli_read_path: true
         },
     }
+    /// Propose actions in outside systems. Writes are CLI only, and nothing runs until the owner accepts.
+    Actions / ActionsRequest {
+        Propose(ActionsProposeRequest => ActionsProposeResult) as ActionsPropose {
+            slot: 35, name: "actions.propose", surfaces: [Cli], read_only: false
+        },
+    }
     /// Import a meeting transcript, read its commitment hypotheses, replay, forget or export it.
     Meeting / MeetingRequest {
         Import(MeetingImportRequest => MeetingResult) as MeetingImport {

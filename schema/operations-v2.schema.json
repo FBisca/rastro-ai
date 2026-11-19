@@ -128,6 +128,59 @@
       ],
       "type": "object"
     },
+    "ActionIssueFields": {
+      "additionalProperties": false,
+      "description": "The fields of a `linear.create_issue` proposal: the content written for Linear, and nothing\nelse. The assignee is `me` for the owner, or the name the proposal gave.",
+      "properties": {
+        "assignee": {
+          "type": "string"
+        },
+        "description": {
+          "type": "string"
+        },
+        "team": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "title",
+        "team",
+        "assignee"
+      ],
+      "type": "object"
+    },
+    "ActionProposal": {
+      "additionalProperties": false,
+      "description": "An action proposal: the action, its fields, why it is proposed and the claims it cites. The\nwhy and the citations stay in Rastro and are never sent to the outside system.",
+      "properties": {
+        "action": {
+          "type": "string"
+        },
+        "cites": {
+          "description": "The claims the proposer cited, sorted and without repeats.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "fields": {
+          "$ref": "#/$defs/ActionIssueFields"
+        },
+        "why": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "action",
+        "fields",
+        "why",
+        "cites"
+      ],
+      "type": "object"
+    },
     "Candidate": {
       "additionalProperties": false,
       "description": "Two accounts that may be one human, and why.",
@@ -2046,6 +2099,17 @@
       "additionalProperties": false,
       "description": "One pending proposal or question.",
       "properties": {
+        "action": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActionProposal"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The proposed action; present exactly when `kind` is `action_proposal`."
+        },
         "context": {
           "description": "What Rastro already knows about the parties the owner mapped: their visible claims, each\nonce. Context only — an item with claims beside it stays in the queue.",
           "items": {
@@ -2110,11 +2174,20 @@
     },
     "QueueItemKind": {
       "description": "Whether an item waits for the owner as a proposal or as a question.",
-      "enum": [
-        "proposal",
-        "question"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "proposal",
+            "question"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "action_proposal",
+          "description": "What an agent proposed to do in an outside system; see [`crate::actions`].",
+          "type": "string"
+        }
+      ]
     },
     "QueueOutcome": {
       "additionalProperties": false,
@@ -2270,6 +2343,11 @@
         {
           "const": "identity",
           "description": "The identity graph's same-person candidates, computed on read.",
+          "type": "string"
+        },
+        {
+          "const": "linear",
+          "description": "A Linear source, which an action proposal writes to.",
           "type": "string"
         }
       ]
@@ -4182,6 +4260,46 @@
               "type": "object"
             }
           }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "actions.propose"
+            },
+            "result": {
+              "additionalProperties": false,
+              "description": "A recorded proposal: its content address, the source it writes to with that source's scope,\nthe provider that declares its action, and when it was proposed.",
+              "properties": {
+                "id": {
+                  "description": "The queue item's id: the content address of everything below except `proposed_at`.",
+                  "type": "string"
+                },
+                "proposal": {
+                  "$ref": "#/$defs/ActionProposal"
+                },
+                "proposed_at": {
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "provider": {
+                  "description": "The plugin id of the provider that declares the action.",
+                  "type": "string"
+                },
+                "source": {
+                  "$ref": "#/$defs/QueueSource"
+                }
+              },
+              "required": [
+                "id",
+                "proposal",
+                "source",
+                "provider",
+                "proposed_at"
+              ],
+              "title": "FiledActionProposal",
+              "type": "object"
+            }
+          }
         }
       ],
       "required": [
@@ -4230,7 +4348,8 @@
         "claim.reject",
         "claim.edit",
         "claim.undo",
-        "focus"
+        "focus",
+        "actions.propose"
       ]
     },
     "result": {
@@ -6221,6 +6340,106 @@
       "surfaces": [
         "cli",
         "mcp"
+      ]
+    },
+    {
+      "description": "Propose an action for the owner to accept: it waits in the queue with its why and runs nothing. The action must be one an installed provider declares, such as `linear.create_issue`, which needs a title and a team (`--team`, else `[actions.linear] default_team` in config.toml) and is assigned to the owner unless `--assignee` says otherwise. The why and the cited claims stay in Rastro: only the title, description, team and assignee are ever written to the outside system.",
+      "input": {
+        "additionalProperties": false,
+        "description": "Propose an action for the owner to accept: it waits in the queue with its why and runs nothing. The action must be one an installed provider declares, such as `linear.create_issue`, which needs a title and a team (`--team`, else `[actions.linear] default_team` in config.toml) and is assigned to the owner unless `--assignee` says otherwise. The why and the cited claims stay in Rastro: only the title, description, team and assignee are ever written to the outside system.",
+        "properties": {
+          "action": {
+            "description": "The action, as an installed provider declares it, such as `linear.create_issue`.",
+            "type": "string"
+          },
+          "assignee": {
+            "default": null,
+            "description": "Who the issue is assigned to; the owner when omitted.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "cites": {
+            "default": [],
+            "description": "A claim id that supports the proposal, as `about` and `why` show it; repeatable.",
+            "items": {
+              "type": "string"
+            },
+            "type": "array"
+          },
+          "description": {
+            "default": null,
+            "description": "The issue's description.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "team": {
+            "default": null,
+            "description": "The Linear team's key; `[actions.linear] default_team` when omitted.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title": {
+            "default": null,
+            "description": "The issue's title; `linear.create_issue` needs one.",
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "why": {
+            "description": "Why you propose it, in your words. Required; it stays in Rastro and is never written to the outside system.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "action",
+          "why"
+        ],
+        "title": "ActionsProposeRequest",
+        "type": "object"
+      },
+      "name": "actions.propose",
+      "result": {
+        "additionalProperties": false,
+        "description": "A recorded proposal: its content address, the source it writes to with that source's scope,\nthe provider that declares its action, and when it was proposed.",
+        "properties": {
+          "id": {
+            "description": "The queue item's id: the content address of everything below except `proposed_at`.",
+            "type": "string"
+          },
+          "proposal": {
+            "$ref": "#/$defs/ActionProposal"
+          },
+          "proposed_at": {
+            "format": "date-time",
+            "type": "string"
+          },
+          "provider": {
+            "description": "The plugin id of the provider that declares the action.",
+            "type": "string"
+          },
+          "source": {
+            "$ref": "#/$defs/QueueSource"
+          }
+        },
+        "required": [
+          "id",
+          "proposal",
+          "source",
+          "provider",
+          "proposed_at"
+        ],
+        "title": "FiledActionProposal",
+        "type": "object"
+      },
+      "surfaces": [
+        "cli"
       ]
     }
   ]

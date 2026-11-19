@@ -23,6 +23,11 @@
 //! alike, and the read still succeeds. Same-person candidates are computed over every scope, so
 //! a caller whose launch scopes are restricted is shown none of them.
 //!
+//! An action proposal is a third kind of item: what an agent asked Rastro to do in an outside
+//! system ([`crate::actions`]). It waits for the owner like a proposal does, and is visible only in
+//! the scopes that see the source it writes to. It is never "already known": nothing observed
+//! says it was done.
+//!
 //! Everything is checked against what is known before it is shown. A proposal whose standard
 //! statements one observed commitment already holds is left out and counted ("already known"):
 //! the same `std:` predicates with the same literals — a party's name as the source said it or
@@ -94,6 +99,8 @@ pub enum SourceKind {
     Meeting,
     /// The identity graph's same-person candidates, computed on read.
     Identity,
+    /// A Linear source, which an action proposal writes to.
+    Linear,
 }
 
 /// Whether an item waits for the owner as a proposal or as a question.
@@ -103,6 +110,8 @@ pub enum SourceKind {
 pub enum ItemKind {
     Proposal,
     Question,
+    /// What an agent proposed to do in an outside system; see [`crate::actions`].
+    ActionProposal,
 }
 
 /// One account of a question: its entity id, canonical identifier and the current names it goes
@@ -177,6 +186,9 @@ pub struct Item {
     /// confirmation that went stale. A yes records the earlier correction again.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub correction: Option<CorrectionQuestion>,
+    /// The proposed action; present exactly when `kind` is `action_proposal`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub action: Option<crate::actions::Proposal>,
     /// What Rastro already knows about the parties the owner mapped: their visible claims, each
     /// once. Context only — an item with claims beside it stays in the queue.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -320,6 +332,19 @@ impl Queue {
         corrections: Vec<CorrectionQuestion>,
         answered: &BTreeSet<String>,
     ) -> Self {
+        Self::with_actions(origins, questions, corrections, Vec::new(), answered)
+    }
+
+    /// [`Queue::new`] with the action proposals recorded for the sources the caller sees. Each
+    /// is ordered by when it was proposed, among the items by the time their content belongs to,
+    /// and one the owner has answered is left out like any other.
+    pub fn with_actions(
+        origins: Vec<Origin>,
+        questions: Vec<Question>,
+        corrections: Vec<CorrectionQuestion>,
+        actions: Vec<crate::actions::Filed>,
+        answered: &BTreeSet<String>,
+    ) -> Self {
         let known = known_by_subject(origins.iter().flat_map(|origin| origin.known.iter()));
         let retracted = retracted_by_subject(origins.iter().flat_map(|origin| origin.known.iter()));
         let mut aged = Vec::new();
@@ -336,6 +361,7 @@ impl Queue {
                     proposal: Some(hypothesis.clone()),
                     question: None,
                     correction: None,
+                    action: None,
                     context: Vec::new(),
                     earlier_retracted: false,
                     run: (origin.source.results_from.as_ref()).map(|results| results.run.clone()),
@@ -371,6 +397,7 @@ impl Queue {
                 proposal: None,
                 question: Some(question),
                 correction: None,
+                action: None,
                 context: Vec::new(),
                 earlier_retracted: false,
                 run: None,
@@ -394,6 +421,7 @@ impl Queue {
             }
         }
         aged.extend(correction_items(corrections, &mut seen));
+        aged.extend(action_items(actions, answered, &mut seen));
         aged.sort_by(|a, b| a.key().cmp(&b.key()));
         Self {
             notice: NOTICE.into(),
@@ -727,6 +755,26 @@ pub fn proposed_ids(
         .collect()
 }
 
+/// The content address of an action proposal: the source it writes to, the action, its fields,
+/// the why and the cited claims. The time it was proposed is not part of it, so proposing the
+/// same thing again is the same item.
+pub(crate) fn action_item_id(source: &Source, proposal: &crate::actions::Proposal) -> String {
+    let fields = &proposal.fields;
+    item_id(&[
+        (b'K', ItemKind::ActionProposal.as_str().into()),
+        (b'S', source.kind.as_str().into()),
+        (b'N', source.name.clone()),
+        (b'O', source.scope.clone()),
+        (b'A', proposal.action.clone()),
+        (b'T', fields.title.clone()),
+        (b'D', fields.description.clone().unwrap_or_default()),
+        (b'M', fields.team.clone()),
+        (b'E', fields.assignee.clone()),
+        (b'W', proposal.why.clone()),
+        (b'C', proposal.cites.join("\u{1f}")),
+    ])
+}
+
 /// The content address of a question: its two accounts and the signals that produced it.
 fn question_id(question: &Question) -> String {
     let reasons: Vec<String> = (question.reasons.iter())
@@ -749,6 +797,40 @@ fn question_id(question: &Question) -> String {
     ])
 }
 
+/// The items that ask whether to run an action an agent proposed, keyed by when it was
+/// proposed. One the owner answered, or one a source already showed, is left out.
+fn action_items(
+    actions: Vec<crate::actions::Filed>,
+    answered: &BTreeSet<String>,
+    seen: &mut BTreeSet<String>,
+) -> Vec<Aged> {
+    let mut aged = Vec::new();
+    for filed in actions {
+        if answered.contains(&filed.id) || !seen.insert(filed.id.clone()) {
+            continue;
+        }
+        aged.push(Aged {
+            at: Some(filed.proposed_at),
+            question: false,
+            turn: 0,
+            accounts: String::new(),
+            item: Item {
+                id: filed.id,
+                kind: ItemKind::ActionProposal,
+                source: filed.source,
+                proposal: None,
+                question: None,
+                correction: None,
+                action: Some(filed.proposal),
+                context: Vec::new(),
+                earlier_retracted: false,
+                run: None,
+            },
+        });
+    }
+    aged
+}
+
 /// The items that ask about corrected claims, keyed to sort after the same-person questions
 /// and before every proposal.
 fn correction_items(
@@ -763,6 +845,7 @@ fn correction_items(
             source: Source::identity(),
             proposal: None,
             question: None,
+            action: None,
             context: Vec::new(),
             earlier_retracted: false,
             run: None,
@@ -847,6 +930,7 @@ impl SourceKind {
         match self {
             Self::Meeting => "meeting",
             Self::Identity => "identity",
+            Self::Linear => "linear",
         }
     }
 }
@@ -855,6 +939,7 @@ impl ItemKind {
         match self {
             Self::Proposal => "proposal",
             Self::Question => "question",
+            Self::ActionProposal => "action_proposal",
         }
     }
 }
@@ -876,7 +961,8 @@ pub(crate) fn read(
         Vec::new()
     };
     let corrections = correction_questions(view, scopes, &resolution)?;
-    let mut queue = Queue::new(origins, questions, corrections, &answered);
+    let actions = view.action_proposals(scopes)?;
+    let mut queue = Queue::with_actions(origins, questions, corrections, actions, &answered);
     queue.attach_context(view, scopes)?;
     Ok(queue)
 }
