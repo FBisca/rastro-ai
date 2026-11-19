@@ -46,6 +46,10 @@ while IFS= read -r line; do
 done
 "#;
 
+/// The key owner's Linear user id, and a colleague's.
+const OWNER_LINEAR: &str = "11111111-1111-4111-8111-111111111111";
+const COLLEAGUE: &str = "22222222-2222-4222-8222-222222222222";
+
 const NOW: &str = "2026-11-19T09:00:00Z";
 
 struct Env {
@@ -131,26 +135,34 @@ impl Env {
     fn candidates(&self, text: &str) {
         fs::write(self.path("candidates.json"), text).unwrap();
     }
-    /// A `linear` source whose connector run submits `issues` as (id, title, state type), and
-    /// finishes with `status`.
-    fn sync_linear(&self, issues: &[(&str, &str, &str)], status: &str) {
+    /// A `linear` source whose connector run submits `issues` as (id, title, state type,
+    /// assignee), after the key owner's `linear:viewer`, and finishes with `status`.
+    fn sync_linear(&self, issues: &[(&str, &str, &str, &str)], status: &str) {
         let mut steps = vec![json!({"do": "initialize"})];
-        for (id, title, state) in issues {
+        let mut submit = |kind: &str, location: String, field: &str, quote: String| {
+            steps.push(json!({"do": "send", "message": {"jsonrpc": "2.0",
+                "method": "evidence.submit", "params": {"kind": kind,
+                "location": location, "field": field, "start": 0,
+                "end": quote.len(), "quote": quote, "trust_class": "structured",
+                "source_updated_at": "2026-11-18T00:00:00Z"}}}));
+        };
+        if status != "ok-no-viewer" {
+            submit("issue", "linear:viewer".into(), "/id", OWNER_LINEAR.into());
+        }
+        for (id, title, state, assignee) in issues {
+            let location = format!("linear:issue/{id}");
             for (field, quote) in [
                 ("/identifier", format!("H-{id}")),
                 ("/title", (*title).to_string()),
                 ("/state/type", (*state).to_string()),
+                ("/assignee/id", (*assignee).to_string()),
             ] {
-                steps.push(json!({"do": "send", "message": {"jsonrpc": "2.0",
-                    "method": "evidence.submit", "params": {"kind": "issue",
-                    "location": format!("linear:issue/{id}"), "field": field, "start": 0,
-                    "end": quote.len(), "quote": quote, "trust_class": "structured",
-                    "source_updated_at": "2026-11-18T00:00:00Z"}}}));
+                submit("issue", location.clone(), field, quote);
             }
         }
         steps.push(json!({"do": "send", "message": {"jsonrpc": "2.0",
             "method": "coverage.report", "params": {"status": "complete", "selection": "all"}}}));
-        steps.push(json!({"do": "finish", "status": status, "submitted": issues.len() * 3}));
+        steps.push(json!({"do": "finish", "status": status.trim_end_matches("-no-viewer"), "submitted": issues.len() * 4 + 1}));
         let lines: Vec<_> = steps.iter().map(Value::to_string).collect();
         fs::write(self.path("script.jsonl"), lines.join("\n")).unwrap();
         // The test connector stands in for Linear: the core knows the source by its connector, so
@@ -250,16 +262,18 @@ fn the_answer_over_a_stored_meeting_holds_the_promise_its_citation_and_the_gap()
     );
 }
 
-/// spec: Focus is a read in the catalog
-/// a Linear source's started issue is cited in the answer, and a failed sync shows its gap with
+/// spec: A focus report ranks what needs the owner
+/// only the owner's own started issue is a candidate: one a colleague holds is absent, whoever
+/// filed it; and a Linear source's started issue is cited in the answer, and a failed sync shows its gap with
 /// the last good read's time
 #[test]
 fn the_answer_over_a_linear_source_holds_its_issues_and_a_failed_sync_as_a_gap() {
     let env = Env::new();
     env.sync_linear(
         &[
-            ("a1", "Ship the schema", "started"),
-            ("b2", "Old", "completed"),
+            ("a0", "Colleague's started issue", "started", COLLEAGUE),
+            ("a1", "Ship the schema", "started", OWNER_LINEAR),
+            ("b2", "Old", "completed", OWNER_LINEAR),
         ],
         "ok",
     );
@@ -284,4 +298,18 @@ fn the_answer_over_a_linear_source_holds_its_issues_and_a_failed_sync_as_a_gap()
     assert_eq!(gaps[0]["name"], "linear", "{failed}");
     assert_eq!(gaps[0]["reason"]["kind"], "sync_failed", "{failed}");
     assert!(gaps[0]["as_of"].is_string(), "{failed}");
+}
+
+/// spec: A focus report ranks what needs the owner
+/// without the owner's own Linear id in the store, no Linear issue is a candidate
+#[test]
+fn without_the_owners_linear_id_no_issue_needs_the_owner() {
+    let env = Env::new();
+    env.sync_linear(
+        &[("a1", "Ship the schema", "started", OWNER_LINEAR)],
+        "ok-no-viewer",
+    );
+    let focus = env.ok(&["focus"]);
+    assert!(focus["focus"].is_null(), "{focus}");
+    assert_eq!(focus["gaps"], json!([]), "{focus}");
 }

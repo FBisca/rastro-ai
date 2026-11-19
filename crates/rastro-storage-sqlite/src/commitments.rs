@@ -135,7 +135,7 @@ pub(crate) fn linear_read(
     let mut statement = view.0.prepare(
         "SELECT e.location, e.field, e.quote FROM evidence e
          WHERE e.source = ?1 AND e.location LIKE 'linear:issue/%'
-           AND e.field IN ('/identifier', '/url', '/title', '/state/type')
+           AND e.field IN ('/identifier', '/url', '/title', '/state/type', '/assignee/id')
            AND (?2 IS NULL OR e.scope IN (SELECT value FROM json_each(?2)))
            AND e.id = (SELECT max(x.id) FROM evidence x WHERE x.source = e.source
                        AND x.scope = e.scope AND x.location = e.location AND x.field = e.field)
@@ -152,6 +152,7 @@ pub(crate) fn linear_read(
         },
     )?;
     let mut tasks: BTreeMap<String, Task> = BTreeMap::new();
+    let mut assignees: BTreeMap<String, String> = BTreeMap::new();
     for row in rows {
         let (location, field, quote) = row?;
         let task = tasks.entry(location.clone()).or_insert_with(|| Task {
@@ -164,6 +165,9 @@ pub(crate) fn linear_read(
             urgency: Urgency::None,
         });
         match field.as_str() {
+            "/assignee/id" => {
+                assignees.insert(location, quote);
+            }
             "/identifier" => task.identifier = quote,
             "/url" => task.url = Some(quote),
             "/title" => task.title = quote,
@@ -176,8 +180,21 @@ pub(crate) fn linear_read(
             }
         }
     }
-    Ok(Some(LinearRead {
-        read,
-        tasks: tasks.into_values().collect(),
-    }))
+    // Only what the owner holds needs the owner: the connector also syncs issues the owner filed
+    // or follows. Without the owner's own Linear id nothing can be told apart, so nothing is kept.
+    let viewer: Option<String> = view
+        .0
+        .query_row(
+            "SELECT quote FROM evidence WHERE source = ?1 AND location = 'linear:viewer'
+             AND field = '/id' ORDER BY id DESC LIMIT 1",
+            [source],
+            |row| row.get(0),
+        )
+        .optional()?;
+    let tasks = tasks
+        .into_iter()
+        .filter(|(location, _)| viewer.is_some() && assignees.get(location) == viewer.as_ref())
+        .map(|(_, task)| task)
+        .collect();
+    Ok(Some(LinearRead { read, tasks }))
 }
