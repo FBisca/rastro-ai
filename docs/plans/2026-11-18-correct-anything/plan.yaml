@@ -268,6 +268,7 @@ tickets:
       - crates/rastro-storage-sqlite/src/automatic.rs
       - crates/rastro-storage-sqlite/src/knowledge.rs
       - crates/rastro-core/src/queue/mod.rs
+      - schema/operations-v2.schema.json
       - crates/rastro-cli/tests/corrections_carry.rs
     size: regular
     difficulty: complex
@@ -280,7 +281,10 @@ tickets:
     satisfies: [S13, S14, S15]
     paths:
       - crates/rastro-storage-sqlite/src/lifecycle.rs
+      - crates/rastro-storage-sqlite/src/knowledge.rs
       - crates/rastro-core/src/knowledge.rs
+      - crates/rastro-operations/src/results.rs
+      - schema/operations-v2.schema.json
       - crates/rastro-cli/tests/corrections_lapse.rs
     size: regular
     difficulty: complex
@@ -291,6 +295,8 @@ tickets:
     satisfies: [S16, S17]
     paths:
       - crates/rastro-core/src/queue/
+      - crates/rastro-cli/src/main.rs
+      - schema/operations-v2.schema.json
       - crates/rastro-cli/tests/corrections_lapse.rs
     size: regular
     difficulty: complex
@@ -337,7 +343,8 @@ tickets:
     blocked_by: [T6, T8]
 approval:
   by: felippe.bisca@gmail.com
-  at: '2026-11-18T11:56:14.542027+00:00'
+  at: '2026-11-18T17:44:34.790518+00:00'
   base: 75390ddbdf00735bccc5722566e3bd6482804b2e
-  digest: 0cab24b0d02c39a07e6ef62ded73117b99884f977cdb6292cc53b71b570cdc9c
-  reason: I approved
+  digest: a025e003d895320c66a57c3c249887c02971b962d5348f7ab26adf231d3b140f
+  reason: T6 needs the queue correction field in the schema and its text arm in main.rs;
+    T8 also lists them
