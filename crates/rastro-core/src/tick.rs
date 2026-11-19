@@ -1,0 +1,110 @@
+//! `tick`: the one entry point a schedule calls. It syncs every source whose last complete
+//! check is older than its freshness rule, and runs at most once at a time.
+use crate::{
+    CompleteCheck, Locations, Rastro, Source, Storage, coverage, files,
+    runs::{Silent, StoredTwins},
+};
+use anyhow::Result;
+use chrono::{DateTime, Duration, Utc};
+use std::{fs::TryLockError, path::PathBuf};
+
+/// Held for as long as a tick runs, so a second tick can tell it is not alone. It is separate
+/// from the sync lock, which a sync inside the tick takes and lets go of on its own.
+pub fn lock_path(locations: &Locations) -> PathBuf {
+    locations.data.join("tick.lock")
+}
+
+/// Whether a source with `check` as its last complete check needs a sync at `now`: one that
+/// was never checked does, and one checked a whole freshness rule ago does, the instant
+/// coverage stops calling it fresh.
+pub fn is_stale(check: Option<&CompleteCheck>, freshness: Duration, now: DateTime<Utc>) -> bool {
+    check.is_none_or(|check| now >= check.checked_at + freshness)
+}
+
+/// What a tick did.
+#[derive(Debug)]
+pub enum Tick {
+    /// Another tick held the lock, so this one did nothing.
+    AlreadyRunning,
+    /// This tick held the lock and went over every source.
+    Ran(TickReport),
+}
+
+/// The sources a tick that ran went over.
+#[derive(Debug, Default)]
+pub struct TickReport {
+    /// Sources synced.
+    pub synced: Vec<String>,
+    /// Sources within their freshness rule, left alone.
+    pub fresh: Vec<String>,
+    /// Sources whose sync failed, each with why. The sources after one still synced.
+    pub failed: Vec<(String, String)>,
+}
+
+impl<S: Storage + StoredTwins> Rastro<S> {
+    /// Syncs each source past its freshness rule, one after another, and skips the fresh ones.
+    /// A source whose sync fails is recorded in the report and the next one still syncs.
+    ///
+    /// Returns [`Tick::AlreadyRunning`] without recording anything when another tick holds
+    /// the tick lock. Fails only when the lock or the source list cannot be read.
+    pub fn tick(&mut self) -> Result<Tick> {
+        files::private_directory(&self.locations.data)?;
+        let lock = files::private_file(&lock_path(&self.locations))?;
+        match lock.try_lock() {
+            Ok(()) => {}
+            Err(TryLockError::WouldBlock) => return Ok(Tick::AlreadyRunning),
+            Err(TryLockError::Error(error)) => return Err(error.into()),
+        }
+        let now = coverage::now()?;
+        let sources: Vec<Source> = self.config.sources.clone();
+        let mut report = TickReport::default();
+        for source in &sources {
+            let check = self.storage.last_complete_check(source)?;
+            if !is_stale(check.as_ref(), source.freshness(), now) {
+                report.fresh.push(source.name.clone());
+                continue;
+            }
+            match self.sync_observed(Some(&source.name), false, &mut Silent) {
+                Ok(synced) => match synced.runs.iter().find(|run| run.status == "failed") {
+                    Some(run) => report.failed.push((
+                        source.name.clone(),
+                        run.reason.clone().unwrap_or_else(|| "failed".into()),
+                    )),
+                    None => report.synced.push(source.name.clone()),
+                },
+                Err(error) => report
+                    .failed
+                    .push((source.name.clone(), format!("{error:#}"))),
+            }
+        }
+        drop(lock);
+        Ok(Tick::Ran(report))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn check_at(at: &str) -> CompleteCheck {
+        let at: DateTime<Utc> = at.parse().unwrap();
+        CompleteCheck {
+            window_end: at,
+            checked_at: at,
+        }
+    }
+
+    /// spec: One tick syncs every stale source
+    #[test]
+    fn a_source_is_stale_when_never_checked_or_a_whole_rule_has_passed() {
+        let hour = Duration::hours(1);
+        let now: DateTime<Utc> = "2026-11-19T12:00:00Z".parse().unwrap();
+        assert!(is_stale(None, hour, now));
+        assert!(!is_stale(
+            Some(&check_at("2026-11-19T11:00:01Z")),
+            hour,
+            now
+        ));
+        assert!(is_stale(Some(&check_at("2026-11-19T11:00:00Z")), hour, now));
+    }
+}
