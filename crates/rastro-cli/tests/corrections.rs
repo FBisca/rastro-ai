@@ -894,3 +894,41 @@ fn a_second_fix_of_the_same_claim_replaces_the_first_fix() {
         env.about(pr)
     );
 }
+
+// spec: Corrections serve a real morning
+/// One sitting, from the terminal: the owner reads `about`, fixes a stale pull-request state,
+/// retracts a wrong alias and confirms a claim they rely on, and the next `about` shows each
+/// change.
+#[test]
+fn the_owner_fixes_retracts_and_confirms_in_one_sitting_and_about_shows_each() {
+    let env = Env::with_vocabulary();
+    let pr = env.pull_request();
+    env.account(7, "octocat");
+
+    let stale = env.claim(pr, "code:state", "open");
+    let relied = env.claim(pr, "code:in_repository", "github:repo/o/p");
+    let wrong = env.claim("github:account/7", "rastro:alias", "octocat");
+
+    env.edit(&stale, "closed");
+    env.reject(&wrong);
+    env.confirm(&relied);
+    assert_eq!(env.intents(), 3);
+
+    assert_eq!(
+        listed(&env, pr, "code:state"),
+        [("closed".to_string(), "observed".to_string())],
+        "{}",
+        env.about(pr)
+    );
+    assert_eq!(
+        listed(&env, pr, "code:in_repository"),
+        [("github:repo/o/p".to_string(), "confirmed".to_string())],
+        "{}",
+        env.about(pr)
+    );
+    assert!(
+        listed(&env, "github:account/7", "rastro:alias").is_empty(),
+        "{}",
+        env.about("github:account/7")
+    );
+}
