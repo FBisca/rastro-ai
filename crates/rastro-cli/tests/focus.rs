@@ -2,7 +2,6 @@
 //! public `focus::report` seam over scripted evidence (no database, no process).
 #![allow(non_snake_case)]
 use chrono::{DateTime, FixedOffset, Utc};
-use std::collections::BTreeSet;
 use rastro_core::{
     CoverageState,
     commitments::{
@@ -15,6 +14,7 @@ use rastro_core::{
     meeting::{Cause, RunState},
     queue::{Origin, Queue},
 };
+use std::collections::BTreeSet;
 
 fn at(text: &str) -> DateTime<Utc> {
     text.parse().unwrap()
