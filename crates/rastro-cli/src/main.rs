@@ -1108,6 +1108,7 @@ fn human(response: &Response) -> String {
         Response::Commitments(r) => commitments_text(r),
         Response::Queue(r) => queue_text(r),
         Response::Actions(r) => actions_text(r),
+        Response::ActionsShow(r) => actions_text(r),
         Response::ActionsPropose(r) => actions_propose_text(r),
         Response::Focus(r) => focus_text(r),
         Response::QueueOutcomes(r) => outcomes_text(r),

@@ -230,13 +230,13 @@ fn an_agent_asking_the_actions_tool_for_a_run_gets_why_it_ran() {
     assert_eq!(why["reach"], "others see it");
     assert_eq!(why["reversibility"], "can be undone");
 
-    // The CLI says the same, byte for byte.
+    // The CLI says the same under `actions show`: the same result, whatever the envelope names.
     let cli: Value =
-        serde_json::from_slice(&env.rastro(&["actions", id, "--json"]).stdout).unwrap();
-    assert_eq!(cli, answer);
+        serde_json::from_slice(&env.rastro(&["actions", "show", id, "--json"]).stdout).unwrap();
+    assert_eq!(cli["result"], answer["result"]);
 
     // The owner reads the same in words.
-    let text = String::from_utf8_lossy(&env.rastro(&["actions", id]).stdout).into_owned();
+    let text = String::from_utf8_lossy(&env.rastro(&["actions", "show", id]).stdout).into_owned();
     for part in [
         "Why: owner asked in session after the red build",
         &format!("Cites: {}", claims[0]),
@@ -285,4 +285,25 @@ fn a_server_launched_with_another_scope_sees_neither_the_proposal_nor_the_run() 
     assert_eq!(ids, [&json!(waiting)], "{queue}");
     let actions = at_work.read("actions", json!({}));
     assert_eq!(actions["result"]["runs"][0]["id"], json!(run), "{actions}");
+}
+
+// spec: The owner reads why an action ran
+#[test]
+fn a_run_is_explained_after_its_provider_is_uninstalled() {
+    let env = Env::new();
+    let item = env.propose("Flaky sync test", &["--why", "owner asked in session"]);
+    env.ok_json(&["queue", "accept", &item]);
+    let id = env.ok_json(&["actions"])["runs"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    fs::remove_dir_all(env.home.path().join("config/plugins/rastro-action-linear")).unwrap();
+
+    let mut mcp = env.serve(&["work"]);
+    let answer = mcp.read("actions", json!({"run": id}));
+
+    let why = &answer["result"]["why"];
+    assert_eq!(why["proposal"]["why"], "owner asked in session");
+    assert_eq!(why["reach"], "others see it", "{why}");
+    assert_eq!(why["reversibility"], "can be undone", "{why}");
 }

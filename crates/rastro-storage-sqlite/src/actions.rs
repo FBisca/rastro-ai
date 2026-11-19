@@ -1,11 +1,14 @@
 //! Action proposals: the insert-only record of what an agent proposed to do in an outside system,
 //! bound to the source it writes to and that source's scope.
 use crate::{View, parse_time, scope_parameter, stamp};
-use anyhow::Result;
+use anyhow::{Context, Result};
 use chrono::{DateTime, Utc};
 use rastro_core::{
     Scope,
-    actions::{Filed, IssueFields, NewRun, ObservedIssue, Proposal, Run, RunResult, RunStatus},
+    actions::{
+        Filed, IssueFields, NewRun, ObservedIssue, Proposal, Reach, Reversibility, Run, RunResult,
+        RunStatus,
+    },
     queue::{Source, SourceKind},
 };
 use rusqlite::{Connection, params};
@@ -16,8 +19,8 @@ use rusqlite::{Connection, params};
 pub(crate) fn record(connection: &mut Connection, filed: &Filed) -> Result<()> {
     connection.execute(
         "INSERT INTO action_proposal
-             (id, action, provider, fields, why, cites, source, scope, proposed_at)
-         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9
+             (id, action, provider, fields, why, cites, source, scope, proposed_at, reach, reversibility)
+         SELECT ?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11
          WHERE NOT EXISTS (SELECT 1 FROM action_proposal WHERE id = ?1)",
         params![
             filed.id,
@@ -29,6 +32,8 @@ pub(crate) fn record(connection: &mut Connection, filed: &Filed) -> Result<()> {
             filed.source.name,
             filed.source.scope,
             stamp(filed.proposed_at),
+            serde_json::to_value(filed.reach)?.as_str(),
+            serde_json::to_value(filed.reversibility)?.as_str(),
         ],
     )?;
     Ok(())
@@ -37,7 +42,8 @@ pub(crate) fn record(connection: &mut Connection, filed: &Filed) -> Result<()> {
 /// Every proposal whose source is in `scopes` (empty: every scope), oldest first.
 pub(crate) fn proposals(view: &View, scopes: &[Scope]) -> Result<Vec<Filed>> {
     let mut statement = view.0.prepare(
-        "SELECT id, action, provider, fields, why, cites, source, scope, proposed_at
+        "SELECT id, action, provider, fields, why, cites, source, scope, proposed_at,
+                reach, reversibility
          FROM action_proposal
          WHERE ?1 IS NULL OR scope IN (SELECT value FROM json_each(?1))
          ORDER BY append_seq",
@@ -53,11 +59,25 @@ pub(crate) fn proposals(view: &View, scopes: &[Scope]) -> Result<Vec<Filed>> {
             row.get::<_, String>(6)?,
             row.get::<_, String>(7)?,
             row.get::<_, String>(8)?,
+            row.get::<_, String>(9)?,
+            row.get::<_, String>(10)?,
         ))
     })?;
     let mut filed = Vec::new();
     for row in rows {
-        let (id, action, provider, fields, why, cites, source, scope, proposed_at) = row?;
+        let (
+            id,
+            action,
+            provider,
+            fields,
+            why,
+            cites,
+            source,
+            scope,
+            proposed_at,
+            reach,
+            reversibility,
+        ) = row?;
         filed.push(Filed {
             id,
             proposal: Proposal {
@@ -72,6 +92,9 @@ pub(crate) fn proposals(view: &View, scopes: &[Scope]) -> Result<Vec<Filed>> {
                 scope,
             },
             provider,
+            reach: Reach::parse(&reach).with_context(|| format!("unknown reach {reach}"))?,
+            reversibility: Reversibility::parse(&reversibility)
+                .with_context(|| format!("unknown reversibility {reversibility}"))?,
             proposed_at: parse_time(proposed_at)?,
         });
     }

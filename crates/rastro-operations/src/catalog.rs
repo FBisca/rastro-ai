@@ -381,6 +381,9 @@ operations! {
         Propose(ActionsProposeRequest => ActionsProposeResult) as ActionsPropose {
             slot: 35, name: "actions.propose", surfaces: [Cli], read_only: false
         },
+        Show(ActionsShowRequest => ActionsResult) as ActionsShow {
+            slot: 37, name: "actions.show", surfaces: [Cli], read_only: true, reader: run_read, cli_read_path: true
+        },
     }
     /// Import a meeting transcript, read its commitment hypotheses, replay, forget or export it.
     Meeting / MeetingRequest {

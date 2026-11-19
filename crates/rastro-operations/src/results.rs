@@ -428,9 +428,15 @@ mod tests {
                     scope: "work".into(),
                 },
                 provider: "p".into(),
+                reach: rastro_core::actions::Reach::OthersSeeIt,
+                reversibility: rastro_core::actions::Reversibility::CanBeUndone,
                 proposed_at: "2026-11-19T09:00:00Z".parse().unwrap(),
             }),
             Response::Actions(rastro_core::actions::Runs {
+                runs: vec![],
+                why: None,
+            }),
+            Response::ActionsShow(rastro_core::actions::Runs {
                 runs: vec![],
                 why: None,
             }),
@@ -465,6 +471,7 @@ mod tests {
             "actions.propose" => {
                 serde_json::json!({"action": "linear.create_issue", "why": "w"})
             }
+            "actions.show" => serde_json::json!({"run": "r_1"}),
             "queue.accept" => serde_json::json!({"item": "q_1"}),
             "queue.edit" => serde_json::json!({"item": "q_1", "promise": "send it"}),
             "queue.reject" => serde_json::json!({"item": "q_1", "reason": "not a promise"}),

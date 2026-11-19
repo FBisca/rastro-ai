@@ -1,11 +1,12 @@
 //! Why an action ran: one run with its proposal, the claims it cited and their evidence, the
-//! owner's accept, its level, its cell and the risk its provider declares for it.
+//! owner's accept, its level, its cell and the risk its provider declared when the action was
+//! proposed: recorded with the proposal, so no plugin has to be installed to read it.
 //!
 //! Only a reader whose scopes see the source the run writes to gets the run: for any other
 //! reader the run does not exist, and so is its why.
 use super::{Proposal, Run};
 use crate::knowledge::{Explanation, WhyOptions};
-use crate::{Locations, Scope, Snapshot, host};
+use crate::{Scope, Snapshot};
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
@@ -50,12 +51,7 @@ pub struct RunWhy {
 
 /// The run `id` among those `scopes` see, explained. Fails when no run of that id is visible,
 /// without saying whether it exists elsewhere.
-pub(crate) fn explain(
-    view: &dyn Snapshot,
-    locations: &Locations,
-    scopes: &[Scope],
-    id: &str,
-) -> Result<(Run, RunWhy)> {
+pub(crate) fn explain(view: &dyn Snapshot, scopes: &[Scope], id: &str) -> Result<(Run, RunWhy)> {
     let Some(run) = (view.action_runs(scopes)?)
         .into_iter()
         .find(|run| run.id == id)
@@ -81,8 +77,6 @@ pub(crate) fn explain(
                 })
         })
         .collect::<Result<Vec<_>>>()?;
-    let offer = host::actions::offer(locations, &run.action)
-        .with_context(|| format!("the provider of run {id} no longer offers its action"))?;
     let why = RunWhy {
         proposal: filed.proposal,
         cited,
@@ -95,8 +89,8 @@ pub(crate) fn explain(
             action: run.action.clone(),
             team: run.fields.team.clone(),
         },
-        reach: offer.reach.label(),
-        reversibility: offer.reversibility.label(),
+        reach: filed.reach.label(),
+        reversibility: filed.reversibility.label(),
     };
     Ok((run, why))
 }
