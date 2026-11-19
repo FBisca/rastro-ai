@@ -64,6 +64,20 @@ fn a_provider_that_also_submits_evidence_is_refused_naming_the_permission() {
 
 // spec: Action providers are a plugin role
 #[test]
+fn a_shadowed_copy_of_a_refused_provider_offers_nothing() {
+    // The copy at the plugins root is found first, so it is the one the host would run; it is
+    // refused, and the valid copy it shadows must not bring the action back.
+    let env = Env::with_provider(|_| {});
+    let mut winning = support::provider::manifest();
+    winning["permissions"]["submit"] = toml::Value::Array(vec!["issue".into()]);
+    let root = env.locations().config.join("plugins");
+    std::fs::write(root.join("rastro-plugin.toml"), winning.to_string()).unwrap();
+    let message = refusal(&env, "linear.create_issue");
+    assert!(message.contains("`submit`"), "{message}");
+}
+
+// spec: Action providers are a plugin role
+#[test]
 fn a_provider_of_another_kind_too_is_refused() {
     let env = Env::with_provider(|manifest| {
         manifest["kinds"] = toml::Value::Array(vec!["action_provider".into(), "extractor".into()]);

@@ -28,12 +28,18 @@ pub struct Offers {
 }
 
 /// Reads every installed manifest that declares the `action_provider` kind and sorts them into
-/// offers and refusals. A manifest of any other kind is no business of this role, even one that
-/// declares actions: it is skipped here, and refused, with the reason on stderr, when its own
-/// role loads it.
+/// offers and refusals, the first manifest of each plugin id only. A manifest of any other kind
+/// is no business of this role, even one that declares actions: it is skipped here, and refused,
+/// with the reason on stderr, when its own role loads it.
 pub fn offered(locations: &Locations) -> Offers {
     let mut offers = Offers::default();
+    let mut seen = std::collections::HashSet::new();
     scan(locations, |manifest, dir| {
+        // First wins, as `find` resolves an id: a shadowed copy is never the plugin the host
+        // runs, so it is neither offered nor refused.
+        if !seen.insert(manifest.id.clone()) {
+            return false;
+        }
         let claims_role = manifest.kinds.iter().any(|k| k == ACTION_PROVIDER_KIND);
         if !claims_role {
             return false;
