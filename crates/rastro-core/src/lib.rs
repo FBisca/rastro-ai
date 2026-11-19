@@ -1,3 +1,4 @@
+pub mod actions;
 pub mod claims;
 pub mod commitments;
 pub mod coverage;
@@ -182,6 +183,9 @@ pub struct Config {
     /// configures one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commitment_adapter: Option<meeting::CommitmentAdapter>,
+    /// `[actions]`: what a proposal takes when it names nothing.
+    #[serde(default, skip_serializing_if = "actions::ActionsConfig::is_empty")]
+    pub actions: actions::ActionsConfig,
 }
 impl Config {
     pub fn load(locations: &Locations) -> Result<Self> {
@@ -456,6 +460,12 @@ pub trait Storage {
     /// Records one shown report per item a terminal queue read printed, in one transaction.
     /// Insert-only: what the owner saw is never revised.
     fn record_shown_reports(&mut self, reports: &[queue::ShownReport]) -> Result<usize>;
+    /// Records one action proposal in one transaction, bound to the source it writes to and that
+    /// source's scope. Insert-only: a proposal with the same content address is the same
+    /// proposal, and nothing is added for it.
+    fn record_action_proposal(&mut self, _filed: &actions::Filed) -> Result<()> {
+        anyhow::bail!("storage does not support action proposals")
+    }
 }
 
 pub struct Rastro<S> {

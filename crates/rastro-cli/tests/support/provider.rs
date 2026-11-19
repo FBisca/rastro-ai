@@ -1,12 +1,15 @@
 //! A fake action provider: a shell script that speaks the plugin protocol and answers every
-//! action message with a canned success, so no outside system is ever called.
+//! action message with a canned success, so no outside system is ever called. It writes each
+//! message it receives to `calls.log` beside itself, so a test can tell that none reached it.
 use std::{fs, os::unix::fs::PermissionsExt, path::Path};
 
 /// The id of the fake provider's manifest.
 pub const ID: &str = "fake-actions";
 
 const SCRIPT: &str = r#"#!/bin/sh
+log="$(dirname "$0")/calls.log"
 while IFS= read -r line; do
+  printf '%s\n' "$line" >> "$log"
   id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
   case "$line" in
     *'"method":"initialize"'*)
@@ -61,4 +64,9 @@ pub fn install(config: &Path, edit: impl FnOnce(&mut toml::Table)) {
     let script = dir.join("provider");
     fs::write(&script, SCRIPT).unwrap();
     fs::set_permissions(&script, fs::Permissions::from_mode(0o755)).unwrap();
+}
+
+/// Every message the fake provider has received, one per line; empty when it was never started.
+pub fn calls(config: &Path) -> String {
+    fs::read_to_string(config.join("plugins").join(ID).join("calls.log")).unwrap_or_default()
 }

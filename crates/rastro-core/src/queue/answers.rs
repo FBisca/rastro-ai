@@ -57,6 +57,12 @@ fn still_queued(view: &dyn Snapshot, item: &str) -> Result<Item> {
 
 /// Refuses a question where a proposal was expected.
 fn proposal(item: &Item) -> Result<()> {
+    if item.action.is_some() {
+        bail!(
+            "{} is an action proposal, which `rastro queue` doesn't run yet",
+            item.id
+        )
+    }
     if item.proposal.is_none() {
         bail!(
             "{} is a question; answer it with `rastro queue answer`",

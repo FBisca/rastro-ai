@@ -726,6 +726,49 @@ fn focus_text(report: &rastro_core::focus::Report) -> String {
     lines.join("\n")
 }
 
+/// The name a queue source's kind goes by in the owner's reads.
+fn queue_source_kind(kind: rastro_core::queue::SourceKind) -> &'static str {
+    match kind {
+        rastro_core::queue::SourceKind::Meeting => "meeting",
+        rastro_core::queue::SourceKind::Identity => "identity",
+        rastro_core::queue::SourceKind::Linear => "linear",
+    }
+}
+
+/// The lines of an action proposal: what it would do, the assignee and why, and what it cites.
+fn action_proposal_lines(action: &rastro_core::actions::Proposal) -> Vec<String> {
+    let fields = &action.fields;
+    let mut lines = vec![format!(
+        "  {} | Title: {} | Team: {} | Assignee: {} | Why: {}",
+        display_safe(&action.action),
+        display_safe(&fields.title),
+        display_safe(&fields.team),
+        display_safe(&fields.assignee),
+        display_safe(&action.why)
+    )];
+    if let Some(description) = &fields.description {
+        lines.push(format!("  Description: {}", display_safe(description)));
+    }
+    if !action.cites.is_empty() {
+        let cites: Vec<String> = action.cites.iter().map(|c| display_safe(c)).collect();
+        lines.push(format!("  Cites: {}", cites.join(", ")));
+    }
+    lines
+}
+
+/// What `actions propose` recorded: the proposal's id, what it would do and where it waits.
+fn actions_propose_text(filed: &rastro_core::actions::Filed) -> String {
+    let mut lines = vec![format!(
+        "Proposed {} | Source: {} {} | Scope: {} | Waiting in the queue; nothing has run",
+        filed.id,
+        queue_source_kind(filed.source.kind),
+        display_safe(&filed.source.name),
+        display_safe(&filed.source.scope)
+    )];
+    lines.extend(action_proposal_lines(&filed.proposal));
+    lines.join("\n")
+}
+
 /// The queue: each proposal or question with its id and source, then each source's gap.
 #[expect(
     clippy::too_many_lines,
@@ -740,13 +783,19 @@ fn queue_text(queue: &rastro_core::queue::Queue) -> String {
     for item in &queue.items {
         let source = format!(
             "{} {}",
-            match item.source.kind {
-                rastro_core::queue::SourceKind::Meeting => "meeting",
-                rastro_core::queue::SourceKind::Identity => "identity",
-            },
+            queue_source_kind(item.source.kind),
             display_safe(&item.source.name)
         );
         match item.kind {
+            ItemKind::ActionProposal => {
+                let action = item.action.as_ref().expect("an action item carries one");
+                lines.push(format!(
+                    "Action proposal | Id: {} | Source: {source} | Scope: {}",
+                    item.id,
+                    display_safe(&item.source.scope)
+                ));
+                lines.extend(action_proposal_lines(action));
+            }
             ItemKind::Proposal => {
                 let h = item.proposal.as_ref().expect("a proposal item carries one");
                 lines.push(format!(
@@ -836,10 +885,7 @@ fn queue_text(queue: &rastro_core::queue::Queue) -> String {
         let mut line = format!(
             "Gap: {} | Kind: {} | Scope: {} | Run: {}",
             display_safe(&gap.source.name),
-            match gap.source.kind {
-                rastro_core::queue::SourceKind::Meeting => "meeting",
-                rastro_core::queue::SourceKind::Identity => "identity",
-            },
+            queue_source_kind(gap.source.kind),
             display_safe(&gap.source.scope),
             gap.run
         );
@@ -984,6 +1030,7 @@ fn human(response: &Response) -> String {
         Response::About(r) => about_text(r),
         Response::Commitments(r) => commitments_text(r),
         Response::Queue(r) => queue_text(r),
+        Response::ActionsPropose(r) => actions_propose_text(r),
         Response::Focus(r) => focus_text(r),
         Response::QueueOutcomes(r) => outcomes_text(r),
         Response::QueueAccept(r)

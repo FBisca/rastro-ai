@@ -210,6 +210,11 @@ pub trait Snapshot {
     fn queue_sources(&self, _scopes: &[Scope]) -> Result<Vec<crate::queue::Origin>> {
         anyhow::bail!("storage does not support the queue")
     }
+    /// The action proposals whose source is in `scopes` (empty: every scope), oldest first: a
+    /// proposal is visible only in the scopes that see the source it writes to.
+    fn action_proposals(&self, _scopes: &[Scope]) -> Result<Vec<crate::actions::Filed>> {
+        Ok(Vec::new())
+    }
     /// What storage recorded for the source, before the freshness rule is applied.
     fn coverage(&self, pair: &Pair, all_windows: bool) -> Result<Coverage>;
     /// Allowed (source, scope) pairs storage holds anything for, with stored freshness rules.

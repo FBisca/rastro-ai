@@ -66,6 +66,8 @@ pub type QueueResult = rastro_core::queue::Queue;
 pub type FocusResult = rastro_core::focus::Report;
 /// Every outcome of the queue, newest first, with what was shown and what was acted on.
 pub type OutcomesResult = rastro_core::queue::Outcomes;
+/// The action proposal `actions propose` recorded, as it now waits in the queue.
+pub type ActionsProposeResult = rastro_core::actions::Proposed;
 /// What a queue answer recorded: the item it named and the owner intents it accepted.
 #[derive(Debug, JsonSchema, Serialize)]
 pub struct QueueAnswerResult {
@@ -396,6 +398,27 @@ mod tests {
                 meetings: &[],
                 queue: &rastro_core::queue::Queue::empty(),
             })),
+            Response::ActionsPropose(rastro_core::actions::Filed {
+                id: "q_1".into(),
+                proposal: rastro_core::actions::Proposal {
+                    action: "linear.create_issue".into(),
+                    fields: rastro_core::actions::IssueFields {
+                        title: "t".into(),
+                        description: None,
+                        team: "ENG".into(),
+                        assignee: "me".into(),
+                    },
+                    why: "w".into(),
+                    cites: vec![],
+                },
+                source: rastro_core::queue::Source {
+                    kind: rastro_core::queue::SourceKind::Linear,
+                    name: "linear-work".into(),
+                    scope: "work".into(),
+                },
+                provider: "p".into(),
+                proposed_at: "2026-11-19T09:00:00Z".parse().unwrap(),
+            }),
         ];
         let arguments = |name: &str| match name {
             "source.add" => {
@@ -423,6 +446,9 @@ mod tests {
             "identity.history" => serde_json::json!({"entity": "me"}),
             "identity.answer" => {
                 serde_json::json!({"account": "github:login/a", "other": "linear:user/u", "verdict": "no"})
+            }
+            "actions.propose" => {
+                serde_json::json!({"action": "linear.create_issue", "why": "w"})
             }
             "queue.accept" => serde_json::json!({"item": "q_1"}),
             "queue.edit" => serde_json::json!({"item": "q_1", "promise": "send it"}),
