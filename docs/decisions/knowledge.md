@@ -164,3 +164,6 @@ Architecture: `../adr/0010-identity-and-owner-intents.md`. Plan: `../plans/2026-
 
 ## Added 2026-11-19 (roadmap slice 8a)
 74. **An owner-accepted proposal is not a knowledge-derived basis (amends §43).** An Action run whose only basis is the owner's accept of a proposal needs no outbox: the accept intent and the run record commit in one transaction, and execution is idempotent: the run's external id is stored before any request and looked up before every create, and one process executes a run at a time, so a retry or a crash never repeats the effect. Claims a proposal cites are recorded with the run as its why; they don't authorize it. §43 still holds for any run a rule starts from claims (slice 8b).
+
+## Added 2026-11-19 (roadmap slice 8b)
+75. **A rule over an agent's proposal is not a knowledge-derived basis (amends §43).** A run a rule starts from an agent's proposal needs no outbox for the reason §74 gives: the proposal and its run commit in one transaction and execution is idempotent. Claims it cites are its why and are re-checked before it runs (levels §19); they don't authorize it. Rules over observed facts or accepted commitments stay blocked until the §43 outbox exists.

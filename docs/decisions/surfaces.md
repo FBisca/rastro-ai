@@ -142,3 +142,6 @@ Architecture: `../adr/0010-identity-and-owner-intents.md`. Plan: `../plans/2026-
 
 ## Added 2026-11-19 (roadmap slice 8a)
 54. **Actions: one read on both surfaces, the writes on the CLI (additive within v2).** `actions` (the runs, or one run with its proposal, why, cited claims and evidence, accept intent, level and cell) is a catalog read on the CLI and MCP, visible only in scopes that see the source the run writes to. `actions propose` and `actions undo` are CLI-only writes; an agent in any harness proposes through the shell (§37).
+
+## Added 2026-11-19 (roadmap slice 8b)
+55. **Rules: the check on both surfaces, the stop on the CLI (additive within v2).** `rules check` (each rule's match, grace, cap, today's count, pending Acts and the queued proposals it matches) is a catalog read on the CLI and MCP, and records nothing. `actions` shows a pending Act with the time it runs and its stop command. `actions stop` is a CLI-only write, and nothing on MCP writes a rule.

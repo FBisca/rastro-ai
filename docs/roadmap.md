@@ -32,7 +32,7 @@ Status: `todo` · `planning` · `doing` · `done`
 | # | Slice | Outcome: from here on you can… | Builds on | Concept / decisions | Status |
 |---|---|---|---|---|---|
 | 8a | **First action, proposed** | Have an agent in any session propose a Linear issue through Rastro, accept it in one step, and get it created once, with its justification kept in Rastro (never in Linear), `actions show` to ask why, and an undo. One idempotent `rastro tick`, called by launchd, keeps sources fresh and retries failed runs. Switch day: the next Linear issue you have an agent create goes through Rastro | 7 | levels §1–6, §9; knowledge §43, §74; plugins §34–36 | planning (`plans/2026-11-19-first-act/plan.yaml`) |
-| 8b | **First Act** | Let that action run at Act through a rule you write, with a grace window you can stop, an optional daily budget, and `rules check` to see what a rule would do now | 8a | levels (all), §13–15; open question #13 | todo |
+| 8b | **First Act** | Let that action run at Act through a rule you write, with a grace window you can stop, an optional daily budget, and `rules check` to see what a rule would do now | 8a | levels (all), §13–20; knowledge §75; surfaces §55 | planning (`plans/2026-11-19-act-by-rule/plan.yaml`) |
 | 9 | **Learned trust and usefulness** | See trust per cell grow from your outcomes: promotion is proposed to you, demotion is automatic. Includes a trust view, a learning journal, and usefulness and cost per plugin, so dead parts are visible | 8b | learning (all); plugins §9 | todo |
 
 ## M4: Where I already am
