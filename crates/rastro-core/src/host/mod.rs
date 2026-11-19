@@ -6,9 +6,9 @@ use crate::{Appended, Counts, CoverageRecord, CoverageState, Locations, RunEnd, 
 use anyhow::{Result, bail};
 use chrono::{DateTime, SecondsFormat, Utc};
 use rastro_plugin_sdk::{
-    COULDNT_LOOK_REASONS, COVERAGE_REPORT, CoverageReport, CoverageStatus, EVIDENCE_SUBMIT,
-    Envelope, INITIALIZE, InitializeParams, InitializeResult, Manifest, PROTOCOL_VERSION,
-    RUN_FINISH, RunBinding, RunFinish, Window, major,
+    ACTION_PROVIDER_KIND, COULDNT_LOOK_REASONS, COVERAGE_REPORT, CoverageReport, CoverageStatus,
+    EVIDENCE_SUBMIT, Envelope, INITIALIZE, InitializeParams, InitializeResult, Manifest,
+    PROTOCOL_VERSION, RUN_FINISH, RunBinding, RunFinish, Window, major,
 };
 use std::{
     env,
@@ -21,6 +21,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+pub mod actions;
 mod extract;
 mod io;
 mod judge;
@@ -111,6 +112,20 @@ pub(crate) fn single_source(locations: &Locations, connector: &str) -> bool {
 
 /// The manifest whose `id` is `id`, before any check of what it provides.
 pub(crate) fn find(locations: &Locations, id: &str) -> Option<(Manifest, PathBuf)> {
+    let mut found = None;
+    scan(locations, |manifest, dir| {
+        if manifest.id == id {
+            found = Some((manifest, dir));
+        }
+        found.is_some()
+    });
+    found
+}
+
+/// Every manifest that parses, in discovery order, until `visit` returns true: `<config>/plugins`
+/// first, then the directories of `RASTRO_PLUGIN_PATH`. Each root may be a plugin directory or
+/// hold some. One that doesn't parse is skipped with a diagnostic.
+pub(crate) fn scan(locations: &Locations, mut visit: impl FnMut(Manifest, PathBuf) -> bool) {
     let mut roots = vec![locations.plugins()];
     if let Some(path) = env::var_os("RASTRO_PLUGIN_PATH") {
         roots.extend(env::split_paths(&path));
@@ -129,8 +144,11 @@ pub(crate) fn find(locations: &Locations, id: &str) -> Option<(Manifest, PathBuf
                 continue;
             };
             match Manifest::parse(&text) {
-                Ok(manifest) if manifest.id == id => return Some((manifest, dir)),
-                Ok(_) => {}
+                Ok(manifest) => {
+                    if visit(manifest, dir) {
+                        return;
+                    }
+                }
                 Err(error) => notice(&format!(
                     "skipping {}",
                     parse_diagnostic(&dir, &text, &error)
@@ -138,7 +156,6 @@ pub(crate) fn find(locations: &Locations, id: &str) -> Option<(Manifest, PathBuf
             }
         }
     }
-    None
 }
 
 /// Where a manifest failed to parse, without quoting any of it: its text can hold values
@@ -170,7 +187,9 @@ fn check(manifest: Manifest, dir: PathBuf, kind: &str) -> Result<Plugin> {
     if !manifest.kinds.iter().any(|k| k == kind) {
         bail!("plugin {} is not a {kind}", manifest.id);
     }
-    if !manifest.permissions.actions.is_empty() {
+    if kind == ACTION_PROVIDER_KIND {
+        manifest.check_action_provider()?;
+    } else if !manifest.permissions.actions.is_empty() || !manifest.actions.is_empty() {
         bail!("a {kind} can't hold actions (plugin {})", manifest.id);
     }
     Ok(Plugin { manifest, dir })

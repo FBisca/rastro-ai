@@ -7,6 +7,7 @@ use std::{
 };
 
 pub mod binaries;
+pub mod provider;
 
 /// The `rastro` binary under test, as a private copy.
 pub fn rastro() -> &'static Path {
