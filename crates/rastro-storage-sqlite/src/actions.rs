@@ -6,8 +6,8 @@ use chrono::{DateTime, Utc};
 use rastro_core::{
     Scope,
     actions::{
-        Filed, IssueFields, NewRun, ObservedIssue, Proposal, Reach, Reversibility, Run, RunResult,
-        RunStatus,
+        Filed, IssueFields, NewRun, ObservedIssue, Proposal, Reach, Reversibility, Run, RunFailure,
+        RunResult, RunStatus,
     },
     queue::{Source, SourceKind},
 };
@@ -182,6 +182,8 @@ pub(crate) fn record_run(
         status: RunStatus::Accepted,
         identifier: None,
         url: None,
+        attempts: 0,
+        error: None,
     })
 }
 
@@ -206,12 +208,31 @@ pub(crate) fn record_result(
     Ok(())
 }
 
+/// Records a failed execution of a run as its next attempt. A run that already holds a result is
+/// done and keeps reading so, and nothing is added.
+pub(crate) fn record_failure(
+    connection: &mut Connection,
+    run: &str,
+    failure: &RunFailure,
+) -> Result<()> {
+    connection.execute(
+        "INSERT INTO action_attempt (run_id, attempt, error, failed_at)
+         SELECT ?1, 1 + (SELECT count(*) FROM action_attempt WHERE run_id = ?1), ?2, ?3
+         WHERE NOT EXISTS (SELECT 1 FROM action_result WHERE run_id = ?1)",
+        params![run, failure.error, stamp(failure.failed_at)],
+    )?;
+    Ok(())
+}
+
 /// Every run whose source is in `scopes` (empty: every scope), oldest first, with the issue it
 /// created when it did.
 pub(crate) fn runs(view: &View, scopes: &[Scope]) -> Result<Vec<Run>> {
     let mut statement = view.0.prepare(
         "SELECT r.id, r.proposal, r.accept_intent, r.action, r.provider, r.fields, r.source,
-                r.scope, r.issue_id, r.accepted_at, d.identifier, d.url
+                r.scope, r.issue_id, r.accepted_at, d.identifier, d.url,
+                (SELECT count(*) FROM action_attempt a WHERE a.run_id = r.id),
+                (SELECT a.error FROM action_attempt a WHERE a.run_id = r.id
+                 ORDER BY a.attempt DESC LIMIT 1)
          FROM action_run r LEFT JOIN action_result d ON d.run_id = r.id
          WHERE ?1 IS NULL OR r.scope IN (SELECT value FROM json_each(?1))
          ORDER BY r.append_seq",
@@ -232,11 +253,13 @@ pub(crate) fn runs(view: &View, scopes: &[Scope]) -> Result<Vec<Run>> {
             ],
             row.get::<_, Option<String>>(10)?,
             row.get::<_, Option<String>>(11)?,
+            row.get::<_, u32>(12)?,
+            row.get::<_, Option<String>>(13)?,
         ))
     })?;
     let mut runs = Vec::new();
     for row in rows {
-        let (text, identifier, url) = row?;
+        let (text, identifier, url, attempts, error) = row?;
         let [
             id,
             proposal,
@@ -249,6 +272,13 @@ pub(crate) fn runs(view: &View, scopes: &[Scope]) -> Result<Vec<Run>> {
             issue_id,
             accepted_at,
         ] = text;
+        let status = if identifier.is_some() {
+            RunStatus::Done
+        } else if attempts > 0 {
+            RunStatus::Failed
+        } else {
+            RunStatus::Accepted
+        };
         runs.push(Run {
             id,
             proposal,
@@ -263,13 +293,12 @@ pub(crate) fn runs(view: &View, scopes: &[Scope]) -> Result<Vec<Run>> {
             provider,
             issue_id,
             accepted_at: parse_time(accepted_at)?,
-            status: if identifier.is_some() {
-                RunStatus::Done
-            } else {
-                RunStatus::Accepted
-            },
+            status,
             identifier,
             url,
+            attempts,
+            // A run that went on to finish no longer carries the error of an earlier attempt.
+            error: error.filter(|_| status == RunStatus::Failed),
         });
     }
     Ok(runs)

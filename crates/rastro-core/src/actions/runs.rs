@@ -4,8 +4,10 @@
 //! random issue id the outside system is asked to create the issue under, fixed before any
 //! request is sent, so what the run did can always be found by it. Executing a run takes the run's
 //! lock, asks the provider whether the issue under that id exists and only if it does not to create
-//! it, and records the issue's identifier and URL; a run with such a result reads `done`, and one
-//! without reads `accepted`.
+//! it, and records the issue's identifier and URL; a run with such a result reads `done`. An execution
+//! that fails is recorded with its error as an attempt: a run with attempts and no result reads
+//! `failed`, and `tick` executes it again until it has made [`MAX_ATTEMPTS`]. A run with neither
+//! reads `accepted`.
 //!
 //! Only [`crate::actions::IssueFields`], the content the owner accepted, and the run's random
 //! issue id go to the provider: the why, the citations and every Rastro id stay here.
@@ -32,6 +34,9 @@ pub enum RunStatus {
     Accepted,
     /// The provider created the issue, and the run holds its identifier and URL.
     Done,
+    /// An execution failed and the run has no issue: it holds the error, and `tick` retries it
+    /// until it has made 3 attempts.
+    Failed,
 }
 
 impl RunStatus {
@@ -40,6 +45,7 @@ impl RunStatus {
         match self {
             Self::Accepted => "accepted",
             Self::Done => "done",
+            Self::Failed => "failed",
         }
     }
 }
@@ -70,7 +76,15 @@ pub struct Run {
     /// The created issue's URL; present once the run is done.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub url: Option<String>,
+    /// How many executions of the run have failed. Zero until one does.
+    pub attempts: u32,
+    /// The error of the last failed execution; present while the run reads `failed`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
+
+/// How many times a run is executed before `tick` leaves it failed.
+pub const MAX_ATTEMPTS: u32 = 3;
 
 /// What an accept records beside its intent: the run it starts. Storage adds the intent's time.
 #[derive(Clone, Debug)]
@@ -92,6 +106,13 @@ pub struct RunResult {
     pub identifier: String,
     pub url: String,
     pub finished_at: DateTime<Utc>,
+}
+
+/// What a run records when an execution of it fails.
+#[derive(Clone, Debug)]
+pub struct RunFailure {
+    pub error: String,
+    pub failed_at: DateTime<Utc>,
 }
 
 /// The id of the run an accept intent starts: its content address, so the same accept is the same
@@ -147,12 +168,17 @@ fn lock_path(locations: &crate::Locations, run: &str) -> std::path::PathBuf {
 }
 
 impl<S: Storage> Rastro<S> {
-    /// The runs that were accepted and have not finished, oldest first: what `tick` finishes.
+    /// The runs `tick` executes, oldest first: the ones accepted and not done, and the failed ones
+    /// that have not yet made [`MAX_ATTEMPTS`].
     pub(crate) fn unfinished_runs(&self) -> Result<Vec<Run>> {
         let runs = self.storage.snapshot(|view| view.action_runs(&[]))?;
         Ok(runs
             .into_iter()
-            .filter(|run| run.status == RunStatus::Accepted)
+            .filter(|run| match run.status {
+                RunStatus::Accepted => true,
+                RunStatus::Failed => run.attempts < MAX_ATTEMPTS,
+                RunStatus::Done => false,
+            })
             .collect())
     }
 
@@ -163,8 +189,10 @@ impl<S: Storage> Rastro<S> {
     /// Under the lock it reads the run again, and a run already done is returned as it is. Then it
     /// asks the provider whether the issue under the run's id exists, and only when it does not
     /// asks it to create it, so a run cut off before it sent anything is created, and one whose
-    /// answer was lost is found, never created twice. Fails, recording nothing, when the provider
-    /// is refused, fails or does not confirm the issue.
+    /// answer was lost is found, never created twice. When the provider is refused, fails or does
+    /// not confirm the issue, the failure is recorded as the run's next attempt, the run reads
+    /// `failed` with that error, and this fails with it. A failed run that has made
+    /// [`MAX_ATTEMPTS`] is left as it is and returns `None`.
     pub(crate) fn execute_run(&mut self, run: &Run) -> Result<Option<Run>> {
         files::private_directory(&self.locations.data)?;
         let lock = files::private_file(&lock_path(&self.locations, &run.id))?;
@@ -177,6 +205,31 @@ impl<S: Storage> Rastro<S> {
         if current.status == RunStatus::Done {
             return Ok(Some(current));
         }
+        if current.attempts >= MAX_ATTEMPTS {
+            return Ok(None);
+        }
+        let outcome = self.create_issue(run);
+        let done = match outcome {
+            Ok(result) => {
+                self.storage.record_action_result(&run.id, &result)?;
+                self.stored_run(&run.id)?
+            }
+            Err(error) => {
+                let failure = RunFailure {
+                    error: format!("{error:#}"),
+                    failed_at: crate::coverage::now()?,
+                };
+                self.storage.record_action_failure(&run.id, &failure)?;
+                return Err(error);
+            }
+        };
+        drop(lock);
+        Ok(Some(done))
+    }
+
+    /// Asks the provider whether the issue under the run's id exists, and creates it only when it
+    /// does not. Fails when the provider is refused, fails or does not confirm the issue.
+    fn create_issue(&self, run: &Run) -> Result<RunResult> {
         let call = ActionCall {
             action: run.action.clone(),
             key: run.issue_id.clone(),
@@ -194,15 +247,11 @@ impl<S: Storage> Rastro<S> {
                 run.id
             );
         };
-        let result = RunResult {
+        Ok(RunResult {
             identifier,
             url,
             finished_at: crate::coverage::now()?,
-        };
-        self.storage.record_action_result(&run.id, &result)?;
-        let done = self.stored_run(&run.id)?;
-        drop(lock);
-        Ok(Some(done))
+        })
     }
 
     fn ask_provider(&self, run: &Run, method: &str, call: &ActionCall) -> Result<ActionResult> {

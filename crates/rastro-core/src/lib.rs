@@ -483,6 +483,11 @@ pub trait Storage {
     fn record_action_result(&mut self, _run: &str, _result: &actions::RunResult) -> Result<()> {
         anyhow::bail!("storage does not support action runs")
     }
+    /// Records that an execution of a run failed, with its error, as the run's next attempt. A run
+    /// that is already done keeps reading `done`, and nothing is added.
+    fn record_action_failure(&mut self, _run: &str, _failure: &actions::RunFailure) -> Result<()> {
+        anyhow::bail!("storage does not support action runs")
+    }
 }
 
 pub struct Rastro<S> {
