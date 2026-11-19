@@ -22,6 +22,15 @@ pub const CLAIM_SUBMIT: &str = "claim.submit";
 pub const JUDGMENT_REQUEST: &str = "judgment.request";
 /// The kind of plugin that lets an agent runtime do judgment (decisions/plugins.md §2, §10).
 pub const AGENT_TOOL_ADAPTER_KIND: &str = "agent-tool-adapter";
+/// The kind of plugin that executes actions (ADR 0015). It reads no evidence: it declares its
+/// actions and holds no `submit` permission.
+pub const ACTION_PROVIDER_KIND: &str = "action_provider";
+/// `action.execute` (core to action provider): do the action once, keyed by the run's id.
+pub const ACTION_EXECUTE: &str = "action.execute";
+/// `action.lookup` (core to action provider): find what a run's id already did, without doing it.
+pub const ACTION_LOOKUP: &str = "action.lookup";
+/// `action.undo` (core to action provider): reverse what a run did, when the action can be undone.
+pub const ACTION_UNDO: &str = "action.undo";
 /// What an agent tool adapter may ask of an agent tool: abilities, never a named tool.
 pub const AGENT_TOOL_CAPABILITIES: [&str; 1] = ["judge_text"];
 
@@ -144,6 +153,67 @@ pub struct InitializeResult {
     pub manifest_id: String,
 }
 
+/// Who an action affects (GLOSSARY "Reach").
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reach {
+    OnlyMe,
+    MyThings,
+    OthersSeeIt,
+    Public,
+}
+impl Reach {
+    /// The manifest's names, in order.
+    pub const NAMES: [&'static str; 4] = ["only_me", "my_things", "others_see_it", "public"];
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "only_me" => Some(Self::OnlyMe),
+            "my_things" => Some(Self::MyThings),
+            "others_see_it" => Some(Self::OthersSeeIt),
+            "public" => Some(Self::Public),
+            _ => None,
+        }
+    }
+    /// The words the owner reads.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::OnlyMe => "only me",
+            Self::MyThings => "my things",
+            Self::OthersSeeIt => "others see it",
+            Self::Public => "public",
+        }
+    }
+}
+/// Whether an action can be undone (GLOSSARY "Reversibility").
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Reversibility {
+    CanBeUndone,
+    CanBeCompensated,
+    CannotBeUndone,
+}
+impl Reversibility {
+    /// The manifest's names, in order.
+    pub const NAMES: [&'static str; 3] =
+        ["can_be_undone", "can_be_compensated", "cannot_be_undone"];
+    pub fn parse(name: &str) -> Option<Self> {
+        match name {
+            "can_be_undone" => Some(Self::CanBeUndone),
+            "can_be_compensated" => Some(Self::CanBeCompensated),
+            "cannot_be_undone" => Some(Self::CannotBeUndone),
+            _ => None,
+        }
+    }
+    /// The words the owner reads.
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::CanBeUndone => "can be undone",
+            Self::CanBeCompensated => "can be compensated",
+            Self::CannotBeUndone => "cannot be undone",
+        }
+    }
+}
+
 /// What a plugin is asked to do in a run. An `initialize` without one is a connector's.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -152,6 +222,52 @@ pub enum Role {
     Connector,
     Extractor,
     AgentToolAdapter,
+    ActionProvider,
+}
+/// `initialize` for the action provider role. The provider holds no run binding: each action
+/// message carries what it needs.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ActionInitializeParams {
+    pub protocol: String,
+    pub manifest_id: String,
+    pub role: Role,
+}
+/// The params of `action.execute`, `action.lookup` and `action.undo`. `key` is the run's random
+/// id: the provider derives the outside system's own id from it, so a repeated execute can find
+/// what the first one did. `fields` holds only the content written for the outside system.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ActionCall {
+    pub action: String,
+    pub key: String,
+    #[serde(default)]
+    pub fields: BTreeMap<String, String>,
+}
+/// The `result` of an action message: whether the run's thing exists in the outside system, and
+/// the reference to it the owner reads.
+#[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+pub struct ActionResult {
+    pub found: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identifier: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub url: Option<String>,
+}
+/// One action an action provider declares: its name and what it risks (decisions/levels.md §4).
+/// `reach` and `reversibility` are read as text so a missing or unknown one is refused naming it.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ActionDeclaration {
+    pub name: String,
+    #[serde(default)]
+    pub reach: Option<String>,
+    #[serde(default)]
+    pub reversibility: Option<String>,
+}
+/// An action checked: its name with its reach and reversibility.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct DeclaredAction {
+    pub name: String,
+    pub reach: Reach,
+    pub reversibility: Reversibility,
 }
 /// `initialize` for the agent tool adapter role. The adapter holds no run binding: it reads
 /// what each `judgment.request` carries and nothing else.
@@ -453,6 +569,10 @@ pub struct Manifest {
     /// would read the same data into another scope. `source add` refuses a second one.
     #[serde(default)]
     pub single_source: bool,
+    /// On an action provider: the actions it declares, each with its reach and reversibility
+    /// (`[[action]]`). Any other plugin that declares one is refused.
+    #[serde(default, rename = "action")]
+    pub actions: Vec<ActionDeclaration>,
 }
 /// One option a connector's sources take.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -572,6 +692,84 @@ impl Manifest {
             );
         }
         Ok(())
+    }
+
+    /// Checks an action provider's declaration and returns its actions. A provider is that kind
+    /// and no other, declares at least one action with its reach and reversibility, lists the
+    /// same names in `permissions.actions`, and holds no `submit` permission: it never reads
+    /// evidence, so untrusted content never reaches a plugin that can write (ADR 0015).
+    pub fn check_action_provider(&self) -> Result<Vec<DeclaredAction>> {
+        let id = &self.id;
+        if let Some(kind) = self.kinds.iter().find(|k| *k != ACTION_PROVIDER_KIND) {
+            anyhow::bail!(
+                "plugin {id} is also a {kind}: an action provider is that kind and no other"
+            );
+        }
+        anyhow::ensure!(
+            self.kinds.iter().any(|k| k == ACTION_PROVIDER_KIND),
+            "plugin {id} does not declare the kind {ACTION_PROVIDER_KIND}"
+        );
+        anyhow::ensure!(
+            self.permissions.submit.is_empty(),
+            "plugin {id} is an action provider and holds the `submit` permission: it declares actions or reads evidence, never both"
+        );
+        anyhow::ensure!(!self.actions.is_empty(), "plugin {id} declares no action");
+        let mut declared = Vec::new();
+        for action in &self.actions {
+            let name = &action.name;
+            let reach = Self::risk(id, name, "reach", action.reach.as_deref(), &Reach::NAMES)?;
+            let reversibility = Self::risk(
+                id,
+                name,
+                "reversibility",
+                action.reversibility.as_deref(),
+                &Reversibility::NAMES,
+            )?;
+            anyhow::ensure!(
+                !declared.iter().any(|d: &DeclaredAction| &d.name == name),
+                "plugin {id} declares the action {name} twice"
+            );
+            declared.push(DeclaredAction {
+                name: name.clone(),
+                reach: Reach::parse(reach).context("reach was checked")?,
+                reversibility: Reversibility::parse(reversibility)
+                    .context("reversibility was checked")?,
+            });
+        }
+        let mut names: Vec<_> = declared.iter().map(|d| d.name.as_str()).collect();
+        let mut granted: Vec<_> = self
+            .permissions
+            .actions
+            .iter()
+            .map(String::as_str)
+            .collect();
+        names.sort_unstable();
+        granted.sort_unstable();
+        anyhow::ensure!(
+            names == granted,
+            "plugin {id} declares the actions {} but lists {} in `permissions.actions`: they must be the same",
+            names.join(", "),
+            granted.join(", ")
+        );
+        Ok(declared)
+    }
+    /// One of an action's risks: present and one of the `known` names.
+    fn risk<'a>(
+        id: &str,
+        action: &str,
+        field: &str,
+        value: Option<&'a str>,
+        known: &[&str],
+    ) -> Result<&'a str> {
+        let value = value.with_context(|| {
+            format!("plugin {id} declares the action {action} with no `{field}`")
+        })?;
+        anyhow::ensure!(
+            known.contains(&value),
+            "plugin {id} declares the action {action} with the `{field}` {value:?}, which is none of {}",
+            known.join(", ")
+        );
+        Ok(value)
     }
 
     pub fn parse(text: &str) -> Result<Self> {
