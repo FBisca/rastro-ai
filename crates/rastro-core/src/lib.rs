@@ -506,6 +506,11 @@ pub trait Storage {
     fn record_action_failure(&mut self, _run: &str, _failure: &actions::RunFailure) -> Result<()> {
         anyhow::bail!("storage does not support action runs")
     }
+    /// Records that a pending Act's re-check at grace end failed, with its reason, which makes the
+    /// run `returned`. A run that already holds a result keeps reading `done`, and nothing is added.
+    fn record_action_return(&mut self, _run: &str, _returned: &actions::RunReturn) -> Result<()> {
+        anyhow::bail!("storage does not support action runs")
+    }
 }
 
 pub struct Rastro<S> {

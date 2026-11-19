@@ -51,7 +51,7 @@ fn stored_evidence_rejects_updates_and_deletes() {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 24);
+        assert_eq!(version, 25);
     }
 }
 
@@ -94,7 +94,7 @@ fn migrations_apply_once_in_timestamp_order_and_unknown_ones_are_refused() {
         .unwrap();
     connection.pragma_update(None, "user_version", 1).unwrap();
     SqliteStorage::open(&legacy).unwrap();
-    assert_eq!(names(&connection).len(), 24);
+    assert_eq!(names(&connection).len(), 25);
 }
 
 /// spec: Every migration applies once in timestamp order
@@ -250,7 +250,7 @@ fn recorded_action_proposals_are_never_rewritten() {
 
 /// An action run and the issue it created are never revised: an update, a delete, and a replace by
 /// the same id or the same sequence number are refused, a run has one proposal, one accept and
-/// one issue id, and a run holds at most one result.
+/// one issue id, and a run holds at most one result and at most one return.
 // spec: Accepting a proposal runs the action once
 #[test]
 fn recorded_action_runs_and_their_results_are_never_rewritten() {
@@ -308,6 +308,29 @@ fn recorded_action_runs_and_their_results_are_never_rewritten() {
         .query_row("SELECT identifier FROM action_result", [], |row| row.get(0))
         .unwrap();
     assert_eq!(identifier, "ENG-1");
+
+    let returned = |verb: &str, seq: &str, reason: &str| {
+        db.execute(
+            &format!(
+                "{verb} INTO action_return (append_seq, run_id, reason, returned_at)
+                 VALUES ({seq}, 'r_1', '{reason}', '2026-11-19T09:00:01.000Z')"
+            ),
+            [],
+        )
+    };
+    returned("INSERT", "NULL", "the rule is no longer in config.toml").unwrap();
+    assert!(returned("INSERT", "NULL", "again").is_err());
+    assert!(returned("INSERT OR REPLACE", "NULL", "again").is_err());
+    assert!(returned("INSERT OR REPLACE", "1", "again").is_err());
+    assert!(
+        db.execute("UPDATE action_return SET reason = 'rewritten'", [])
+            .is_err()
+    );
+    assert!(db.execute("DELETE FROM action_return", []).is_err());
+    let reason: String = db
+        .query_row("SELECT reason FROM action_return", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(reason, "the rule is no longer in config.toml");
 }
 
 /// The Act-run migration rebuilds the run table with foreign keys off: every accepted run keeps

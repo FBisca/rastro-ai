@@ -15,7 +15,7 @@ mod undo;
 mod why;
 pub use rastro_plugin_sdk::{Reach, Reversibility};
 pub use runs::{
-    MAX_ATTEMPTS, NewAct, NewRun, Run, RunFailure, RunLevel, RunResult, RunStatus, Undo,
+    MAX_ATTEMPTS, NewAct, NewRun, Run, RunFailure, RunLevel, RunResult, RunReturn, RunStatus, Undo,
 };
 pub(crate) use runs::{act_run_id, random_issue_id, run_id};
 pub use why::{Accept, Cell, RunWhy};

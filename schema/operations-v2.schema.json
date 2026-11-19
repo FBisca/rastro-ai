@@ -2995,6 +2995,11 @@
           "type": "string"
         },
         {
+          "const": "returned",
+          "description": "The re-check at grace end failed: nothing was sent, and the proposal waits in the queue.",
+          "type": "string"
+        },
+        {
           "const": "done",
           "description": "The provider created the issue, and the run holds its identifier and URL.",
           "type": "string"
