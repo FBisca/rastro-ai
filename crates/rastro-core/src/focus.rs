@@ -185,7 +185,7 @@ pub struct Gap {
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[schemars(rename = "FocusReport")]
 pub struct Report {
-    /// The oldest read time any source's items rest on; `now` when no source was read.
+    /// The oldest read time the report's items rest on; `now` when no item is shown.
     pub as_of: DateTime<Utc>,
     /// The one recommended focus; null when nothing needs the owner.
     pub focus: Option<Item>,

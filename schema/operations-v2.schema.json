@@ -4347,7 +4347,7 @@
               "description": "The focus report.",
               "properties": {
                 "as_of": {
-                  "description": "The oldest read time any source's items rest on; `now` when no source was read.",
+                  "description": "The oldest read time the report's items rest on; `now` when no item is shown.",
                   "format": "date-time",
                   "type": "string"
                 },
@@ -6537,7 +6537,7 @@
         "description": "The focus report.",
         "properties": {
           "as_of": {
-            "description": "The oldest read time any source's items rest on; `now` when no source was read.",
+            "description": "The oldest read time the report's items rest on; `now` when no item is shown.",
             "format": "date-time",
             "type": "string"
           },
