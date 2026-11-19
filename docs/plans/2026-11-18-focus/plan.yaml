@@ -36,6 +36,9 @@ requirements:
         - id: S7
           when: a source returned empty
           then: the report shows no gap for that source
+        - id: S12
+          when: a source was read but none of its items appear in the report
+          then: the report's as-of rests only on the reads its items rest on, and is now when no item rests on any read
     - title: Focus shows the queue as a count
       shall: Focus SHALL report waiting proposals and questions as a count only, never their content.
       scenarios:
@@ -104,10 +107,15 @@ tickets:
     paths: [herdr/agent-workbench/model.js, herdr/agent-workbench/views/focus.js, herdr/agent-workbench/test/]
     owner: owner
     repo: ../agent-runtime
+  - id: T8
+    delivers: As-of truthfulness — the report's as-of is the oldest read its items rest on; a stale source contributing no items no longer backdates the stamp, and an empty report stands as of now.
+    satisfies: [S12]
+    paths: [crates/rastro-core/src/focus.rs, crates/rastro-cli/tests/focus.rs]
+    size: regular
+    difficulty: simple
 approval:
   by: felippe.bisca@gmail.com
-  at: '2026-11-19T14:16:41.746829+00:00'
-  base: a9a653889b66f51fec4af9f94482ac9ae203aeec
-  digest: e0d127d0d4ac33e103668f1dfa91e6437ad3d508d1e62a60e038659c0940d9fe
-  reason: 'Owner: improve focus card text hierarchy (D22); T7 added, owner-owned in
-    agent-runtime'
+  at: '2026-11-19T15:27:55.158753+00:00'
+  base: 69c18c9f1085a2ba7ba303fb516b6e72b3d26503
+  digest: e8ee9ac7e114893b4e4c41f58fac4075ca1358a8ae789b81f7aa5c8bd57b7ec6
+  reason: 'Owner: fix the as-of stamp (D23, S12, T8); Giuseppe linked'
