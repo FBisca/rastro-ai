@@ -11,10 +11,10 @@ const ISSUE_CREATE: &str = "mutation IssueCreate($input: IssueCreateInput!) { \
     issueCreate(input: $input) { success issue { id identifier url } } }";
 
 /// The one document an issue lookup sends: the issue by the id it was created under.
-/// It also reads `trashed`: Linear keeps a deleted issue in its trash, archived, and still answers
-/// a lookup of it by id.
+/// It also reads `trashed`: Linear keeps a deleted issue in its trash, and still answers a lookup of
+/// it by id.
 const ISSUE_LOOKUP: &str =
-    "query IssueLookup($id: String!) { issue(id: $id) { id identifier url trashed archivedAt } }";
+    "query IssueLookup($id: String!) { issue(id: $id) { id identifier url trashed } }";
 
 /// The one document an issue delete sends: Linear moves the issue to its trash.
 const ISSUE_DELETE: &str =
@@ -178,7 +178,8 @@ fn confirmed(issue: &Value) -> Result<Created> {
         (Some(identifier), Some(url)) => Ok(Created {
             identifier,
             url,
-            trashed: issue["trashed"] == true || !issue["archivedAt"].is_null(),
+            // Only `trashed` says deleted: Linear archives a closed issue too, and it is still there.
+            trashed: issue["trashed"] == true,
         }),
         _ => bail!("Linear confirmed the issue without its identifier and url"),
     }

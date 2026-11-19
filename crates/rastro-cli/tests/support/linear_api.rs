@@ -271,6 +271,14 @@ impl Fixture {
             .collect()
     }
 
+    /// Archives every issue the fake holds without trashing it, as Linear does to a closed issue
+    /// after a while or when a user archives one by hand: it is still there to delete.
+    pub fn archive_issues(&self) {
+        for issue in &mut self.world.lock().unwrap().issues {
+            issue["archivedAt"] = "2026-11-18T10:00:00.000Z".into();
+        }
+    }
+
     /// The issue deletes received so far.
     pub fn deletes(&self) -> Vec<Req> {
         (self.requests().into_iter())

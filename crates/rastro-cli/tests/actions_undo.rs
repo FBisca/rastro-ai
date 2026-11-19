@@ -198,3 +198,26 @@ fn undoing_again_after_a_lost_delete_response_sends_no_second_delete_and_records
     assert_eq!(env.run()["status"], "undone");
     assert_eq!(env.undo_intents(), 1);
 }
+
+// spec: Undo is safe to repeat
+#[test]
+fn undoing_a_run_whose_issue_is_archived_but_not_trashed_still_sends_the_delete() {
+    let env = Env::new();
+    let run = env.done_run();
+    env.linear.archive_issues();
+
+    let undone = env.ok_json(&["actions", "undo", &run]);
+
+    assert_eq!(
+        env.linear.deletes().len(),
+        1,
+        "an archived issue is not deleted"
+    );
+    assert_eq!(
+        env.linear.issues()[0]["trashed"],
+        true,
+        "the issue is in the trash"
+    );
+    assert_eq!(undone["status"], "undone");
+    assert_eq!(env.undo_intents(), 1);
+}
