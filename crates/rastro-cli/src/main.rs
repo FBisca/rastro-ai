@@ -989,10 +989,42 @@ fn actions_text(runs: &rastro_core::actions::Runs) -> String {
     if runs.runs.is_empty() {
         return "No action has run".into();
     }
-    (runs.runs.iter())
+    let mut text = (runs.runs.iter())
         .map(action_run_text)
         .collect::<Vec<_>>()
-        .join("\n")
+        .join("\n");
+    if let Some(why) = &runs.why {
+        text += &action_why_text(why);
+    }
+    text
+}
+
+/// Why one run happened, under its line: the why, each cited claim, the accept and the risk.
+fn action_why_text(why: &rastro_core::actions::RunWhy) -> String {
+    let mut text = format!("\nWhy: {}", display_safe(&why.proposal.why));
+    for claim in &why.cited {
+        text += &format!(
+            "\nCites: {} ({} support{})",
+            display_safe(&claim.claim.claim.id),
+            claim.claim.support_count,
+            if claim.claim.support_count == 1 {
+                ""
+            } else {
+                "s"
+            }
+        );
+    }
+    text += &format!(
+        "\nAccepted: intent {}, {}\nLevel: {} | Cell: {} x {} | Reach: {} | Reversibility: {}",
+        why.accept.intent,
+        why.accept.at.format("%Y-%m-%d %H:%M"),
+        why.level,
+        display_safe(&why.cell.action),
+        display_safe(&why.cell.team),
+        why.reach,
+        why.reversibility
+    );
+    text
 }
 
 /// The result of an operation, its human form, and whether it succeeded.
@@ -1076,6 +1108,7 @@ fn human(response: &Response) -> String {
         Response::Commitments(r) => commitments_text(r),
         Response::Queue(r) => queue_text(r),
         Response::Actions(r) => actions_text(r),
+        Response::ActionsShow(r) => actions_text(r),
         Response::ActionsPropose(r) => actions_propose_text(r),
         Response::Focus(r) => focus_text(r),
         Response::QueueOutcomes(r) => outcomes_text(r),

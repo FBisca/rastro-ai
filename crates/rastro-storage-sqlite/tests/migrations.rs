@@ -51,7 +51,7 @@ fn stored_evidence_rejects_updates_and_deletes() {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 21);
+        assert_eq!(version, 22);
     }
 }
 
@@ -94,7 +94,7 @@ fn migrations_apply_once_in_timestamp_order_and_unknown_ones_are_refused() {
         .unwrap();
     connection.pragma_update(None, "user_version", 1).unwrap();
     SqliteStorage::open(&legacy).unwrap();
-    assert_eq!(names(&connection).len(), 21);
+    assert_eq!(names(&connection).len(), 22);
 }
 
 /// spec: Every migration applies once in timestamp order
