@@ -189,6 +189,10 @@ pub struct Item {
     /// The proposed action; present exactly when `kind` is `action_proposal`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action: Option<crate::actions::Proposal>,
+    /// The identifiers of the open observed Linear issues whose title is exactly an action
+    /// proposal's: a warning that never takes the item out of the queue.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub possible_duplicates: Vec<String>,
     /// What Rastro already knows about the parties the owner mapped: their visible claims, each
     /// once. Context only — an item with claims beside it stays in the queue.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -362,6 +366,7 @@ impl Queue {
                     question: None,
                     correction: None,
                     action: None,
+                    possible_duplicates: Vec::new(),
                     context: Vec::new(),
                     earlier_retracted: false,
                     run: (origin.source.results_from.as_ref()).map(|results| results.run.clone()),
@@ -398,6 +403,7 @@ impl Queue {
                 question: Some(question),
                 correction: None,
                 action: None,
+                possible_duplicates: Vec::new(),
                 context: Vec::new(),
                 earlier_retracted: false,
                 run: None,
@@ -429,6 +435,17 @@ impl Queue {
             gaps,
             already_known,
         }
+    }
+
+    /// Names, on each action proposal, the open observed Linear issues whose title equals its
+    /// own: read at the time of the queue, so an issue closed since is no longer named.
+    fn attach_duplicates(&mut self, view: &dyn Snapshot) -> Result<()> {
+        for item in &mut self.items {
+            if let Some(action) = &item.action {
+                item.possible_duplicates = crate::actions::duplicates(view, &item.source, action)?;
+            }
+        }
+        Ok(())
     }
 
     /// Reads each proposal's mapped parties' visible claims as its context, from the same
@@ -822,6 +839,7 @@ fn action_items(
                 question: None,
                 correction: None,
                 action: Some(filed.proposal),
+                possible_duplicates: Vec::new(),
                 context: Vec::new(),
                 earlier_retracted: false,
                 run: None,
@@ -846,6 +864,7 @@ fn correction_items(
             proposal: None,
             question: None,
             action: None,
+            possible_duplicates: Vec::new(),
             context: Vec::new(),
             earlier_retracted: false,
             run: None,
@@ -964,6 +983,7 @@ pub(crate) fn read(
     let actions = view.action_proposals(scopes)?;
     let mut queue = Queue::with_actions(origins, questions, corrections, actions, &answered);
     queue.attach_context(view, scopes)?;
+    queue.attach_duplicates(view)?;
     Ok(queue)
 }
 

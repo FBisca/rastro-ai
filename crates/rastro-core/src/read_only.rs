@@ -207,6 +207,16 @@ pub trait Snapshot {
     ) -> Result<Option<crate::focus::LinearRead>> {
         Ok(None)
     }
+    /// Every issue the Linear source `source` observed, in the scopes given (empty: every
+    /// scope), as the latest evidence of each field says it, ordered by location. An issue whose
+    /// evidence lacks a title or an identifier is left out.
+    fn linear_issues(
+        &self,
+        _source: &str,
+        _scopes: &[Scope],
+    ) -> Result<Vec<crate::actions::ObservedIssue>> {
+        Ok(Vec::new())
+    }
     fn queue_sources(&self, _scopes: &[Scope]) -> Result<Vec<crate::queue::Origin>> {
         anyhow::bail!("storage does not support the queue")
     }

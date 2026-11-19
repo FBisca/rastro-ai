@@ -795,6 +795,15 @@ fn queue_text(queue: &rastro_core::queue::Queue) -> String {
                     display_safe(&item.source.scope)
                 ));
                 lines.extend(action_proposal_lines(action));
+                if !item.possible_duplicates.is_empty() {
+                    lines.push(format!(
+                        "  Warning: possible duplicate of {}",
+                        (item.possible_duplicates.iter())
+                            .map(|id| display_safe(id))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    ));
+                }
             }
             ItemKind::Proposal => {
                 let h = item.proposal.as_ref().expect("a proposal item carries one");

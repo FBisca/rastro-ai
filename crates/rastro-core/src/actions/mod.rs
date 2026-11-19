@@ -9,7 +9,7 @@
 //! cited claims and the id stay in Rastro: [`IssueFields`] is the only part written for the
 //! outside system.
 use crate::queue::{self, Source as QueueSource, SourceKind};
-use crate::{Config, Rastro, Source, Storage, host};
+use crate::{Config, Rastro, Scope, Snapshot, Source, Storage, host, knowledge::WhyOptions};
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
@@ -91,6 +91,41 @@ pub struct Filed {
     /// The plugin id of the provider that declares the action.
     pub provider: String,
     pub proposed_at: DateTime<Utc>,
+}
+
+/// An issue a Linear source observed: what its evidence says of its identifier, title and state
+/// type (`backlog`, `unstarted`, `started`, `completed`, `canceled`, …).
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct ObservedIssue {
+    pub identifier: String,
+    pub title: String,
+    pub state: String,
+}
+
+/// Whether an observed issue's state type is one Linear counts as closed: Done or Canceled.
+fn is_closed(state: &str) -> bool {
+    matches!(state, "completed" | "canceled")
+}
+
+/// The identifiers of the open issues `source` observed, visible in its scope, whose title equals
+/// the proposal's exactly, sorted. Empty for any action but `linear.create_issue`.
+pub(crate) fn duplicates(
+    view: &dyn Snapshot,
+    source: &QueueSource,
+    proposal: &Proposal,
+) -> Result<Vec<String>> {
+    if proposal.action != LINEAR_CREATE_ISSUE {
+        return Ok(Vec::new());
+    }
+    let mut identifiers: Vec<String> = (view
+        .linear_issues(&source.name, &[Scope(source.scope.clone())])?)
+    .into_iter()
+    .filter(|issue| issue.title == proposal.fields.title && !is_closed(&issue.state))
+    .map(|issue| issue.identifier)
+    .collect();
+    identifiers.sort();
+    identifiers.dedup();
+    Ok(identifiers)
 }
 
 /// What `actions propose` returns: the proposal as it now waits in the queue.
@@ -186,6 +221,26 @@ fn linear_source(sources: &[Source]) -> Result<QueueSource> {
     }
 }
 
+/// Refuses a citation the source's scope cannot see, naming the claim and the scope. A claim that
+/// scope cannot see would reach a reader of that scope through the proposal, so the proposal is
+/// not recorded.
+fn check_citations(view: &dyn Snapshot, cites: &[String], source: &QueueSource) -> Result<()> {
+    let scope = [Scope(source.scope.clone())];
+    for claim in cites {
+        if view
+            .explain_scoped(claim, &WhyOptions::default(), &scope)?
+            .is_none()
+        {
+            bail!(
+                "the claim {claim} is not visible in the scope {} of the source {} the action writes to: cite only claims that scope can see",
+                source.scope,
+                source.name
+            );
+        }
+    }
+    Ok(())
+}
+
 /// The queue's name for the source an action writes to.
 fn source_of(source: &Source) -> QueueSource {
     QueueSource {
@@ -201,6 +256,8 @@ impl<S: Storage> Rastro<S> {
     pub fn propose_action(&mut self, request: &ProposeRequest) -> Result<Proposed> {
         let offer = host::actions::offer(&self.locations, &request.action)?;
         let filed = plan(request, &offer, &self.config, crate::coverage::now()?)?;
+        self.storage
+            .snapshot(|view| check_citations(view, &filed.proposal.cites, &filed.source))?;
         self.storage.record_action_proposal(&filed)?;
         Ok(filed)
     }
