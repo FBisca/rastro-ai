@@ -66,6 +66,8 @@ pub type QueueResult = rastro_core::queue::Queue;
 pub type FocusResult = rastro_core::focus::Report;
 /// Every outcome of the queue, newest first, with what was shown and what was acted on.
 pub type OutcomesResult = rastro_core::queue::Outcomes;
+/// The runs `actions` lists, oldest first.
+pub type ActionsResult = rastro_core::actions::Runs;
 /// The action proposal `actions propose` recorded, as it now waits in the queue.
 pub type ActionsProposeResult = rastro_core::actions::Proposed;
 /// What a queue answer recorded: the item it named and the owner intents it accepted.
@@ -76,12 +78,16 @@ pub struct QueueAnswerResult {
     pub item: Option<String>,
     /// The owner intents the answer accepted, in acceptance order.
     pub intents: Vec<IntentView>,
+    /// The run an accepted action proposal started, as it stands once the provider answered.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run: Option<rastro_core::actions::Run>,
 }
 impl QueueAnswerResult {
     pub(crate) fn of(answered: rastro_core::queue::Answered) -> Self {
         Self {
             item: answered.item,
             intents: views(&answered.intents),
+            run: answered.run,
         }
     }
 }
@@ -352,22 +358,27 @@ mod tests {
             Response::QueueAccept(QueueAnswerResult {
                 item: None,
                 intents: vec![],
+                run: None,
             }),
             Response::QueueEdit(QueueAnswerResult {
                 item: None,
                 intents: vec![],
+                run: None,
             }),
             Response::QueueReject(QueueAnswerResult {
                 item: None,
                 intents: vec![],
+                run: None,
             }),
             Response::QueueAnswer(QueueAnswerResult {
                 item: None,
                 intents: vec![],
+                run: None,
             }),
             Response::QueueMissed(QueueAnswerResult {
                 item: None,
                 intents: vec![],
+                run: None,
             }),
             Response::QueueOutcomes(OutcomesResult::empty()),
             Response::ClaimConfirm(ClaimWriteResult {
@@ -419,6 +430,7 @@ mod tests {
                 provider: "p".into(),
                 proposed_at: "2026-11-19T09:00:00Z".parse().unwrap(),
             }),
+            Response::Actions(rastro_core::actions::Runs { runs: vec![] }),
         ];
         let arguments = |name: &str| match name {
             "source.add" => {

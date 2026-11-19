@@ -8,7 +8,7 @@ The queue is a read (`rastro queue`, and the MCP tool `queue`) and five owner wr
 
 An item carries a **content-addressed id**, the hash of its canonical encoding, so the same proposal re-imported or replayed keeps its id and an item whose content changed is a different item. An answer names an item id; an id the queue no longer holds is refused, naming it, and nothing is recorded.
 
-What the owner answers becomes a durable owner intent (`../adr/0010-identity-and-owner-intents.md`): accepting a proposal mints one `observed` claim whose `std:` predicates carry the party names as literals (`../decisions/vocabulary.md` §32) and whose only justification is the intent. An accepted claim is visible only in scopes that can see the item's source, so a personal commitment never reaches a work-scoped agent.
+What the owner answers becomes a durable owner intent (`../adr/0010-identity-and-owner-intents.md`): accepting a commitment proposal mints one `observed` claim whose `std:` predicates carry the party names as literals (`../decisions/vocabulary.md` §32) and whose only justification is the intent. An accepted claim is visible only in scopes that can see the item's source, so a personal commitment never reaches a work-scoped agent. An action proposal is a third kind of item and mints no claim: accepting it records the intent and starts one action run in the same transaction, which creates the issue and reads `done` in `rastro actions`.
 
 Outcomes are what happened to an item — accepted, accepted with edits, rejected, answered, ignored — derived from the intents and from the shown reports the terminal read records (`../decisions/learning.md` §2–3). `ignored` is not an intent: it is an item the owner was shown and never answered, and that left the queue. The queue never shows an item whose statement an observed claim already holds (`../decisions/knowledge.md` §70 keeps hypotheses outside the projection; this reads them beside it).
 
@@ -76,7 +76,7 @@ Each answer SHALL be recorded as exactly one owner intent, and an answer naming 
 - THEN the answer is refused with a reason naming the item, nothing is recorded, and the queue reads the same before and after
 
 ### Requirement: An accepted proposal becomes an observed claim
-Accepting a proposal SHALL record an owner intent and mint one `observed` claim carrying the item's standard terms, justified by that intent alone and citing no evidence span.
+Accepting a commitment proposal SHALL record an owner intent and mint one `observed` claim carrying the item's standard terms, justified by that intent alone and citing no evidence span.
 
 #### Scenario: accepting unchanged
 - WHEN the owner accepts a proposal unchanged

@@ -181,6 +181,70 @@
       ],
       "type": "object"
     },
+    "ActionRun": {
+      "additionalProperties": false,
+      "description": "An action run, with its status and, once done, the issue it created.",
+      "properties": {
+        "accept_intent": {
+          "description": "The owner intent that accepted it.",
+          "type": "string"
+        },
+        "accepted_at": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "action": {
+          "type": "string"
+        },
+        "fields": {
+          "$ref": "#/$defs/ActionIssueFields",
+          "description": "The fields the owner accepted: the content written for the outside system."
+        },
+        "id": {
+          "type": "string"
+        },
+        "identifier": {
+          "description": "The created issue's identifier; present once the run is done.",
+          "type": "string"
+        },
+        "issue_id": {
+          "description": "The random id the issue is created under. UUID v4.",
+          "type": "string"
+        },
+        "proposal": {
+          "description": "The queue item the owner accepted.",
+          "type": "string"
+        },
+        "provider": {
+          "description": "The plugin id of the provider that executes it.",
+          "type": "string"
+        },
+        "source": {
+          "$ref": "#/$defs/QueueSource",
+          "description": "The source the run writes to, with that source's scope."
+        },
+        "status": {
+          "$ref": "#/$defs/RunStatus"
+        },
+        "url": {
+          "description": "The created issue's URL; present once the run is done.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "proposal",
+        "accept_intent",
+        "action",
+        "fields",
+        "source",
+        "provider",
+        "issue_id",
+        "accepted_at",
+        "status"
+      ],
+      "type": "object"
+    },
     "Candidate": {
       "additionalProperties": false,
       "description": "Two accounts that may be one human, and why.",
@@ -2638,6 +2702,21 @@
       ],
       "type": "string"
     },
+    "RunStatus": {
+      "description": "Where a run stands, derived from what is recorded for it.",
+      "oneOf": [
+        {
+          "const": "accepted",
+          "description": "The accept is recorded and the issue has not been created.",
+          "type": "string"
+        },
+        {
+          "const": "done",
+          "description": "The provider created the issue, and the run holds its identifier and URL.",
+          "type": "string"
+        }
+      ]
+    },
     "Scope": {
       "minLength": 1,
       "type": "string"
@@ -3908,6 +3987,17 @@
                 "item": {
                   "description": "The item's id as `queue` listed it; absent for a missed report about nothing queued.",
                   "type": "string"
+                },
+                "run": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ActionRun"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The run an accepted action proposal started, as it stands once the provider answered."
                 }
               },
               "required": [
@@ -3937,6 +4027,17 @@
                 "item": {
                   "description": "The item's id as `queue` listed it; absent for a missed report about nothing queued.",
                   "type": "string"
+                },
+                "run": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ActionRun"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The run an accepted action proposal started, as it stands once the provider answered."
                 }
               },
               "required": [
@@ -3966,6 +4067,17 @@
                 "item": {
                   "description": "The item's id as `queue` listed it; absent for a missed report about nothing queued.",
                   "type": "string"
+                },
+                "run": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ActionRun"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The run an accepted action proposal started, as it stands once the provider answered."
                 }
               },
               "required": [
@@ -3995,6 +4107,17 @@
                 "item": {
                   "description": "The item's id as `queue` listed it; absent for a missed report about nothing queued.",
                   "type": "string"
+                },
+                "run": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ActionRun"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The run an accepted action proposal started, as it stands once the provider answered."
                 }
               },
               "required": [
@@ -4024,6 +4147,17 @@
                 "item": {
                   "description": "The item's id as `queue` listed it; absent for a missed report about nothing queued.",
                   "type": "string"
+                },
+                "run": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ActionRun"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The run an accepted action proposal started, as it stands once the provider answered."
                 }
               },
               "required": [
@@ -4307,6 +4441,30 @@
               "type": "object"
             }
           }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "actions"
+            },
+            "result": {
+              "additionalProperties": false,
+              "description": "What `actions` lists: the runs the reader sees, oldest first, each with its status.",
+              "properties": {
+                "runs": {
+                  "items": {
+                    "$ref": "#/$defs/ActionRun"
+                  },
+                  "type": "array"
+                }
+              },
+              "required": [
+                "runs"
+              ],
+              "title": "ActionRuns",
+              "type": "object"
+            }
+          }
         }
       ],
       "required": [
@@ -4356,7 +4514,8 @@
         "claim.edit",
         "claim.undo",
         "focus",
-        "actions.propose"
+        "actions.propose",
+        "actions"
       ]
     },
     "result": {
@@ -5792,6 +5951,17 @@
           "item": {
             "description": "The item's id as `queue` listed it; absent for a missed report about nothing queued.",
             "type": "string"
+          },
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ActionRun"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The run an accepted action proposal started, as it stands once the provider answered."
           }
         },
         "required": [
@@ -5852,6 +6022,17 @@
           "item": {
             "description": "The item's id as `queue` listed it; absent for a missed report about nothing queued.",
             "type": "string"
+          },
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ActionRun"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The run an accepted action proposal started, as it stands once the provider answered."
           }
         },
         "required": [
@@ -5901,6 +6082,17 @@
           "item": {
             "description": "The item's id as `queue` listed it; absent for a missed report about nothing queued.",
             "type": "string"
+          },
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ActionRun"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The run an accepted action proposal started, as it stands once the provider answered."
           }
         },
         "required": [
@@ -5958,6 +6150,17 @@
           "item": {
             "description": "The item's id as `queue` listed it; absent for a missed report about nothing queued.",
             "type": "string"
+          },
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ActionRun"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The run an accepted action proposal started, as it stands once the provider answered."
           }
         },
         "required": [
@@ -6010,6 +6213,17 @@
           "item": {
             "description": "The item's id as `queue` listed it; absent for a missed report about nothing queued.",
             "type": "string"
+          },
+          "run": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ActionRun"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The run an accepted action proposal started, as it stands once the provider answered."
           }
         },
         "required": [
@@ -6443,6 +6657,36 @@
           "proposed_at"
         ],
         "title": "FiledActionProposal",
+        "type": "object"
+      },
+      "surfaces": [
+        "cli"
+      ]
+    },
+    {
+      "description": "List the actions Rastro ran in outside systems, oldest first: each run the owner's accept started, with the action and its fields, the source it writes to, and its status: `accepted` while its issue is not created, `done` with the issue's identifier and URL once it is.",
+      "input": {
+        "additionalProperties": false,
+        "description": "List the actions Rastro ran in outside systems, oldest first: each run the owner's accept started, with the action and its fields, the source it writes to, and its status: `accepted` while its issue is not created, `done` with the issue's identifier and URL once it is.",
+        "title": "ActionsRequest",
+        "type": "object"
+      },
+      "name": "actions",
+      "result": {
+        "additionalProperties": false,
+        "description": "What `actions` lists: the runs the reader sees, oldest first, each with its status.",
+        "properties": {
+          "runs": {
+            "items": {
+              "$ref": "#/$defs/ActionRun"
+            },
+            "type": "array"
+          }
+        },
+        "required": [
+          "runs"
+        ],
+        "title": "ActionRuns",
         "type": "object"
       },
       "surfaces": [

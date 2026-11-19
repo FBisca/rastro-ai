@@ -2,9 +2,10 @@
 //! bound to the source it writes to and that source's scope.
 use crate::{View, parse_time, scope_parameter, stamp};
 use anyhow::Result;
+use chrono::{DateTime, Utc};
 use rastro_core::{
     Scope,
-    actions::{Filed, IssueFields, ObservedIssue, Proposal},
+    actions::{Filed, IssueFields, NewRun, ObservedIssue, Proposal, Run, RunResult, RunStatus},
     queue::{Source, SourceKind},
 };
 use rusqlite::{Connection, params};
@@ -118,4 +119,135 @@ pub(crate) fn linear_issues(
         .into_values()
         .filter(|issue| !issue.identifier.is_empty() && !issue.title.is_empty())
         .collect())
+}
+
+/// Records the run an accept starts, in the accept's own transaction. Returns it as it reads
+/// then: `accepted`, with no issue.
+pub(crate) fn record_run(
+    connection: &Connection,
+    run: &NewRun,
+    accepted_at: DateTime<Utc>,
+) -> Result<Run> {
+    connection.execute(
+        "INSERT INTO action_run
+             (id, proposal, accept_intent, action, provider, fields, source, scope, issue_id,
+              accepted_at)
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+        params![
+            run.id,
+            run.proposal,
+            run.accept_intent,
+            run.action,
+            run.provider,
+            serde_json::to_string(&run.fields)?,
+            run.source.name,
+            run.source.scope,
+            run.issue_id,
+            stamp(accepted_at),
+        ],
+    )?;
+    Ok(Run {
+        id: run.id.clone(),
+        proposal: run.proposal.clone(),
+        accept_intent: run.accept_intent.clone(),
+        action: run.action.clone(),
+        fields: run.fields.clone(),
+        source: run.source.clone(),
+        provider: run.provider.clone(),
+        issue_id: run.issue_id.clone(),
+        accepted_at,
+        status: RunStatus::Accepted,
+        identifier: None,
+        url: None,
+    })
+}
+
+/// Records the issue a run created. A run that already holds a result keeps it, and nothing is
+/// added: the insert selects no row, so the table's insert-only guard is never reached.
+pub(crate) fn record_result(
+    connection: &mut Connection,
+    run: &str,
+    result: &RunResult,
+) -> Result<()> {
+    connection.execute(
+        "INSERT INTO action_result (run_id, identifier, url, finished_at)
+         SELECT ?1, ?2, ?3, ?4
+         WHERE NOT EXISTS (SELECT 1 FROM action_result WHERE run_id = ?1)",
+        params![
+            run,
+            result.identifier,
+            result.url,
+            stamp(result.finished_at)
+        ],
+    )?;
+    Ok(())
+}
+
+/// Every run whose source is in `scopes` (empty: every scope), oldest first, with the issue it
+/// created when it did.
+pub(crate) fn runs(view: &View, scopes: &[Scope]) -> Result<Vec<Run>> {
+    let mut statement = view.0.prepare(
+        "SELECT r.id, r.proposal, r.accept_intent, r.action, r.provider, r.fields, r.source,
+                r.scope, r.issue_id, r.accepted_at, d.identifier, d.url
+         FROM action_run r LEFT JOIN action_result d ON d.run_id = r.id
+         WHERE ?1 IS NULL OR r.scope IN (SELECT value FROM json_each(?1))
+         ORDER BY r.append_seq",
+    )?;
+    let rows = statement.query_map([scope_parameter(scopes)?], |row| {
+        Ok((
+            [
+                row.get::<_, String>(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+                row.get(6)?,
+                row.get(7)?,
+                row.get(8)?,
+                row.get(9)?,
+            ],
+            row.get::<_, Option<String>>(10)?,
+            row.get::<_, Option<String>>(11)?,
+        ))
+    })?;
+    let mut runs = Vec::new();
+    for row in rows {
+        let (text, identifier, url) = row?;
+        let [
+            id,
+            proposal,
+            accept_intent,
+            action,
+            provider,
+            fields,
+            source,
+            scope,
+            issue_id,
+            accepted_at,
+        ] = text;
+        runs.push(Run {
+            id,
+            proposal,
+            accept_intent,
+            action,
+            fields: serde_json::from_str::<IssueFields>(&fields)?,
+            source: Source {
+                kind: SourceKind::Linear,
+                name: source,
+                scope,
+            },
+            provider,
+            issue_id,
+            accepted_at: parse_time(accepted_at)?,
+            status: if identifier.is_some() {
+                RunStatus::Done
+            } else {
+                RunStatus::Accepted
+            },
+            identifier,
+            url,
+        });
+    }
+    Ok(runs)
 }

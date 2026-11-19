@@ -31,7 +31,7 @@ role = "core"
 | `storage` | `rastro-storage-sqlite` | `core`, `sdk` |
 | `operations` | `rastro-operations` | `core`, `sdk` |
 | `surface` | `rastro-cli` | `core`, `operations`, `storage`, `sdk` |
-| `plugin` | `rastro-connector-*`, `rastro-extractor-*`, `rastro-adapter-claude-code`, `rastro-test-*` | `sdk` |
+| `plugin` | `rastro-connector-*`, `rastro-extractor-*`, `rastro-action-*`, `rastro-adapter-claude-code`, `rastro-test-*` | `sdk` |
 
 An edge the table does not allow is a design change, not a local one: amend the table in the script and here in the same commit, and say why in the pull request. Run the gate from the workspace root, or point it at another workspace with `--root <dir>`, which is how [`scripts/crate-gate.test.sh`](../scripts/crate-gate.test.sh) checks it against the fixture workspaces in `scripts/fixtures/crate-gate/`. The gate needs Cargo and jq, like the affected selector.
 

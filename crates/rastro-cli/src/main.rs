@@ -956,7 +956,43 @@ fn queue_answer_text(result: &rastro_operations::results::QueueAnswerResult) -> 
         lines.push(format!("Item: {item}"));
     }
     lines.push(intents_text(&result.intents, "Nothing recorded"));
+    lines.extend(result.run.iter().map(action_run_text));
     lines.join("\n")
+}
+
+/// One action run: its id, status, the action and where it wrote, and the issue it created.
+fn action_run_text(run: &rastro_core::actions::Run) -> String {
+    let mut line = format!(
+        "Run {} | {} | {} | Source: {} {} | Scope: {} | Title: {} | Team: {} | Assignee: {}",
+        run.id,
+        run.status.as_str(),
+        display_safe(&run.action),
+        queue_source_kind(run.source.kind),
+        display_safe(&run.source.name),
+        display_safe(&run.source.scope),
+        display_safe(&run.fields.title),
+        display_safe(&run.fields.team),
+        display_safe(&run.fields.assignee)
+    );
+    if let (Some(identifier), Some(url)) = (&run.identifier, &run.url) {
+        line += &format!(
+            " | Issue: {} {}",
+            display_safe(identifier),
+            display_safe(url)
+        );
+    }
+    line
+}
+
+/// What `actions` lists: each run, or that none has run.
+fn actions_text(runs: &rastro_core::actions::Runs) -> String {
+    if runs.runs.is_empty() {
+        return "No action has run".into();
+    }
+    (runs.runs.iter())
+        .map(action_run_text)
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The result of an operation, its human form, and whether it succeeded.
@@ -1039,6 +1075,7 @@ fn human(response: &Response) -> String {
         Response::About(r) => about_text(r),
         Response::Commitments(r) => commitments_text(r),
         Response::Queue(r) => queue_text(r),
+        Response::Actions(r) => actions_text(r),
         Response::ActionsPropose(r) => actions_propose_text(r),
         Response::Focus(r) => focus_text(r),
         Response::QueueOutcomes(r) => outcomes_text(r),

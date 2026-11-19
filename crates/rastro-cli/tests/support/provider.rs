@@ -70,3 +70,18 @@ pub fn install(config: &Path, edit: impl FnOnce(&mut toml::Table)) {
 pub fn calls(config: &Path) -> String {
     fs::read_to_string(config.join("plugins").join(ID).join("calls.log")).unwrap_or_default()
 }
+
+/// Installs the real Linear action provider, with its own manifest, under
+/// `<config>/plugins/rastro-action-linear`.
+pub fn install_linear(config: &Path, binary: &Path) {
+    let dir = config.join("plugins").join("rastro-action-linear");
+    fs::create_dir_all(&dir).unwrap();
+    fs::write(
+        dir.join("rastro-plugin.toml"),
+        include_str!("../../../rastro-action-linear/rastro-plugin.toml"),
+    )
+    .unwrap();
+    let command = dir.join("rastro-action-linear");
+    fs::copy(binary, &command).unwrap();
+    fs::set_permissions(&command, fs::Permissions::from_mode(0o755)).unwrap();
+}

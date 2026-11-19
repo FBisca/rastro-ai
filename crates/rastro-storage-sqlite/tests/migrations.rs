@@ -51,7 +51,7 @@ fn stored_evidence_rejects_updates_and_deletes() {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 20);
+        assert_eq!(version, 21);
     }
 }
 
@@ -94,7 +94,7 @@ fn migrations_apply_once_in_timestamp_order_and_unknown_ones_are_refused() {
         .unwrap();
     connection.pragma_update(None, "user_version", 1).unwrap();
     SqliteStorage::open(&legacy).unwrap();
-    assert_eq!(names(&connection).len(), 20);
+    assert_eq!(names(&connection).len(), 21);
 }
 
 /// spec: Every migration applies once in timestamp order
@@ -246,6 +246,68 @@ fn recorded_action_proposals_are_never_rewritten() {
         .collect::<Result<_, _>>()
         .unwrap();
     assert_eq!(rows, ["first"]);
+}
+
+/// An action run and the issue it created are never revised: an update, a delete, and a replace by
+/// the same id or the same sequence number are refused, a run has one proposal, one accept and
+/// one issue id, and a run holds at most one result.
+// spec: Accepting a proposal runs the action once
+#[test]
+fn recorded_action_runs_and_their_results_are_never_rewritten() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("rastro.sqlite3");
+    SqliteStorage::open(&path).unwrap();
+    let db = Connection::open(path).unwrap();
+    // The proposal and the accept intent a run names are not what this checks.
+    db.execute_batch("PRAGMA foreign_keys = OFF").unwrap();
+    let run = |verb: &str, id: &str, seq: &str, proposal: &str, intent: &str, issue: &str| {
+        db.execute(
+            &format!(
+                "{verb} INTO action_run
+                 (append_seq, id, proposal, accept_intent, action, provider, fields, source, scope,
+                  issue_id, accepted_at)
+                 VALUES ({seq}, '{id}', '{proposal}', '{intent}', 'linear.create_issue', 'p', '{{}}',
+                         'linear-work', 'work', '{issue}', '2026-11-19T09:00:00.000Z')"
+            ),
+            [],
+        )
+    };
+    run("INSERT", "r_1", "NULL", "q_1", "i_1", "u_1").unwrap();
+    assert!(run("INSERT OR REPLACE", "r_1", "NULL", "q_2", "i_2", "u_2").is_err());
+    assert!(run("INSERT OR REPLACE", "r_2", "1", "q_2", "i_2", "u_2").is_err());
+    // A second run for the same proposal, accept or issue id is refused.
+    assert!(run("INSERT", "r_2", "NULL", "q_1", "i_2", "u_2").is_err());
+    assert!(run("INSERT", "r_2", "NULL", "q_2", "i_1", "u_2").is_err());
+    assert!(run("INSERT", "r_2", "NULL", "q_2", "i_2", "u_1").is_err());
+    assert!(
+        db.execute("UPDATE action_run SET issue_id = 'u_9'", [])
+            .is_err()
+    );
+    assert!(db.execute("DELETE FROM action_run", []).is_err());
+
+    let result = |verb: &str, seq: &str, identifier: &str| {
+        db.execute(
+            &format!(
+                "{verb} INTO action_result (append_seq, run_id, identifier, url, finished_at)
+                 VALUES ({seq}, 'r_1', '{identifier}', 'https://linear.example/ENG-1',
+                         '2026-11-19T09:00:01.000Z')"
+            ),
+            [],
+        )
+    };
+    result("INSERT", "NULL", "ENG-1").unwrap();
+    assert!(result("INSERT", "NULL", "ENG-2").is_err());
+    assert!(result("INSERT OR REPLACE", "NULL", "ENG-2").is_err());
+    assert!(result("INSERT OR REPLACE", "1", "ENG-2").is_err());
+    assert!(
+        db.execute("UPDATE action_result SET identifier = 'ENG-2'", [])
+            .is_err()
+    );
+    assert!(db.execute("DELETE FROM action_result", []).is_err());
+    let identifier: String = db
+        .query_row("SELECT identifier FROM action_result", [], |row| row.get(0))
+        .unwrap();
+    assert_eq!(identifier, "ENG-1");
 }
 
 /// claims/R17: entity types are never stored as a column

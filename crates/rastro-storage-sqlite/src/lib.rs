@@ -34,7 +34,7 @@ const INTENT_END: &str = "202611081000_intent_justification_end";
 /// A migration that starts with this line rebuilds a table other tables name, so the open runs
 /// it with foreign keys off and checks them before it commits.
 const FOREIGN_KEYS_OFF: &str = "-- foreign_keys = off";
-const MIGRATIONS: [(&str, &str); 20] = [
+const MIGRATIONS: [(&str, &str); 21] = [
     (
         "202611041200_initial",
         include_str!("../migrations/202611041200_initial.sql"),
@@ -114,6 +114,10 @@ const MIGRATIONS: [(&str, &str); 20] = [
     (
         "202611191000_action_proposals",
         include_str!("../migrations/202611191000_action_proposals.sql"),
+    ),
+    (
+        "202611191100_action_runs",
+        include_str!("../migrations/202611191100_action_runs.sql"),
     ),
 ];
 
@@ -404,9 +408,58 @@ impl rastro_core::runs::StoredTwins for SqliteStorage {
             .collect())
     }
 }
+/// Stores `intents` in the open transaction and brings the claims they back up to date, checking
+/// each as `issue_intents` does.
+fn write_intents(
+    transaction: &rusqlite::Transaction,
+    sees: &[Scope],
+    intents: Vec<rastro_core::identity::Intent>,
+) -> Result<Vec<rastro_core::identity::Intent>> {
+    let stored = identity::insert_all(transaction, sees, intents)?;
+    identity::apply(transaction)?;
+    // An undone correction no longer holds its claim at the status it gave.
+    if identity::release(transaction)? {
+        identity::apply(transaction)?;
+    }
+    automatic::apply(transaction)?;
+    lifecycle::settle(transaction)?;
+    // An intent write changes the projection, so it publishes like any other projection write.
+    lifecycle::publish(transaction)?;
+    Ok(stored)
+}
+
 impl Storage for SqliteStorage {
     fn record_action_proposal(&mut self, filed: &rastro_core::actions::Filed) -> Result<()> {
         actions::record(&mut self.connection, filed)
+    }
+    fn accept_action(
+        &mut self,
+        plan: impl FnOnce(
+            &dyn Snapshot,
+        )
+            -> Result<(rastro_core::identity::Intent, rastro_core::actions::NewRun)>,
+    ) -> Result<(rastro_core::identity::Intent, rastro_core::actions::Run)> {
+        // One immediate transaction: the queue the plan reads, the accept and the run it starts.
+        let transaction = self
+            .connection
+            .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let (intent, run) = plan(&View(&transaction))?;
+        let stored = write_intents(&transaction, &[], vec![intent])?;
+        let intent = stored.into_iter().next().expect("one intent stored");
+        anyhow::ensure!(
+            intent.id == run.accept_intent,
+            "the run names an intent other than the one stored"
+        );
+        let run = actions::record_run(&transaction, &run, intent.issued_at)?;
+        transaction.commit()?;
+        Ok((intent, run))
+    }
+    fn record_action_result(
+        &mut self,
+        run: &str,
+        result: &rastro_core::actions::RunResult,
+    ) -> Result<()> {
+        actions::record_result(&mut self.connection, run, result)
     }
     fn record_meeting_run(&mut self, run: &rastro_core::meeting::RunRecord) -> Result<i64> {
         meeting::record(&mut self.connection, run)
@@ -883,16 +936,7 @@ impl Storage for SqliteStorage {
             .connection
             .transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let (intents, out) = plan(&View(&transaction))?;
-        let stored = identity::insert_all(&transaction, sees, intents)?;
-        identity::apply(&transaction)?;
-        // An undone correction no longer holds its claim at the status it gave.
-        if identity::release(&transaction)? {
-            identity::apply(&transaction)?;
-        }
-        automatic::apply(&transaction)?;
-        lifecycle::settle(&transaction)?;
-        // An intent write changes the projection, so it publishes like any other projection write.
-        lifecycle::publish(&transaction)?;
+        let stored = write_intents(&transaction, sees, intents)?;
         transaction.commit()?;
         Ok((stored, out))
     }
@@ -1023,6 +1067,9 @@ impl Snapshot for View<'_> {
     }
     fn action_proposals(&self, scopes: &[Scope]) -> Result<Vec<rastro_core::actions::Filed>> {
         actions::proposals(self, scopes)
+    }
+    fn action_runs(&self, scopes: &[Scope]) -> Result<Vec<rastro_core::actions::Run>> {
+        actions::runs(self, scopes)
     }
     fn meeting_recording(&self, meeting: &str) -> Result<Option<rastro_core::meeting::Recording>> {
         meeting::recording(self, meeting)

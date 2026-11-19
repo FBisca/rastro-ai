@@ -692,6 +692,25 @@ impl FocusRequest {
     }
 }
 
+/// List the actions Rastro ran in outside systems, oldest first: each run the owner's accept started, with the action and its fields, the source it writes to, and its status: `accepted` while its issue is not created, `done` with the issue's identifier and URL once it is.
+#[derive(Args, Debug, Default, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ActionsRequest {}
+impl ActionsRequest {
+    pub(crate) fn run<S: Storage + StoredTwins>(
+        self,
+        rastro: &mut Rastro<S>,
+    ) -> Result<ActionsResult> {
+        rastro.action_runs()
+    }
+    pub(crate) fn run_read<S: rastro_core::ReadStorage>(
+        self,
+        reader: &mut rastro_core::Reader<S>,
+    ) -> Result<ActionsResult> {
+        reader.action_runs()
+    }
+}
+
 /// Propose an action for the owner to accept: it waits in the queue with its why and runs nothing. The action must be one an installed provider declares, such as `linear.create_issue`, which needs a title and a team (`--team`, else `[actions.linear] default_team` in config.toml) and is assigned to the owner unless `--assignee` says otherwise. The why and the cited claims stay in Rastro: only the title, description, team and assignee are ever written to the outside system.
 #[derive(Args, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
