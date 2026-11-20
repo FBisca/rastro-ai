@@ -463,6 +463,7 @@ fn launch_migrates_recovers_and_turns_on_wal_before_the_first_answer() {
         "DROP INDEX evidence_by_location;
          DROP TABLE action_attempt; DROP TABLE action_result; DROP TABLE action_return; DROP TABLE action_run; DROP TABLE action_proposal;
          DROP TABLE shown_report;
+         DROP TABLE judgment_turn;
          DROP TABLE meeting_transcript; DROP TABLE meeting_speaker; DROP TABLE meeting_span;
          DROP TABLE meeting_output; DROP TABLE meeting_hypothesis; DROP TABLE meeting_run;
          DROP TABLE meeting;
