@@ -773,10 +773,10 @@ fn actions_propose_text(proposed: &rastro_core::actions::Proposed) -> String {
     let mut lines = match &proposed.run {
         Some(run) if run.status == rastro_core::actions::RunStatus::Pending => match run.due_at {
             Some(due) => vec![format!(
-                "{head} | Run {} runs at {} unless stopped: rastro actions stop {}",
+                "{head} | Run {} runs at {} unless stopped: {}",
                 run.id,
                 due.format("%Y-%m-%d %H:%M"),
-                run.id
+                rastro_core::actions::stop_command(&run.id)
             )],
             None => vec![format!("{head} | Run {}", run.id)],
         },
@@ -814,11 +814,33 @@ fn queue_text(queue: &rastro_core::queue::Queue) -> String {
         match item.kind {
             ItemKind::ActionProposal => {
                 let action = item.action.as_ref().expect("an action item carries one");
-                lines.push(format!(
-                    "Action proposal | Id: {} | Source: {source} | Scope: {}",
-                    item.id,
-                    display_safe(&item.source.scope)
-                ));
+                match &item.act {
+                    Some(run) => {
+                        let left = match item.runs_in_seconds {
+                            Some(seconds) if seconds > 0 => {
+                                format!("runs in {}", grace_text(seconds.unsigned_abs()))
+                            }
+                            _ => "due now".into(),
+                        };
+                        lines.push(format!(
+                            "Pending Act | {} | {left} | {}",
+                            display_safe(&action.fields.title),
+                            run.stop_command
+                                .clone()
+                                .unwrap_or_else(|| rastro_core::actions::stop_command(&run.id)),
+                        ));
+                        lines.push(format!(
+                            "  Id: {} | Source: {source} | Scope: {}",
+                            item.id,
+                            display_safe(&item.source.scope)
+                        ));
+                    }
+                    None => lines.push(format!(
+                        "Action proposal | Id: {} | Source: {source} | Scope: {}",
+                        item.id,
+                        display_safe(&item.source.scope)
+                    )),
+                }
                 lines.extend(action_proposal_lines(action));
                 if !item.possible_duplicates.is_empty() {
                     lines.push(format!(
@@ -1014,6 +1036,9 @@ fn action_run_text(run: &rastro_core::actions::Run) -> String {
             "Grace ended"
         };
         line += &format!(" | {label}: {}", stamp(due));
+    }
+    if let Some(stop) = &run.stop_command {
+        line += &format!(" | Stop: {stop}");
     }
     if let Some(error) = &run.error {
         line += &format!(

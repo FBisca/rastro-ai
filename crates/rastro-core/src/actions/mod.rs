@@ -40,6 +40,12 @@ const LINEAR_CONNECTOR: &str = "linear";
 /// The assignee of a proposal that names none: the owner, as `identity` names them.
 pub const OWNER: &str = "me";
 
+/// The command the owner runs to stop a pending Act. The one place its wording lives, so every
+/// answer and refusal names the same command.
+pub fn stop_command(run: &str) -> String {
+    format!("rastro actions stop {run}")
+}
+
 /// What `config.toml` says about actions, under `[actions]`.
 #[derive(Clone, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 pub struct ActionsConfig {

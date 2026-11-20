@@ -26,7 +26,9 @@
 //! An action proposal is a third kind of item: what an agent asked Rastro to do in an outside
 //! system ([`crate::actions`]). It waits for the owner like a proposal does, and is visible only in
 //! the scopes that see the source it writes to. It is never "already known": nothing observed
-//! says it was done. A proposal whose Act run the owner stopped is final: it never returns to
+//! says it was done. A proposal whose Act run is still pending shows as that Act, first in the
+//! list: the item carries the run with the time it runs, the time left as of the read and its
+//! stop command. A proposal whose Act run the owner stopped is final: it never returns to
 //! the queue.
 //!
 //! Everything is checked against what is known before it is shown. A proposal whose standard
@@ -190,6 +192,15 @@ pub struct Item {
     /// The proposed action; present exactly when `kind` is `action_proposal`.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action: Option<crate::actions::Proposal>,
+    /// The pending Act run this action proposal started, while its grace runs: it executes at
+    /// the run's `due_at` unless the owner stops it. Present only while the Act is pending;
+    /// such an item sorts before every other wait.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub act: Option<Box<crate::actions::Run>>,
+    /// How many seconds until the pending Act runs, as of this read; present with `act`. Zero
+    /// or less once its grace has ended and a tick has not yet run it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runs_in_seconds: Option<i64>,
     /// The identifiers of the open observed Linear issues whose title is exactly an action
     /// proposal's: a warning that never takes the item out of the queue.
     #[serde(skip_serializing_if = "Vec::is_empty")]
@@ -378,6 +389,8 @@ impl Queue {
                     question: None,
                     correction: None,
                     action: None,
+                    act: None,
+                    runs_in_seconds: None,
                     possible_duplicates: Vec::new(),
                     context: Vec::new(),
                     earlier_retracted: false,
@@ -415,6 +428,8 @@ impl Queue {
                 question: Some(question),
                 correction: None,
                 action: None,
+                act: None,
+                runs_in_seconds: None,
                 possible_duplicates: Vec::new(),
                 context: Vec::new(),
                 earlier_retracted: false,
@@ -458,6 +473,24 @@ impl Queue {
             }
         }
         Ok(())
+    }
+
+    /// Names the pending Act on the proposal it started and puts it first: the owner's chance
+    /// to stop a run before it executes outranks every wait. `now` is the read's instant, so the
+    /// time left is as of it. The sort is stable: every other item keeps its order.
+    fn attach_acts(&mut self, runs: Vec<crate::actions::Run>, now: DateTime<Utc>) {
+        let mut acts: BTreeMap<String, crate::actions::Run> = runs
+            .into_iter()
+            .filter(|run| run.status == crate::actions::RunStatus::Pending)
+            .map(|run| (run.proposal.clone(), run))
+            .collect();
+        for item in &mut self.items {
+            if let Some(run) = acts.remove(&item.id) {
+                item.runs_in_seconds = run.due_at.map(|due| (due - now).num_seconds());
+                item.act = Some(Box::new(run));
+            }
+        }
+        self.items.sort_by_key(|item| item.act.is_none());
     }
 
     /// Reads each proposal's mapped parties' visible claims as its context, from the same
@@ -851,6 +884,8 @@ fn action_items(
                 question: None,
                 correction: None,
                 action: Some(filed.proposal),
+                act: None,
+                runs_in_seconds: None,
                 possible_duplicates: Vec::new(),
                 context: Vec::new(),
                 earlier_retracted: false,
@@ -876,6 +911,8 @@ fn correction_items(
             proposal: None,
             question: None,
             action: None,
+            act: None,
+            runs_in_seconds: None,
             possible_duplicates: Vec::new(),
             context: Vec::new(),
             earlier_retracted: false,
@@ -993,11 +1030,12 @@ pub(crate) fn read(
     };
     let corrections = correction_questions(view, scopes, &resolution)?;
     let actions = view.action_proposals(scopes)?;
+    let runs = view.action_runs(scopes)?;
     // A stopped Act is final: its proposal never returns to the queue.
-    let stopped: BTreeSet<String> = (view.action_runs(scopes)?)
-        .into_iter()
+    let stopped: BTreeSet<String> = runs
+        .iter()
         .filter(|run| run.status == crate::actions::RunStatus::Stopped)
-        .map(|run| run.proposal)
+        .map(|run| run.proposal.clone())
         .collect();
     let actions = actions
         .into_iter()
@@ -1006,6 +1044,7 @@ pub(crate) fn read(
     let mut queue = Queue::with_actions(origins, questions, corrections, actions, &answered);
     queue.attach_context(view, scopes)?;
     queue.attach_duplicates(view)?;
+    queue.attach_acts(runs, crate::coverage::now()?);
     Ok(queue)
 }
 

@@ -120,6 +120,10 @@ pub struct Run {
     /// When the run's grace ends and it executes unless stopped; present for an Act run.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub due_at: Option<DateTime<Utc>>,
+    /// The command that stops the run; present exactly while it reads `pending`, the only state
+    /// a stop accepts.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub stop_command: Option<String>,
     /// The created issue's identifier; present once the run is done.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identifier: Option<String>,

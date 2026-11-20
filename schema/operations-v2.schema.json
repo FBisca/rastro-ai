@@ -351,6 +351,10 @@
         "status": {
           "$ref": "#/$defs/RunStatus"
         },
+        "stop_command": {
+          "description": "The command that stops the run; present exactly while it reads `pending`, the only state\na stop accepts.",
+          "type": "string"
+        },
         "undo": {
           "anyOf": [
             {
@@ -2428,6 +2432,17 @@
       "additionalProperties": false,
       "description": "One pending proposal or question.",
       "properties": {
+        "act": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/ActionRun"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "description": "The pending Act run this action proposal started, while its grace runs: it executes at\nthe run's `due_at` unless the owner stops it. Present only while the Act is pending;\nsuch an item sorts before every other wait."
+        },
         "action": {
           "anyOf": [
             {
@@ -2496,6 +2511,11 @@
             }
           ],
           "description": "The same-person candidate; present on a `question` that asks whether two accounts are one\nperson."
+        },
+        "runs_in_seconds": {
+          "description": "How many seconds until the pending Act runs, as of this read; present with `act`. Zero\nor less once its grace has ended and a tick has not yet run it.",
+          "format": "int64",
+          "type": "integer"
         },
         "source": {
           "$ref": "#/$defs/QueueSource"
@@ -4943,6 +4963,10 @@
                 "status": {
                   "$ref": "#/$defs/RunStatus"
                 },
+                "stop_command": {
+                  "description": "The command that stops the run; present exactly while it reads `pending`, the only state\na stop accepts.",
+                  "type": "string"
+                },
                 "undo": {
                   "anyOf": [
                     {
@@ -5081,6 +5105,10 @@
                 },
                 "status": {
                   "$ref": "#/$defs/RunStatus"
+                },
+                "stop_command": {
+                  "description": "The command that stops the run; present exactly while it reads `pending`, the only state\na stop accepts.",
+                  "type": "string"
                 },
                 "undo": {
                   "anyOf": [
@@ -7565,6 +7593,10 @@
           "status": {
             "$ref": "#/$defs/RunStatus"
           },
+          "stop_command": {
+            "description": "The command that stops the run; present exactly while it reads `pending`, the only state\na stop accepts.",
+            "type": "string"
+          },
           "undo": {
             "anyOf": [
               {
@@ -7724,6 +7756,10 @@
           },
           "status": {
             "$ref": "#/$defs/RunStatus"
+          },
+          "stop_command": {
+            "description": "The command that stops the run; present exactly while it reads `pending`, the only state\na stop accepts.",
+            "type": "string"
           },
           "undo": {
             "anyOf": [

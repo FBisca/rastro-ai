@@ -7,7 +7,7 @@ use rastro_core::{
     Scope,
     actions::{
         Filed, IssueFields, NewAct, NewRun, ObservedIssue, Proposal, Reach, Reversibility, Run,
-        RunFailure, RunLevel, RunResult, RunReturn, RunStatus, Undo,
+        RunFailure, RunLevel, RunResult, RunReturn, RunStatus, Undo, stop_command,
     },
     queue::{Source, SourceKind},
     rules::RuleCopy,
@@ -184,6 +184,7 @@ pub(crate) fn record_run(
         level: RunLevel::Propose,
         rule: None,
         due_at: None,
+        stop_command: None,
         identifier: None,
         url: None,
         attempts: 0,
@@ -232,6 +233,7 @@ pub(crate) fn record_act(
         level: RunLevel::Act,
         rule: Some(act.rule.clone()),
         due_at: Some(act.due_at),
+        stop_command: Some(stop_command(&act.id)),
         identifier: None,
         url: None,
         attempts: 0,
@@ -405,6 +407,7 @@ pub(crate) fn runs(view: &View, scopes: &[Scope]) -> Result<Vec<Run>> {
         } else {
             RunStatus::Accepted
         };
+        let stop_command = (status == RunStatus::Pending).then(|| stop_command(&id));
         runs.push(Run {
             id,
             proposal,
@@ -423,6 +426,7 @@ pub(crate) fn runs(view: &View, scopes: &[Scope]) -> Result<Vec<Run>> {
             level,
             rule,
             due_at,
+            stop_command,
             identifier,
             url,
             attempts,
