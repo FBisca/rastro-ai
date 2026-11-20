@@ -41,7 +41,7 @@
 //! claims as the item's context, and the item stays.
 
 mod answers;
-pub use answers::{ActionEdits, Answered, answered_items};
+pub use answers::{ActionEdits, Answered, answer_for, answered_items};
 mod outcomes;
 pub use outcomes::{NOTICE as OUTCOMES_NOTICE, Outcome, OutcomeKind, Outcomes, Totals};
 
@@ -1032,10 +1032,14 @@ pub(crate) fn read(
     let corrections = correction_questions(view, scopes, &resolution)?;
     let actions = view.action_proposals(scopes)?;
     let runs = view.action_runs(scopes)?;
-    let settled = settled_by_runs(&runs);
     let actions = actions
         .into_iter()
-        .filter(|filed| !settled.contains(&filed.id))
+        .filter(|filed| {
+            matches!(
+                standing(&filed.id, &runs, &intents),
+                Standing::Waiting | Standing::PendingAct { .. }
+            )
+        })
         .collect();
     let mut queue = Queue::with_actions(origins, questions, corrections, actions, &answered);
     queue.attach_context(view, scopes)?;
@@ -1048,21 +1052,87 @@ pub(crate) fn read(
 /// past pending, unless the run was `returned`. Each status is decided here, so a new one cannot
 /// fall through to "still waiting" unnoticed.
 pub fn settled_by_runs(runs: &[crate::actions::Run]) -> BTreeSet<String> {
-    use crate::actions::RunStatus;
     (runs.iter())
-        .filter(|run| match run.status {
-            // Shown as the pending Act, first in the queue, until its grace ends.
-            RunStatus::Pending => false,
-            // The re-check failed before anything was sent: the proposal waits for the owner.
-            RunStatus::Returned => false,
-            RunStatus::Accepted
-            | RunStatus::Stopped
-            | RunStatus::Done
-            | RunStatus::Failed
-            | RunStatus::Undone => true,
-        })
+        .filter(|run| settles(run.status))
         .map(|run| run.proposal.clone())
         .collect()
+}
+
+/// Whether a run of this status takes its proposal out of the queue: every status past pending
+/// except `returned`, whose re-check failed before anything was sent. Each status is decided here,
+/// so a new one cannot fall through to "still waiting" unnoticed. The queue's filter and the run
+/// read's standing both decide by it, so they cannot disagree.
+fn settles(status: crate::actions::RunStatus) -> bool {
+    use crate::actions::RunStatus;
+    match status {
+        // Shown as the pending Act, first in the queue, until its grace ends.
+        RunStatus::Pending => false,
+        // The re-check failed before anything was sent: the proposal waits for the owner.
+        RunStatus::Returned => false,
+        RunStatus::Accepted
+        | RunStatus::Stopped
+        | RunStatus::Done
+        | RunStatus::Failed
+        | RunStatus::Undone => true,
+    }
+}
+
+/// Where a proposal stands in the queue, from all of its runs and the owner's intents: the one
+/// decision the queue's filter and the run read both use, so they cannot disagree. The states, in
+/// precedence order: the owner's answer takes it out (`answered`), else a run that settled it
+/// (`settled`, naming the latest settling run), else a pending Act shows it as that Act
+/// (`pending_act`), else it waits for the owner (`waiting`). `runs` are the runs the caller's
+/// scopes see and `intents` the owner intents in acceptance order, as the snapshot gives them.
+pub fn standing(
+    proposal: &str,
+    runs: &[crate::actions::Run],
+    intents: &[crate::identity::Intent],
+) -> Standing {
+    if let Some(intent) = answer_for(intents, proposal) {
+        return Standing::Answered {
+            kind: intent.kind,
+            intent: intent.id.clone(),
+        };
+    }
+    if let Some(run) = (runs.iter())
+        .filter(|run| run.proposal == proposal && settles(run.status))
+        .max_by_key(|run| run.accepted_at)
+    {
+        return Standing::Settled {
+            run: run.id.clone(),
+            status: run.status,
+        };
+    }
+    if let Some(run) = (runs.iter())
+        .find(|run| run.proposal == proposal && run.status == crate::actions::RunStatus::Pending)
+    {
+        return Standing::PendingAct {
+            run: run.id.clone(),
+        };
+    }
+    Standing::Waiting
+}
+
+/// Where a proposal stands in the queue, as the run read carries it. The owner's answer outranks a
+/// run's status: an accepted run that is also done reads `answered`, the more direct reason.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
+#[schemars(rename = "ActionStanding")]
+#[serde(tag = "state", rename_all = "snake_case")]
+pub enum Standing {
+    /// The owner answered it: the intent's kind and id.
+    Answered {
+        kind: crate::identity::IntentKind,
+        intent: String,
+    },
+    /// A run settled it: the latest settling run and its status.
+    Settled {
+        run: String,
+        status: crate::actions::RunStatus,
+    },
+    /// A pending Act shows it as that Act, first in the queue, until its grace ends.
+    PendingAct { run: String },
+    /// It waits in the queue for the owner.
+    Waiting,
 }
 
 impl<S: Storage> Rastro<S> {
@@ -1415,5 +1485,121 @@ mod tests {
         );
         assert_eq!(queue.items.len(), 1);
         assert!(!queue.items[0].earlier_retracted);
+    }
+
+    /// A run of `status` on `proposal`, with the fields a standing decision reads.
+    fn run(id: &str, proposal: &str, status: crate::actions::RunStatus) -> crate::actions::Run {
+        crate::actions::Run {
+            id: id.into(),
+            proposal: proposal.into(),
+            accept_intent: None,
+            action: "linear.create_issue".into(),
+            fields: crate::actions::IssueFields {
+                title: "Ship the doc".into(),
+                description: None,
+                team: "H".into(),
+                assignee: "me".into(),
+            },
+            source: Source {
+                kind: SourceKind::Linear,
+                name: "linear-work".into(),
+                scope: "work".into(),
+            },
+            provider: "rastro-action-linear".into(),
+            issue_id: "issue-1".into(),
+            accepted_at: "2026-11-19T10:00:00Z".parse().unwrap(),
+            status,
+            level: crate::actions::RunLevel::Act,
+            rule: None,
+            due_at: None,
+            stop_command: None,
+            identifier: None,
+            url: None,
+            attempts: 0,
+            error: None,
+            undo: None,
+        }
+    }
+
+    /// The owner intent of `kind` answering `item`.
+    fn answer(kind: crate::identity::IntentKind, item: &str, id: &str) -> crate::identity::Intent {
+        use crate::identity::{
+            FORMAT_VERSION, Intent, IssuerContext, OWNER, Payload, SHAPE_VERSION, Targets,
+        };
+        Intent {
+            id: id.into(),
+            append_seq: 0,
+            format_version: FORMAT_VERSION,
+            kind,
+            owner_id: OWNER.into(),
+            issuer_context: IssuerContext::owner_cli(&[]),
+            issued_at: "2026-11-19T10:00:00Z".parse().unwrap(),
+            domain_key: format!("queue/{item}"),
+            targets: Targets::Proposal {
+                version: SHAPE_VERSION,
+                item: Some(item.into()),
+                text: None,
+                seen: None,
+                edited: None,
+                subject: None,
+                parties: Vec::new(),
+                terms: Vec::new(),
+                scope: Some("work".into()),
+            },
+            payload: Payload::empty(),
+            undo_of: None,
+            supersedes: None,
+        }
+    }
+
+    // spec: A run says where its proposal stands in the queue
+    #[test]
+    fn a_pending_act_shows_as_the_pending_act() {
+        use crate::actions::RunStatus;
+        let runs = [run("r_a", "q_1", RunStatus::Pending)];
+        assert_eq!(
+            standing("q_1", &runs, &[]),
+            Standing::PendingAct { run: "r_a".into() }
+        );
+    }
+
+    // spec: A run says where its proposal stands in the queue
+    #[test]
+    fn the_latest_settling_run_is_named() {
+        use crate::actions::RunStatus;
+        let mut first = run("r_a", "q_1", RunStatus::Done);
+        first.accepted_at = "2026-11-19T10:00:00Z".parse().unwrap();
+        let mut second = run("r_b", "q_1", RunStatus::Undone);
+        second.accepted_at = "2026-11-19T11:00:00Z".parse().unwrap();
+        // A returned run between them settled nothing, so it is never the one named.
+        let returned = run("r_c", "q_1", RunStatus::Returned);
+        assert_eq!(
+            standing("q_1", &[first, returned, second], &[]),
+            Standing::Settled {
+                run: "r_b".into(),
+                status: RunStatus::Undone,
+            }
+        );
+    }
+
+    // spec: A run says where its proposal stands in the queue
+    #[test]
+    fn the_owners_answer_outranks_the_run_that_settled_it() {
+        use crate::actions::RunStatus;
+        use crate::identity::IntentKind;
+        // The real case: an undone run that also holds the owner's answer reads answered, the
+        // more direct reason, whatever kind of answer it was.
+        let runs = [run("r_a", "q_1", RunStatus::Undone)];
+        for kind in [IntentKind::Accept, IntentKind::Edit, IntentKind::Reject] {
+            let intent = answer(kind, "q_1", "i_9");
+            assert_eq!(
+                standing("q_1", &runs, &[intent]),
+                Standing::Answered {
+                    kind,
+                    intent: "i_9".into(),
+                },
+                "{kind:?}"
+            );
+        }
     }
 }

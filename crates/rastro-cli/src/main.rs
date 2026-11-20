@@ -1118,6 +1118,7 @@ fn action_why_text(
             accept.at.format("%Y-%m-%d %H:%M")
         );
     }
+    text += &format!("\nQueue: {}", standing_text(&why.queue));
     text += &format!(
         "\nLevel: {} | Cell: {} x {} | Reach: {} | Reversibility: {}",
         why.level,
@@ -1127,6 +1128,20 @@ fn action_why_text(
         why.reversibility
     );
     text
+}
+
+/// Where the run's proposal stands in the queue, in the owner's words: one line, by the same
+/// decision the queue read uses.
+fn standing_text(standing: &rastro_core::queue::Standing) -> String {
+    use rastro_core::queue::Standing;
+    match standing {
+        Standing::Waiting => "waiting for the owner".into(),
+        Standing::PendingAct { run } => format!("waiting as pending Act {run}"),
+        Standing::Answered { kind, intent } => {
+            format!("out, the owner's {} (intent {intent})", kind.as_str())
+        }
+        Standing::Settled { run, status } => format!("out, run {run} is {}", status.as_str()),
+    }
 }
 
 /// The result of an operation, its human form, and whether it succeeded.
