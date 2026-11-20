@@ -281,8 +281,8 @@ pub struct RuleView {
     pub pending: Vec<actions::Run>,
     /// The queued proposals the rule matches on action, team and assignee, oldest first: each
     /// waits in the queue with no pending Act of its own. A pending Act's proposal is listed
-    /// under `pending`, a stopped Act's never returns to the queue, and a returned or undone
-    /// Act's proposal waits here as a normal proposal.
+    /// under `pending`, and an Act's proposal leaves the queue once its run settles it (stopped,
+    /// done, failed or undone); only a returned Act's proposal waits here as a normal proposal.
     pub matches: Vec<actions::Filed>,
 }
 
@@ -294,10 +294,10 @@ pub struct Check {
 }
 
 /// What `rules check` reads from one snapshot: each rule's count, pending Acts and the queued
-/// proposals it matches. The proposals are the ones the queue holds — an answer took the answered
-/// ones out, and a stopped Act's proposal never returns — less the pending Acts' proposals, which
-/// are listed under `pending`. A returned or undone Act's proposal waits in the queue, so a
-/// matching one is listed here. Records nothing.
+/// proposals it matches. The proposals are the ones the queue holds — no answer took them out and
+/// no run settled them ([`crate::queue::settled_by_runs`]) — less the pending Acts' proposals,
+/// which are listed under `pending`. A returned Act's proposal waits in the queue, so a matching
+/// one is listed here. Records nothing.
 fn check(
     config: &Config,
     view: Option<&dyn Snapshot>,
@@ -312,22 +312,20 @@ fn check(
         ),
         None => (Vec::new(), Vec::new(), BTreeSet::new()),
     };
-    // The queue holds a proposal unless an answer took it out or its Act was stopped; a pending
-    // Act's proposal is listed under `pending`, not here. Every other run — returned, undone,
-    // done, failed — leaves its proposal waiting, so a matching one is listed.
-    let mut listed_under_run: BTreeSet<&str> = BTreeSet::new();
-    for run in &runs {
-        if matches!(
-            run.status,
-            actions::RunStatus::Pending | actions::RunStatus::Stopped
-        ) {
-            listed_under_run.insert(run.proposal.as_str());
-        }
-    }
+    // A match is a proposal still waiting in the queue, read by the queue's own rule: no answer
+    // took it out and no run settled it. A pending Act's proposal is listed under `pending`, not
+    // here.
+    let settled = crate::queue::settled_by_runs(&runs);
+    let pending: BTreeSet<&str> = (runs.iter())
+        .filter(|run| run.status == actions::RunStatus::Pending)
+        .map(|run| run.proposal.as_str())
+        .collect();
     let waiting: Vec<&actions::Filed> = proposals
         .iter()
         .filter(|filed| {
-            !answered.contains(&filed.id) && !listed_under_run.contains(filed.id.as_str())
+            !answered.contains(&filed.id)
+                && !settled.contains(&filed.id)
+                && !pending.contains(filed.id.as_str())
         })
         .collect();
     Ok(Check {
