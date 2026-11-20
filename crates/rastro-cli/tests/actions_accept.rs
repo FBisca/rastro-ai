@@ -332,6 +332,11 @@ fn the_writer_reports_an_authentication_failure_without_a_credential_and_exposes
 
     assert!(env.linear.creates().is_empty());
     let shown = format!("{}{runs:?}", printed(&out)).to_lowercase();
+    // The owner is told authentication failed, in the writer's words, not merely where it looked.
+    assert!(
+        shown.contains("authentication failed"),
+        "no authentication failure is reported: {shown}"
+    );
     assert!(
         shown.contains("linear_api_key") && shown.contains("keychain"),
         "{shown}"
@@ -339,4 +344,16 @@ fn the_writer_reports_an_authentication_failure_without_a_credential_and_exposes
     assert!(!shown.contains(&linear_api::KEY.to_lowercase()), "{shown}");
     assert!(!shown.contains(KEYCHAIN_KEY), "{shown}");
     assert_ne!(runs[0]["status"], "done", "{runs:?}");
+
+    // The failure reads where the owner reads their runs.
+    let listing = env.rastro(&["actions"]);
+    let text = String::from_utf8_lossy(&listing.stdout).into_owned();
+    let line = text
+        .lines()
+        .find(|line| line.contains("Error:"))
+        .unwrap_or_else(|| panic!("{text}"));
+    assert!(
+        line.to_lowercase().contains("authentication failed"),
+        "{line}"
+    );
 }
