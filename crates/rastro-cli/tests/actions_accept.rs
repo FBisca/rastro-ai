@@ -98,16 +98,16 @@ fn accepting_an_action_proposal_creates_the_issue_once_and_the_run_reads_done() 
         .collect();
     assert_eq!(
         sent,
-        ["IssueLookup", "IssueCreate"],
-        "the id is looked up first"
+        ["IssueLookup", "Teams", "Viewer", "IssueCreate"],
+        "the id is looked up first, the ids it names just before the create"
     );
     let create = &creates[0];
     assert_eq!(create.method, "POST");
     assert_eq!(create.path, "/graphql");
     assert_eq!(create.auth.as_deref(), Some(linear_api::KEY));
     assert_eq!(create.input()["title"], "Flaky sync test");
-    assert_eq!(create.input()["teamId"], "ENG");
-    assert_eq!(create.input()["assigneeId"], "me");
+    assert_eq!(create.input()["teamId"], linear_api::TEAM_ENG.id);
+    assert_eq!(create.input()["assigneeId"], linear_api::OWNER.id);
 
     let runs = env.runs();
     assert_eq!(runs.len(), 1, "{runs:?}");
@@ -188,8 +188,8 @@ fn the_issue_create_holds_only_the_accepted_content_and_the_runs_random_id() {
     );
     assert_eq!(input["title"], "Flaky sync test");
     assert_eq!(input["description"], description);
-    assert_eq!(input["teamId"], "ENG");
-    assert_eq!(input["assigneeId"], "me");
+    assert_eq!(input["teamId"], linear_api::TEAM_ENG.id);
+    assert_eq!(input["assigneeId"], linear_api::OWNER.id);
     assert_eq!(input["id"], issue_id);
     let uuid = issue_id.as_bytes();
     assert_eq!(uuid.len(), 36, "{issue_id}");
