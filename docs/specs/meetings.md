@@ -35,11 +35,15 @@ An import SHALL not claim success when the owner is unmapped, the extractor is u
 - THEN extraction does not claim success and the user sees the cause and incomplete coverage
 
 ### Requirement: An unsupported candidate is excluded and an invalid quote fails the run
-A proposed candidate without owner involvement supported by the transcript SHALL be excluded, and a candidate whose quote is unverifiable or noncontiguous SHALL fail the entire run without replacing last-good results.
+A proposed candidate without owner involvement supported by the transcript SHALL be excluded, and a candidate whose quote is unverifiable or noncontiguous SHALL earn capped retry turns in the same judgment session before failing the entire run without replacing last-good results.
 
 #### Scenario: an unsupported candidate is excluded, and an invalid quote fails the run
 - WHEN a proposed candidate has no owner involvement supported by the transcript, or has an unverifiable or noncontiguous quote
-- THEN an unsupported owner relationship is excluded and an invalid quote fails the entire run without replacing last-good results
+- THEN an unsupported owner relationship is excluded, and an invalid quote is sent back as the next turn of the same session while turns remain under the cap, and once the cap is exhausted the run fails without replacing last-good results
+
+#### Scenario: a corrected quote on a retry turn succeeds
+- WHEN a retry turn of the same session answers with a quote that is an exact, contiguous piece of its turn
+- THEN the run succeeds and only the final validated output becomes evidence
 
 ### Requirement: Stated dates, conditions, unknown people, repeats and instructions stay as given
 Extraction SHALL leave relative dates as stated, keep conditions in their promises, leave unresolved people unknown and uncertain repeats separate, and SHALL treat transcript instructions as data.
