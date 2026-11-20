@@ -400,3 +400,18 @@ The owner SHALL have one real Linear issue created by an Act under their rule, w
 #### Scenario: switch day
 - WHEN with the launchd job calling `rastro tick` every minute and a rule on the owner's team, an in-session agent proposes the owner's next real Linear issue and the owner lets the grace window pass
 - THEN the issue exists in Linear with exactly the proposed title and description
+
+### Requirement: A run says where its proposal stands in the queue
+`actions` with a run id, on the CLI and MCP, SHALL state whether the run's proposal waits in `rastro queue` and, when it does not, whether the owner's answer or a run's status took it out, agreeing with what `rastro queue` lists.
+
+#### Scenario: a returned Act's proposal waits
+- WHEN a rule's pending Act reads `returned` after its re-check fails, and the owner reads that run with `rastro actions show` and the MCP tool `actions`
+- THEN both reads state that the proposal waits in the queue, and `rastro queue` lists it
+
+#### Scenario: a done Act's proposal was taken out by its run
+- WHEN a rule's Act reads `done` after `rastro tick` creates its issue, and the owner reads that run with `rastro actions show` and the MCP tool `actions`
+- THEN both reads state that the proposal left the queue because that run reads `done`, and `rastro queue` does not list it
+
+#### Scenario: an accepted proposal was taken out by the owner
+- WHEN the owner accepts an action proposal with `rastro queue accept` and reads the run it started with `rastro actions show` and the MCP tool `actions`
+- THEN both reads state that the proposal left the queue because of the owner's accept, naming the accept intent's id
