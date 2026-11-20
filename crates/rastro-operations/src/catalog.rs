@@ -394,7 +394,7 @@ operations! {
     /// Check the owner's rules.
     Rules / RulesRequest {
         Check(RulesCheckRequest => RulesCheckResult) as RulesCheck {
-            slot: 39, name: "rules.check", surfaces: [Cli], read_only: true, reader: run_read, cli_read_path: true
+            slot: 39, name: "rules.check", surfaces: [Cli, Mcp], read_only: true, reader: run_read, cli_read_path: true
         },
     }
     /// Import a meeting transcript, read its commitment hypotheses, replay, forget or export it.

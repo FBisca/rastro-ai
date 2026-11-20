@@ -287,9 +287,9 @@ fn listed_tools_equal_the_catalog_entries() {
 }
 
 /// spec: Only the read-only operations are tools
-/// exactly search, coverage, about, why, commitments, meeting_commitments, queue, focus and actions, read-only; any other tool is a JSON-RPC error and runs nothing
+/// exactly search, coverage, about, why, commitments, meeting_commitments, queue, focus, actions and rules_check, read-only; any other tool is a JSON-RPC error and runs nothing
 #[test]
-fn exactly_nine_read_only_tools_and_writes_are_protocol_errors() {
+fn exactly_ten_read_only_tools_and_writes_are_protocol_errors() {
     let env = seeded();
     let config = env.home.path().join("config/config.toml");
     let config_before = fs::read(&config).unwrap();
@@ -308,6 +308,7 @@ fn exactly_nine_read_only_tools_and_writes_are_protocol_errors() {
             "focus",
             "meeting_commitments",
             "queue",
+            "rules_check",
             "search",
             "why"
         ]
@@ -350,6 +351,98 @@ fn exactly_nine_read_only_tools_and_writes_are_protocol_errors() {
         .as_array()
         .unwrap();
     assert_eq!(sources.len(), 1);
+}
+
+/// spec: The owner checks what each rule does now
+/// the rules_check tool answers the same read as `rules check --json` and records nothing
+#[test]
+fn the_rules_check_tool_answers_the_cli_read_and_records_nothing() {
+    let env = Env::new();
+    support::provider::install(&env.home.path().join("config"), |_| {});
+    let config = env.home.path().join("config/config.toml");
+    let source = "[[sources]]\nname = \"linear-work\"\nconnector = \"linear\"\nselector = {}\n\
+                  scope = \"work\"\nfreshness_rule = \"1h\"\nwindow_start = \"2026-08-01T00:00:00Z\"\n\
+                  keep_original = false\n";
+    fs::write(&config, source).unwrap();
+    let proposed_at = "2026-11-19T10:00:00Z";
+    let read_at = "2026-11-19T10:04:00Z";
+    let cli = |args: &[&str], at: &str| -> Value {
+        let out = env
+            .command(&[args, &["--json"]].concat())
+            .env("RASTRO_NOW", at)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?}: {}{}",
+            String::from_utf8_lossy(&out.stderr),
+            String::from_utf8_lossy(&out.stdout)
+        );
+        serde_json::from_slice::<Value>(&out.stdout).unwrap()["result"].clone()
+    };
+    let propose = |title: &str, team: &str| -> Value {
+        cli(
+            &[
+                "actions",
+                "propose",
+                "linear.create_issue",
+                "--title",
+                title,
+                "--team",
+                team,
+                "--why",
+                "owner asked",
+            ],
+            proposed_at,
+        )
+    };
+
+    // A proposal queued before the rule, then two Act runs today, one of them stopped: the
+    // check holds a count against the cap, one pending run and one matching queued proposal.
+    let early = propose("Before the rule", "H");
+    assert!(early.get("run").is_none(), "{early}");
+    fs::write(
+        &config,
+        format!(
+            "{source}\n[[rules]]\nname = \"my-issues\"\naction = \"linear.create_issue\"\n\
+             team = \"H\"\nassignee = \"me\"\ndaily_cap = 5\n"
+        ),
+    )
+    .unwrap();
+    let first = propose("First", "H");
+    let second = propose("Second", "H");
+    let stopped = first["run"]["id"].as_str().unwrap();
+    let out = env
+        .command(&["actions", "stop", stopped])
+        .env("RASTRO_NOW", proposed_at)
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+
+    let listed = cli(&["rules", "check"], read_at);
+    let rule = &listed["rules"][0];
+    assert_eq!(rule["used_today"], 2, "{listed}");
+    assert_eq!(rule["pending"][0]["id"], second["run"]["id"], "{listed}");
+    assert_eq!(rule["matches"][0]["id"], early["id"], "{listed}");
+
+    // The agent's tool call answers exactly the same read, and changes no row: the store's
+    // intents and runs (and every other table) are as they were.
+    let mut serve = env.command(&["mcp"]);
+    serve.env("RASTRO_NOW", read_at);
+    let mut session = Session::start(serve);
+    session.initialize();
+    let rows = tables(&env);
+    let response = session.call("rules_check", json!({}));
+    let envelope = ok_result(&response["result"]);
+    assert_eq!(envelope["operation"], "rules.check", "{response}");
+    assert_eq!(envelope["result"], listed, "{response}");
+    assert_eq!(tables(&env), rows, "the rules_check call changed a row");
+    let (status, _) = session.finish();
+    assert!(status.success());
 }
 
 fn last_migration(db: &Connection) -> String {
@@ -579,7 +672,7 @@ fn an_unsupported_revision_is_answered_with_the_pinned_revision() {
         let init = session.initialize_as(asked, "scripted-client");
         assert_eq!(init["result"]["protocolVersion"], PINNED, "asked {asked}");
         // Codex's default request (2025-06-18) proceeds: it lists tools and calls one.
-        assert_eq!(session.list_tools().len(), 9, "asked {asked}");
+        assert_eq!(session.list_tools().len(), 10, "asked {asked}");
         let call = session.call("coverage", json!({}));
         ok_result(&call["result"]);
     }
@@ -634,7 +727,7 @@ fn server_discover_first_does_not_end_the_session_and_initialize_then_works() {
     }
     let init = session.initialize();
     assert_eq!(init["result"]["protocolVersion"], PINNED);
-    assert_eq!(session.list_tools().len(), 9);
+    assert_eq!(session.list_tools().len(), 10);
 }
 
 /// spec: A client's name changes no result and is stored nowhere
@@ -2394,7 +2487,7 @@ fn a_person_is_visible_only_where_one_of_its_linked_accounts_is() {
 }
 
 /// claims/R78: one morning's standup comes from a single `about me` over MCP — both linked accounts and
-/// their own claims arrive in that one read, and the server offers only its nine read-only tools, so
+/// their own claims arrive in that one read, and the server offers only its ten read-only tools, so
 /// the read reaches neither GitHub nor Linear
 /// spec: The owner preps a standup from about me
 #[test]
@@ -2427,7 +2520,7 @@ fn about_me_over_mcp_answers_one_morning_from_both_accounts() {
         assert!(shown.contains(login), "{login} missing: {about}");
     }
 
-    // Nothing on this server could reach GitHub or Linear: nine read-only tools and no write.
+    // Nothing on this server could reach GitHub or Linear: ten read-only tools and no write.
     let mut names: Vec<String> = everywhere
         .list_tools()
         .iter()
@@ -2444,6 +2537,7 @@ fn about_me_over_mcp_answers_one_morning_from_both_accounts() {
             "focus",
             "meeting_commitments",
             "queue",
+            "rules_check",
             "search",
             "why"
         ],

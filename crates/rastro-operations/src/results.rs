@@ -75,7 +75,8 @@ pub type ActionsProposeResult = rastro_core::actions::Proposed;
 pub type ActionsUndoResult = rastro_core::actions::Run;
 /// The run `actions stop` stopped, as it now reads: `stopped`, never to execute.
 pub type ActionsStopResult = rastro_core::actions::Run;
-/// What `rules check` returns: each rule with its resolved grace.
+/// What `rules check` returns: each rule with its match, grace, cap, today's count, pending Acts
+/// and the queued proposals it matches.
 pub type RulesCheckResult = rastro_core::rules::Check;
 /// What a queue answer recorded: the item it named and the owner intents it accepted.
 #[derive(Debug, JsonSchema, Serialize)]
