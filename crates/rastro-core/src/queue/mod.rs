@@ -26,7 +26,8 @@
 //! An action proposal is a third kind of item: what an agent asked Rastro to do in an outside
 //! system ([`crate::actions`]). It waits for the owner like a proposal does, and is visible only in
 //! the scopes that see the source it writes to. It is never "already known": nothing observed
-//! says it was done.
+//! says it was done. A proposal whose Act run the owner stopped is final: it never returns to
+//! the queue.
 //!
 //! Everything is checked against what is known before it is shown. A proposal whose standard
 //! statements one observed commitment already holds is left out and counted ("already known"):
@@ -992,6 +993,16 @@ pub(crate) fn read(
     };
     let corrections = correction_questions(view, scopes, &resolution)?;
     let actions = view.action_proposals(scopes)?;
+    // A stopped Act is final: its proposal never returns to the queue.
+    let stopped: BTreeSet<String> = (view.action_runs(scopes)?)
+        .into_iter()
+        .filter(|run| run.status == crate::actions::RunStatus::Stopped)
+        .map(|run| run.proposal)
+        .collect();
+    let actions = actions
+        .into_iter()
+        .filter(|filed| !stopped.contains(&filed.id))
+        .collect();
     let mut queue = Queue::with_actions(origins, questions, corrections, actions, &answered);
     queue.attach_context(view, scopes)?;
     queue.attach_duplicates(view)?;

@@ -1,7 +1,9 @@
 //! The queue's answers: accept, edit, reject, answer and missed.
 //!
 //! Each answer is recorded as exactly one owner intent, and an answer naming an item the queue
-//! no longer holds is refused, naming the item and recording nothing. An accepted, edited or
+//! no longer holds is refused, naming the item and recording nothing. An action proposal whose
+//! Act run is still pending is refused too, naming the run and its stop command: one proposal
+//! never has two runs. An accepted, edited or
 //! rejected proposal leaves the queue by that record; an answered question leaves because the
 //! identity graph no longer holds its pair as a candidate; a missed report leaves its item
 //! waiting. A rejection mints no claim; an accepted or edited proposal becomes one observed
@@ -9,7 +11,7 @@
 //! lapsed retraction or a stale confirmation records the earlier correction again, bound to the
 //! lifecycle state the claim has now.
 use super::{CorrectionKind, CorrectionQuestion, Item, read};
-use crate::actions::{self, NewRun, Run};
+use crate::actions::{self, NewRun, Run, RunStatus};
 use crate::identity::{
     self, AnswerPerson, ClaimStatement, ClaimTarget, EntityTarget, Intent, IntentKind,
     IssuerContext, Payload, StandardTerm, StatementSnapshot, Targets, commitment_target,
@@ -85,6 +87,23 @@ pub fn answered_items(intents: &[Intent]) -> BTreeSet<String> {
         })
         .filter_map(|intent| intent.queue_item().map(String::from))
         .collect()
+}
+
+/// Refuses an answer to a proposal whose Act run is still pending: the rule already decided it,
+/// and one proposal never has two runs. The refusal names the run and its stop command.
+fn refuse_pending_act(view: &dyn Snapshot, item: &str) -> Result<()> {
+    if let Some(run) = (view.action_runs(&[])?)
+        .into_iter()
+        .find(|run| run.proposal == item && run.status == RunStatus::Pending)
+    {
+        bail!(
+            "{item} has a pending Act {}: stop it with `rastro actions stop {}`, or wait for \
+             its grace to end",
+            run.id,
+            run.id
+        );
+    }
+    Ok(())
 }
 
 /// The item an answer names, which must still wait in the queue.
@@ -300,6 +319,7 @@ impl<S: Storage> Rastro<S> {
         };
         let (intent, run) = self.storage.accept_action(|view| {
             let pending = still_queued(view, &id)?;
+            refuse_pending_act(view, &pending.id)?;
             let filed = (view.action_proposals(&[])?)
                 .into_iter()
                 .find(|filed| filed.id == pending.id)
@@ -424,6 +444,8 @@ impl<S: Storage> Rastro<S> {
             let pending = still_queued(view, &id)?;
             if pending.action.is_none() {
                 proposal(&pending)?;
+            } else {
+                refuse_pending_act(view, &pending.id)?;
             }
             let intent = proposal_intent(
                 IntentKind::Reject,

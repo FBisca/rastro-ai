@@ -46,6 +46,8 @@ pub enum RunStatus {
     Pending,
     /// The re-check at grace end failed: nothing was sent, and the proposal waits in the queue.
     Returned,
+    /// The owner stopped it before its grace ended: nothing was sent, and it never executes.
+    Stopped,
     /// The provider created the issue, and the run holds its identifier and URL.
     Done,
     /// An execution failed and the run has no issue: it holds the error, and `tick` retries it
@@ -62,6 +64,7 @@ impl RunStatus {
             Self::Accepted => "accepted",
             Self::Pending => "pending",
             Self::Returned => "returned",
+            Self::Stopped => "stopped",
             Self::Done => "done",
             Self::Failed => "failed",
             Self::Undone => "undone",
@@ -271,7 +274,9 @@ impl<S: Storage> Rastro<S> {
                 RunStatus::Failed => run.attempts < MAX_ATTEMPTS,
                 // A pending Act waits out its grace window; it executes once its grace has ended.
                 RunStatus::Pending => run.due_at.is_some_and(|due| now >= due),
-                RunStatus::Done | RunStatus::Undone | RunStatus::Returned => false,
+                RunStatus::Done | RunStatus::Undone | RunStatus::Returned | RunStatus::Stopped => {
+                    false
+                }
             })
             .collect())
     }
@@ -280,8 +285,8 @@ impl<S: Storage> Rastro<S> {
     /// as it then reads. Only one process executes a run at a time: when another holds it, this
     /// leaves the run untouched and returns `None`.
     ///
-    /// Under the lock it reads the run again, and a run already done, undone or returned is returned
-    /// as it is. A pending Act is checked again (its rule still present and matching); a failed check
+    /// Under the lock it reads the run again, and a run already done, undone, returned or stopped
+    /// is returned as it is. A pending Act is checked again (its rule still present and matching); a failed check
     /// records the run as `returned` and returns `None`, sending nothing. Then it asks the provider
     /// whether the issue under the run's id exists, and only when it does not
     /// asks it to create it, so a run cut off before it sent anything is created, and one whose
@@ -298,11 +303,11 @@ impl<S: Storage> Rastro<S> {
             Err(TryLockError::Error(error)) => return Err(error.into()),
         }
         let current = self.stored_run(&run.id)?;
-        // A run that is done, undone or returned is finished: executing it again must not create
-        // its issue anew.
+        // A run that is done, undone, returned or stopped is finished: executing it again must
+        // not create its issue anew.
         if matches!(
             current.status,
-            RunStatus::Done | RunStatus::Undone | RunStatus::Returned
+            RunStatus::Done | RunStatus::Undone | RunStatus::Returned | RunStatus::Stopped
         ) {
             return Ok(Some(current));
         }

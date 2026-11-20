@@ -374,7 +374,7 @@ operations! {
             slot: 29, name: "queue.outcomes", surfaces: [Cli], read_only: true, reader: run_read, cli_read_path: true
         },
     }
-    /// Actions in outside systems: list the runs the owner's accepts started, read why one ran, propose an action, or undo a done run. Proposing and undoing are CLI only, and nothing runs until the owner accepts.
+    /// Actions in outside systems: list the runs the owner's accepts or matching rules started, read why one ran, propose an action, stop a pending Act, or undo a done run. Proposing, stopping and undoing are CLI only.
     Actions(ActionsRequest => ActionsResult) as Actions {
         slot: 36, name: "actions", surfaces: [Cli, Mcp], read_only: true, reader: run_read, cli_read_path: true
     } with ActionsWrite {
@@ -386,6 +386,9 @@ operations! {
         },
         Undo(ActionsUndoRequest => ActionsUndoResult) as ActionsUndo {
             slot: 38, name: "actions.undo", surfaces: [Cli], read_only: false
+        },
+        Stop(ActionsStopRequest => ActionsStopResult) as ActionsStop {
+            slot: 40, name: "actions.stop", surfaces: [Cli], read_only: false
         },
     }
     /// Check the owner's rules.

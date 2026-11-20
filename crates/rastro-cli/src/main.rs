@@ -1201,6 +1201,7 @@ fn human(response: &Response) -> String {
         Response::Actions(r) => actions_text(r),
         Response::ActionsShow(r) => actions_text(r),
         Response::ActionsUndo(r) => format!("Undone: {}", action_run_text(r)),
+        Response::ActionsStop(r) => format!("Stopped: {}", action_run_text(r)),
         Response::ActionsPropose(r) => actions_propose_text(r),
         Response::RulesCheck(r) => rules_check_text(r),
         Response::Focus(r) => focus_text(r),

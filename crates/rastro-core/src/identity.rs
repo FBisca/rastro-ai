@@ -73,9 +73,12 @@ pub enum IntentKind {
     /// Undo an action run: the owner had the provider delete what the run created. It names the
     /// run and its source's scope, and is what makes the run read `undone`.
     UndoAction,
+    /// Stop a pending Act run: the owner ends it before its grace ends. It names the run and its
+    /// source's scope, and is what makes the run read `stopped`: it never executes.
+    Stop,
 }
 impl IntentKind {
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 14] = [
         Self::CreatePerson,
         Self::Name,
         Self::Link,
@@ -89,6 +92,7 @@ impl IntentKind {
         Self::Answer,
         Self::Confirm,
         Self::UndoAction,
+        Self::Stop,
     ];
     pub fn as_str(self) -> &'static str {
         match self {
@@ -105,6 +109,7 @@ impl IntentKind {
             Self::Answer => "answer",
             Self::Confirm => "confirm",
             Self::UndoAction => "undo_action",
+            Self::Stop => "stop",
         }
     }
     /// The core validates kinds; storage keeps them as text with no SQL enum.
@@ -500,7 +505,7 @@ impl Intent {
                 .targets
                 .claim()
                 .map(|claim| format!("{CLAIM_DOMAIN}{}", claim.id)),
-            IntentKind::UndoAction => self
+            IntentKind::UndoAction | IntentKind::Stop => self
                 .targets
                 .queue_item()
                 .map(|run| format!("{ACTION_RUN_DOMAIN}{run}")),
@@ -681,8 +686,13 @@ impl Intent {
                 true
             }
             IntentKind::Confirm => false,
-            // The run's id sits where a queue item's does: the item an undo names is the run.
-            IntentKind::Accept | IntentKind::Edit | IntentKind::Reject | IntentKind::UndoAction => {
+            // The run's id sits where a queue item's does: the item an undo or a stop names is
+            // the run.
+            IntentKind::Accept
+            | IntentKind::Edit
+            | IntentKind::Reject
+            | IntentKind::UndoAction
+            | IntentKind::Stop => {
                 matches!(&self.targets, Targets::Proposal { item: Some(item), .. } if plain(item))
             }
             IntentKind::Missed => match &self.targets {
@@ -766,6 +776,8 @@ impl Intent {
                 // The undo of a run names the run and its source's scope, and nothing else, so
                 // its outcome is visible only where the run is.
                 IntentKind::UndoAction => check_undo_action(&self.targets)?,
+                // The stop of a run names the run and its source's scope, and nothing else.
+                IntentKind::Stop => check_stop(&self.targets)?,
                 // A rejection or a missed report is a decision about an item, not a commitment:
                 // it states no terms and mints no claim. It names its source's scope whenever it
                 // names an item, so its outcome is visible only where that source is.
@@ -802,7 +814,8 @@ impl Intent {
                     && (!matches!(self.kind, IntentKind::Edit | IntentKind::Reject)
                         || self.targets.claim().is_some())
                     && self.kind != IntentKind::Missed
-                    && self.kind != IntentKind::UndoAction,
+                    && self.kind != IntentKind::UndoAction
+                    && self.kind != IntentKind::Stop,
                 "a {} intent takes a queue proposal",
                 self.kind.as_str()
             ),
@@ -846,6 +859,34 @@ fn check_undo_action(targets: &Targets) -> Result<()> {
             && terms.is_empty()
             && scope.is_some(),
         "an undo of an action run names the run and its source's scope, and nothing else"
+    );
+    Ok(())
+}
+
+/// The stop of an action run names the run and its source's scope, and nothing else.
+fn check_stop(targets: &Targets) -> Result<()> {
+    let Targets::Proposal {
+        text,
+        seen,
+        edited,
+        subject,
+        parties,
+        terms,
+        scope,
+        ..
+    } = targets
+    else {
+        return Ok(());
+    };
+    ensure!(
+        seen.is_none()
+            && edited.is_none()
+            && text.is_none()
+            && subject.is_none()
+            && parties.is_empty()
+            && terms.is_empty()
+            && scope.is_some(),
+        "a stop of an action run names the run and its source's scope, and nothing else"
     );
     Ok(())
 }
@@ -1068,7 +1109,10 @@ impl Resolution {
                 }
                 // A proposal's answer is the owner's record of what they decided; its item
                 // leaves the queue by that record alone and it backs no claim.
-                IntentKind::Accept | IntentKind::Missed | IntentKind::UndoAction => {}
+                IntentKind::Accept
+                | IntentKind::Missed
+                | IntentKind::UndoAction
+                | IntentKind::Stop => {}
                 IntentKind::Edit if intent.targets.claim().is_none() => {}
                 // The latest valid correction of a claim is the one in force.
                 IntentKind::Confirm => {
@@ -1176,6 +1220,7 @@ impl Resolution {
             | IntentKind::Reject
             | IntentKind::Missed
             | IntentKind::UndoAction
+            | IntentKind::Stop
             | IntentKind::Confirm => {}
             IntentKind::Undo => {
                 let undone = intent.undo_of.as_deref().unwrap_or_default();
@@ -1251,6 +1296,7 @@ impl Resolution {
                     | IntentKind::Reject
                     | IntentKind::Missed => bail!("a proposal's answer can't be undone"),
                     IntentKind::UndoAction => bail!("an undo of an action run can't be undone"),
+                    IntentKind::Stop => bail!("a stop of an action run can't be undone"),
                     IntentKind::Confirm => {
                         bail!("a confirmation can only be undone with `rastro claim undo`")
                     }
