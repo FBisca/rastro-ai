@@ -31,7 +31,7 @@ pub(crate) use extract::vocabulary;
 /// How many helper threads a teardown left, for the tests that drive a connector directly.
 #[doc(hidden)]
 pub use io::Tally;
-pub use judge::{JudgmentFailure, MAX_RESPONSE_BYTES, judge};
+pub use judge::{JudgmentFailure, JudgmentSession, MAX_RESPONSE_BYTES};
 
 /// Queues one progress line for stderr. The printer drops it when its queue is full and
 /// ignores a stderr that fails, so this never blocks and never fails.

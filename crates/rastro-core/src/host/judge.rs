@@ -1,15 +1,16 @@
-//! The agent tool adapter role: the core sends one `judgment.request` to an adapter plugin and
-//! reads back its candidates (ADR 0012). The adapter reads untrusted text outside the core, so
-//! the core refuses a manifest that does not declare the kind and its capabilities before it
-//! starts anything, and treats the answer as data to check, never as instructions.
-use super::{
-    Connector, Limits, Plugin, Wire, allowed_environment, check, find, handshake, resolve,
-};
+//! The agent tool adapter role: the core opens one judgment session with an adapter plugin
+//! and sends the turns of one capped run over it (ADR 0012, ADR-0016). The adapter reads
+//! untrusted text outside the core, so the core refuses a manifest that does not declare the
+//! kind and its capabilities before it starts anything, and treats every answer as data to
+//! check, never as instructions. The session's process lives exactly as long as its run: no
+//! process outlives it (ADR-0016 §4).
+use super::{Connector, Limits, Plugin, allowed_environment, check, find, handshake, resolve};
 use crate::Locations;
 use rastro_plugin_sdk::{
     AGENT_TOOL_ADAPTER_KIND, AdapterInitializeParams, Envelope, JUDGMENT_REQUEST, JudgmentRequest,
-    JudgmentResponse, PROTOCOL_VERSION, Role,
+    PROTOCOL_VERSION, Role,
 };
+use serde_json::Value;
 use std::{
     process::Command,
     time::{Duration, Instant},
@@ -17,10 +18,8 @@ use std::{
 
 /// The most the core reads of an adapter's answer, in one line.
 pub const MAX_RESPONSE_BYTES: usize = 4 * 1024 * 1024;
-/// The id of the one request after `initialize`.
-const REQUEST_ID: u64 = 2;
 
-/// Why a judgment produced no response.
+/// Why a judgment turn produced no answer to check.
 #[derive(Debug)]
 pub enum JudgmentFailure {
     /// The adapter was refused, could not start, ended early, answered with an error, or timed
@@ -30,44 +29,121 @@ pub enum JudgmentFailure {
     Invalid(String),
 }
 
-/// Asks the adapter plugin `id` to judge `request`, within `timeout`.
-///
-/// The manifest is checked first (protocol major, the kind `agent-tool-adapter`, the declared
-/// agent-tool capabilities, no action permission): a refused adapter is never started. The
-/// adapter starts with a cleared environment plus the basics, what its manifest lists, and
-/// `RASTRO_HOME` when the core has one.
-///
-/// # Errors
-/// [`JudgmentFailure::Failed`] when the adapter is not installed, is refused, can't start, exits
-/// early, sends a JSON-RPC error or runs out of time; [`JudgmentFailure::Invalid`] when a line it
-/// sends is not a JSON-RPC message, the answer is not the response shape, or it sends anything
-/// but the one response.
-pub fn judge(
-    locations: &Locations,
-    id: &str,
+/// One judgment session: one checked, initialized adapter process that answers the turns of
+/// one run. The core sends each turn as a `judgment.request` over the same conversation; a
+/// retry turn carries its session object, and the adapter resumes what the first turn began.
+/// Close it when the run ends: a clean finish lets the process exit on its own, a failed run
+/// kills it.
+pub struct JudgmentSession {
+    adapter: Connector,
+    id: String,
     timeout: Duration,
-    request: &JudgmentRequest,
-) -> Result<JudgmentResponse, JudgmentFailure> {
-    let plugin = adapter(locations, id)?;
-    let mut command = Command::new(resolve(&plugin.dir, &plugin.manifest.command));
-    command
-        .env_clear()
-        .envs(allowed_environment(&plugin.manifest))
-        .envs(std::env::var_os("RASTRO_HOME").map(|home| ("RASTRO_HOME", home)));
-    let limits = Limits {
-        max_line: MAX_RESPONSE_BYTES,
-        silence: timeout,
-        extraction_time: timeout,
-        ..Limits::from_env()
-    };
-    let Ok(mut adapter) = Connector::launch(command, &plugin.manifest.id, limits) else {
-        return Err(JudgmentFailure::Failed(format!(
-            "the adapter {id} can't start"
-        )));
-    };
-    let outcome = converse(&mut adapter.wire, &plugin, request, timeout);
-    adapter.teardown(outcome.is_ok());
-    outcome
+    next_request: u64,
+}
+impl JudgmentSession {
+    /// Opens a session with the adapter plugin `id`, each of its turns bounded by `timeout`.
+    ///
+    /// The manifest is checked first (protocol major, the kind `agent-tool-adapter`, the
+    /// declared agent-tool capabilities, no action permission): a refused adapter is never
+    /// started. The adapter starts with a cleared environment plus the basics, what its
+    /// manifest lists, and `RASTRO_HOME` when the core has one, and answers `initialize`
+    /// before any turn.
+    ///
+    /// # Errors
+    /// [`JudgmentFailure::Failed`] when the adapter is not installed, is refused, can't start,
+    /// exits early or runs out of time; [`JudgmentFailure::Invalid`] when it does not answer
+    /// `initialize` with this protocol and its manifest id.
+    pub fn open(
+        locations: &Locations,
+        id: &str,
+        timeout: Duration,
+    ) -> Result<Self, JudgmentFailure> {
+        let plugin = adapter(locations, id)?;
+        let mut command = Command::new(resolve(&plugin.dir, &plugin.manifest.command));
+        command
+            .env_clear()
+            .envs(allowed_environment(&plugin.manifest))
+            .envs(std::env::var_os("RASTRO_HOME").map(|home| ("RASTRO_HOME", home)));
+        let limits = Limits {
+            max_line: MAX_RESPONSE_BYTES,
+            silence: timeout,
+            extraction_time: timeout,
+            ..Limits::from_env()
+        };
+        let Ok(mut adapter) = Connector::launch(command, &plugin.manifest.id, limits) else {
+            return Err(JudgmentFailure::Failed(format!(
+                "the adapter {id} can't start"
+            )));
+        };
+        let init = AdapterInitializeParams {
+            protocol: PROTOCOL_VERSION.into(),
+            manifest_id: plugin.manifest.id.clone(),
+            role: Role::AgentToolAdapter,
+        };
+        let id = plugin.manifest.id.clone();
+        let failure = match handshake(&mut adapter.wire, &plugin, init) {
+            Ok(Ok(())) => None,
+            Ok(Err("protocol")) => Some(JudgmentFailure::Invalid(format!(
+                "the adapter {id} did not answer `initialize` with this protocol and its manifest id"
+            ))),
+            Ok(Err(reason)) => Some(broke(&id, reason, timeout)),
+            Err(error) => Some(JudgmentFailure::Failed(format!("{error:#}"))),
+        };
+        if let Some(failure) = failure {
+            adapter.teardown(false);
+            return Err(failure);
+        }
+        Ok(Self {
+            adapter,
+            id,
+            timeout,
+            next_request: 2,
+        })
+    }
+
+    /// Sends one turn of the session and reads its answer: the raw `result` JSON, for the
+    /// core's own gates to check. The turn gets the full per-turn timeout, however long the
+    /// turns before it took.
+    ///
+    /// # Errors
+    /// [`JudgmentFailure::Failed`] when the adapter exits early, sends a JSON-RPC error or
+    /// runs out of time; [`JudgmentFailure::Invalid`] when a line it sends is not a JSON-RPC
+    /// message, or it sends anything but the response to this turn's `judgment.request`.
+    pub fn turn(&mut self, request: &JudgmentRequest) -> Result<Value, JudgmentFailure> {
+        let request_id = self.next_request;
+        self.next_request += 1;
+        let message = Envelope::request(request_id, JUDGMENT_REQUEST, request)
+            .map_err(|error| JudgmentFailure::Failed(format!("{error:#}")))?;
+        let broke = |reason: &str| broke(&self.id, reason, self.timeout);
+        self.adapter.wire.send(&message).map_err(broke)?;
+        let reply = self
+            .adapter
+            .wire
+            .recv_by(Instant::now() + self.timeout)
+            .map_err(broke)?;
+        if reply.id != Some(request_id.into()) || reply.method.is_some() {
+            return Err(JudgmentFailure::Invalid(format!(
+                "the adapter {} sent something other than the response to `judgment.request`",
+                self.id
+            )));
+        }
+        if let Some(error) = &reply.error {
+            return Err(JudgmentFailure::Failed(format!(
+                "the adapter {} answered with an error: {}",
+                self.id,
+                crate::display_safe(&error.to_string())
+            )));
+        }
+        reply.result.ok_or_else(|| {
+            JudgmentFailure::Invalid(format!("the adapter {} answered without a result", self.id))
+        })
+    }
+
+    /// Ends the session's process: after a clean finish it gets the shutdown deadline to exit
+    /// on its own; a failed run kills its whole process group.
+    pub fn close(self, succeeded: bool) {
+        self.adapter.teardown(succeeded);
+    }
 }
 
 /// The installed adapter `id`, if it passes its checks.
@@ -89,14 +165,9 @@ fn adapter(locations: &Locations, id: &str) -> Result<Plugin, JudgmentFailure> {
     Ok(plugin)
 }
 
-fn converse(
-    wire: &mut Wire,
-    plugin: &Plugin,
-    request: &JudgmentRequest,
-    timeout: Duration,
-) -> Result<JudgmentResponse, JudgmentFailure> {
-    let id = &plugin.manifest.id;
-    let broke = |reason: &str| match reason {
+/// A conversation that broke before an answer arrived.
+fn broke(id: &str, reason: &str, timeout: Duration) -> JudgmentFailure {
+    match reason {
         "protocol" => JudgmentFailure::Invalid(format!(
             "the adapter {id} sent a line that is not a JSON-RPC message, or one over {MAX_RESPONSE_BYTES} bytes"
         )),
@@ -107,42 +178,5 @@ fn converse(
         _ => JudgmentFailure::Failed(format!(
             "the adapter {id} exited or closed its output before it answered"
         )),
-    };
-    let started = Instant::now();
-    let init = AdapterInitializeParams {
-        protocol: PROTOCOL_VERSION.into(),
-        manifest_id: id.clone(),
-        role: Role::AgentToolAdapter,
-    };
-    match handshake(wire, plugin, init) {
-        Ok(Ok(())) => {}
-        Ok(Err("protocol")) => {
-            return Err(JudgmentFailure::Invalid(format!(
-                "the adapter {id} did not answer `initialize` with this protocol and its manifest id"
-            )));
-        }
-        Ok(Err(reason)) => return Err(broke(reason)),
-        Err(error) => return Err(JudgmentFailure::Failed(format!("{error:#}"))),
     }
-    let message = Envelope::request(REQUEST_ID, JUDGMENT_REQUEST, request)
-        .map_err(|error| JudgmentFailure::Failed(format!("{error:#}")))?;
-    wire.send(&message).map_err(broke)?;
-    let reply = wire.recv_by(started + timeout).map_err(broke)?;
-    if reply.id != Some(REQUEST_ID.into()) || reply.method.is_some() {
-        return Err(JudgmentFailure::Invalid(format!(
-            "the adapter {id} sent something other than the response to `judgment.request`"
-        )));
-    }
-    if let Some(error) = &reply.error {
-        return Err(JudgmentFailure::Failed(format!(
-            "the adapter {id} answered with an error: {}",
-            crate::display_safe(&error.to_string())
-        )));
-    }
-    reply.result::<JudgmentResponse>().map_err(|error| {
-        JudgmentFailure::Invalid(format!(
-            "the adapter {id}'s response is not the judgment shape: {}",
-            crate::display_safe(&format!("{error:#}"))
-        ))
-    })
 }

@@ -214,6 +214,9 @@ impl Config {
             );
         }
         rules::validate(&config, locations)?;
+        if let Some(adapter) = &config.commitment_adapter {
+            adapter.validate()?;
+        }
         Ok(config)
     }
     fn save(&self, locations: &Locations) -> Result<()> {
