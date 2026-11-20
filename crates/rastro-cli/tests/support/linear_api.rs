@@ -6,7 +6,9 @@
 //! delete by moving the issue to the trash (`trashed`, `archivedAt`), where a lookup by id still
 //! finds it, and can lose the response to the next delete. It answers who the key belongs to, and
 //! reads an issue's comments and change history a page of [`PAGE`] at a time, as seeded by the test:
-//! each page can be made to fail.
+//! each page can be made to fail. It holds the teams [`TEAMS`] and answers a team lookup by key, and,
+//! as Linear does, refuses an issue create whose team is not one of their ids or whose assignee is
+//! not one of the users it holds, making no issue.
 #![allow(dead_code)]
 use serde_json::{Value, json};
 use std::{
@@ -44,6 +46,28 @@ impl User {
         json!({"id": self.id, "name": self.name})
     }
 }
+
+/// A Linear team: its key as the owner writes it, and the id Linear knows it by.
+#[derive(Clone, Copy)]
+pub struct Team {
+    pub key: &'static str,
+    pub id: &'static str,
+}
+
+/// The team `H`.
+pub const TEAM_H: Team = Team {
+    key: "H",
+    id: "team-h-uuid",
+};
+
+/// The team `ENG`.
+pub const TEAM_ENG: Team = Team {
+    key: "ENG",
+    id: "team-eng-uuid",
+};
+
+/// The teams the fake holds.
+pub const TEAMS: [Team; 2] = [TEAM_H, TEAM_ENG];
 
 /// How many comments or history entries the fake gives a page, whatever the caller asks for, so
 /// a read of a few of them takes several pages.
@@ -149,12 +173,27 @@ impl World {
         (200, reply)
     }
 
+    /// Whether the create's team and assignee are ids the fake holds, as Linear requires.
+    fn holds_ids(&self, input: &Value) -> bool {
+        TEAMS.iter().any(|team| input["teamId"] == team.id)
+            && [OWNER, COLLEAGUE]
+                .iter()
+                .any(|user| input["assigneeId"] == user.id)
+    }
+
     fn reply(&mut self, req: &Req) -> (u16, Value, Fate) {
         let mut fate = Fate::Respond;
         let (status, body) = match req.operation.as_str() {
             "IssueCreate" if self.refuse_creates => (
                 500,
                 json!({"errors": [{"message": "Linear is down", "extensions": {"code": "INTERNAL_SERVER_ERROR"}}]}),
+            ),
+            "IssueCreate" if !self.holds_ids(req.input()) => (
+                200,
+                json!({"data": null, "errors": [{
+                    "message": "Argument Validation Error",
+                    "extensions": {"type": "invalid input", "code": "INVALID_INPUT"}
+                }]}),
             ),
             "IssueCreate" => {
                 let input = req.input();
@@ -191,6 +230,14 @@ impl World {
                     fate = Fate::Lose;
                 }
                 (200, json!({"data": {"issueDelete": {"success": found}}}))
+            }
+            "Teams" => {
+                let key = &req.body["variables"]["key"];
+                let nodes: Vec<Value> = (TEAMS.iter())
+                    .filter(|team| key == team.key)
+                    .map(|team| json!({"id": team.id, "key": team.key}))
+                    .collect();
+                (200, json!({"data": {"teams": {"nodes": nodes}}}))
             }
             "Viewer" => (200, json!({"data": {"viewer": OWNER.json()}})),
             "IssueComments" | "IssueHistory" => self.page(req),

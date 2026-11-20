@@ -4,7 +4,9 @@
 //!
 //! `action.execute` creates the issue with the run's random id as the issue's own, from the title,
 //! description, team and assignee the owner accepted and nothing else: the why, the citations and
-//! every Rastro id stay in Rastro. `action.lookup` finds the issue under that id, so a run
+//! every Rastro id stay in Rastro. Just before the create it asks Linear for the id of the team the
+//! run's team key names and, for the assignee `me`, whose key this is, and sends those ids; a team
+//! key Linear holds no team for fails the run, naming the key, before anything is created. `action.lookup` finds the issue under that id, so a run
 //! executed again, or whose answer was lost, learns what the first execution did before it creates
 //! anything. `action.undo` deletes the issue under that id, unless Linear already holds none, so
 //! an undo whose answer was lost deletes nothing the second time. Before it deletes, it reads the

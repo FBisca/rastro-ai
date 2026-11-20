@@ -23,6 +23,13 @@ const ISSUE_DELETE: &str =
 /// The one document that asks whose key this is: the owner's.
 const VIEWER: &str = "query Viewer { viewer { id name } }";
 
+/// The one document that finds a team's Linear id by its key.
+const TEAM_BY_KEY: &str =
+    "query Teams($key: String!) { teams(filter: {key: {eq: $key}}) { nodes { id key } } }";
+
+/// The assignee that names the key's owner.
+const ME: &str = "me";
+
 /// The one document a read of an issue's comments sends, one page at a time.
 const ISSUE_COMMENTS: &str = "query IssueComments($id: String!, $after: String) { \
     issue(id: $id) { comments(first: 100, after: $after) { \
@@ -61,7 +68,8 @@ pub struct Created {
     pub trashed: bool,
 }
 
-/// The content an issue is created with: what the owner accepted, and nothing else.
+/// The content an issue is created with: what the owner accepted, and nothing else. The team is
+/// its key and the assignee is `me` or a Linear user id; the client turns them into Linear ids.
 pub struct Issue<'a> {
     /// The run's random id, which Linear keeps as the issue's own.
     pub id: &'a str,
@@ -71,12 +79,13 @@ pub struct Issue<'a> {
     pub assignee: &'a str,
 }
 impl Issue<'_> {
-    fn input(&self) -> Value {
+    /// The create's input, with the team and assignee as the Linear ids `team_id` and `assignee_id`.
+    fn input(&self, team_id: &str, assignee_id: &str) -> Value {
         let mut input = json!({
             "id": self.id,
             "title": self.title,
-            "teamId": self.team,
-            "assigneeId": self.assignee,
+            "teamId": team_id,
+            "assigneeId": assignee_id,
         });
         if let Some(description) = self.description {
             input["description"] = description.into();
@@ -115,10 +124,21 @@ impl Client {
         })
     }
 
-    /// Creates the issue. Fails, without the key in the message, when Linear is unreachable,
-    /// answers with an error or a status that is not a success, or does not confirm the issue.
+    /// Creates the issue under the Linear id of the team its key names and, for the assignee `me`,
+    /// the key owner's user id; any other assignee is sent as it is. Fails, sending no create,
+    /// when Linear holds no team by the key. Fails, without the key in the message, when Linear is
+    /// unreachable, answers with an error or a status that is not a success, or does not confirm
+    /// the issue.
     pub fn create_issue(&self, issue: &Issue) -> Result<Created> {
-        let data = self.query(ISSUE_CREATE, json!({"input": issue.input()}))?;
+        let team = self.team_id(issue.team)?;
+        let assignee = match issue.assignee {
+            ME => self.owner()?,
+            other => other.to_string(),
+        };
+        let data = self.query(
+            ISSUE_CREATE,
+            json!({"input": issue.input(&team, &assignee)}),
+        )?;
         let created = &data["issueCreate"];
         if created["success"] != true {
             bail!("Linear did not confirm the issue");
@@ -192,6 +212,17 @@ impl Client {
             }
         }
         Ok(())
+    }
+
+    /// The Linear id of the team whose key is `key`. Fails, naming the key, when Linear holds none.
+    fn team_id(&self, key: &str) -> Result<String> {
+        let data = self.query(TEAM_BY_KEY, json!({"key": key}))?;
+        let teams = data["teams"]["nodes"].as_array();
+        let found = teams.into_iter().flatten().find(|team| team["key"] == key);
+        match found.and_then(|team| team["id"].as_str()) {
+            Some(id) => Ok(id.into()),
+            None => bail!("Linear holds no team with the key {key}"),
+        }
     }
 
     /// The id of the user the key belongs to.

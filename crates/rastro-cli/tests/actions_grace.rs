@@ -163,8 +163,8 @@ fn tick_at_the_grace_end_creates_the_issue_once_with_exactly_the_proposed_conten
         .collect();
     assert_eq!(
         sent,
-        ["IssueLookup", "IssueCreate"],
-        "the run's id is looked up before any create"
+        ["IssueLookup", "Teams", "Viewer", "IssueCreate"],
+        "the run's id is looked up before any create, and the ids it names just before it"
     );
     // The create holds exactly the proposal's content and the run's issue id, and nothing else.
     let input = creates[0].input().as_object().unwrap();
@@ -176,8 +176,8 @@ fn tick_at_the_grace_end_creates_the_issue_once_with_exactly_the_proposed_conten
     );
     assert_eq!(input["title"], TITLE);
     assert_eq!(input["description"], DESCRIPTION);
-    assert_eq!(input["teamId"], "H");
-    assert_eq!(input["assigneeId"], "me");
+    assert_eq!(input["teamId"], linear_api::TEAM_H.id);
+    assert_eq!(input["assigneeId"], linear_api::OWNER.id);
     assert_eq!(input["id"], issue_id.as_str());
 
     let run = env.run();
