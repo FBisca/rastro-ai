@@ -24,7 +24,7 @@ use rastro_plugin_sdk::{
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
-use serde_json::Value;
+use serde_json::{Value, json};
 use std::{
     collections::{BTreeMap, BTreeSet},
     io::Read,
@@ -354,6 +354,20 @@ pub struct Recording {
     pub spans: Vec<Span>,
     pub speakers: Vec<(String, Identity)>,
 }
+/// One turn of a run's judgment session as the run's history keeps it (ADR-0016 §3): the
+/// request the core sent, the adapter's answer and the core's gate verdict. Failed turns are
+/// kept like any other; an export leaves the history out, and forgetting the meeting removes it.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SessionTurn {
+    /// Counted from 1 within the session.
+    pub turn: usize,
+    /// The request the core sent, as the wire JSON.
+    pub request: String,
+    /// The adapter's answer as the wire JSON; `None` when it never answered.
+    pub answer: Option<String>,
+    /// The core's gate verdict for this turn, as deterministic JSON.
+    pub verdict: String,
+}
 /// A finished run to record, with its hypotheses when it succeeded.
 #[derive(Clone, Debug)]
 pub struct RunRecord {
@@ -374,6 +388,9 @@ pub struct RunRecord {
     /// Present on a successful run.
     pub recorded: Option<Recorded>,
     pub transcript: TranscriptKeep,
+    /// The judgment session's turns in order, failed ones included; empty when no session ran
+    /// (a replay, or a run refused before the adapter started).
+    pub turns: Vec<SessionTurn>,
 }
 
 impl StoredMeeting {
@@ -527,6 +544,21 @@ fn fail<T>(cause: Cause, reason: impl Into<String>) -> Result<T, Failure> {
     })
 }
 
+/// The verdict a passing turn's history keeps.
+const PASS_VERDICT: &str = r#"{"passed":true}"#;
+
+/// A gate failure's verdict: the core-authored feedback the retry turn carries, as JSON.
+fn gate_verdict(feedback: &[GateFeedback]) -> String {
+    serde_json::to_string(&json!({ "passed": false, "feedback": feedback }))
+        .expect("gate feedback is plain data and serialises")
+}
+
+/// A system failure's verdict: no answer arrived; the reason names what broke.
+fn system_verdict(reason: &str) -> String {
+    serde_json::to_string(&json!({ "passed": false, "reason": reason }))
+        .expect("a verdict reason is plain data and serialises")
+}
+
 /// Maps a session failure to the run's typed cause: a system failure fails the run, a broken
 /// wire keeps the output-invalid name it has always had.
 fn judgment_failure(failure: JudgmentFailure) -> Failure {
@@ -544,29 +576,39 @@ fn judgment_failure(failure: JudgmentFailure) -> Failure {
 
 /// Asks the configured adapter to judge the turns, running the core's gates on every answer:
 /// a gate failure earns the failure reason as the next turn of the same session while turns
-/// remain under the cap (ADR-0016 §8). Only the final validated answer is returned.
+/// remain under the cap (ADR-0016 §8). Only the final validated answer is returned, with the
+/// session's turn history — every turn's request, answer and verdict, failed turns included.
 fn ask_adapter(
     locations: &crate::Locations,
     config: &CommitmentAdapter,
     people: &People,
     turns: &[Turn],
-) -> Result<Validated, Failure> {
-    let mut session = host::JudgmentSession::open(locations, &config.plugin, config.turn_timeout())
-        .map_err(judgment_failure)?;
-    let outcome = judge_turns(&mut session, config.max_turns(), people, turns);
+) -> (Result<Validated, Failure>, Vec<SessionTurn>) {
+    let mut session =
+        match host::JudgmentSession::open(locations, &config.plugin, config.turn_timeout()) {
+            Ok(session) => session,
+            Err(failure) => return (Err(judgment_failure(failure)), Vec::new()),
+        };
+    let (outcome, history) = judge_turns(&mut session, config.max_turns(), people, turns);
     session.close(outcome.is_ok());
-    outcome
+    (outcome, history)
 }
 
 /// The turns of one session: ask, gate, and on a gate failure ask again with the core's
 /// feedback, until an answer passes every gate or the cap is exhausted. A system failure on
-/// any turn fails the run; no partial answer of a failed turn becomes evidence.
+/// any turn fails the run; no partial answer of a failed turn becomes evidence. Every turn is
+/// recorded as the run's history, with its request, answer and gate verdict (ADR-0016 §3).
+#[expect(
+    clippy::too_many_lines,
+    reason = "the session loop asks, gates, records every turn and retries in one place"
+)]
 fn judge_turns(
     session: &mut host::JudgmentSession,
     cap: u64,
     people: &People,
     turns: &[Turn],
-) -> Result<Validated, Failure> {
+) -> (Result<Validated, Failure>, Vec<SessionTurn>) {
+    let mut history: Vec<SessionTurn> = Vec::new();
     let mut request = JudgmentRequest {
         instructions: INSTRUCTIONS.into(),
         owner_speaker: people.owner.clone(),
@@ -583,18 +625,49 @@ fn judge_turns(
     };
     let mut feedback: Vec<GateFeedback> = Vec::new();
     let mut prior: Option<Value> = None;
+    let mut session_id: Option<String> = None;
     for turn in 1..=cap {
         if let Some(value) = &prior {
             request.session = Some(JudgmentSession {
                 turn,
                 feedback: feedback.clone(),
-                prior_answer: prior_answer_of(value),
+                prior_answer: prior_answer_of(value, session_id.as_deref()),
             });
         }
-        let value = session.turn(&request).map_err(judgment_failure)?;
+        let sent = serde_json::to_string(&request)
+            .expect("the judgment request is plain data and serialises");
+        let value = match session.turn(&request) {
+            Ok(value) => value,
+            Err(failure) => {
+                let failure = judgment_failure(failure);
+                history.push(SessionTurn {
+                    turn: turn as usize,
+                    request: sent,
+                    answer: None,
+                    verdict: system_verdict(&failure.reason),
+                });
+                return (Err(failure), history);
+            }
+        };
+        // Persist the first harness session id the session produced: every retry turn resumes
+        // it, even when a later answer omits it (ADR-0016 §4).
+        if session_id.is_none() {
+            session_id = value
+                .get("session_id")
+                .and_then(Value::as_str)
+                .filter(|id| !id.is_empty())
+                .map(str::to_string);
+        }
+        let answer = value.to_string();
         let response = match shape_gate(&value) {
             Ok(response) => response,
             Err(found) => {
+                history.push(SessionTurn {
+                    turn: turn as usize,
+                    request: sent,
+                    answer: Some(answer),
+                    verdict: gate_verdict(&found),
+                });
                 feedback = found;
                 prior = Some(value);
                 continue;
@@ -606,8 +679,22 @@ fn judge_turns(
             .map(Candidate::from)
             .collect();
         match validate(candidates, turns, people) {
-            Verdict::Pass(validated) => return Ok(validated),
+            Verdict::Pass(validated) => {
+                history.push(SessionTurn {
+                    turn: turn as usize,
+                    request: sent,
+                    answer: Some(answer),
+                    verdict: PASS_VERDICT.into(),
+                });
+                return (Ok(validated), history);
+            }
             Verdict::Retry(found) => {
+                history.push(SessionTurn {
+                    turn: turn as usize,
+                    request: sent,
+                    answer: Some(answer),
+                    verdict: gate_verdict(&found),
+                });
                 feedback = found;
                 prior = Some(value);
             }
@@ -620,12 +707,15 @@ fn judge_turns(
     } else {
         Cause::ExtractorOutputInvalid
     };
-    fail(
-        cause,
-        format!(
-            "the turn cap of {cap} is exhausted; the last answer fails the {gate} gate: {}",
-            feedback_details(&feedback)
+    (
+        fail(
+            cause,
+            format!(
+                "the turn cap of {cap} is exhausted; the last answer fails the {gate} gate: {}",
+                feedback_details(&feedback)
+            ),
         ),
+        history,
     )
 }
 
@@ -794,17 +884,23 @@ fn shape_candidate(candidate: &Value, n: usize, feedback: &mut Vec<GateFeedback>
 }
 
 /// The prior answer a retry turn carries: the typed response when the answer was the judgment
-/// shape; a shape-broken answer cannot be typed, so its harness session id and degradation
-/// ride along with empty candidates and the feedback names what was there (ADR-0016 §4, §8).
-fn prior_answer_of(value: &Value) -> JudgmentResponse {
-    serde_json::from_value(value.clone()).unwrap_or_else(|_| JudgmentResponse {
-        candidates: Vec::new(),
-        session_id: value
-            .get("session_id")
-            .and_then(Value::as_str)
-            .map(str::to_string),
-        degraded: value.get("degraded").and_then(Value::as_bool),
-    })
+/// shape; a shape-broken answer cannot be typed, so its degradation rides along with empty
+/// candidates and the feedback names what was there. The persisted harness session id wins over
+/// whatever the answer names, so the retry resumes the session the first turn produced
+/// (ADR-0016 §4, §8).
+fn prior_answer_of(value: &Value, session_id: Option<&str>) -> JudgmentResponse {
+    let mut response =
+        serde_json::from_value::<JudgmentResponse>(value.clone()).unwrap_or_else(|_| {
+            JudgmentResponse {
+                candidates: Vec::new(),
+                session_id: None,
+                degraded: value.get("degraded").and_then(Value::as_bool),
+            }
+        });
+    if let Some(id) = session_id {
+        response.session_id = Some(id.to_string());
+    }
+    response
 }
 
 /// The gate failures as one deterministic line: field, expected, actual, in the order the
@@ -1208,6 +1304,7 @@ impl<S: Storage> Rastro<S> {
         let mut turns_total = 0;
         let mut extractor = None;
         let mut transcript = TranscriptKeep::Untouched;
+        let mut history: Vec<SessionTurn> = Vec::new();
         let outcome = (|| -> Result<(Validated, Recorded), Failure> {
             let text = read_transcript(&request.file)?;
             let turns = match parse_transcript(&text) {
@@ -1234,7 +1331,9 @@ impl<S: Storage> Rastro<S> {
                 );
             };
             extractor = Some(config.plugin.clone());
-            let validated = ask_adapter(&self.locations, &config, &people, &turns)?;
+            let (judged, session_turns) = ask_adapter(&self.locations, &config, &people, &turns);
+            history = session_turns;
+            let validated = judged?;
             let recorded = record_of(&validated, &turns, &people);
             Ok((validated, recorded))
         })();
@@ -1259,6 +1358,7 @@ impl<S: Storage> Rastro<S> {
             replay_of: None,
             recorded: None,
             transcript,
+            turns: history,
         };
         match outcome {
             Ok((validated, recorded)) => {
@@ -1378,6 +1478,7 @@ impl<S: Storage> Rastro<S> {
             replay_of: Some(recording.run),
             recorded: None,
             transcript: TranscriptKeep::Untouched,
+            turns: Vec::new(),
         };
         match outcome {
             Ok((validated, recorded)) => {

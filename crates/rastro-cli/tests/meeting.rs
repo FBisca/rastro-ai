@@ -29,6 +29,7 @@ kinds = ["agent-tool-adapter"]
 protocol = 1
 command = "adapter"
 agent_tool = { capabilities = ["judge_text"] }
+enforcement = ["tools_off", "no_mcp_servers", "no_setting_sources"]
 
 [permissions]
 submit = []
@@ -911,10 +912,26 @@ fn S7_default_import_retains_spans_and_output_but_not_the_transcript() {
     assert_eq!(rows(&env, "meeting_output"), 1);
     assert!(rows(&env, "meeting_span") >= 3);
     let bytes = stored_bytes(&env);
-    // Cited turns are kept; a turn nothing cites is not.
+    // Cited turns are kept as spans; a turn nothing cites is not a span, and the full transcript
+    // is not retained. The session history records the request the core sent (every turn) as the
+    // run's audit record, apart from the replay spans and the opt-in transcript (ADR 0016 §3).
     assert!(holds(&bytes, "I'll send Bob the budget by Friday"));
-    assert!(!holds(&bytes, "I will email Dave the notes tomorrow"));
-    assert!(!holds(&bytes, "Thanks. I'll review it next week"));
+    assert_eq!(
+        count_where(
+            &env,
+            "meeting_span",
+            "text LIKE '%I will email Dave the notes tomorrow%'"
+        ),
+        0
+    );
+    assert_eq!(
+        count_where(
+            &env,
+            "meeting_span",
+            "text LIKE '%Thanks. I''ll review it next week%'"
+        ),
+        0
+    );
     assert_eq!(env.read()["transcript_retained"], false);
 
     let export = env.ok(&["meeting", "export", "weekly-1"]);

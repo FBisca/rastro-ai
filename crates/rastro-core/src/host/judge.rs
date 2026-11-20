@@ -7,8 +7,8 @@
 use super::{Connector, Limits, Plugin, allowed_environment, check, find, handshake, resolve};
 use crate::Locations;
 use rastro_plugin_sdk::{
-    AGENT_TOOL_ADAPTER_KIND, AdapterInitializeParams, Envelope, JUDGMENT_REQUEST, JudgmentRequest,
-    PROTOCOL_VERSION, Role,
+    AGENT_TOOL_ADAPTER_KIND, AdapterInitializeParams, Envelope, JUDGMENT_FLOOR, JUDGMENT_REQUEST,
+    JudgmentRequest, PROTOCOL_VERSION, Role,
 };
 use serde_json::Value;
 use std::{
@@ -44,10 +44,10 @@ impl JudgmentSession {
     /// Opens a session with the adapter plugin `id`, each of its turns bounded by `timeout`.
     ///
     /// The manifest is checked first (protocol major, the kind `agent-tool-adapter`, the
-    /// declared agent-tool capabilities, no action permission): a refused adapter is never
-    /// started. The adapter starts with a cleared environment plus the basics, what its
-    /// manifest lists, and `RASTRO_HOME` when the core has one, and answers `initialize`
-    /// before any turn.
+    /// declared agent-tool capabilities, no action permission, and the judgment floor's controls
+    /// it declares it can enforce): a refused adapter is never started. The adapter starts with a
+    /// cleared environment plus the basics, what its manifest lists, and `RASTRO_HOME` when the
+    /// core has one, and answers `initialize` before any turn.
     ///
     /// # Errors
     /// [`JudgmentFailure::Failed`] when the adapter is not installed, is refused, can't start,
@@ -162,6 +162,20 @@ fn adapter(locations: &Locations, id: &str) -> Result<Plugin, JudgmentFailure> {
         .manifest
         .check_agent_tool()
         .map_err(|error| refused(format!("{error:#}")))?;
+    // The judgment floor is non-negotiable (ADR-0016 §6): a manifest that cannot enforce one of
+    // its controls refuses the run naming it, before the adapter starts. There is no
+    // degraded-security mode.
+    let missing: Vec<&str> = JUDGMENT_FLOOR
+        .iter()
+        .filter(|control| !plugin.manifest.enforcement.iter().any(|c| c == *control))
+        .copied()
+        .collect();
+    if !missing.is_empty() {
+        return Err(refused(format!(
+            "the judgment floor requires {}, which its manifest does not declare it can enforce",
+            missing.join(", ")
+        )));
+    }
     Ok(plugin)
 }
 
