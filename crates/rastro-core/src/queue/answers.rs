@@ -97,10 +97,10 @@ fn refuse_pending_act(view: &dyn Snapshot, item: &str) -> Result<()> {
         .find(|run| run.proposal == item && run.status == RunStatus::Pending)
     {
         bail!(
-            "{item} has a pending Act {}: stop it with `rastro actions stop {}`, or wait for \
+            "{item} has a pending Act {}: stop it with `{}`, or wait for \
              its grace to end",
             run.id,
-            run.id
+            actions::stop_command(&run.id)
         );
     }
     Ok(())
