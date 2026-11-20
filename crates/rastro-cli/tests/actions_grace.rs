@@ -236,3 +236,35 @@ fn undoing_a_done_act_deletes_its_issue_and_the_run_reads_undone() {
     );
     assert_eq!(env.run()["status"], "undone");
 }
+
+// spec: A real issue goes through a rule
+/// The switch day in one sitting: with the owner's rule on team `H`, an agent proposes the owner's
+/// next issue, the grace window passes with no accept, a tick creates it, and Linear holds exactly
+/// the proposed title and description; `actions show` names the rule that authorized it.
+#[test]
+fn an_agents_proposal_under_the_owners_rule_becomes_the_issue_once_the_grace_passes() {
+    let env = Env::new();
+    let id = env.propose();
+
+    env.ok(&["tick"], BEFORE);
+    assert!(
+        env.linear.creates().is_empty(),
+        "sent before the grace ended"
+    );
+
+    env.ok(&["tick"], DUE);
+
+    let creates = env.linear.creates();
+    assert_eq!(creates.len(), 1, "{creates:?}");
+    let input = creates[0].input();
+    assert_eq!(input["title"], TITLE);
+    assert_eq!(input["description"], DESCRIPTION);
+    assert_eq!(input["teamId"], linear_api::TEAM_H.id);
+    assert_eq!(input["assigneeId"], linear_api::OWNER.id);
+    let shown = env.ok_json(&["actions", "show", &id], AFTER);
+    let run = &shown["runs"][0];
+    assert_eq!(run["status"], "done", "{shown}");
+    assert_eq!(run["level"], "act", "{shown}");
+    assert!(run.get("accept_intent").is_none(), "{run}");
+    assert_eq!(run["rule"]["name"], "my-issues", "{shown}");
+}
