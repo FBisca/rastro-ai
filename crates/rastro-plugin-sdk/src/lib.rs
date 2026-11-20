@@ -1375,7 +1375,6 @@ evidence_requirement = "r"
 
     /// S9: a codex, pi or decision adapter's manifest passes the check as kind
     /// agent-tool-adapter with its declared capability and no named tool.
-    // spec: A harness adapter is a thin CLI driver bindable for one-shot judgment
     // spec: An adapter's manifest declares its kind and names no tool
     #[test]
     fn a_harness_or_decision_adapter_manifest_passes_the_check() {
@@ -1396,7 +1395,6 @@ evidence_requirement = "r"
 
     /// A manifest keeps the boundary enforcement it declares, and one without the field still
     /// parses: the declaration the core matches is exactly what the adapter wrote.
-    // spec: The core matches the adapter's declared boundary enforcement before a run
     // spec: An adapter's manifest declares its kind and names no tool
     #[test]
     fn a_manifest_keeps_its_declared_boundary_enforcement() {
@@ -1419,7 +1417,6 @@ evidence_requirement = "r"
     /// and a retry turn's session object and the answer's session id and degradation survive
     /// the wire unchanged.
     // spec: The core calls the adapter and keeps only the candidates that pass its checks
-    // spec: A session turn resumes the harness or degrades recorded
     #[test]
     fn the_judgment_session_wire_is_additive() {
         let one_shot = json!({
@@ -1461,7 +1458,6 @@ evidence_requirement = "r"
 
     /// A decision request carries the caller's instructions, input and schema, and its answer
     /// carries the structured output the core validates against that schema.
-    // spec: A decision adapter scores text through the same session protocol
     #[test]
     fn a_decision_request_and_response_round_trip() {
         let request = json!({
