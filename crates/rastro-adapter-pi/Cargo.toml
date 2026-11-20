@@ -1,0 +1,19 @@
+[package]
+name = "rastro-adapter-pi"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[package.metadata.rastro]
+role = "plugin"
+
+[dependencies]
+anyhow.workspace = true
+rastro-plugin-sdk = { path = "../rastro-plugin-sdk" }
+serde_json.workspace = true
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true
