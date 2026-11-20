@@ -1708,6 +1708,11 @@
           "const": "undo_action",
           "description": "Undo an action run: the owner had the provider delete what the run created. It names the\nrun and its source's scope, and is what makes the run read `undone`.",
           "type": "string"
+        },
+        {
+          "const": "stop",
+          "description": "Stop a pending Act run: the owner ends it before its grace ends. It names the run and its\nsource's scope, and is what makes the run read `stopped`: it never executes.",
+          "type": "string"
         }
       ]
     },
@@ -2997,6 +3002,11 @@
         {
           "const": "returned",
           "description": "The re-check at grace end failed: nothing was sent, and the proposal waits in the queue.",
+          "type": "string"
+        },
+        {
+          "const": "stopped",
+          "description": "The owner stopped it before its grace ended: nothing was sent, and it never executes.",
           "type": "string"
         },
         {
@@ -4958,6 +4968,121 @@
               "type": "object"
             }
           }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "actions.stop"
+            },
+            "result": {
+              "additionalProperties": false,
+              "description": "An action run, with its status and, once done, the issue it created.",
+              "properties": {
+                "accept_intent": {
+                  "description": "The owner intent that accepted it; absent for an Act run, which a rule authorized.",
+                  "type": "string"
+                },
+                "accepted_at": {
+                  "description": "When the run started: the owner's accept, or the proposal a rule matched.",
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "action": {
+                  "type": "string"
+                },
+                "attempts": {
+                  "description": "How many executions of the run have failed. Zero until one does.",
+                  "format": "uint32",
+                  "minimum": 0,
+                  "type": "integer"
+                },
+                "due_at": {
+                  "description": "When the run's grace ends and it executes unless stopped; present for an Act run.",
+                  "format": "date-time",
+                  "type": "string"
+                },
+                "error": {
+                  "description": "The error of the last failed execution; present while the run reads `failed`.",
+                  "type": "string"
+                },
+                "fields": {
+                  "$ref": "#/$defs/ActionIssueFields",
+                  "description": "The fields the owner accepted: the content written for the outside system."
+                },
+                "id": {
+                  "type": "string"
+                },
+                "identifier": {
+                  "description": "The created issue's identifier; present once the run is done.",
+                  "type": "string"
+                },
+                "issue_id": {
+                  "description": "The random id the issue is created under. UUID v4.",
+                  "type": "string"
+                },
+                "level": {
+                  "$ref": "#/$defs/RunLevel",
+                  "description": "The level the run started at."
+                },
+                "proposal": {
+                  "description": "The queue item the run started from: the one the owner accepted, or the one a rule matched.",
+                  "type": "string"
+                },
+                "provider": {
+                  "description": "The plugin id of the provider that executes it.",
+                  "type": "string"
+                },
+                "rule": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ActionRule"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The rule as it was when the run started under it; present for an Act run."
+                },
+                "source": {
+                  "$ref": "#/$defs/QueueSource",
+                  "description": "The source the run writes to, with that source's scope."
+                },
+                "status": {
+                  "$ref": "#/$defs/RunStatus"
+                },
+                "undo": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ActionUndo"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The owner's undo; present once the run reads `undone`."
+                },
+                "url": {
+                  "description": "The created issue's URL; present once the run is done.",
+                  "type": "string"
+                }
+              },
+              "required": [
+                "id",
+                "proposal",
+                "action",
+                "fields",
+                "source",
+                "provider",
+                "issue_id",
+                "accepted_at",
+                "status",
+                "level",
+                "attempts"
+              ],
+              "title": "ActionRun",
+              "type": "object"
+            }
+          }
         }
       ],
       "required": [
@@ -5011,7 +5136,8 @@
         "actions",
         "actions.show",
         "actions.undo",
-        "rules.check"
+        "rules.check",
+        "actions.stop"
       ]
     },
     "result": {
@@ -7456,6 +7582,136 @@
           "rules"
         ],
         "title": "RulesCheck",
+        "type": "object"
+      },
+      "surfaces": [
+        "cli"
+      ]
+    },
+    {
+      "description": "Stop a pending Act run before its grace ends: the owner's stop intent is recorded, the run reads `stopped` and never executes, and nothing is sent to the outside system. Only a `pending` run can be stopped: a `done` run is refused naming `rastro actions undo <run>`, and any other status is refused naming it. Its proposal leaves the queue for good. Stopping is CLI only.",
+      "input": {
+        "additionalProperties": false,
+        "description": "Stop a pending Act run before its grace ends: the owner's stop intent is recorded, the run reads `stopped` and never executes, and nothing is sent to the outside system. Only a `pending` run can be stopped: a `done` run is refused naming `rastro actions undo <run>`, and any other status is refused naming it. Its proposal leaves the queue for good. Stopping is CLI only.",
+        "properties": {
+          "run": {
+            "description": "The run, as `actions` lists it.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "run"
+        ],
+        "title": "ActionsStopRequest",
+        "type": "object"
+      },
+      "name": "actions.stop",
+      "result": {
+        "additionalProperties": false,
+        "description": "An action run, with its status and, once done, the issue it created.",
+        "properties": {
+          "accept_intent": {
+            "description": "The owner intent that accepted it; absent for an Act run, which a rule authorized.",
+            "type": "string"
+          },
+          "accepted_at": {
+            "description": "When the run started: the owner's accept, or the proposal a rule matched.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "action": {
+            "type": "string"
+          },
+          "attempts": {
+            "description": "How many executions of the run have failed. Zero until one does.",
+            "format": "uint32",
+            "minimum": 0,
+            "type": "integer"
+          },
+          "due_at": {
+            "description": "When the run's grace ends and it executes unless stopped; present for an Act run.",
+            "format": "date-time",
+            "type": "string"
+          },
+          "error": {
+            "description": "The error of the last failed execution; present while the run reads `failed`.",
+            "type": "string"
+          },
+          "fields": {
+            "$ref": "#/$defs/ActionIssueFields",
+            "description": "The fields the owner accepted: the content written for the outside system."
+          },
+          "id": {
+            "type": "string"
+          },
+          "identifier": {
+            "description": "The created issue's identifier; present once the run is done.",
+            "type": "string"
+          },
+          "issue_id": {
+            "description": "The random id the issue is created under. UUID v4.",
+            "type": "string"
+          },
+          "level": {
+            "$ref": "#/$defs/RunLevel",
+            "description": "The level the run started at."
+          },
+          "proposal": {
+            "description": "The queue item the run started from: the one the owner accepted, or the one a rule matched.",
+            "type": "string"
+          },
+          "provider": {
+            "description": "The plugin id of the provider that executes it.",
+            "type": "string"
+          },
+          "rule": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ActionRule"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The rule as it was when the run started under it; present for an Act run."
+          },
+          "source": {
+            "$ref": "#/$defs/QueueSource",
+            "description": "The source the run writes to, with that source's scope."
+          },
+          "status": {
+            "$ref": "#/$defs/RunStatus"
+          },
+          "undo": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ActionUndo"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The owner's undo; present once the run reads `undone`."
+          },
+          "url": {
+            "description": "The created issue's URL; present once the run is done.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "id",
+          "proposal",
+          "action",
+          "fields",
+          "source",
+          "provider",
+          "issue_id",
+          "accepted_at",
+          "status",
+          "level",
+          "attempts"
+        ],
+        "title": "ActionRun",
         "type": "object"
       },
       "surfaces": [

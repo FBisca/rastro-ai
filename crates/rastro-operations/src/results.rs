@@ -73,6 +73,8 @@ pub type ActionsResult = rastro_core::actions::Runs;
 pub type ActionsProposeResult = rastro_core::actions::Proposed;
 /// The run `actions undo` undid, as it now reads: `undone`, with the owner's undo intent.
 pub type ActionsUndoResult = rastro_core::actions::Run;
+/// The run `actions stop` stopped, as it now reads: `stopped`, never to execute.
+pub type ActionsStopResult = rastro_core::actions::Run;
 /// What `rules check` returns: each rule with its resolved grace.
 pub type RulesCheckResult = rastro_core::rules::Check;
 /// What a queue answer recorded: the item it named and the owner intents it accepted.
@@ -481,6 +483,42 @@ mod tests {
                 }),
             }),
             Response::RulesCheck(rastro_core::rules::Check { rules: vec![] }),
+            Response::ActionsStop(rastro_core::actions::Run {
+                id: "r_1".into(),
+                proposal: "q_1".into(),
+                accept_intent: None,
+                action: "linear.create_issue".into(),
+                fields: rastro_core::actions::IssueFields {
+                    title: "t".into(),
+                    description: None,
+                    team: "ENG".into(),
+                    assignee: "me".into(),
+                },
+                source: rastro_core::queue::Source {
+                    kind: rastro_core::queue::SourceKind::Linear,
+                    name: "linear-work".into(),
+                    scope: "work".into(),
+                },
+                provider: "p".into(),
+                issue_id: "00000000-0000-4000-8000-000000000000".into(),
+                accepted_at: "2026-11-19T09:00:00Z".parse().unwrap(),
+                status: rastro_core::actions::RunStatus::Stopped,
+                level: rastro_core::actions::RunLevel::Act,
+                rule: Some(rastro_core::rules::RuleCopy {
+                    name: "my-issues".into(),
+                    action: "linear.create_issue".into(),
+                    team: "ENG".into(),
+                    assignee: "me".into(),
+                    grace_seconds: 600,
+                    daily_cap: None,
+                }),
+                due_at: Some("2026-11-19T09:10:00Z".parse().unwrap()),
+                identifier: None,
+                url: None,
+                attempts: 0,
+                error: None,
+                undo: None,
+            }),
         ];
         let arguments = |name: &str| match name {
             "source.add" => {
@@ -512,7 +550,7 @@ mod tests {
             "actions.propose" => {
                 serde_json::json!({"action": "linear.create_issue", "why": "w"})
             }
-            "actions.show" | "actions.undo" => serde_json::json!({"run": "r_1"}),
+            "actions.show" | "actions.undo" | "actions.stop" => serde_json::json!({"run": "r_1"}),
             "queue.accept" => serde_json::json!({"item": "q_1"}),
             "queue.edit" => serde_json::json!({"item": "q_1", "promise": "send it"}),
             "queue.reject" => serde_json::json!({"item": "q_1", "reason": "not a promise"}),

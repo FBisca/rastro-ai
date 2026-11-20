@@ -299,7 +299,7 @@ pub(crate) fn record_return(
 /// created when it did.
 #[expect(
     clippy::too_many_lines,
-    reason = "one pass reads each run with its result, attempts, undo, return, level, rule copy and due time, so the status derivation stays in sight of what it rests on"
+    reason = "one pass reads each run with its result, attempts, undo, stop, return, level, rule copy and due time, so the status derivation stays in sight of what it rests on"
 )]
 pub(crate) fn runs(view: &View, scopes: &[Scope]) -> Result<Vec<Run>> {
     let mut statement = view.0.prepare(
@@ -313,7 +313,9 @@ pub(crate) fn runs(view: &View, scopes: &[Scope]) -> Result<Vec<Run>> {
                 (SELECT i.issued_at FROM intent i WHERE i.kind = 'undo_action'
                    AND i.domain_key = 'action_run/' || r.id ORDER BY i.append_seq LIMIT 1),
                 r.level, r.rule, r.due_at,
-                (SELECT 1 FROM action_return t WHERE t.run_id = r.id)
+                (SELECT 1 FROM action_return t WHERE t.run_id = r.id),
+                (SELECT 1 FROM intent i WHERE i.kind = 'stop'
+                   AND i.domain_key = 'action_run/' || r.id)
          FROM action_run r LEFT JOIN action_result d ON d.run_id = r.id
          WHERE ?1 IS NULL OR r.scope IN (SELECT value FROM json_each(?1))
          ORDER BY r.append_seq",
@@ -342,6 +344,7 @@ pub(crate) fn runs(view: &View, scopes: &[Scope]) -> Result<Vec<Run>> {
             row.get::<_, Option<String>>(17)?,
             row.get::<_, Option<String>>(18)?,
             row.get::<_, Option<i64>>(19)?,
+            row.get::<_, Option<i64>>(20)?,
         ))
     })?;
     let mut runs = Vec::new();
@@ -359,6 +362,7 @@ pub(crate) fn runs(view: &View, scopes: &[Scope]) -> Result<Vec<Run>> {
             rule,
             due_at,
             returned,
+            stopped,
         ) = row?;
         let [
             id,
@@ -390,6 +394,8 @@ pub(crate) fn runs(view: &View, scopes: &[Scope]) -> Result<Vec<Run>> {
             RunStatus::Undone
         } else if identifier.is_some() {
             RunStatus::Done
+        } else if stopped.is_some() {
+            RunStatus::Stopped
         } else if returned.is_some() {
             RunStatus::Returned
         } else if attempts > 0 {

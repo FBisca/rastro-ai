@@ -773,6 +773,22 @@ impl ActionsUndoRequest {
     }
 }
 
+/// Stop a pending Act run before its grace ends: the owner's stop intent is recorded, the run reads `stopped` and never executes, and nothing is sent to the outside system. Only a `pending` run can be stopped: a `done` run is refused naming `rastro actions undo <run>`, and any other status is refused naming it. Its proposal leaves the queue for good. Stopping is CLI only.
+#[derive(Args, Debug, Deserialize, JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ActionsStopRequest {
+    /// The run, as `actions` lists it.
+    pub run: String,
+}
+impl ActionsStopRequest {
+    pub(crate) fn run<S: Storage + StoredTwins>(
+        self,
+        rastro: &mut Rastro<S>,
+    ) -> Result<ActionsStopResult> {
+        rastro.stop_action(&self.run)
+    }
+}
+
 /// Propose an action for the owner to accept: it waits in the queue with its why and runs nothing. The action must be one an installed provider declares, such as `linear.create_issue`, which needs a title and a team (`--team`, else `[actions.linear] default_team` in config.toml) and is assigned to the owner unless `--assignee` says otherwise. The why and the cited claims stay in Rastro: only the title, description, team and assignee are ever written to the outside system.
 #[derive(Args, Debug, Deserialize, JsonSchema)]
 #[serde(deny_unknown_fields)]
