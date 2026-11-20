@@ -208,3 +208,35 @@ fn the_issue_create_holds_only_the_accepted_content_and_the_runs_random_id() {
         );
     }
 }
+
+// spec: A real issue goes through Rastro
+/// The switch day in one sitting: an agent proposes the owner's next issue, the owner accepts it,
+/// and Linear holds exactly the accepted title and description, under the team's and the owner's
+/// own ids.
+#[test]
+fn an_agents_proposal_the_owner_accepts_becomes_the_issue_in_linear_as_accepted() {
+    let env = Env::new();
+    let item = env.propose(
+        "Retry the stale sync",
+        &[
+            "--description",
+            "Seen twice in CI.",
+            "--why",
+            "owner asked in session",
+        ],
+    );
+
+    env.ok_json(&["queue", "accept", &item]);
+
+    let creates = env.linear.creates();
+    assert_eq!(creates.len(), 1, "{creates:?}");
+    let input = creates[0].input();
+    assert_eq!(input["title"], "Retry the stale sync");
+    assert_eq!(input["description"], "Seen twice in CI.");
+    assert_eq!(input["teamId"], linear_api::TEAM_ENG.id);
+    assert_eq!(input["assigneeId"], linear_api::OWNER.id);
+    let runs = env.runs();
+    assert_eq!(runs.len(), 1, "{runs:?}");
+    assert_eq!(runs[0]["status"], "done");
+    assert_eq!(runs[0]["identifier"], "ENG-1");
+}
