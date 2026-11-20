@@ -302,6 +302,21 @@ Before executing a pending Act, Rastro SHALL check that its rule still exists an
 - WHEN a sync observes an open Linear issue whose title equals a pending Act's title, and `rastro tick` runs after its grace
 - THEN the fake Linear server has received no create, and the run reads `returned`
 
+### Requirement: A proposal a rule acted on leaves the queue
+Once the Act run a rule started on a proposal is no longer pending, the proposal SHALL leave `rastro queue` and the matches `rastro rules check` lists, and an answer to it SHALL be refused, unless the run reads `returned`.
+
+#### Scenario: a done Act's proposal
+- WHEN `rastro tick` creates the issue of a pending Act after its grace
+- THEN `rastro queue` no longer lists its proposal, and `rastro queue accept` on it is refused with no second run recorded
+
+#### Scenario: an undone Act's proposal
+- WHEN the owner undoes a done Act
+- THEN `rastro queue` does not list its proposal
+
+#### Scenario: a failed Act's proposal
+- WHEN a pending Act's execution fails at its grace end
+- THEN `rastro queue` does not list its proposal, and `rastro rules check` lists it under no rule's matches
+
 ### Requirement: The owner stops a pending Act
 `rastro actions stop <run>` SHALL record the owner's stop of a pending Act run, after which the run SHALL read `stopped` and never execute, and SHALL refuse a run that is not pending.
 

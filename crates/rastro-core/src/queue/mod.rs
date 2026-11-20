@@ -28,8 +28,9 @@
 //! the scopes that see the source it writes to. It is never "already known": nothing observed
 //! says it was done. A proposal whose Act run is still pending shows as that Act, first in the
 //! list: the item carries the run with the time it runs, the time left as of the read and its
-//! stop command. A proposal whose Act run the owner stopped is final: it never returns to
-//! the queue.
+//! stop command. Once that run is no longer pending it has settled the proposal, which leaves the
+//! queue for good, whether the run was stopped, done, failed or undone; only a `returned` run, whose
+//! re-check failed before anything was sent, leaves its proposal waiting ([`settled_by_runs`]).
 //!
 //! Everything is checked against what is known before it is shown. A proposal whose standard
 //! statements one observed commitment already holds is left out and counted ("already known"):
@@ -1031,21 +1032,37 @@ pub(crate) fn read(
     let corrections = correction_questions(view, scopes, &resolution)?;
     let actions = view.action_proposals(scopes)?;
     let runs = view.action_runs(scopes)?;
-    // A stopped Act is final: its proposal never returns to the queue.
-    let stopped: BTreeSet<String> = runs
-        .iter()
-        .filter(|run| run.status == crate::actions::RunStatus::Stopped)
-        .map(|run| run.proposal.clone())
-        .collect();
+    let settled = settled_by_runs(&runs);
     let actions = actions
         .into_iter()
-        .filter(|filed| !stopped.contains(&filed.id))
+        .filter(|filed| !settled.contains(&filed.id))
         .collect();
     let mut queue = Queue::with_actions(origins, questions, corrections, actions, &answered);
     queue.attach_context(view, scopes)?;
     queue.attach_duplicates(view)?;
     queue.attach_acts(runs, crate::coverage::now()?);
     Ok(queue)
+}
+
+/// The proposals a run settled, which no longer wait in the queue: every proposal whose run is
+/// past pending, unless the run was `returned`. Each status is decided here, so a new one cannot
+/// fall through to "still waiting" unnoticed.
+pub fn settled_by_runs(runs: &[crate::actions::Run]) -> BTreeSet<String> {
+    use crate::actions::RunStatus;
+    (runs.iter())
+        .filter(|run| match run.status {
+            // Shown as the pending Act, first in the queue, until its grace ends.
+            RunStatus::Pending => false,
+            // The re-check failed before anything was sent: the proposal waits for the owner.
+            RunStatus::Returned => false,
+            RunStatus::Accepted
+            | RunStatus::Stopped
+            | RunStatus::Done
+            | RunStatus::Failed
+            | RunStatus::Undone => true,
+        })
+        .map(|run| run.proposal.clone())
+        .collect()
 }
 
 impl<S: Storage> Rastro<S> {

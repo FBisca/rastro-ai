@@ -216,7 +216,7 @@ fn rules_check_lists_the_queued_proposals_a_rule_matches() {
 
 // spec: The owner checks what each rule does now
 #[test]
-fn rules_check_lists_queued_proposals_whose_acts_returned_or_were_undone() {
+fn rules_check_lists_a_returned_acts_proposal_and_not_an_undone_ones() {
     let env = Env::new();
     env.set_rule(Some(5));
     // The source was checked just now, so a tick finds it fresh and only runs actions.
@@ -230,8 +230,8 @@ fn rules_check_lists_queued_proposals_whose_acts_returned_or_were_undone() {
     env.ok(&["tick"], DUE);
     env.set_rule(Some(5));
 
-    // Another Act runs to done and is undone: its proposal also waits in the queue, since an
-    // undo records no accept and an Act never had one.
+    // Another Act runs to done and is undone: the run settled its proposal, which never returns
+    // to the queue.
     let undone = env.propose("Undone issue", "H", PROPOSED_AT);
     let undone_run = undone["run"]["id"].as_str().unwrap().to_string();
     env.ok(&["tick"], DUE);
@@ -250,18 +250,20 @@ fn rules_check_lists_queued_proposals_whose_acts_returned_or_were_undone() {
     assert_eq!(status(&returned_run), "returned", "{runs}");
     assert_eq!(status(&undone_run), "undone", "{runs}");
 
-    // The queue holds both proposals, and the rule matches both: the check lists them under the
-    // rule, not nothing. Neither is pending, and both used today's budget.
+    // The queue holds the returned proposal only, and the check lists it alone under the rule.
+    // Neither is pending, and both used today's budget.
     let items = env.ok_json(&["queue"], AFTER)["items"]
         .as_array()
         .unwrap()
         .clone();
-    for proposal in [&returned["id"], &undone["id"]] {
-        assert!(
-            items.iter().any(|item| item["id"] == *proposal),
-            "the queue dropped {proposal}: {items:?}"
-        );
-    }
+    assert!(
+        items.iter().any(|item| item["id"] == returned["id"]),
+        "the queue dropped the returned proposal: {items:?}"
+    );
+    assert!(
+        !items.iter().any(|item| item["id"] == undone["id"]),
+        "the undone Act's proposal is back in the queue: {items:?}"
+    );
     let check = env.ok_json(&["rules", "check"], AFTER);
     let rule = &check["rules"][0];
     assert_eq!(rule["used_today"], 2, "{check}");
@@ -272,19 +274,16 @@ fn rules_check_lists_queued_proposals_whose_acts_returned_or_were_undone() {
         .iter()
         .map(|filed| filed["id"].as_str().unwrap())
         .collect();
-    assert_eq!(matched.len(), 2, "{check}");
-    assert!(
-        matched.contains(&returned["id"].as_str().unwrap()),
-        "{check}"
-    );
-    assert!(matched.contains(&undone["id"].as_str().unwrap()), "{check}");
+    assert_eq!(matched, [returned["id"].as_str().unwrap()], "{check}");
 
-    // The owner's read names both proposals under the rule.
+    // The owner's read names the returned proposal under the rule, and not the undone one.
     let text = stdout(&env.rastro(&["rules", "check"], AFTER));
-    for id in [
-        returned["id"].as_str().unwrap(),
-        undone["id"].as_str().unwrap(),
-    ] {
-        assert!(text.contains(id), "{id} missing from: {text}");
-    }
+    assert!(
+        text.contains(returned["id"].as_str().unwrap()),
+        "returned proposal missing from: {text}"
+    );
+    assert!(
+        !text.contains(undone["id"].as_str().unwrap()),
+        "undone proposal listed in: {text}"
+    );
 }

@@ -268,3 +268,101 @@ fn an_agents_proposal_under_the_owners_rule_becomes_the_issue_once_the_grace_pas
     assert!(run.get("accept_intent").is_none(), "{run}");
     assert_eq!(run["rule"]["name"], "my-issues", "{shown}");
 }
+
+/// The ids of the items `rastro queue` lists at `now`.
+fn queued(env: &Env, now: &str) -> Vec<String> {
+    (env.ok_json(&["queue"], now)["items"]
+        .as_array()
+        .unwrap()
+        .iter())
+    .map(|item| item["id"].as_str().unwrap().to_string())
+    .collect()
+}
+
+/// The proposal a run started on.
+fn proposal_of(env: &Env, run: &str) -> String {
+    let shown = env.ok_json(&["actions", "show", run], AFTER);
+    shown["runs"][0]["proposal"].as_str().unwrap().to_string()
+}
+
+// spec: A proposal a rule acted on leaves the queue
+#[test]
+fn a_done_acts_proposal_leaves_the_queue_and_cannot_be_accepted() {
+    let env = Env::new();
+    let id = env.propose();
+    let proposal = proposal_of(&env, &id);
+    env.ok(&["tick"], DUE);
+    assert_eq!(env.run()["status"], "done");
+
+    assert!(
+        !queued(&env, AFTER).contains(&proposal),
+        "{}",
+        env.ok_json(&["queue"], AFTER)
+    );
+    let accept = env.rastro(&["queue", "accept", &proposal], AFTER);
+    assert!(
+        !accept.status.success(),
+        "{}",
+        String::from_utf8_lossy(&accept.stdout)
+    );
+    assert_eq!(env.linear.creates().len(), 1, "a second create was sent");
+    let runs = env.ok_json(&["actions"], AFTER)["runs"].clone();
+    assert_eq!(runs.as_array().unwrap().len(), 1, "{runs}");
+}
+
+// spec: A proposal a rule acted on leaves the queue
+#[test]
+fn an_undone_acts_proposal_does_not_return_to_the_queue() {
+    let env = Env::new();
+    let id = env.propose();
+    let proposal = proposal_of(&env, &id);
+    env.ok(&["tick"], DUE);
+    env.ok(&["actions", "undo", &id], AFTER);
+    assert_eq!(env.run()["status"], "undone");
+
+    assert!(
+        !queued(&env, AFTER).contains(&proposal),
+        "{}",
+        env.ok_json(&["queue"], AFTER)
+    );
+}
+
+// spec: A proposal a rule acted on leaves the queue
+#[test]
+fn a_failed_acts_proposal_is_neither_queued_nor_matched_by_its_rule() {
+    let env = Env::new();
+    // A rule and a proposal on a team the fake Linear doesn't hold: the Act fails at its grace end.
+    let config = env.config_dir().join("config.toml");
+    let text = fs::read_to_string(&config).unwrap();
+    fs::write(&config, text.replace("team = \"H\"", "team = \"ZZ\"")).unwrap();
+    let answer = env.ok_json(
+        &[
+            "actions",
+            "propose",
+            "linear.create_issue",
+            "--title",
+            TITLE,
+            "--team",
+            "ZZ",
+            "--why",
+            "owner asked",
+        ],
+        PROPOSED_AT,
+    );
+    let id = answer["run"]["id"].as_str().unwrap().to_string();
+    let proposal = proposal_of(&env, &id);
+    // Tick reports the failed run and exits non-zero.
+    assert!(!env.rastro(&["tick"], DUE).status.success());
+    assert_eq!(env.run()["status"], "failed");
+
+    assert!(
+        !queued(&env, AFTER).contains(&proposal),
+        "{}",
+        env.ok_json(&["queue"], AFTER)
+    );
+    let check = env.ok_json(&["rules", "check"], AFTER);
+    assert!(
+        check["rules"][0]["matches"].as_array().unwrap().is_empty(),
+        "{check}"
+    );
+}
