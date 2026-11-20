@@ -5290,6 +5290,53 @@
               "type": "object"
             }
           }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "source.check"
+            },
+            "result": {
+              "additionalProperties": false,
+              "description": "What the check of one source found.",
+              "properties": {
+                "authenticated": {
+                  "description": "Whether the provider accepted the credential.",
+                  "type": "boolean"
+                },
+                "connector": {
+                  "type": "string"
+                },
+                "credential": {
+                  "description": "Where the credential came from, by the name the owner would change; never its value.",
+                  "type": "string"
+                },
+                "fix": {
+                  "description": "What the owner can do about it, when something went wrong.",
+                  "type": "string"
+                },
+                "reason": {
+                  "description": "What went wrong, when something did.",
+                  "type": "string"
+                },
+                "result": {
+                  "description": "The kind of failure, `authenticated` when there was none: `missing`, `rejected` or `failed`.",
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "source",
+                "connector",
+                "authenticated",
+                "result"
+              ],
+              "title": "SourceCheck",
+              "type": "object"
+            }
+          }
         }
       ],
       "required": [
@@ -5344,7 +5391,8 @@
         "actions.show",
         "actions.undo",
         "rules.check",
-        "actions.stop"
+        "actions.stop",
+        "source.check"
       ]
     },
     "result": {
@@ -7940,6 +7988,68 @@
           "attempts"
         ],
         "title": "ActionRun",
+        "type": "object"
+      },
+      "surfaces": [
+        "cli"
+      ]
+    },
+    {
+      "description": "Check that a source's credentials are accepted, with one cheap call and nothing stored.",
+      "input": {
+        "additionalProperties": false,
+        "description": "Check that a source's credentials are accepted, with one cheap call and nothing stored.",
+        "properties": {
+          "source": {
+            "description": "Name of the source to check.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "title": "SourceCheckRequest",
+        "type": "object"
+      },
+      "name": "source.check",
+      "result": {
+        "additionalProperties": false,
+        "description": "What the check of one source found.",
+        "properties": {
+          "authenticated": {
+            "description": "Whether the provider accepted the credential.",
+            "type": "boolean"
+          },
+          "connector": {
+            "type": "string"
+          },
+          "credential": {
+            "description": "Where the credential came from, by the name the owner would change; never its value.",
+            "type": "string"
+          },
+          "fix": {
+            "description": "What the owner can do about it, when something went wrong.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "What went wrong, when something did.",
+            "type": "string"
+          },
+          "result": {
+            "description": "The kind of failure, `authenticated` when there was none: `missing`, `rejected` or `failed`.",
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "connector",
+          "authenticated",
+          "result"
+        ],
+        "title": "SourceCheck",
         "type": "object"
       },
       "surfaces": [

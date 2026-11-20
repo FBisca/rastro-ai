@@ -46,7 +46,52 @@ struct Run<'a, R, W> {
     gaps: Vec<CoverageGap>,
 }
 
+/// `--check`: one cheap authenticated call, and one line on stdout saying where the credential
+/// came from and whether GitHub accepted it. Reads nothing else, writes nothing, and never
+/// prints the token.
+fn check() {
+    let base = std::env::var("RASTRO_GITHUB_API_URL").unwrap_or_else(|_| DEFAULT_API.into());
+    let report = match api::credential() {
+        None => json!({
+            "result": "missing",
+            "reason": "no GitHub token was found",
+            "fix": "Set GH_TOKEN in the environment rastro runs with, or run `gh auth login`",
+        }),
+        Some(_) if !api::loopback(&base) && base != DEFAULT_API => json!({
+            "result": "failed",
+            "reason": "RASTRO_GITHUB_API_URL is not a loopback address",
+            "fix": "Unset RASTRO_GITHUB_API_URL",
+        }),
+        Some((credential, token)) => {
+            let name = credential.name();
+            match Client::new(&base, token).get("/user", &[]) {
+                Ok(_) => json!({"result": "authenticated", "credential": name}),
+                Err(Failure {
+                    reason: "auth" | "forbidden",
+                    ..
+                }) => json!({
+                    "result": "rejected",
+                    "credential": name,
+                    "reason": "GitHub rejected the token",
+                    "fix": format!("Create a new token and update {name}, or run `gh auth login`"),
+                }),
+                Err(failure) => json!({
+                    "result": "failed",
+                    "credential": name,
+                    "reason": format!("could not reach GitHub ({})", failure.reason),
+                    "fix": "Check the network and run the check again",
+                }),
+            }
+        }
+    };
+    println!("{report}");
+}
+
 fn main() -> Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("--check") {
+        check();
+        return Ok(());
+    }
     let mut transport = Transport::new(io::stdin().lock(), io::stdout().lock());
     let request = transport.read()?.context("core closed before initialize")?;
     let params: InitializeParams = request.params()?;

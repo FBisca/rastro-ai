@@ -146,13 +146,28 @@ fn next_link(link: &str) -> Option<String> {
     })
 }
 
-/// `GH_TOKEN`, else `GITHUB_TOKEN`, else `gh auth token`.
-pub fn token() -> Option<String> {
-    let from_env = ["GH_TOKEN", "GITHUB_TOKEN"]
-        .iter()
-        .filter_map(|name| std::env::var(name).ok())
-        .map(|t| t.trim().to_string())
-        .find(|t| !t.is_empty());
+/// Where the token came from.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Credential {
+    Environment(&'static str),
+    GhCli,
+}
+impl Credential {
+    /// What the owner would change to replace this credential; never its value.
+    pub fn name(&self) -> String {
+        match self {
+            Self::Environment(name) => (*name).to_string(),
+            Self::GhCli => "gh auth token".into(),
+        }
+    }
+}
+
+/// `GH_TOKEN`, else `GITHUB_TOKEN`, else `gh auth token`, with where it came from.
+pub fn credential() -> Option<(Credential, String)> {
+    let from_env = ["GH_TOKEN", "GITHUB_TOKEN"].into_iter().find_map(|name| {
+        let value = std::env::var(name).ok()?.trim().to_string();
+        (!value.is_empty()).then_some((Credential::Environment(name), value))
+    });
     from_env.or_else(|| {
         let output = Command::new("gh")
             .args(["auth", "token"])
@@ -160,8 +175,13 @@ pub fn token() -> Option<String> {
             .output()
             .ok()?;
         let token = String::from_utf8(output.stdout).ok()?.trim().to_string();
-        (output.status.success() && !token.is_empty()).then_some(token)
+        (output.status.success() && !token.is_empty()).then_some((Credential::GhCli, token))
     })
+}
+
+/// The token alone, for a sync.
+pub fn token() -> Option<String> {
+    credential().map(|(_, token)| token)
 }
 
 /// Whether `base` is an http(s) URL on a loopback host: `127.0.0.1`, `[::1]` or `localhost`.

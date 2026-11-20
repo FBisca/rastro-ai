@@ -205,10 +205,12 @@ impl Env {
     }
     /// A home with source `x` added with these extra `source add` arguments.
     pub fn with_source_args(api: &str, extra: &[&str]) -> Self {
-        let env = Self {
+        // Setup's own credential check goes to a port nobody listens on, so the API under test
+        // sees only what the test asks of it.
+        let mut env = Self {
             home: TempDir::new().unwrap(),
             tools: TempDir::new().unwrap(),
-            api: api.into(),
+            api: "http://127.0.0.1:1".into(),
             token: Some(TOKEN.into()),
         };
         let plugin = env.home.path().join("plugins/github");
@@ -234,6 +236,7 @@ impl Env {
             extra,
         ]
         .concat());
+        env.api = api.into();
         env
     }
     pub fn without_token(mut self) -> Self {

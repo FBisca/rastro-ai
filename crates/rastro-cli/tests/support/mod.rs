@@ -67,3 +67,16 @@ pub fn action_linear() -> &'static Path {
         binaries::private_copy(&original)
     })
 }
+
+/// A real connector (`rastro-connector-linear`, `rastro-connector-github`), built next to
+/// `rastro` and copied.
+pub fn connector(package: &str) -> PathBuf {
+    let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+    let status = Command::new(cargo)
+        .args(["build", "--quiet", "-p", package])
+        .status()
+        .unwrap();
+    assert!(status.success(), "building {package} failed");
+    let original = Path::new(env!("CARGO_BIN_EXE_rastro")).with_file_name(package);
+    binaries::private_copy(&original)
+}
