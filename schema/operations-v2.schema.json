@@ -2956,7 +2956,7 @@
           "type": "integer"
         },
         "matches": {
-          "description": "The queued proposals the rule matches on action, team and assignee, oldest first: each\nwaits with no run of its own, so a proposal that already started a run is listed under\nthat run, not here.",
+          "description": "The queued proposals the rule matches on action, team and assignee, oldest first: each\nwaits in the queue with no pending Act of its own. A pending Act's proposal is listed\nunder `pending`, a stopped Act's never returns to the queue, and a returned or undone\nAct's proposal waits here as a normal proposal.",
           "items": {
             "$ref": "#/$defs/FiledActionProposal"
           },

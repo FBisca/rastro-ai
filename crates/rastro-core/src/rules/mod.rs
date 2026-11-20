@@ -280,8 +280,9 @@ pub struct RuleView {
     /// command.
     pub pending: Vec<actions::Run>,
     /// The queued proposals the rule matches on action, team and assignee, oldest first: each
-    /// waits with no run of its own, so a proposal that already started a run is listed under
-    /// that run, not here.
+    /// waits in the queue with no pending Act of its own. A pending Act's proposal is listed
+    /// under `pending`, a stopped Act's never returns to the queue, and a returned or undone
+    /// Act's proposal waits here as a normal proposal.
     pub matches: Vec<actions::Filed>,
 }
 
@@ -293,8 +294,10 @@ pub struct Check {
 }
 
 /// What `rules check` reads from one snapshot: each rule's count, pending Acts and the queued
-/// proposals it matches. An answered proposal left the queue; one that already started a run is
-/// listed under that run. Records nothing.
+/// proposals it matches. The proposals are the ones the queue holds — an answer took the answered
+/// ones out, and a stopped Act's proposal never returns — less the pending Acts' proposals, which
+/// are listed under `pending`. A returned or undone Act's proposal waits in the queue, so a
+/// matching one is listed here. Records nothing.
 fn check(
     config: &Config,
     view: Option<&dyn Snapshot>,
@@ -309,10 +312,23 @@ fn check(
         ),
         None => (Vec::new(), Vec::new(), BTreeSet::new()),
     };
-    let started: BTreeSet<&str> = runs.iter().map(|run| run.proposal.as_str()).collect();
+    // The queue holds a proposal unless an answer took it out or its Act was stopped; a pending
+    // Act's proposal is listed under `pending`, not here. Every other run — returned, undone,
+    // done, failed — leaves its proposal waiting, so a matching one is listed.
+    let mut listed_under_run: BTreeSet<&str> = BTreeSet::new();
+    for run in &runs {
+        if matches!(
+            run.status,
+            actions::RunStatus::Pending | actions::RunStatus::Stopped
+        ) {
+            listed_under_run.insert(run.proposal.as_str());
+        }
+    }
     let waiting: Vec<&actions::Filed> = proposals
         .iter()
-        .filter(|filed| !answered.contains(&filed.id) && !started.contains(filed.id.as_str()))
+        .filter(|filed| {
+            !answered.contains(&filed.id) && !listed_under_run.contains(filed.id.as_str())
+        })
         .collect();
     Ok(Check {
         rules: config

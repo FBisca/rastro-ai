@@ -13,6 +13,10 @@ use tempfile::TempDir;
 const PROPOSED_AT: &str = "2026-11-19T10:00:00Z";
 /// While the grace still runs: the check reads the pending Act before it is due.
 const READ_AT: &str = "2026-11-19T10:04:00Z";
+/// The instant the grace ends: a tick here executes a due Act or returns it.
+const DUE: &str = "2026-11-19T10:10:00Z";
+/// After the grace ended: the check reads runs a tick has finished.
+const AFTER: &str = "2026-11-19T10:11:00Z";
 
 /// The Linear source every proposal writes to, in scope `work`.
 const SOURCE: &str = "[[sources]]\nname = \"linear-work\"\nconnector = \"linear\"\nselector = {}\n\
@@ -51,6 +55,22 @@ impl Env {
             ),
         )
         .unwrap();
+    }
+
+    /// Removes the rule, leaving only the source.
+    fn remove_rule(&self) {
+        fs::write(self.config_dir().join("config.toml"), SOURCE).unwrap();
+    }
+
+    /// A command that must succeed.
+    fn ok(&self, args: &[&str], now: &str) {
+        let out = self.rastro(args, now);
+        assert!(
+            out.status.success(),
+            "{args:?}: {}{}",
+            String::from_utf8_lossy(&out.stderr),
+            String::from_utf8_lossy(&out.stdout)
+        );
     }
 
     /// `rastro args`, with the clock at `now`.
@@ -192,4 +212,79 @@ fn rules_check_lists_the_queued_proposals_a_rule_matches() {
     let runs = env.ok_json(&["actions"], READ_AT)["runs"].clone();
     assert_eq!(runs, json!([]), "{runs}");
     assert_eq!(support::provider::calls(&env.config_dir()), "");
+}
+
+// spec: The owner checks what each rule does now
+#[test]
+fn rules_check_lists_queued_proposals_whose_acts_returned_or_were_undone() {
+    let env = Env::new();
+    env.set_rule(Some(5));
+    // The source was checked just now, so a tick finds it fresh and only runs actions.
+    support::seed::checked_now(env.home.path(), "linear-work", "work");
+
+    // One Act is returned: the owner deletes the rule before its grace ends, so the tick's
+    // re-check fails and sends nothing. Its proposal waits in the queue as a normal proposal.
+    let returned = env.propose("Returned issue", "H", PROPOSED_AT);
+    let returned_run = returned["run"]["id"].as_str().unwrap().to_string();
+    env.remove_rule();
+    env.ok(&["tick"], DUE);
+    env.set_rule(Some(5));
+
+    // Another Act runs to done and is undone: its proposal also waits in the queue, since an
+    // undo records no accept and an Act never had one.
+    let undone = env.propose("Undone issue", "H", PROPOSED_AT);
+    let undone_run = undone["run"]["id"].as_str().unwrap().to_string();
+    env.ok(&["tick"], DUE);
+    env.ok(&["actions", "undo", &undone_run], DUE);
+
+    // The setup holds: one run returned, one undone, neither pending.
+    let runs = env.ok_json(&["actions"], AFTER)["runs"].clone();
+    let status = |id: &str| {
+        runs.as_array()
+            .unwrap()
+            .iter()
+            .find(|run| run["id"] == id)
+            .unwrap_or_else(|| panic!("no run {id}: {runs}"))["status"]
+            .clone()
+    };
+    assert_eq!(status(&returned_run), "returned", "{runs}");
+    assert_eq!(status(&undone_run), "undone", "{runs}");
+
+    // The queue holds both proposals, and the rule matches both: the check lists them under the
+    // rule, not nothing. Neither is pending, and both used today's budget.
+    let items = env.ok_json(&["queue"], AFTER)["items"]
+        .as_array()
+        .unwrap()
+        .clone();
+    for proposal in [&returned["id"], &undone["id"]] {
+        assert!(
+            items.iter().any(|item| item["id"] == *proposal),
+            "the queue dropped {proposal}: {items:?}"
+        );
+    }
+    let check = env.ok_json(&["rules", "check"], AFTER);
+    let rule = &check["rules"][0];
+    assert_eq!(rule["used_today"], 2, "{check}");
+    assert_eq!(rule["pending"], json!([]), "{check}");
+    let matched: Vec<&str> = rule["matches"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|filed| filed["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(matched.len(), 2, "{check}");
+    assert!(
+        matched.contains(&returned["id"].as_str().unwrap()),
+        "{check}"
+    );
+    assert!(matched.contains(&undone["id"].as_str().unwrap()), "{check}");
+
+    // The owner's read names both proposals under the rule.
+    let text = stdout(&env.rastro(&["rules", "check"], AFTER));
+    for id in [
+        returned["id"].as_str().unwrap(),
+        undone["id"].as_str().unwrap(),
+    ] {
+        assert!(text.contains(id), "{id} missing from: {text}");
+    }
 }
