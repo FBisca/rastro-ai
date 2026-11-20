@@ -23,6 +23,7 @@ kinds = ["agent-tool-adapter"]
 protocol = 1
 command = "adapter"
 agent_tool = { capabilities = ["judge_text"] }
+enforcement = ["tools_off", "no_mcp_servers", "no_setting_sources"]
 
 [permissions]
 submit = []
@@ -196,6 +197,31 @@ impl Env {
     }
     fn launched(&self) -> bool {
         self.launches() > 0
+    }
+    /// The session history the run recorded: each turn's request, answer and gate verdict as
+    /// JSON, in turn order. The answer is `null` for a turn the adapter never answered.
+    fn history(&self, run: i64) -> Vec<Value> {
+        let database = rusqlite::Connection::open(self.path("data/rastro.sqlite3")).unwrap();
+        database
+            .prepare(
+                "SELECT turn, request, answer, verdict FROM session_turn
+                 WHERE run_id = ?1 ORDER BY turn",
+            )
+            .unwrap()
+            .query_map([run], |row| {
+                let request: String = row.get(1)?;
+                let answer: Option<String> = row.get(2)?;
+                let verdict: String = row.get(3)?;
+                Ok(json!({
+                    "turn": row.get::<_, i64>(0)?,
+                    "request": serde_json::from_str::<Value>(&request).unwrap(),
+                    "answer": answer.map(|a| serde_json::from_str::<Value>(&a).unwrap()),
+                    "verdict": serde_json::from_str::<Value>(&verdict).unwrap(),
+                }))
+            })
+            .unwrap()
+            .map(|turn| turn.unwrap())
+            .collect()
     }
 }
 
@@ -651,4 +677,231 @@ fn S7_a_manifest_that_names_a_tool_or_lacks_the_kind_is_refused_before_anything_
     let env = Env::new();
     env.import_ok();
     assert!(env.launched());
+}
+
+/// The judgment floor's three controls, as a manifest declares them.
+const FLOOR_LINE: &str =
+    "enforcement = [\"tools_off\", \"no_mcp_servers\", \"no_setting_sources\"]\n";
+
+/// S7: a bound adapter whose manifest lacks a control the judgment floor requires is refused
+/// before the run, naming the unenforceable control; the adapter is never started.
+// spec: The core matches the adapter's declared boundary enforcement before a run
+#[test]
+fn S7_a_manifest_lacking_a_floor_control_refuses_the_run_naming_it() {
+    // The manifest without any enforcement declaration, whatever the fixture's default.
+    let base = MANIFEST.replace(FLOOR_LINE, "");
+    let floor = ["tools_off", "no_mcp_servers", "no_setting_sources"];
+    for missing in floor {
+        let declared: Vec<String> = floor
+            .iter()
+            .filter(|control| **control != missing)
+            .map(|control| format!("\"{control}\""))
+            .collect();
+        let manifest = base.replace(
+            "agent_tool = { capabilities = [\"judge_text\"] }",
+            &format!(
+                "agent_tool = {{ capabilities = [\"judge_text\"] }}\nenforcement = [{}]",
+                declared.join(", ")
+            ),
+        );
+        let env = Env::new();
+        env.manifest(&manifest);
+        let (ok, failed) = env.import();
+        assert!(!ok, "{missing}: {failed}");
+        assert_eq!(
+            failed["extraction"]["cause"], "extractor_failed",
+            "{missing}: {failed}"
+        );
+        let reason = failed["extraction"]["reason"].as_str().unwrap();
+        assert!(reason.contains(missing), "{missing} not named: {reason}");
+        assert!(!env.launched(), "{missing}: the adapter ran");
+    }
+
+    // A manifest that declares no enforcement at all lacks every control the floor requires.
+    let env = Env::new();
+    env.manifest(&base);
+    let (ok, failed) = env.import();
+    assert!(!ok, "{failed}");
+    assert_eq!(
+        failed["extraction"]["cause"], "extractor_failed",
+        "{failed}"
+    );
+    assert!(
+        !env.launched(),
+        "the adapter ran without declaring any control"
+    );
+}
+
+/// S8: a bound adapter whose manifest declares every control the judgment floor requires
+/// proceeds: the run imports and the adapter starts.
+// spec: The core matches the adapter's declared boundary enforcement before a run
+#[test]
+fn S8_a_full_enforcement_declaration_lets_the_run_proceed() {
+    let env = Env::new();
+    let result = env.import_ok();
+    assert_eq!(result["extraction"]["state"], "succeeded", "{result}");
+    assert!(env.launched(), "the adapter never started");
+    assert_eq!(env.turns(), 1);
+}
+
+/// S4: a run that includes failed turns keeps each turn's request, answer and gate verdict in
+/// its history, in turn order — the failed turn and the passing one alike.
+// spec: Every turn of a judgment session is recorded
+#[test]
+fn S4_a_runs_history_holds_each_turns_request_answer_and_gate_verdict() {
+    // A retry run: turn 1 fails the quote gate, turn 2 passes. Both turns are recorded.
+    let env = Env::new();
+    let broken = broken_quote();
+    env.respond_turn(1, json!({ "candidates": broken, "session_id": "sess-1" }));
+    env.respond_turn(2, json!({ "candidates": good() }));
+    let result = env.import_ok();
+    let run = result["extraction"]["run"].as_i64().unwrap();
+    let history = env.history(run);
+    assert_eq!(history.len(), 2, "{history:?}");
+    // Turn 1: the request the core sent, the answer it got, and the quote gate's verdict.
+    assert_eq!(history[0]["turn"], 1);
+    assert_eq!(history[0]["request"], env.judgment(1));
+    assert_eq!(
+        history[0]["answer"],
+        json!({ "candidates": broken, "session_id": "sess-1" })
+    );
+    assert_eq!(
+        history[0]["verdict"],
+        json!({ "passed": false, "feedback": env.judgment(2)["session"]["feedback"] }),
+        "the failed turn's verdict is the feedback the retry carried"
+    );
+    // Turn 2: the retry request with its session feedback, the passing answer, a pass verdict.
+    assert_eq!(history[1]["turn"], 2);
+    assert_eq!(history[1]["request"], env.judgment(2));
+    assert_eq!(history[1]["answer"], json!({ "candidates": good() }));
+    assert_eq!(history[1]["verdict"], json!({ "passed": true }));
+
+    // A run whose every turn fails keeps all of them, up to the cap.
+    let env = Env::new();
+    env.candidates(&broken_quote());
+    let (ok, failed) = env.import();
+    assert!(!ok, "{failed}");
+    let run = failed["extraction"]["run"].as_i64().unwrap();
+    let history = env.history(run);
+    assert_eq!(history.len(), 3, "{history:?}");
+    for (n, turn) in history.iter().enumerate() {
+        let n = n as u64 + 1;
+        assert_eq!(turn["turn"], n as i64);
+        assert_eq!(turn["request"], env.judgment(n));
+        assert_eq!(turn["answer"], json!({ "candidates": broken_quote() }));
+        assert_eq!(turn["verdict"]["passed"], false);
+    }
+
+    // A turn the adapter never answered keeps its request and verdict, with no answer.
+    let env = Env::new();
+    env.config("[commitment_adapter]\nplugin = \"test-adapter\"\ntimeout_seconds = 1\n");
+    env.candidates(&broken_quote());
+    env.silent_from(2);
+    let (ok, failed) = env.import();
+    assert!(!ok, "{failed}");
+    let run = failed["extraction"]["run"].as_i64().unwrap();
+    let history = env.history(run);
+    assert_eq!(history.len(), 2, "{history:?}");
+    assert_eq!(history[1]["turn"], 2);
+    assert_eq!(history[1]["request"], env.judgment(2));
+    assert_eq!(history[1]["answer"], json!(null));
+    assert_eq!(history[1]["verdict"]["passed"], false);
+    assert!(
+        history[1]["verdict"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("did not answer within 1 s"),
+        "{:?}",
+        history[1]["verdict"]
+    );
+}
+
+/// S6: an export leaves the turn history out, even when the core recorded failed turns and the
+/// transcript is retained: only what the owner supplied is exported.
+// spec: Every turn of a judgment session is recorded
+#[test]
+fn S6_an_export_leaves_turn_history_out() {
+    let env = Env::new();
+    env.respond_turn(
+        1,
+        json!({ "candidates": broken_quote(), "session_id": "sess-42" }),
+    );
+    env.respond_turn(2, json!({ "candidates": good() }));
+    let transcript = env.path("transcript.txt");
+    let (ok, value) = env.run(&[
+        "meeting",
+        "import",
+        transcript.to_str().unwrap(),
+        "--meeting",
+        "weekly-1",
+        "--scope",
+        "work",
+        "--captured-at",
+        "2026-11-10T10:00:00Z",
+        "--owner-speaker",
+        "Alice",
+        "--retain-transcript",
+    ]);
+    assert!(ok, "{value}");
+    let run = value["result"]["extraction"]["run"].as_i64().unwrap();
+    // The history is really there, so the export omitting it is not vacuous.
+    assert_eq!(
+        env.history(run).len(),
+        2,
+        "the run recorded no history to leave out"
+    );
+
+    let export = env.ok(&["meeting", "export", "weekly-1"]);
+    let mut keys: Vec<_> = export.as_object().unwrap().keys().cloned().collect();
+    keys.sort();
+    assert_eq!(
+        keys,
+        [
+            "format",
+            "meeting",
+            "notice",
+            "owner_speaker",
+            "speakers",
+            "transcript"
+        ],
+        "{export}"
+    );
+    assert_eq!(export["transcript"], TRANSCRIPT);
+    let text = export.to_string();
+    for marker in [
+        "sess-42",
+        "by Friday!",
+        "judgment.request",
+        "candidates[0].quote",
+    ] {
+        assert!(!text.contains(marker), "{marker} leaked: {text}");
+    }
+}
+
+/// A retry turn carries the harness session id the first turn produced, even when a later
+/// answer omits it: the core persists the id across the session so the adapter can resume the
+/// same harness session (ADR-0016 §4).
+// spec: The core calls the adapter and keeps only the candidates that pass its checks
+#[test]
+fn a_retry_turn_carries_the_harness_session_id_the_first_turn_produced() {
+    let env = Env::new();
+    env.respond_turn(
+        1,
+        json!({ "candidates": broken_quote(), "session_id": "sess-1" }),
+    );
+    // Turn 2 fails the quote gate again, and its answer names no session id.
+    env.respond_turn(2, json!({ "candidates": broken_quote() }));
+    env.respond_turn(3, json!({ "candidates": good() }));
+    let result = env.import_ok();
+    assert_eq!(result["extraction"]["state"], "succeeded", "{result}");
+    assert_eq!(env.turns(), 3);
+    assert_eq!(
+        env.judgment(2)["session"]["prior_answer"]["session_id"],
+        "sess-1"
+    );
+    // The id the first turn produced still rides turn 3, though turn 2's answer omitted it.
+    assert_eq!(
+        env.judgment(3)["session"]["prior_answer"]["session_id"],
+        "sess-1"
+    );
 }

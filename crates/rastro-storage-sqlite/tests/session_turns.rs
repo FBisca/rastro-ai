@@ -38,6 +38,7 @@ fn seed_run(storage: &mut SqliteStorage, meeting: &str, transcript: TranscriptKe
             replay_of: None,
             recorded: None,
             transcript,
+            turns: Vec::new(),
         })
         .unwrap()
 }

@@ -938,6 +938,7 @@ kinds = ["agent-tool-adapter"]
 protocol = 1
 command = "adapter"
 agent_tool = { capabilities = ["judge_text"] }
+enforcement = ["tools_off", "no_mcp_servers", "no_setting_sources"]
 
 [permissions]
 submit = []

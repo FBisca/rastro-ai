@@ -9,31 +9,18 @@ use rastro_core::meeting::{
 };
 use rusqlite::{Connection, OptionalExtension, params};
 
-/// One turn of a run's session, as the run's history keeps it (ADR 0016 §3): the
-/// request the core sent, the adapter's answer and the core's gate verdict. Failed turns are
-/// kept like any other; an export leaves them out, and forgetting the meeting removes them.
-#[derive(Clone, Debug, Eq, PartialEq)]
-pub struct SessionTurn {
-    /// Counted from 1 within the session.
-    pub turn: usize,
-    /// The request the core sent, as the wire JSON.
-    pub request: String,
-    /// The adapter's answer as the wire JSON; `None` when it never answered.
-    pub answer: Option<String>,
-    /// The core's gate verdict for this turn.
-    pub verdict: String,
-}
+/// One turn of a run's session, as the run's history keeps it (ADR 0016 §3): the request the
+/// core sent, the adapter's answer and the core's gate verdict. The core owns the record; the
+/// store writes and reads it. Failed turns are kept like any other; an export leaves them out,
+/// and forgetting the meeting removes them.
+pub use rastro_core::meeting::SessionTurn;
 
 /// A count column, read as the unsigned number it is.
 fn count(row: &rusqlite::Row, index: usize) -> rusqlite::Result<usize> {
     Ok(row.get::<_, i64>(index)?.max(0) as usize)
 }
 
-pub(crate) fn record_turn(
-    connection: &mut Connection,
-    run_id: i64,
-    turn: &SessionTurn,
-) -> Result<()> {
+pub(crate) fn record_turn(connection: &Connection, run_id: i64, turn: &SessionTurn) -> Result<()> {
     connection.execute(
         "INSERT INTO session_turn (run_id, turn, request, answer, verdict)
          VALUES (?1, ?2, ?3, ?4, ?5)",
@@ -512,6 +499,11 @@ pub(crate) fn record(connection: &mut Connection, run: &RunRecord) -> Result<i64
                 params![id, run_id, text],
             )?;
         }
+    }
+    // The session's turn history rides the run's own transaction: the history lands with the
+    // run it belongs to, and a failed insert leaves no partial meeting (ADR 0016 §3).
+    for turn in &run.turns {
+        record_turn(&transaction, run_id, turn)?;
     }
     transaction.commit()?;
     Ok(run_id)

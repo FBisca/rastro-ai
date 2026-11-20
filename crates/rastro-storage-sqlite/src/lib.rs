@@ -458,7 +458,7 @@ impl SqliteStorage {
     /// The run must exist, and a turn already recorded for it is refused: the history is
     /// insert-only. Failed turns are recorded like any other (ADR 0016 §3).
     pub fn record_session_turn(&mut self, run_id: i64, turn: &SessionTurn) -> Result<()> {
-        meeting::record_turn(&mut self.connection, run_id, turn)
+        meeting::record_turn(&self.connection, run_id, turn)
     }
     /// The run's session history in turn order; empty when the run recorded no turns.
     pub fn session_turns(&self, run_id: i64) -> Result<Vec<SessionTurn>> {
