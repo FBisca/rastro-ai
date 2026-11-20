@@ -7,7 +7,7 @@ use rastro_core::{
     Scope,
     actions::{
         Filed, IssueFields, NewAct, NewRun, ObservedIssue, Proposal, Reach, Reversibility, Run,
-        RunFailure, RunLevel, RunResult, RunStatus, Undo,
+        RunFailure, RunLevel, RunResult, RunReturn, RunStatus, Undo,
     },
     queue::{Source, SourceKind},
     rules::RuleCopy,
@@ -277,11 +277,29 @@ pub(crate) fn record_failure(
     Ok(())
 }
 
+/// Records that a pending Act's re-check at grace end failed, with its reason. A run that already
+/// holds a result is done and keeps reading so, and a run already returned keeps its first return:
+/// the insert selects no row, so the table's insert-only guard is never reached.
+pub(crate) fn record_return(
+    connection: &mut Connection,
+    run: &str,
+    returned: &RunReturn,
+) -> Result<()> {
+    connection.execute(
+        "INSERT INTO action_return (run_id, reason, returned_at)
+         SELECT ?1, ?2, ?3
+         WHERE NOT EXISTS (SELECT 1 FROM action_return WHERE run_id = ?1)
+           AND NOT EXISTS (SELECT 1 FROM action_result WHERE run_id = ?1)",
+        params![run, returned.reason, stamp(returned.returned_at)],
+    )?;
+    Ok(())
+}
+
 /// Every run whose source is in `scopes` (empty: every scope), oldest first, with the issue it
 /// created when it did.
 #[expect(
     clippy::too_many_lines,
-    reason = "one pass reads each run with its result, attempts, undo, level, rule copy and due time, so the status derivation stays in sight of what it rests on"
+    reason = "one pass reads each run with its result, attempts, undo, return, level, rule copy and due time, so the status derivation stays in sight of what it rests on"
 )]
 pub(crate) fn runs(view: &View, scopes: &[Scope]) -> Result<Vec<Run>> {
     let mut statement = view.0.prepare(
@@ -294,7 +312,8 @@ pub(crate) fn runs(view: &View, scopes: &[Scope]) -> Result<Vec<Run>> {
                    AND i.domain_key = 'action_run/' || r.id ORDER BY i.append_seq LIMIT 1),
                 (SELECT i.issued_at FROM intent i WHERE i.kind = 'undo_action'
                    AND i.domain_key = 'action_run/' || r.id ORDER BY i.append_seq LIMIT 1),
-                r.level, r.rule, r.due_at
+                r.level, r.rule, r.due_at,
+                (SELECT 1 FROM action_return t WHERE t.run_id = r.id)
          FROM action_run r LEFT JOIN action_result d ON d.run_id = r.id
          WHERE ?1 IS NULL OR r.scope IN (SELECT value FROM json_each(?1))
          ORDER BY r.append_seq",
@@ -322,6 +341,7 @@ pub(crate) fn runs(view: &View, scopes: &[Scope]) -> Result<Vec<Run>> {
             row.get::<_, String>(16)?,
             row.get::<_, Option<String>>(17)?,
             row.get::<_, Option<String>>(18)?,
+            row.get::<_, Option<i64>>(19)?,
         ))
     })?;
     let mut runs = Vec::new();
@@ -338,6 +358,7 @@ pub(crate) fn runs(view: &View, scopes: &[Scope]) -> Result<Vec<Run>> {
             level,
             rule,
             due_at,
+            returned,
         ) = row?;
         let [
             id,
@@ -369,6 +390,8 @@ pub(crate) fn runs(view: &View, scopes: &[Scope]) -> Result<Vec<Run>> {
             RunStatus::Undone
         } else if identifier.is_some() {
             RunStatus::Done
+        } else if returned.is_some() {
+            RunStatus::Returned
         } else if attempts > 0 {
             RunStatus::Failed
         } else if level == RunLevel::Act {

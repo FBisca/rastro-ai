@@ -34,7 +34,7 @@ const INTENT_END: &str = "202611081000_intent_justification_end";
 /// A migration that starts with this line rebuilds a table other tables name, so the open runs
 /// it with foreign keys off and checks them before it commits.
 const FOREIGN_KEYS_OFF: &str = "-- foreign_keys = off";
-const MIGRATIONS: [(&str, &str); 24] = [
+const MIGRATIONS: [(&str, &str); 25] = [
     (
         "202611041200_initial",
         include_str!("../migrations/202611041200_initial.sql"),
@@ -130,6 +130,10 @@ const MIGRATIONS: [(&str, &str); 24] = [
     (
         "202611191400_action_act_runs",
         include_str!("../migrations/202611191400_action_act_runs.sql"),
+    ),
+    (
+        "202611191500_action_returns",
+        include_str!("../migrations/202611191500_action_returns.sql"),
     ),
 ];
 
@@ -498,6 +502,13 @@ impl Storage for SqliteStorage {
         failure: &rastro_core::actions::RunFailure,
     ) -> Result<()> {
         actions::record_failure(&mut self.connection, run, failure)
+    }
+    fn record_action_return(
+        &mut self,
+        run: &str,
+        returned: &rastro_core::actions::RunReturn,
+    ) -> Result<()> {
+        actions::record_return(&mut self.connection, run, returned)
     }
     fn record_meeting_run(&mut self, run: &rastro_core::meeting::RunRecord) -> Result<i64> {
         meeting::record(&mut self.connection, run)
