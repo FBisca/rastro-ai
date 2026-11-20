@@ -1,0 +1,64 @@
+schema: plan/2
+slug: credential-checks
+goal: Verify source credentials at setup and share the Linear keychain item between reads and writes.
+spec: docs/specs/surfaces.md
+archive: promote
+requirements:
+  added:
+    - title: Linear writer shares the connector credential
+      shall: The Linear writer SHALL use the environment key first and otherwise the connector's rastro-linear keychain item, without exposing credentials in output or errors.
+      scenarios:
+        - id: S1
+          name: a writer uses the keychain
+          when: LINEAR_API_KEY is absent and the rastro-linear item exists
+          then: the writer authenticates with that item and prints no secret
+        - id: S2
+          name: the environment takes precedence
+          when: LINEAR_API_KEY and the rastro-linear item both exist
+          then: the writer authenticates with the environment key
+        - id: S3
+          name: a missing credential fails safely
+          when: neither credential exists
+          then: the writer reports an authentication failure without exposing secrets
+    - title: Source credentials can be checked without writing
+      shall: The CLI SHALL check a configured source with a cheap authenticated provider call, report credential source and result with an actionable failure hint, and write no evidence, coverage or last complete check.
+      scenarios:
+        - id: S4
+          name: a source authenticates
+          when: the owner checks a source with valid credentials
+          then: the CLI reports the credential source and authentication success without changing stored state
+        - id: S5
+          name: a source cannot authenticate
+          when: credentials are missing or rejected
+          then: the CLI reports the failure and a fix and exits unsuccessfully without changing stored state or exposing secrets
+        - id: S6
+          name: the check stays on the CLI
+          when: an agent lists MCP tools
+          then: no source check tool is exposed
+    - title: Source setup reports authentication
+      shall: Source setup SHALL run the credential check and report its result without rolling back a source when authentication fails.
+      scenarios:
+        - id: S7
+          name: setup with bad credentials
+          when: the owner adds a source whose credentials fail
+          then: the source remains configured and the output explains the failure and fix
+tickets:
+  - id: T1
+    delivers: Linear writer credential parity with the connector.
+    satisfies: [S1, S2, S3]
+    paths: [crates/rastro-action-linear/, crates/rastro-cli/tests/actions_accept.rs]
+    size: regular
+    difficulty: simple
+  - id: T2
+    delivers: CLI-only no-write source authentication probe and setup integration.
+    satisfies: [S4, S5, S6, S7]
+    paths: [crates/rastro-cli/, crates/rastro-core/, crates/rastro-connector-linear/, crates/rastro-connector-github/, docs/macos-tick.md]
+    size: regular
+    difficulty: complex
+approval:
+  by: felippe.bisca@gmail.com
+  at: '2026-11-20T12:25:42.288418+00:00'
+  base: f44762006a2cf1b68fb4c65841dca947806489f6
+  digest: fa28e13f02eba38d3c5b636c5e4e53817a3d57d57906587ee640dc3e7577574a
+  reason: 'Owner yes in session: rebase approval base onto main f447620; #204 code
+    landed in T1 paths since 134ee9d. Contract bytes unchanged.'
