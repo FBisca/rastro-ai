@@ -57,9 +57,10 @@ Status: `todo` · `planning` · `doing` · `done`
 ## Parking lot
 - News radar, project updates in the owner's voice, "find agent work a plain rule could do": workflows after 12.
 - Windows support.
-- Plugins that call agents go through agent-runtime, so the harness is a config choice (`decisions/plugins.md` §36): the Claude Code commitment adapter moves over.
+- Optional agent-runtime adapter for owners already running the fleet; default agent adapters are thin CLI drivers over a shared SDK (`decisions/plugins.md` §36, amended 2026-11-20).
 - Commitments from GitHub and Linear comments: the slice-5 extractor bound to those sources, once their connectors read comments.
 - Slack and mail through the work companion, once commitments prove useful; Slack per approved channel, each with its own coverage. Meetings already shipped as slice 5's first source (`specs/meetings.md`, `adr/0011`): a local transcript import, not a work-companion integration.
 - A versioned structured read contract from the work companion (asked of its maintainers), then a generic MCP bridge with private mapping packs.
 - Agentic connectors (an agent chooses what to read), first for online research. Amends plugins §13 and needs a read broker that constrains tools, scopes and arguments; evidence stays what the broker captured, and "empty" only comes from deterministic reads.
+- Open judgment (M6 candidate, end goal): task-template plugins, generic agent-adapters (thin CLI drivers + SDK), decision-adapters (System-1) and decision tasks; first candidates duplicate/stale triage and categorization (`decisions/plugins.md` §38–43, `adr/0016-judgment-sessions-capped-retry-turns.md`). First delivery unchanged.
 - Open questions in `open-questions.md` get decided inside the slice that first needs them.
