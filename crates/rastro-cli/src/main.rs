@@ -781,7 +781,14 @@ fn actions_propose_text(proposed: &rastro_core::actions::Proposed) -> String {
             None => vec![format!("{head} | Run {}", run.id)],
         },
         Some(run) => vec![format!("{head} | Already has a run"), action_run_text(run)],
-        None => vec![format!("{head} | Waiting in the queue; nothing has run")],
+        None => match &proposed.cap {
+            Some(wait) => vec![format!(
+                "{head} | Waiting in the queue: the rule {} reached its daily cap of {}",
+                display_safe(&wait.rule),
+                wait.cap
+            )],
+            None => vec![format!("{head} | Waiting in the queue; nothing has run")],
+        },
     };
     lines.extend(action_proposal_lines(&filed.proposal));
     lines.join("\n")

@@ -5,7 +5,9 @@
 //! proposer's why and the claims it cited. When an owner rule matches it, the proposal starts a
 //! pending Act run that waits out the rule's grace window; otherwise it runs nothing and waits
 //! in the queue as an item whose content-addressed id names all of that, so the same proposal is
-//! the same item.
+//! the same item. A rule with a `daily_cap` starts at most that many Act runs per local calendar
+//! day, counting every run it started; past the cap a matching proposal waits in the queue and
+//! the answer names the rule and its cap.
 //!
 //! The action must be one an installed provider declares ([`crate::host::actions`]). The why, the
 //! cited claims and the id stay in Rastro: [`IssueFields`] is the only part written for the
@@ -24,7 +26,7 @@ pub use why::{Accept, Cell, RunWhy};
 use crate::queue::{self, Source as QueueSource, SourceKind};
 use crate::{
     Config, Rastro, ReadStorage, Reader, Scope, Snapshot, Source, Storage, host,
-    knowledge::WhyOptions,
+    knowledge::WhyOptions, rules,
 };
 use anyhow::{Context, Result, bail};
 use chrono::{DateTime, Utc};
@@ -164,6 +166,20 @@ pub struct Proposed {
     /// so the answer stays the size of the proposal it carries.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub run: Option<Box<Run>>,
+    /// The rule whose daily cap keeps the proposal waiting in the queue; absent otherwise.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub cap: Option<CapWait>,
+}
+
+/// The rule and daily cap that keep a matching proposal waiting in the queue: the rule already
+/// started its cap of Act runs this local calendar day.
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
+#[schemars(rename = "ActionCapWait")]
+pub struct CapWait {
+    /// The rule the proposal matched.
+    pub rule: String,
+    /// The rule's daily cap, reached today.
+    pub cap: u32,
 }
 
 /// The proposal `request` makes, once checked against what the host offers and the config says:
@@ -289,10 +305,12 @@ fn source_of(source: &Source) -> QueueSource {
 
 impl<S: Storage> Rastro<S> {
     /// Records one pending action proposal. When an owner rule matches it on action, team and
-    /// assignee and no open observed issue holds its title, starts the pending Act run the rule
-    /// authorizes, due when its grace ends, and sends nothing; otherwise the proposal waits in
-    /// the queue. A proposal that already has an Act run keeps it. Fails, recording nothing,
-    /// when no installed provider offers the action, or [`plan`]'s checks fail.
+    /// assignee, no open observed issue holds its title and the rule has not started its daily
+    /// cap of Act runs this local calendar day, starts the pending Act run the rule authorizes,
+    /// due when its grace ends, and sends nothing; otherwise the proposal waits in the queue,
+    /// past the cap with the rule and its cap named in the answer. A proposal that already has
+    /// an Act run keeps it. Fails, recording nothing, when no installed provider offers the
+    /// action, or [`plan`]'s checks fail.
     pub fn propose_action(&mut self, request: &ProposeRequest) -> Result<Proposed> {
         let offer = host::actions::offer(&self.locations, &request.action)?;
         let now = crate::coverage::now()?;
@@ -300,23 +318,53 @@ impl<S: Storage> Rastro<S> {
         self.storage
             .snapshot(|view| check_citations(view, &filed.proposal.cites, &filed.source))?;
         self.storage.record_action_proposal(&filed)?;
-        let (dups, existing) = self.storage.snapshot(|view| {
+        let matched = self.config.matching_rule(&filed.proposal);
+        let (dups, existing, used) = self.storage.snapshot(|view| {
+            let runs = view.action_runs(&[])?;
+            let existing = runs.iter().find(|run| run.proposal == filed.id).cloned();
+            let used = match matched {
+                Some(rule) if rule.daily_cap.is_some() => rules::used_today(&runs, rule, now),
+                _ => 0,
+            };
             Ok((
                 duplicates(view, &filed.source, &filed.proposal)?,
-                view.action_runs(&[])?
-                    .into_iter()
-                    .find(|run| run.proposal == filed.id),
+                existing,
+                used,
             ))
         })?;
         // One proposal never has two runs: one that already has an Act run keeps it.
         if let Some(run) = existing {
             let run = (run.level == RunLevel::Act).then_some(Box::new(run));
-            return Ok(Proposed { filed, run });
+            return Ok(Proposed {
+                filed,
+                run,
+                cap: None,
+            });
         }
-        let rule = match self.config.matching_rule(&filed.proposal) {
+        let rule = match matched {
             Some(rule) if dups.is_empty() => rule,
-            _ => return Ok(Proposed { filed, run: None }),
+            _ => {
+                return Ok(Proposed {
+                    filed,
+                    run: None,
+                    cap: None,
+                });
+            }
         };
+        // Past the cap the proposal waits in the queue as a normal proposal, and the answer
+        // names the rule and the cap it reached.
+        if let Some(cap) = rule.daily_cap
+            && used >= cap as usize
+        {
+            return Ok(Proposed {
+                filed,
+                run: None,
+                cap: Some(CapWait {
+                    rule: rule.name.clone(),
+                    cap,
+                }),
+            });
+        }
         let grace = chrono::Duration::from_std(self.config.grace_of(rule))
             .context("the rule's grace is too long to count")?;
         let due_at = now
@@ -337,6 +385,7 @@ impl<S: Storage> Rastro<S> {
         Ok(Proposed {
             filed,
             run: Some(Box::new(run)),
+            cap: None,
         })
     }
 }

@@ -3,10 +3,12 @@
 //!
 //! A rule names an action, a team and the assignee `me`, and may carry its own `grace`. A rule's
 //! grace window is its own `grace` when set, else its action's sensitivity in `[grace]`, else the
-//! default table: `linear.create_issue` is medium, 10 minutes. A rule that fails a check fails the
-//! command that read the config, naming the rule and the bad field.
+//! default table: `linear.create_issue` is medium, 10 minutes. A rule may also set a `daily_cap`:
+//! at most that many Act runs per local calendar day, counting every run the rule started. A rule
+//! that fails a check fails the command that read the config, naming the rule and the bad field.
 use crate::{Config, Locations, Rastro, ReadStorage, Reader, Storage, actions, host};
 use anyhow::{Result, bail};
+use chrono::{DateTime, Local, Utc};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashSet, time::Duration};
@@ -26,6 +28,10 @@ pub struct Rule {
     /// This rule's own grace window, such as `"1m"`; the `[grace]` table's when omitted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub grace: Option<String>,
+    /// At most this many Act runs a day, counted per local calendar day over every run the rule
+    /// started; no cap when omitted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub daily_cap: Option<u32>,
 }
 
 /// `[grace]`: how long a rule waits, by its action's sensitivity, before it runs. Each omitted
@@ -197,7 +203,7 @@ impl Config {
             team: rule.team.clone().unwrap_or_default(),
             assignee: rule.assignee.clone().unwrap_or_default(),
             grace_seconds: self.grace_of(rule).as_secs(),
-            daily_cap: None,
+            daily_cap: rule.daily_cap,
         }
     }
 
@@ -217,6 +223,19 @@ impl Config {
             .unwrap_or_else(|| Ok(Sensitivity::Medium.default_grace()));
         window.unwrap_or_else(|_| Sensitivity::Medium.default_grace())
     }
+}
+
+/// The Act runs `rule` started on `now`'s local calendar day, every status counted: a stopped,
+/// returned or undone run still used the day's budget.
+pub(crate) fn used_today(runs: &[actions::Run], rule: &Rule, now: DateTime<Utc>) -> usize {
+    let today = now.with_timezone(&Local).date_naive();
+    runs.iter()
+        .filter(|run| {
+            run.level == actions::RunLevel::Act
+                && run.rule.as_ref().is_some_and(|copy| copy.name == rule.name)
+                && run.accepted_at.with_timezone(&Local).date_naive() == today
+        })
+        .count()
 }
 
 /// The rule as it stood when a run started under it: copied into the run, so a later change to
