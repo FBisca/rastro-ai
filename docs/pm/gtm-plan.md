@@ -82,7 +82,7 @@ Proposed staged allocation: **first 8 weeks: 16 engineer-weeks + 4 cohort/PM-wee
 Approved lean P0–P4 direction; execution on merge. Local journals replace G8 for GTM; Linux moves to P3; 10–12 move post-launch; baseline-first gates replace invented thresholds. Slice 13 moves to P2 after 9 and before strangers; export covers trust natively and resolves #18 ([open questions](../open-questions.md)).
 Approved **A+B adapters**: thin harness CLI drivers + shared SDK; agent-runtime optional, never an adoption dependency ([plugins §36 amended](../decisions/plugins.md)).
 Task/action primitives remain end goal: internal tasks vs external actions, deterministic/agent/decision subtypes, task-template plugins, agent/decision adapters and core-executed gates with capped retry turns; M6 starts with duplicate/stale triage + categorization by demand ([plugins §38–43](../decisions/plugins.md)). **[ADR-0016](../adr/0016-judgment-sessions-capped-retry-turns.md) remains proposed**; shipped one-shot judgment unchanged.
-Remaining #14–18: narrow task write exceptions, retry/recovery defaults, failed-turn/session recording and export/forgetting, decision-output evidence contract, recorded-output/export tension. Older opens (learning, focus, registry, source removal, namespaces, sharing) remain with their owning slices ([open questions](../open-questions.md)).
+Decided 2026-11-20: #14 no task write exceptions, #15 retry defaults (cap 3, 120s/turn, owner-set cost cap), #9 remove = config only, #4 no central registry at GTM, #11 owner-approved namespaces ([plugins §44–47](../decisions/plugins.md), [knowledge §76](../decisions/knowledge.md)). Remaining #16–18: failed-turn/session recording and export/forgetting, decision-output evidence contract, recorded-output/export tension. Older opens (learning, focus, sharing) remain with their owning slices ([open questions](../open-questions.md)).
 
 ## TODO register
 
@@ -92,4 +92,4 @@ Remaining #14–18: narrow task write exceptions, retry/recovery defaults, faile
 | Baselines / retention / demand | Cohort | Per-owner P2 journals, activation/support attempts, mature outcomes, missingness and same-task comparisons; fix P3 gates before observation. |
 | Costs / capacity | Lead + owner | Staffing availability, actual engineering effort, labor/provider costs and burn against staged allocation; revise estimates at gates. |
 | Willingness to pay | Cohort + owner | Priced concept test before paid-service scope; no revenue forecast. |
-| Open questions | Owner + owning slice | #14–18 above; #18 decided inside 13 before exit-path claims; older source-remove/registry/namespace questions before affected implementation. |
+| Open questions | Owner + owning slice | #16–18 above; #18 decided inside 13 before exit-path claims; #1/2 in slice 9, #3 in 11, #5 in 16, #17 with the first decision task. |

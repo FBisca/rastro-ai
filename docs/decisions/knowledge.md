@@ -167,3 +167,6 @@ Architecture: `../adr/0010-identity-and-owner-intents.md`. Plan: `../plans/2026-
 
 ## Added 2026-11-19 (roadmap slice 8b)
 75. **A rule over an agent's proposal is not a knowledge-derived basis (amends §43).** A run a rule starts from an agent's proposal needs no outbox for the reason §74 gives: the proposal and its run commit in one transaction and execution is idempotent. Claims it cites are its why and are re-checked before it runs (levels §19); they don't authorize it. Rules over observed facts or accepted commitments stay blocked until the §43 outbox exists.
+
+## Added 2026-11-20 (owner decision on open question #9)
+76. **`source remove` is config only (decides #9's command half; §21 decided the hit half).** Removing a source unregisters it from future syncs; its evidence stays insert-only. Coverage for its (source, scope) pairs reads as §21 says: `registered: false`, freshness from stored windows, "never looked" if it never synced. Deletion is `forget` (slice 14) with propagation to derivatives, never remove. Re-adding semantics stay as §21's accepted observation.
