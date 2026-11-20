@@ -48,15 +48,16 @@ pub struct RunWhy {
     pub reach: &'static str,
     /// Whether the action can be undone, in the owner's words.
     pub reversibility: &'static str,
+    /// Where the proposal stands in the queue: whether it still waits, and what took it out, by
+    /// the same rule `rastro queue` reads.
+    pub queue: crate::queue::Standing,
 }
 
 /// The run `id` among those `scopes` see, explained. Fails when no run of that id is visible,
 /// without saying whether it exists elsewhere.
 pub(crate) fn explain(view: &dyn Snapshot, scopes: &[Scope], id: &str) -> Result<(Run, RunWhy)> {
-    let Some(run) = (view.action_runs(scopes)?)
-        .into_iter()
-        .find(|run| run.id == id)
-    else {
+    let runs = view.action_runs(scopes)?;
+    let Some(run) = (runs.iter()).find(|run| run.id == id).cloned() else {
         bail!("no action run {id} is visible here: list the runs with `actions`");
     };
     let filed = (view.action_proposals(scopes)?)
@@ -92,6 +93,7 @@ pub(crate) fn explain(view: &dyn Snapshot, scopes: &[Scope], id: &str) -> Result
         },
         reach: filed.reach.label(),
         reversibility: filed.reversibility.label(),
+        queue: crate::queue::standing(&run.proposal, &runs, &view.intents()?),
     };
     Ok((run, why))
 }
