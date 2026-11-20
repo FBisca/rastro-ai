@@ -226,3 +226,162 @@ The owner SHALL have one real Linear issue created through a Rastro proposal fro
 #### Scenario: switch day
 - WHEN an in-session agent proposes the owner's next real Linear issue and the owner accepts it
 - THEN the issue exists in Linear with exactly the accepted title and description
+
+### Requirement: Owner rules live in config
+Rastro SHALL read each `[[rules]]` entry in `config.toml` as an owner rule naming an action, a team and the assignee `me`, and SHALL fail any command on an invalid rule, naming the rule and its bad field.
+
+#### Scenario: a valid rule loads
+- WHEN `config.toml` holds a rule `my-issues` with action `linear.create_issue`, team `H` and assignee `me`, and the owner runs `rastro rules check`
+- THEN the output lists `my-issues` with its action, team `H` and assignee `me`
+
+#### Scenario: a rule naming an unknown action is refused
+- WHEN a rule `bad` names an action no installed provider declares and the owner runs `rastro queue`
+- THEN the command fails naming the rule `bad` and the field `action`, and nothing is recorded
+
+#### Scenario: a rule whose assignee is not the owner is refused
+- WHEN a rule `bad` sets `assignee = "someone"` and the owner runs `rastro rules check`
+- THEN the command fails naming the rule `bad` and the field `assignee`
+
+### Requirement: A rule's grace comes from the table
+A rule's grace window SHALL be its own `grace` when set, else its action's sensitivity in `[grace]`, else the default table (`linear.create_issue` is medium, 10 minutes).
+
+#### Scenario: the default grace
+- WHEN a rule sets no `grace` and `config.toml` has no `[grace]` table
+- THEN `rastro rules check` shows its grace as 10 minutes
+
+#### Scenario: the grace table is edited
+- WHEN a rule sets no `grace` and `[grace]` sets `medium = "3m"`
+- THEN `rastro rules check` shows its grace as 3 minutes
+
+#### Scenario: a rule's own grace wins
+- WHEN a rule sets `grace = "1m"` and `[grace]` sets `medium = "3m"`
+- THEN `rastro rules check` shows its grace as 1 minute
+
+### Requirement: A matching rule starts an Act
+When an agent's action proposal matches a rule on action, team and assignee `me`, and is not flagged as a possible duplicate, `rastro actions propose` SHALL record a pending Act run under that rule, due when its grace ends, SHALL answer with the run, the time it runs and its stop command, and SHALL send nothing.
+
+#### Scenario: a matching proposal starts a pending Act
+- WHEN with rule `my-issues` (team `H`, grace 10 minutes) an agent runs `rastro actions propose linear.create_issue --title T --team H --why W` at 10:00
+- THEN the answer names a run, says it runs at 10:10 unless stopped and gives `rastro actions stop <run>`; `rastro actions` lists that run as `pending` at level `act`; the fake Linear server has received no request
+
+#### Scenario: a proposal for another team waits in the queue
+- WHEN with rule `my-issues` on team `H`, an agent proposes `linear.create_issue` for team `ENG`
+- THEN `rastro queue` lists it as an action proposal, and `rastro actions` lists no run
+
+#### Scenario: a possible duplicate waits in the queue
+- WHEN with rule `my-issues` matching, an agent proposes a title equal to an open observed Linear issue's title
+- THEN `rastro queue` lists the proposal with its "possible duplicate of" mark, and `rastro actions` lists no run
+
+### Requirement: An Act runs when its grace ends
+`rastro tick` SHALL execute each pending Act run whose grace has ended, creating the issue exactly once without an owner accept, and SHALL leave every pending Act whose grace has not ended untouched.
+
+#### Scenario: tick before the grace ends sends nothing
+- WHEN a pending Act is due at 10:10 and `rastro tick` runs at 10:09
+- THEN the fake Linear server has received no create, and the run still reads `pending`
+
+#### Scenario: tick after the grace ends creates the issue
+- WHEN a pending Act is due at 10:10 and `rastro tick` runs at 10:10
+- THEN the fake Linear server has received one create holding exactly the proposal's title, description, team, assignee and the run's issue id, and the run reads `done`
+
+#### Scenario: a second tick creates nothing more
+- WHEN a pending Act ran to `done` at 10:10 and `rastro tick` runs again at 10:11
+- THEN the fake Linear server has still received one create
+
+### Requirement: An Act is checked again before it runs
+Before executing a pending Act, Rastro SHALL check that its rule still exists and matches, that no claim it cites was retracted, and that no open observed issue holds its title; when any check fails the run SHALL read `returned`, nothing SHALL be sent, and its proposal SHALL wait in the queue.
+
+#### Scenario: the rule was removed
+- WHEN the rule a pending Act started under is removed from `config.toml` and `rastro tick` runs after its grace
+- THEN the fake Linear server has received no create, the run reads `returned`, and `rastro queue` lists its proposal as an action proposal
+
+#### Scenario: a cited claim was retracted
+- WHEN a claim a pending Act cites is retracted and `rastro tick` runs after its grace
+- THEN the fake Linear server has received no create, and the run reads `returned`
+
+#### Scenario: an issue with the same title appeared
+- WHEN a sync observes an open Linear issue whose title equals a pending Act's title, and `rastro tick` runs after its grace
+- THEN the fake Linear server has received no create, and the run reads `returned`
+
+### Requirement: The owner stops a pending Act
+`rastro actions stop <run>` SHALL record the owner's stop of a pending Act run, after which the run SHALL read `stopped` and never execute, and SHALL refuse a run that is not pending.
+
+#### Scenario: a stopped Act never runs
+- WHEN the owner runs `rastro actions stop <run>` on a pending Act and `rastro tick` runs after its grace
+- THEN the fake Linear server has received no create, the run reads `stopped`, and `rastro queue` lists no item for its proposal
+
+#### Scenario: stopping a done run is refused
+- WHEN the owner runs `rastro actions stop <run>` on a run that reads `done`
+- THEN the command fails naming `rastro actions undo <run>`, and nothing is recorded
+
+#### Scenario: stop is not on MCP
+- WHEN an agent lists the MCP server's tools
+- THEN no tool stops a run or writes a rule
+
+### Requirement: A pending Act runs only once
+The queue SHALL refuse accepting, editing or rejecting a proposal that has a pending Act, naming the run and its stop command.
+
+#### Scenario: accepting a pending Act's proposal is refused
+- WHEN the owner runs `rastro queue accept` on the proposal of a pending Act
+- THEN the command fails naming the run and `rastro actions stop <run>`, and `rastro actions` lists only that one run
+
+### Requirement: A rule's daily cap
+A rule with `daily_cap` SHALL start at most that many Act runs per local calendar day, counting stopped, returned and undone runs, and a matching proposal past the cap SHALL wait in the queue as a normal proposal.
+
+#### Scenario: past the cap the proposal waits
+- WHEN rule `my-issues` has `daily_cap = 2`, two of its Act runs started today and one of them was stopped, and an agent proposes a third matching issue
+- THEN the answer says it waits in the queue because `my-issues` reached its cap of 2, `rastro queue` lists it, and `rastro actions` lists no new run
+
+#### Scenario: the cap resets the next local day
+- WHEN rule `my-issues` with `daily_cap = 2` started two Act runs on 2026-11-19 local time, and an agent proposes a matching issue on 2026-11-20 local time
+- THEN the answer names a new pending Act run
+
+### Requirement: A pending Act shows where the owner looks
+`rastro queue` and the `actions` read on the CLI and MCP SHALL show each pending Act run with the time it runs and its stop command.
+
+#### Scenario: the queue shows a pending Act first
+- WHEN one pending Act due at 10:10 and one action proposal exist, and the owner runs `rastro queue` at 10:04
+- THEN the first line names the pending Act's title, "runs in 6 min" and `rastro actions stop <run>`, before the action proposal
+
+#### Scenario: agents see a pending Act over MCP
+- WHEN an agent calls the MCP tool `actions` while one Act is pending
+- THEN the result lists the run as `pending` with the time it runs and its stop command
+
+### Requirement: An Act run explains itself
+The `actions` read of one Act run SHALL show its level `act`, the copy of the rule it started under, its proposal with the why, and the time its grace ended, and SHALL show no owner accept.
+
+#### Scenario: why did this Act run
+- WHEN an agent reads `actions show <run>` for a done Act run
+- THEN the result holds level `act`, the rule `my-issues` with its action, team, assignee, grace and cap as they were when the run started, the proposal with its why, and no accept intent
+
+#### Scenario: the rule copy survives a config change
+- WHEN the owner changes rule `my-issues` to team `ENG` after an Act run under it started
+- THEN `actions show <run>` still shows the rule with team `H`
+
+### Requirement: An Act run can be undone
+`rastro actions undo <run>` SHALL undo a done Act run as it undoes an owner-accepted run.
+
+#### Scenario: undo an Act
+- WHEN the owner runs `rastro actions undo <run>` on a done Act run whose issue only the owner touched
+- THEN the fake Linear server has received one delete of that issue, and the run reads `undone`
+
+### Requirement: The owner checks what each rule does now
+`rastro rules check` SHALL show, for each rule, its match, grace, cap, today's count, its pending Acts and the queued proposals it matches, on the CLI and over MCP, and SHALL record nothing.
+
+#### Scenario: today's count and pending Acts
+- WHEN rule `my-issues` with `daily_cap = 5` started two Act runs today and one of them is pending
+- THEN `rastro rules check` shows `my-issues` with 2 of 5 used today and lists the pending run
+
+#### Scenario: queued proposals the rule matches
+- WHEN an action proposal for team `H` was queued before rule `my-issues` on team `H` was written
+- THEN `rastro rules check` lists that proposal under `my-issues` as one it matches
+
+#### Scenario: agents check rules over MCP
+- WHEN an agent calls the MCP tool `rules_check`
+- THEN the result holds the same rules, counts and pending runs as `rastro rules check --json`, and the store's intents and runs are unchanged
+
+### Requirement: A real issue goes through a rule
+The owner SHALL have one real Linear issue created by an Act under their rule, without an accept, before the slice is done.
+
+#### Scenario: switch day
+- WHEN with the launchd job calling `rastro tick` every minute and a rule on the owner's team, an in-session agent proposes the owner's next real Linear issue and the owner lets the grace window pass
+- THEN the issue exists in Linear with exactly the proposed title and description
