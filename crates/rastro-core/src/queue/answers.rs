@@ -79,14 +79,27 @@ impl ActionEdits {
 /// candidate, and a missed report leaves its item waiting.
 pub fn answered_items(intents: &[Intent]) -> BTreeSet<String> {
     (intents.iter())
-        .filter(|intent| {
-            matches!(
-                intent.kind,
-                IntentKind::Accept | IntentKind::Edit | IntentKind::Reject
-            )
-        })
+        .filter(|intent| answers_item(intent.kind))
         .filter_map(|intent| intent.queue_item().map(String::from))
         .collect()
+}
+
+/// Whether an intent of this kind answers a queue item, taking it out of the queue: an accept, an
+/// edit or a reject. The one place the answering kinds are named, so the queue's membership and
+/// its standing cannot drift apart.
+fn answers_item(kind: IntentKind) -> bool {
+    matches!(
+        kind,
+        IntentKind::Accept | IntentKind::Edit | IntentKind::Reject
+    )
+}
+
+/// The intent that answered this item, when one did: the latest accept, edit or reject naming it,
+/// in acceptance order. The queue's standing reads it to say whose answer took the proposal out.
+pub fn answer_for<'a>(intents: &'a [Intent], item: &str) -> Option<&'a Intent> {
+    (intents.iter())
+        .rev()
+        .find(|intent| answers_item(intent.kind) && intent.queue_item() == Some(item))
 }
 
 /// Refuses an answer to a proposal whose Act run is still pending: the rule already decided it,
