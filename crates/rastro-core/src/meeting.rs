@@ -514,6 +514,7 @@ fn ask_adapter(
             })
             .collect(),
         fields: FIELDS.iter().map(|field| field.to_string()).collect(),
+        session: None,
     };
     let timeout = Duration::from_secs(config.timeout_seconds.unwrap_or(DEFAULT_TIMEOUT_SECONDS));
     match host::judge(locations, &config.plugin, timeout, &request) {

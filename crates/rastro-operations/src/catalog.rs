@@ -310,13 +310,16 @@ macro_rules! operations {
 // Add one entry here, its request/result types, and typed execution methods. `reader` is
 // explicit: SourceList is read-only too, but is not supported by a read-only Reader.
 operations! {
-    /// Register and list sources.
+    /// Register, list and check sources.
     Source / SourceRequest {
         Add(SourceAddRequest => SourceAddResult) as SourceAdd {
             slot: 0, name: "source.add", surfaces: [Cli], read_only: false
         },
         List(SourceListRequest => SourceListResult) as SourceList {
             slot: 1, name: "source.list", surfaces: [Cli], read_only: true
+        },
+        Check(SourceCheckRequest => SourceCheckResult) as SourceCheck {
+            slot: 41, name: "source.check", surfaces: [Cli], read_only: true
         },
     }
     Coverage(CoverageRequest => CoverageResult) {

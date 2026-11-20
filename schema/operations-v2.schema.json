@@ -419,6 +419,10 @@
           "$ref": "#/$defs/ActionProposal",
           "description": "The proposal as filed: the action, its fields, the proposer's why and the claims it cited."
         },
+        "queue": {
+          "$ref": "#/$defs/ActionStanding",
+          "description": "Where the proposal stands in the queue: whether it still waits, and what took it out, by\nthe same rule `rastro queue` reads."
+        },
         "reach": {
           "description": "Who the action affects, in the owner's words.",
           "type": "string"
@@ -434,9 +438,91 @@
         "level",
         "cell",
         "reach",
-        "reversibility"
+        "reversibility",
+        "queue"
       ],
       "type": "object"
+    },
+    "ActionStanding": {
+      "description": "Where a proposal stands in the queue, as the run read carries it. The owner's answer outranks a\nrun's status: an accepted run that is also done reads `answered`, the more direct reason.",
+      "oneOf": [
+        {
+          "additionalProperties": false,
+          "description": "The owner answered it: the intent's kind and id.",
+          "properties": {
+            "intent": {
+              "type": "string"
+            },
+            "kind": {
+              "$ref": "#/$defs/IntentKind"
+            },
+            "state": {
+              "const": "answered",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "kind",
+            "intent"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A run settled it: the latest settling run and its status.",
+          "properties": {
+            "run": {
+              "type": "string"
+            },
+            "state": {
+              "const": "settled",
+              "type": "string"
+            },
+            "status": {
+              "$ref": "#/$defs/RunStatus"
+            }
+          },
+          "required": [
+            "state",
+            "run",
+            "status"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "A pending Act shows it as that Act, first in the queue, until its grace ends.",
+          "properties": {
+            "run": {
+              "type": "string"
+            },
+            "state": {
+              "const": "pending_act",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state",
+            "run"
+          ],
+          "type": "object"
+        },
+        {
+          "additionalProperties": false,
+          "description": "It waits in the queue for the owner.",
+          "properties": {
+            "state": {
+              "const": "waiting",
+              "type": "string"
+            }
+          },
+          "required": [
+            "state"
+          ],
+          "type": "object"
+        }
+      ]
     },
     "ActionUndo": {
       "additionalProperties": false,
@@ -5204,6 +5290,53 @@
               "type": "object"
             }
           }
+        },
+        {
+          "properties": {
+            "operation": {
+              "const": "source.check"
+            },
+            "result": {
+              "additionalProperties": false,
+              "description": "What the check of one source found.",
+              "properties": {
+                "authenticated": {
+                  "description": "Whether the provider accepted the credential.",
+                  "type": "boolean"
+                },
+                "connector": {
+                  "type": "string"
+                },
+                "credential": {
+                  "description": "Where the credential came from, by the name the owner would change; never its value.",
+                  "type": "string"
+                },
+                "fix": {
+                  "description": "What the owner can do about it, when something went wrong.",
+                  "type": "string"
+                },
+                "reason": {
+                  "description": "What went wrong, when something did.",
+                  "type": "string"
+                },
+                "result": {
+                  "description": "The kind of failure, `authenticated` when there was none: `missing`, `rejected` or `failed`.",
+                  "type": "string"
+                },
+                "source": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "source",
+                "connector",
+                "authenticated",
+                "result"
+              ],
+              "title": "SourceCheck",
+              "type": "object"
+            }
+          }
         }
       ],
       "required": [
@@ -5258,7 +5391,8 @@
         "actions.show",
         "actions.undo",
         "rules.check",
-        "actions.stop"
+        "actions.stop",
+        "source.check"
       ]
     },
     "result": {
@@ -7854,6 +7988,68 @@
           "attempts"
         ],
         "title": "ActionRun",
+        "type": "object"
+      },
+      "surfaces": [
+        "cli"
+      ]
+    },
+    {
+      "description": "Check that a source's credentials are accepted, with one cheap call and nothing stored.",
+      "input": {
+        "additionalProperties": false,
+        "description": "Check that a source's credentials are accepted, with one cheap call and nothing stored.",
+        "properties": {
+          "source": {
+            "description": "Name of the source to check.",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source"
+        ],
+        "title": "SourceCheckRequest",
+        "type": "object"
+      },
+      "name": "source.check",
+      "result": {
+        "additionalProperties": false,
+        "description": "What the check of one source found.",
+        "properties": {
+          "authenticated": {
+            "description": "Whether the provider accepted the credential.",
+            "type": "boolean"
+          },
+          "connector": {
+            "type": "string"
+          },
+          "credential": {
+            "description": "Where the credential came from, by the name the owner would change; never its value.",
+            "type": "string"
+          },
+          "fix": {
+            "description": "What the owner can do about it, when something went wrong.",
+            "type": "string"
+          },
+          "reason": {
+            "description": "What went wrong, when something did.",
+            "type": "string"
+          },
+          "result": {
+            "description": "The kind of failure, `authenticated` when there was none: `missing`, `rejected` or `failed`.",
+            "type": "string"
+          },
+          "source": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "source",
+          "connector",
+          "authenticated",
+          "result"
+        ],
+        "title": "SourceCheck",
         "type": "object"
       },
       "surfaces": [

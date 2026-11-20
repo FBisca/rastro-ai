@@ -107,6 +107,7 @@ mod tests {
                 None,
             ),
             ("source.list", json!({}), None),
+            ("source.check", json!({"source": "a"}), None),
             ("sync", json!({}), None),
             ("index.rebuild", json!({}), None),
             (

@@ -94,20 +94,36 @@ impl Issue<'_> {
     }
 }
 
+/// `LINEAR_API_KEY`, else the keychain item `rastro-linear`, as the connector reads it.
+fn api_key() -> Option<String> {
+    let from_env = std::env::var("LINEAR_API_KEY")
+        .ok()
+        .map(|key| key.trim().to_string())
+        .filter(|key| !key.is_empty());
+    from_env.or_else(|| {
+        let output = std::process::Command::new("security")
+            .args(["find-generic-password", "-s", "rastro-linear", "-w"])
+            .stdin(std::process::Stdio::null())
+            .output()
+            .ok()?;
+        let key = String::from_utf8(output.stdout).ok()?.trim().to_string();
+        (output.status.success() && !key.is_empty()).then_some(key)
+    })
+}
+
 pub struct Client {
     agent: ureq::Agent,
     endpoint: String,
     key: String,
 }
 impl Client {
-    /// The client for the key in `LINEAR_API_KEY`, at `RASTRO_LINEAR_API_URL` when it is set.
-    /// Fails, saying so, when there is no key.
+    /// The client for the key in `LINEAR_API_KEY`, else the keychain item `rastro-linear` the
+    /// connector reads, at `RASTRO_LINEAR_API_URL` when it is set. Fails, saying where it looked
+    /// and never what it found, when there is no key.
     pub fn from_env() -> Result<Self> {
-        let key = std::env::var("LINEAR_API_KEY")
-            .ok()
-            .map(|key| key.trim().to_string())
-            .filter(|key| !key.is_empty())
-            .context("LINEAR_API_KEY is not set")?;
+        let key = api_key().context(
+            "Linear authentication failed: no key in LINEAR_API_KEY or the rastro-linear keychain item",
+        )?;
         let base = std::env::var("RASTRO_LINEAR_API_URL").unwrap_or_else(|_| DEFAULT_API.into());
         // No redirects, so the key can't follow a response to another host.
         let agent = ureq::Agent::config_builder()
