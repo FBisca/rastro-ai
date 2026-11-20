@@ -415,3 +415,40 @@ The owner SHALL have one real Linear issue created by an Act under their rule, w
 #### Scenario: an accepted proposal was taken out by the owner
 - WHEN the owner accepts an action proposal with `rastro queue accept` and reads the run it started with `rastro actions show` and the MCP tool `actions`
 - THEN both reads state that the proposal left the queue because of the owner's accept, naming the accept intent's id
+
+### Requirement: Hostile proposal content does not widen Act reach
+Rule matching SHALL act only on action, team and assignee, and instruction-like proposal content SHALL NOT create an Act outside the matching rule's terms.
+
+#### Scenario: injection content creates no extra Act
+- WHEN a proposal whose title and description embed instructions to create issues for another team or another action is proposed under a rule on team H
+- THEN the only Act recorded is the rule's own (linear.create_issue, team H, assignee me), and no run exists for any other team or action
+
+### Requirement: Hostile content does not bypass the Act safety gates
+An Act whose proposal content is hostile SHALL remain subject to grace, stop and recheck exactly as a benign Act is.
+
+#### Scenario: grace holds under hostile content
+- WHEN an Act with injection-laden title and description is pending within its grace window and tick runs
+- THEN the fake Linear server receives no request before grace ends
+
+#### Scenario: stop holds under hostile content
+- WHEN a pending hostile-content Act is stopped and later ticks run
+- THEN no issue create is sent for it, ever
+
+#### Scenario: recheck holds under hostile content
+- WHEN a hostile-content Act's recheck finds an open issue with the same title during grace
+- THEN the Act returns and no issue create is sent
+
+### Requirement: The outbound payload stays exact under hostile content
+The issue create for a hostile-content Act SHALL carry exactly the five input fields with the content as authored, and SHALL add no Rastro id, link, why, citation, footer, label or marker even when the content itself embeds Rastro-looking ids.
+
+#### Scenario: the payload is exact under hostile content
+- WHEN a hostile-content Act executes whose description embeds injection text, markdown and Rastro-looking ids and links
+- THEN the fake Linear server receives exactly one IssueCreate whose input keys are exactly assigneeId, description, id, teamId, title, with title and description unchanged as authored and no added Rastro field
+
+#### Scenario: hostile content drives no extra request
+- WHEN the same hostile-content Act executes
+- THEN the recorded operation sequence is exactly IssueLookup, Teams, Viewer, IssueCreate
+
+#### Scenario: live proof on real Linear
+- WHEN the owner runs the adversarial scenario against real Linear on a disposable issue at the release commit
+- THEN the recorded run shows the exact payload and containment with no escape, and the result is recorded for the G7 gate
