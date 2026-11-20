@@ -24,6 +24,7 @@ mod knowledge;
 /// order by time. Never edit one that has shipped; add a new one.
 mod lifecycle;
 mod meeting;
+pub use meeting::JudgmentTurn;
 mod scoped;
 #[doc(hidden)]
 pub use scoped::{cache_len as scoped_cache_len, clear_cache as clear_scoped_cache};
@@ -34,7 +35,7 @@ const INTENT_END: &str = "202611081000_intent_justification_end";
 /// A migration that starts with this line rebuilds a table other tables name, so the open runs
 /// it with foreign keys off and checks them before it commits.
 const FOREIGN_KEYS_OFF: &str = "-- foreign_keys = off";
-const MIGRATIONS: [(&str, &str); 25] = [
+const MIGRATIONS: [(&str, &str); 26] = [
     (
         "202611041200_initial",
         include_str!("../migrations/202611041200_initial.sql"),
@@ -134,6 +135,10 @@ const MIGRATIONS: [(&str, &str); 25] = [
     (
         "202611191500_action_returns",
         include_str!("../migrations/202611191500_action_returns.sql"),
+    ),
+    (
+        "202611201000_judgment_turn_history",
+        include_str!("../migrations/202611201000_judgment_turn_history.sql"),
     ),
 ];
 
@@ -442,6 +447,19 @@ fn write_intents(
     // An intent write changes the projection, so it publishes like any other projection write.
     lifecycle::publish(transaction)?;
     Ok(stored)
+}
+
+impl SqliteStorage {
+    /// Records one turn of a run's judgment session: its request, answer and gate verdict.
+    /// The run must exist, and a turn already recorded for it is refused: the history is
+    /// insert-only. Failed turns are recorded like any other (ADR 0016 §3).
+    pub fn record_judgment_turn(&mut self, run_id: i64, turn: &JudgmentTurn) -> Result<()> {
+        meeting::record_turn(&mut self.connection, run_id, turn)
+    }
+    /// The run's judgment history in turn order; empty when the run recorded no turns.
+    pub fn judgment_turns(&self, run_id: i64) -> Result<Vec<JudgmentTurn>> {
+        meeting::turns(&self.connection, run_id)
+    }
 }
 
 impl Storage for SqliteStorage {

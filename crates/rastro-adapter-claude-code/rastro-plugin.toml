@@ -9,6 +9,9 @@ command = "rastro-adapter-claude-code"
 triggers = []
 dependencies = []
 agent_tool = { capabilities = ["judge_text"] }
+# The lockdown kit enforces the whole judgment floor: --tools "" turns every tool off,
+# --strict-mcp-config with no MCP config admits no server, --setting-sources "" loads no settings.
+enforcement = ["tools_off", "no_mcp_servers", "no_setting_sources"]
 
 [permissions]
 submit = []
