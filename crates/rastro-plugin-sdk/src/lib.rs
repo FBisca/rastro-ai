@@ -383,6 +383,170 @@ pub struct DecisionRequest {
 pub struct DecisionResponse {
     pub output: Value,
 }
+/// The type of one declared candidate field: a generic primitive, never a task's domain type.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskFieldType {
+    String,
+    Integer,
+}
+/// One field of a task template's output shape. `values` enumerates the only strings the field
+/// may hold; empty declares any string. An absent field is required unless it says otherwise.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskField {
+    pub name: String,
+    #[serde(rename = "type")]
+    pub field_type: TaskFieldType,
+    #[serde(default = "required")]
+    pub required: bool,
+    #[serde(default)]
+    pub values: Vec<String>,
+}
+fn required() -> bool {
+    true
+}
+/// What a rule does with a candidate it matches (ADR-0016 §2, §8).
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RuleDisposition {
+    /// A gate failure: the answer earns a retry turn carrying the core's feedback.
+    #[default]
+    Fail,
+    /// The candidate is left out and counted as excluded; never a retry.
+    Exclude,
+}
+/// One declared rule over the candidates, built from generic primitives: a text span or a
+/// field comparison. The core executes it; the adapter never validates its own trust boundary.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TaskRule {
+    /// The quote field must be an exact, contiguous, non-empty piece of the text of the turn
+    /// the turn field names.
+    Span {
+        quote_field: String,
+        turn_field: String,
+        #[serde(default)]
+        disposition: RuleDisposition,
+    },
+    /// The field holds exactly this value.
+    Equals {
+        field: String,
+        value: String,
+        #[serde(default)]
+        disposition: RuleDisposition,
+    },
+}
+impl TaskRule {
+    /// What the rule does with a candidate that triggers it.
+    pub fn disposition(&self) -> RuleDisposition {
+        match self {
+            Self::Span { disposition, .. } | Self::Equals { disposition, .. } => *disposition,
+        }
+    }
+}
+/// A task template: the declarative package a generic runner executes (ADR-0016 §1–2, §6;
+/// decisions/plugins.md §40). The instructions and field names go to the adapter as the
+/// request's own; the rules are the core's gates, each with its disposition; the boundary
+/// names controls the adapter must enforce. The runner holds no task's domain logic and no
+/// template identity: the same declarations run a meeting, a blog or any other task.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct TaskTemplate {
+    pub instructions: String,
+    pub fields: Vec<TaskField>,
+    #[serde(default)]
+    pub rules: Vec<TaskRule>,
+    /// Controls the task requires beyond the judgment floor (ADR-0016 §6). A name from
+    /// [`JUDGMENT_FLOOR`] repeats the floor; any other name is an additional control the
+    /// adapter must declare it can enforce. The floor itself is the core's, never
+    /// task-declarable: a template can demand more lockdown, never less.
+    #[serde(default)]
+    pub boundary: Vec<String>,
+}
+impl TaskTemplate {
+    /// Parses a declarative template and refuses one the runner cannot execute.
+    pub fn parse(text: &str) -> Result<Self> {
+        let template: Self = toml::from_str(text).context("invalid task template")?;
+        template.check()?;
+        Ok(template)
+    }
+    /// Checks the declarations name what the runner can execute: fields the rules reference,
+    /// primitives of the right type, and a non-empty instruction and boundary names.
+    pub fn check(&self) -> Result<()> {
+        anyhow::ensure!(
+            !self.instructions.trim().is_empty(),
+            "the template declares no instructions"
+        );
+        anyhow::ensure!(!self.fields.is_empty(), "the template declares no fields");
+        for field in &self.fields {
+            anyhow::ensure!(
+                !field.name.trim().is_empty(),
+                "the template declares a field with no name"
+            );
+            anyhow::ensure!(
+                self.fields.iter().filter(|f| f.name == field.name).count() == 1,
+                "the template declares the field {} twice",
+                field.name
+            );
+            anyhow::ensure!(
+                field.field_type != TaskFieldType::Integer || field.values.is_empty(),
+                "the field {} is an integer and declares enum values",
+                field.name
+            );
+            anyhow::ensure!(
+                field.values.iter().all(|value| !value.is_empty()),
+                "the field {} declares an empty enum value",
+                field.name
+            );
+        }
+        for rule in &self.rules {
+            match rule {
+                TaskRule::Span {
+                    quote_field,
+                    turn_field,
+                    ..
+                } => {
+                    let quote = self.field(quote_field).with_context(|| {
+                        format!("the span rule names the undeclared field {quote_field}")
+                    })?;
+                    let turn = self.field(turn_field).with_context(|| {
+                        format!("the span rule names the undeclared field {turn_field}")
+                    })?;
+                    anyhow::ensure!(
+                        quote.field_type == TaskFieldType::String,
+                        "the span rule's quote field {quote_field} is not a string"
+                    );
+                    anyhow::ensure!(
+                        turn.field_type == TaskFieldType::Integer,
+                        "the span rule's turn field {turn_field} is not an integer"
+                    );
+                }
+                TaskRule::Equals { field, .. } => {
+                    let declared = self.field(field).with_context(|| {
+                        format!("the equals rule names the undeclared field {field}")
+                    })?;
+                    anyhow::ensure!(
+                        declared.field_type == TaskFieldType::String,
+                        "the equals rule's field {field} is not a string"
+                    );
+                }
+            }
+        }
+        for control in &self.boundary {
+            anyhow::ensure!(
+                !control.trim().is_empty(),
+                "the boundary declares an empty control name"
+            );
+        }
+        Ok(())
+    }
+    /// The declared field named `name`, if the template declares one.
+    pub fn field(&self, name: &str) -> Option<&TaskField> {
+        self.fields.iter().find(|field| field.name == name)
+    }
+}
+
 /// What an agent tool adapter needs from an agent tool, in capabilities. It never names a tool
 /// (decisions/plugins.md §4): fields this declaration doesn't define are kept only to refuse it.
 #[derive(Clone, Debug, Deserialize, Serialize)]
@@ -611,10 +775,11 @@ pub struct Manifest {
     /// On an agent tool adapter: the capabilities it needs from an agent tool, never a named tool.
     #[serde(default)]
     pub agent_tool: Option<AgentToolNeeds>,
-    /// On an agent tool adapter: the boundary controls it can enforce, named from
-    /// [`JUDGMENT_FLOOR`] (ADR-0016 §6). Absent declares none; the core refuses a run whose floor
-    /// the declaration cannot match, naming the unenforceable control, and never starts the
-    /// adapter in a degraded-security mode.
+    /// On an agent tool adapter: the boundary controls it can enforce — the judgment floor's
+    /// ([`JUDGMENT_FLOOR`]) and any additional control a task's boundary demands (ADR-0016 §6).
+    /// Absent declares none; the core refuses a run whose floor or task boundary the declaration
+    /// cannot match, naming the unenforceable control, and never starts the adapter in a
+    /// degraded-security mode.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub enforcement: Vec<String>,
     #[serde(default)]
@@ -757,6 +922,23 @@ impl Manifest {
             );
         }
         Ok(())
+    }
+
+    /// The controls of the judgment floor plus the task's `boundary` that this manifest does
+    /// not declare it can enforce, floor first, without duplicates (ADR-0016 §6). The floor
+    /// is always required; a boundary can demand more lockdown, never less.
+    pub fn unenforceable(&self, boundary: &[String]) -> Vec<String> {
+        let mut required: Vec<&str> = JUDGMENT_FLOOR.to_vec();
+        for control in boundary {
+            if !required.contains(&control.as_str()) {
+                required.push(control.as_str());
+            }
+        }
+        required
+            .into_iter()
+            .filter(|control| !self.enforcement.iter().any(|declared| declared == control))
+            .map(str::to_string)
+            .collect()
     }
 
     /// Checks an action provider's declaration and returns its actions. A provider is that kind
@@ -1473,5 +1655,125 @@ evidence_requirement = "r"
         let answer = Envelope::response(Some(1.into()), &output).unwrap();
         let parsed: DecisionResponse = answer.result().unwrap();
         assert_eq!(serde_json::to_value(&parsed).unwrap(), output);
+    }
+
+    /// spec: Task templates run without domain logic in the core runner
+    /// The floor and the task boundary are matched against the declaration; every
+    /// unenforceable control is named once, floor first.
+    #[test]
+    fn missing_controls_are_named() {
+        fn manifest(enforcement: &str) -> Manifest {
+            Manifest::parse(&format!(
+                r#"
+id = "m"
+name = "M"
+version = "0.1.0"
+author = "Rastro"
+kinds = ["agent-tool-adapter"]
+protocol = 1
+command = "m"
+{enforcement}
+[permissions]
+submit = []
+scopes = []
+env = []
+actions = []
+"#
+            ))
+            .unwrap()
+        }
+        let full = "enforcement = [\"tools_off\", \"no_mcp_servers\", \"no_setting_sources\"]";
+        let partial = "enforcement = [\"tools_off\", \"no_mcp_servers\"]";
+        let extra = "enforcement = [\"tools_off\", \"no_mcp_servers\", \"no_setting_sources\", \"no_session_persistence\"]";
+        let boundary = vec!["no_session_persistence".to_string()];
+        for (name, declaration, profile, expected) in [
+            (
+                "no declaration at all",
+                "",
+                vec![],
+                vec!["tools_off", "no_mcp_servers", "no_setting_sources"],
+            ),
+            (
+                "a floor control missing",
+                partial,
+                vec![],
+                vec!["no_setting_sources"],
+            ),
+            ("the whole floor declared", full, vec![], vec![]),
+            (
+                "a template control beyond the floor",
+                full,
+                boundary.clone(),
+                vec!["no_session_persistence"],
+            ),
+            (
+                "a floor control repeated in the boundary",
+                partial,
+                vec!["no_setting_sources".to_string()],
+                vec!["no_setting_sources"],
+            ),
+            ("everything declared", extra, boundary, vec![]),
+        ] {
+            let missing = manifest(declaration).unenforceable(&profile);
+            assert_eq!(missing, expected, "{name}");
+        }
+    }
+
+    /// spec: Task templates run without domain logic in the core runner
+    /// A template the runner cannot execute is refused at parse, naming why; a sound one loads.
+    #[test]
+    fn a_malformed_template_is_refused_naming_why() {
+        const BASE: &str = r#"
+instructions = "Do the task."
+[[fields]]
+name = "n"
+type = "integer"
+[[fields]]
+name = "s"
+type = "string"
+"#;
+        let span_on_string = format!(
+            "{BASE}\n[[rules]]\nkind = \"span\"\nquote_field = \"s\"\nturn_field = \"s\"\n"
+        );
+        let span_quote_integer = format!(
+            "{BASE}\n[[rules]]\nkind = \"span\"\nquote_field = \"n\"\nturn_field = \"n\"\n"
+        );
+        let equals_integer =
+            format!("{BASE}\n[[rules]]\nkind = \"equals\"\nfield = \"n\"\nvalue = \"1\"\n");
+        let undeclared =
+            format!("{BASE}\n[[rules]]\nkind = \"equals\"\nfield = \"missing\"\nvalue = \"x\"\n");
+        let values_integer =
+            format!("{BASE}\n[[fields]]\nname = \"t\"\ntype = \"integer\"\nvalues = [\"1\"]\n");
+        let duplicate = format!("{BASE}\n[[fields]]\nname = \"s\"\ntype = \"string\"\n");
+        for (name, text) in [
+            ("empty instructions", BASE.replace("Do the task.", "   ")),
+            ("no fields", "instructions = \"Do the task.\"\n".to_string()),
+            ("a duplicate field", duplicate),
+            ("a rule naming an undeclared field", undeclared),
+            ("a span over a string turn field", span_on_string),
+            ("a span quoting an integer field", span_quote_integer),
+            ("a comparison on an integer field", equals_integer),
+            ("enum values on an integer field", values_integer),
+            (
+                "an empty boundary name",
+                BASE.replacen("[[fields]]", "boundary = [\"\"]\n[[fields]]", 1),
+            ),
+            (
+                "an unknown declaration",
+                format!("{BASE}\nunexpected = true\n"),
+            ),
+        ] {
+            let error = TaskTemplate::parse(&text).err();
+            assert!(error.is_some(), "{name} was accepted: {text}");
+        }
+        let sound = format!(
+            "{}\n[[rules]]\nkind = \"span\"\nquote_field = \"s\"\nturn_field = \"n\"\n",
+            BASE.replacen(
+                "[[fields]]",
+                "boundary = [\"no_session_persistence\"]\n[[fields]]",
+                1
+            )
+        );
+        TaskTemplate::parse(&sound).unwrap();
     }
 }

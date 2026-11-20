@@ -26,6 +26,7 @@ pub(crate) mod check;
 mod extract;
 mod io;
 mod judge;
+pub mod task;
 pub use extract::extract;
 pub(crate) use extract::vocabulary;
 /// How many helper threads a teardown left, for the tests that drive a connector directly.
