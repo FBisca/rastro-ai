@@ -397,3 +397,40 @@ When one location is observed in two scopes with different types, a scoped read'
 #### Scenario: the operation stays additive
 - WHEN `commitments` is added under v2
 - THEN the operation is additive within v2 and `meeting.commitments` stays
+
+### Requirement: Linear writer shares the connector credential
+The Linear writer SHALL use the environment key first and otherwise the connector's rastro-linear keychain item, without exposing credentials in output or errors.
+
+#### Scenario: a writer uses the keychain
+- WHEN LINEAR_API_KEY is absent and the rastro-linear item exists
+- THEN the writer authenticates with that item and prints no secret
+
+#### Scenario: the environment takes precedence
+- WHEN LINEAR_API_KEY and the rastro-linear item both exist
+- THEN the writer authenticates with the environment key
+
+#### Scenario: a missing credential fails safely
+- WHEN neither credential exists
+- THEN the writer reports an authentication failure without exposing secrets
+
+### Requirement: Source credentials can be checked without writing
+The CLI SHALL check a configured source with a cheap authenticated provider call, report credential source and result with an actionable failure hint, and write no evidence, coverage or last complete check.
+
+#### Scenario: a source authenticates
+- WHEN the owner checks a source with valid credentials
+- THEN the CLI reports the credential source and authentication success without changing stored state
+
+#### Scenario: a source cannot authenticate
+- WHEN credentials are missing or rejected
+- THEN the CLI reports the failure and a fix and exits unsuccessfully without changing stored state or exposing secrets
+
+#### Scenario: the check stays on the CLI
+- WHEN an agent lists MCP tools
+- THEN no source check tool is exposed
+
+### Requirement: Source setup reports authentication
+Source setup SHALL run the credential check and report its result without rolling back a source when authentication fails.
+
+#### Scenario: setup with bad credentials
+- WHEN the owner adds a source whose credentials fail
+- THEN the source remains configured and the output explains the failure and fix
