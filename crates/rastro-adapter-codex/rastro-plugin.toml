@@ -1,0 +1,20 @@
+id = "rastro-adapter-codex"
+name = "Rastro Codex adapter"
+version = "0.1.0"
+author = "Rastro"
+kinds = ["agent-tool-adapter"]
+protocol = 1
+command = "rastro-adapter-codex"
+triggers = []
+dependencies = []
+# It lets Codex do the judgment. The declaration names capabilities, never a tool.
+agent_tool = { capabilities = ["judge_text"] }
+# The boundary controls this adapter enforces on every turn (the judgment floor): the lockdown
+# kit turns the tools off, clears MCP servers and loads no setting sources.
+enforcement = ["tools_off", "no_mcp_servers", "no_setting_sources"]
+
+[permissions]
+submit = []
+scopes = []
+env = ["RASTRO_CODEX_COMMAND", "RASTRO_CODEX_MODEL", "CODEX_HOME", "CODEX_API_KEY"]
+actions = []
