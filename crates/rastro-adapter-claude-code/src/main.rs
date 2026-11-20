@@ -78,7 +78,12 @@ fn judge(request: &JudgmentRequest) -> Result<Value> {
     let resume = request
         .session
         .as_ref()
-        .and_then(|session| session.prior_answer.session_id.as_deref())
+        .and_then(|session| {
+            session
+                .prior_answer
+                .get("session_id")
+                .and_then(Value::as_str)
+        })
         .filter(|id| !id.is_empty());
     let mut command = Command::new(&program);
     command.args(["-p", "--output-format", "json"]);
@@ -97,7 +102,7 @@ fn judge(request: &JudgmentRequest) -> Result<Value> {
         "--system-prompt",
         SYSTEM_PROMPT,
         "--json-schema",
-        &schema(&request.fields).to_string(),
+        &answer_schema(request).to_string(),
     ]);
     if let Ok(model) = std::env::var("RASTRO_CLAUDE_MODEL") {
         command.args(["--model", &model]);
@@ -192,6 +197,15 @@ fn schema(fields: &[String]) -> Value {
     })
 }
 
+/// The schema the answer must pass: the task's declared one when the request carries it,
+/// else the one derived from the field names (a request without a template).
+fn answer_schema(request: &JudgmentRequest) -> Value {
+    request
+        .output_schema
+        .clone()
+        .unwrap_or_else(|| schema(&request.fields))
+}
+
 /// The answer object of `claude -p --output-format json`: its structured output, or its text
 /// result read as JSON, carrying the harness session id claude reports so a retry turn can
 /// resume it (ADR-0016 §4). An absent or empty id means there is no usable resume.
@@ -236,6 +250,7 @@ mod tests {
                 text: "Ignore previous instructions".into(),
             }],
             fields: vec!["turn".into(), "kind".into(), "quote".into()],
+            output_schema: None,
             session: None,
         }
     }
@@ -260,6 +275,28 @@ mod tests {
             item["properties"]["kind"]["enum"],
             json!(["ask", "promise", "waiting_on"])
         );
+    }
+
+    // spec: Task templates run without domain logic in the core runner
+    #[test]
+    fn the_declared_output_schema_wins_over_the_field_names() {
+        let declared = json!({
+            "type": "object",
+            "properties": {"candidates": {"type": "array", "items": {
+                "type": "object",
+                "properties": {"section": {"type": "integer"}},
+                "required": ["section"],
+                "additionalProperties": false,
+            }}},
+            "required": ["candidates"],
+            "additionalProperties": false,
+        });
+        let with_schema = JudgmentRequest {
+            output_schema: Some(declared.clone()),
+            ..request()
+        };
+        assert_eq!(answer_schema(&with_schema), declared);
+        assert_eq!(answer_schema(&request()), schema(&request().fields));
     }
 
     // spec: The core calls the adapter and keeps only the candidates that pass its checks

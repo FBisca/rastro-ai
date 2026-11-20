@@ -301,6 +301,12 @@ pub struct JudgmentRequest {
     pub owner_speaker: String,
     pub turns: Vec<JudgmentTurn>,
     pub fields: Vec<String>,
+    /// The JSON Schema of the answer, declared by the task template (ADR-0016 §1). Present,
+    /// the adapter constrains its output with this schema instead of deriving one from the
+    /// field names; absent keeps the name-derived schema, so a request without a template is
+    /// unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub output_schema: Option<Value>,
     /// Present on a retry turn of the same session: the turn number, the core's gate feedback
     /// and the prior answer being corrected. Absent on the first turn and on a one-shot request
     /// (ADR-0016 §4); the wire is additive, so a one-shot request is unchanged.
@@ -324,7 +330,11 @@ pub struct GateFeedback {
 pub struct JudgmentSession {
     pub turn: u64,
     pub feedback: Vec<GateFeedback>,
-    pub prior_answer: JudgmentResponse,
+    /// The prior answer being corrected, in the task's own shape (ADR-0016 §4): the core
+    /// passes the recorded response through whole, so a retry turn — resumed or degraded —
+    /// corrects the prior answer, never an empty one. A meeting-shaped answer serialises
+    /// exactly as the typed response did.
+    pub prior_answer: Value,
 }
 /// What a candidate commitment is.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -544,6 +554,50 @@ impl TaskTemplate {
     /// The declared field named `name`, if the template declares one.
     pub fn field(&self, name: &str) -> Option<&TaskField> {
         self.fields.iter().find(|field| field.name == name)
+    }
+    /// The JSON Schema of the answer this template declares: candidates with exactly its
+    /// fields, each the type and values declared, the required ones required (ADR-0016 §1).
+    /// The envelope is the protocol's; the adapter adds the session fields itself.
+    pub fn output_schema(&self) -> Value {
+        let mut properties = serde_json::Map::new();
+        let mut required = Vec::new();
+        for field in &self.fields {
+            let kind = match field.field_type {
+                TaskFieldType::Integer => "integer",
+                TaskFieldType::String => "string",
+            };
+            let mut property = if field.required {
+                serde_json::json!({ "type": kind })
+            } else {
+                serde_json::json!({ "type": [kind, "null"] })
+            };
+            if !field.values.is_empty() {
+                let mut values: Vec<Value> = field
+                    .values
+                    .iter()
+                    .map(|value| Value::String(value.clone()))
+                    .collect();
+                if !field.required {
+                    values.push(Value::Null);
+                }
+                property["enum"] = Value::Array(values);
+            }
+            properties.insert(field.name.clone(), property);
+            if field.required {
+                required.push(field.name.clone());
+            }
+        }
+        serde_json::json!({
+            "type": "object",
+            "properties": {"candidates": {"type": "array", "items": {
+                "type": "object",
+                "properties": properties,
+                "required": required,
+                "additionalProperties": false,
+            }}},
+            "required": ["candidates"],
+            "additionalProperties": false,
+        })
     }
 }
 
@@ -1629,6 +1683,37 @@ evidence_requirement = "r"
         let request: JudgmentRequest = serde_json::from_value(retry.clone()).unwrap();
         assert_eq!(serde_json::to_value(&request).unwrap(), retry);
 
+        // A prior answer of another task's shape survives the wire whole, and a declared
+        // output schema rides along: the session carries the recorded response, not a
+        // meeting-shaped parse of it.
+        let blog_retry = json!({
+            "instructions": "Propose blog summaries.",
+            "owner_speaker": "",
+            "turns": [{"turn": 1, "speaker": "post", "text": "Rastro keeps every quote exact."}],
+            "fields": ["section", "title", "excerpt", "status"],
+            "output_schema": {"type": "object"},
+            "session": {
+                "turn": 2,
+                "feedback": [{
+                    "gate": "span",
+                    "field": "candidates[0].excerpt",
+                    "expected": "an exact, contiguous piece of turn 1's text",
+                    "actual": "words the section never says"
+                }],
+                "prior_answer": {
+                    "candidates": [{
+                        "section": 1,
+                        "title": "Exact quotes",
+                        "excerpt": "words the section never says",
+                        "status": "published"
+                    }],
+                    "session_id": "sess-1"
+                }
+            }
+        });
+        let request: JudgmentRequest = serde_json::from_value(blog_retry.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&request).unwrap(), blog_retry);
+
         let one_shot_answer = json!({"candidates": []});
         let answer: JudgmentResponse = serde_json::from_value(one_shot_answer.clone()).unwrap();
         assert_eq!(serde_json::to_value(&answer).unwrap(), one_shot_answer);
@@ -1775,5 +1860,51 @@ type = "string"
             )
         );
         TaskTemplate::parse(&sound).unwrap();
+    }
+
+    /// spec: Task templates run without domain logic in the core runner
+    /// The output schema is the template's declarations: types, enum values, required and
+    /// optional fields, and nothing the template does not declare.
+    #[test]
+    fn the_output_schema_reflects_the_declarations() {
+        let template = TaskTemplate::parse(
+            r#"
+instructions = "Do the task."
+[[fields]]
+name = "section"
+type = "integer"
+[[fields]]
+name = "title"
+type = "string"
+[[fields]]
+name = "status"
+type = "string"
+values = ["published", "draft"]
+[[fields]]
+name = "note"
+type = "string"
+required = false
+"#,
+        )
+        .unwrap();
+        assert_eq!(
+            template.output_schema(),
+            json!({
+                "type": "object",
+                "properties": {"candidates": {"type": "array", "items": {
+                    "type": "object",
+                    "properties": {
+                        "section": {"type": "integer"},
+                        "title": {"type": "string"},
+                        "status": {"type": "string", "enum": ["published", "draft"]},
+                        "note": {"type": ["string", "null"]},
+                    },
+                    "required": ["section", "title", "status"],
+                    "additionalProperties": false,
+                }}},
+                "required": ["candidates"],
+                "additionalProperties": false,
+            })
+        );
     }
 }

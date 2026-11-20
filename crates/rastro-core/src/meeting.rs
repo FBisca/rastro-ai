@@ -621,6 +621,7 @@ fn judge_turns(
             })
             .collect(),
         fields: FIELDS.iter().map(|field| field.to_string()).collect(),
+        output_schema: None,
         session: None,
     };
     let mut feedback: Vec<GateFeedback> = Vec::new();
@@ -631,7 +632,8 @@ fn judge_turns(
             request.session = Some(JudgmentSession {
                 turn,
                 feedback: feedback.clone(),
-                prior_answer: prior_answer_of(value, session_id.as_deref()),
+                prior_answer: serde_json::to_value(prior_answer_of(value, session_id.as_deref()))
+                    .expect("the prior answer is plain data and serialises"),
             });
         }
         let sent = serde_json::to_string(&request)

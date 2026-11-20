@@ -7,8 +7,8 @@
 use super::{JudgmentFailure, JudgmentSession};
 use crate::{Locations, display_safe};
 use rastro_plugin_sdk::{
-    GateFeedback, JudgmentRequest, JudgmentResponse, JudgmentSession as WireSession, JudgmentTurn,
-    RuleDisposition, TaskFieldType, TaskRule, TaskTemplate,
+    GateFeedback, JudgmentRequest, JudgmentSession as WireSession, JudgmentTurn, RuleDisposition,
+    TaskFieldType, TaskRule, TaskTemplate,
 };
 use serde_json::Value;
 use std::time::Duration;
@@ -96,6 +96,7 @@ fn run_turns(
             .iter()
             .map(|field| field.name.clone())
             .collect(),
+        output_schema: Some(template.output_schema()),
         session: None,
     };
     let mut feedback: Vec<GateFeedback> = Vec::new();
@@ -174,23 +175,17 @@ fn run_turns(
     })
 }
 
-/// The prior answer a retry turn carries: the typed response when the answer parses into the
-/// protocol's shape; an answer of another task's shape cannot, so its degradation rides along
-/// with empty candidates and the feedback names what was there. The persisted harness session
-/// id wins over whatever the answer names (ADR-0016 §4, §8).
-fn prior_answer_of(value: &Value, session_id: Option<&str>) -> JudgmentResponse {
-    let mut response =
-        serde_json::from_value::<JudgmentResponse>(value.clone()).unwrap_or_else(|_| {
-            JudgmentResponse {
-                candidates: Vec::new(),
-                session_id: None,
-                degraded: value.get("degraded").and_then(Value::as_bool),
-            }
-        });
-    if let Some(id) = session_id {
-        response.session_id = Some(id.to_string());
+/// The prior answer a retry turn carries: the whole recorded response in the task's own
+/// shape, so a resumed or degraded turn corrects the candidates it actually proposed
+/// (ADR-0016 §4, §8). The persisted harness session id wins over whatever the answer names;
+/// an answer that is not an object rides along unchanged, with the feedback naming what was
+/// there.
+fn prior_answer_of(value: &Value, session_id: Option<&str>) -> Value {
+    let mut prior = value.clone();
+    if let (Some(id), Some(object)) = (session_id, prior.as_object_mut()) {
+        object.insert("session_id".into(), Value::String(id.to_string()));
     }
-    response
+    prior
 }
 
 /// What the core's gates made of one answer: the validated candidates and the excluded count,

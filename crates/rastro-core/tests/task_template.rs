@@ -224,6 +224,26 @@ fn the_runner_returns_validated_blog_shaped_results() {
         request["params"]["fields"],
         json!(["section", "title", "excerpt", "status"])
     );
+    assert_eq!(
+        request["params"]["output_schema"],
+        json!({
+            "type": "object",
+            "properties": {"candidates": {"type": "array", "items": {
+                "type": "object",
+                "properties": {
+                    "section": {"type": "integer"},
+                    "title": {"type": "string"},
+                    "excerpt": {"type": "string"},
+                    "status": {"type": "string", "enum": ["published", "draft"]},
+                },
+                "required": ["section", "title", "excerpt", "status"],
+                "additionalProperties": false,
+            }}},
+            "required": ["candidates"],
+            "additionalProperties": false,
+        }),
+        "the request must carry the blog's declared schema, not just field names"
+    );
     assert_eq!(request["params"]["turns"].as_array().unwrap().len(), 2);
 }
 
@@ -308,6 +328,11 @@ fn a_gate_failure_earns_a_retry_turn_in_the_same_session() {
         retry["params"]["session"]["prior_answer"]["session_id"],
         json!("sess-1"),
         "the retry resumes the session the first turn produced"
+    );
+    assert_eq!(
+        retry["params"]["session"]["prior_answer"]["candidates"],
+        json!([broken]),
+        "the retry carries the whole prior answer in the task's own shape, not an empty one"
     );
 }
 
