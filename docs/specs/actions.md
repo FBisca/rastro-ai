@@ -114,7 +114,7 @@ The request an action sends to an outside system SHALL carry only the content wr
 
 #### Scenario: the Linear payload is exactly the issue
 - WHEN an accepted proposal with a why and two cited claims creates its issue
-- THEN the issue create the fake Linear server receives holds exactly the title, description, team and assignee the owner accepted, each unchanged, plus the run's random issue id, and no other field
+- THEN the issue create the fake Linear server receives holds exactly the title and description the owner accepted, unchanged, the Linear ids of the team and assignee the owner accepted, and the run's random issue id, and no other field
 
 ### Requirement: An interrupted run is finished by tick
 `rastro tick` SHALL execute each accepted Action run that is neither done nor failed, SHALL look the run's issue id up before creating it, and SHALL let only one process execute a run at a time.
