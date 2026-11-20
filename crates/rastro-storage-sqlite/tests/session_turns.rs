@@ -1,10 +1,10 @@
-//! The turn history a judgment session keeps (ADR 0016 §3): every turn's request, answer and
+//! The turn history a session keeps (ADR 0016 §3): every turn's request, answer and
 //! gate verdict, failed turns included; an export leaves it out and forgetting removes it.
 
 use chrono::{DateTime, Utc};
 use rastro_core::Storage;
 use rastro_core::meeting::{Cause, MeetingRef, RunRecord, RunState, TranscriptKeep};
-use rastro_storage_sqlite::{JudgmentTurn, SqliteStorage};
+use rastro_storage_sqlite::{SessionTurn, SqliteStorage};
 
 fn time(text: &str) -> DateTime<Utc> {
     text.parse().unwrap()
@@ -51,19 +51,19 @@ fn a_runs_history_holds_every_turns_request_answer_and_verdict() {
     let mut storage = open(&home);
     let run = seed_run(&mut storage, "weekly-1", TranscriptKeep::Drop);
     let turns = vec![
-        JudgmentTurn {
+        SessionTurn {
             turn: 1,
             request: r#"{"method":"judgment.request","params":{"turn":1}}"#.into(),
             answer: Some(r#"{"candidates":[{"quote":"I'll send the budget sometime"}]}"#.into()),
             verdict: r#"{"gate":"quote","field":"candidates[0].quote","passed":false}"#.into(),
         },
-        JudgmentTurn {
+        SessionTurn {
             turn: 2,
             request: r#"{"method":"judgment.request","params":{"turn":2,"feedback":{"gate":"quote","expected":"an exact contiguous quote","actual":"I'll send the budget sometime"}}}"#.into(),
             answer: Some(r#"{"candidates":[{"quote":"I'll send Bob the budget by Friday."}]}"#.into()),
             verdict: r#"{"gate":"quote","field":"candidates[0].quote","passed":false}"#.into(),
         },
-        JudgmentTurn {
+        SessionTurn {
             turn: 3,
             request: r#"{"method":"judgment.request","params":{"turn":3,"feedback":{"gate":"quote"}}}"#.into(),
             answer: Some(r#"{"candidates":[{"quote":"I'll send Bob the budget by Friday"}]}"#.into()),
@@ -71,12 +71,12 @@ fn a_runs_history_holds_every_turns_request_answer_and_verdict() {
         },
     ];
     for turn in &turns {
-        storage.record_judgment_turn(run, turn).unwrap();
+        storage.record_session_turn(run, turn).unwrap();
     }
-    assert_eq!(storage.judgment_turns(run).unwrap(), turns);
+    assert_eq!(storage.session_turns(run).unwrap(), turns);
     // The history survives the connection that wrote it.
     drop(storage);
-    assert_eq!(open(&home).judgment_turns(run).unwrap(), turns);
+    assert_eq!(open(&home).session_turns(run).unwrap(), turns);
 }
 
 /// A turn the adapter never answered (a timeout) still keeps its request and the core's verdict,
@@ -87,14 +87,14 @@ fn a_turn_the_adapter_never_answered_keeps_its_request_and_verdict() {
     let home = tempfile::tempdir().unwrap();
     let mut storage = open(&home);
     let run = seed_run(&mut storage, "weekly-1", TranscriptKeep::Drop);
-    let turn = JudgmentTurn {
+    let turn = SessionTurn {
         turn: 1,
         request: r#"{"method":"judgment.request","params":{"turn":1}}"#.into(),
         answer: None,
         verdict: r#"{"gate":"system","passed":false,"reason":"the adapter timed out"}"#.into(),
     };
-    storage.record_judgment_turn(run, &turn).unwrap();
-    assert_eq!(storage.judgment_turns(run).unwrap(), vec![turn]);
+    storage.record_session_turn(run, &turn).unwrap();
+    assert_eq!(storage.session_turns(run).unwrap(), vec![turn]);
 }
 
 /// S6: an export leaves the turn history out, even when the transcript is retained.
@@ -109,7 +109,7 @@ fn an_export_leaves_turn_history_out() {
         "weekly-1",
         TranscriptKeep::Store(transcript.into()),
     );
-    let turn = JudgmentTurn {
+    let turn = SessionTurn {
         turn: 1,
         request:
             r#"{"method":"judgment.request","params":{"instructions":"judge the transcript"}}"#
@@ -118,9 +118,9 @@ fn an_export_leaves_turn_history_out() {
         verdict: r#"{"gate":"quote","passed":false,"feedback":"the quote is not contiguous"}"#
             .into(),
     };
-    storage.record_judgment_turn(run, &turn).unwrap();
+    storage.record_session_turn(run, &turn).unwrap();
     assert_eq!(
-        storage.judgment_turns(run).unwrap(),
+        storage.session_turns(run).unwrap(),
         vec![turn.clone()],
         "the history must be stored for the export to leave it out"
     );
@@ -165,22 +165,22 @@ fn forgetting_a_meeting_removes_its_turn_history() {
     let mut storage = open(&home);
     let run = seed_run(&mut storage, "weekly-1", TranscriptKeep::Drop);
     let other = seed_run(&mut storage, "weekly-2", TranscriptKeep::Drop);
-    let turn = JudgmentTurn {
+    let turn = SessionTurn {
         turn: 1,
         request: r#"{"method":"judgment.request","params":{"turn":1}}"#.into(),
         answer: Some(r#"{"candidates":[]}"#.into()),
         verdict: r#"{"gate":"quote","passed":false}"#.into(),
     };
-    storage.record_judgment_turn(run, &turn).unwrap();
-    storage.record_judgment_turn(other, &turn).unwrap();
+    storage.record_session_turn(run, &turn).unwrap();
+    storage.record_session_turn(other, &turn).unwrap();
     let removed = storage
         .forget_meeting("weekly-1")
         .unwrap()
         .expect("the meeting exists");
     assert_eq!(removed.runs, 1);
     assert!(
-        storage.judgment_turns(run).unwrap().is_empty(),
+        storage.session_turns(run).unwrap().is_empty(),
         "the forgotten meeting's turn history stays behind"
     );
-    assert_eq!(storage.judgment_turns(other).unwrap(), vec![turn]);
+    assert_eq!(storage.session_turns(other).unwrap(), vec![turn]);
 }
