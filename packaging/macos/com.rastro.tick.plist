@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.rastro.tick</string>
+    <key>ProgramArguments</key>
+    <array>
+        <string>/ABSOLUTE/PATH/TO/rastro</string>
+        <string>tick</string>
+    </array>
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>RASTRO_HOME</key>
+        <string>/ABSOLUTE/PATH/TO/RASTRO_HOME</string>
+    </dict>
+    <key>StartInterval</key>
+    <integer>60</integer>
+    <key>RunAtLoad</key>
+    <false/>
+    <key>KeepAlive</key>
+    <false/>
+    <key>StandardOutPath</key>
+    <string>/ABSOLUTE/PATH/TO/LOGS/rastro-tick.out.log</string>
+    <key>StandardErrorPath</key>
+    <string>/ABSOLUTE/PATH/TO/LOGS/rastro-tick.err.log</string>
+</dict>
+</plist>
