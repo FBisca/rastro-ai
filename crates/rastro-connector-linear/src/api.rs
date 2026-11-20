@@ -116,21 +116,44 @@ fn retry_at(header: &dyn Fn(&str) -> Option<String>) -> Option<String> {
         .map(|seconds| at(Utc::now() + chrono::Duration::seconds(seconds)))
 }
 
-/// `LINEAR_API_KEY`, else the keychain item `rastro-linear`. Read at sync, never stored.
-pub fn api_key() -> Option<String> {
+/// Where the API key came from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Credential {
+    Environment,
+    Keychain,
+}
+impl Credential {
+    /// What the owner would change to replace this credential; never its value.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Environment => "LINEAR_API_KEY",
+            Self::Keychain => "keychain item rastro-linear",
+        }
+    }
+}
+
+/// `LINEAR_API_KEY`, else the keychain item `rastro-linear`, with where it came from. Read at
+/// sync, never stored.
+pub fn credential() -> Option<(Credential, String)> {
     let from_env = std::env::var("LINEAR_API_KEY")
         .ok()
         .map(|key| key.trim().to_string())
         .filter(|key| !key.is_empty());
-    from_env.or_else(|| {
-        let output = Command::new("security")
-            .args(["find-generic-password", "-s", "rastro-linear", "-w"])
-            .stdin(std::process::Stdio::null())
-            .output()
-            .ok()?;
-        let key = String::from_utf8(output.stdout).ok()?.trim().to_string();
-        (output.status.success() && !key.is_empty()).then_some(key)
-    })
+    if let Some(key) = from_env {
+        return Some((Credential::Environment, key));
+    }
+    let output = Command::new("security")
+        .args(["find-generic-password", "-s", "rastro-linear", "-w"])
+        .stdin(std::process::Stdio::null())
+        .output()
+        .ok()?;
+    let key = String::from_utf8(output.stdout).ok()?.trim().to_string();
+    (output.status.success() && !key.is_empty()).then_some((Credential::Keychain, key))
+}
+
+/// The key alone, for a sync.
+pub fn api_key() -> Option<String> {
+    credential().map(|(_, key)| key)
 }
 
 /// Whether `base` is an http(s) URL on a loopback host: `127.0.0.1`, `[::1]` or `localhost`.

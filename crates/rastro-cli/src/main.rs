@@ -7,11 +7,13 @@ use rastro_core::{
 };
 use rastro_operations::{
     Request, Response, catalog, envelope,
+    requests::{SourceCheckRequest, SourceRequest},
     results::{SearchResponse, WhyResult},
 };
 use rastro_storage_sqlite::SqliteStorage;
 use std::ffi::OsString;
 
+mod check;
 mod mcp;
 mod tick;
 
@@ -40,6 +42,11 @@ enum Command {
     },
     /// Sync every source past its freshness rule; a schedule calls this.
     Tick,
+    /// Check that a source's credentials are accepted, with one cheap call and nothing stored.
+    Check {
+        #[command(flatten)]
+        check: SourceCheckRequest,
+    },
 }
 fn stamp(time: DateTime<Utc>) -> String {
     time.to_rfc3339_opts(SecondsFormat::Millis, true)
@@ -1231,6 +1238,7 @@ fn human(response: &Response) -> String {
     };
     match response {
         Response::SourceAdd(r) => format!("Source registered: {}", r.source.name),
+        Response::SourceCheck(r) => check::line(r),
         Response::SourceList(r) => or_none(r.sources.iter().map(|s| format!(
             "{} | Connector: {} | selector: {} | Scope: {} | Freshness rule: {} | window start: {}",
             s.name, s.connector, serde_json::to_string(&s.selector).expect("string map"), s.scope.0, s.freshness_rule, s.window_start.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true),
@@ -1360,6 +1368,7 @@ fn parse() -> (Cli, &'static str) {
                 Command::Operation(request) => request.name(),
                 Command::Mcp { .. } => "mcp",
                 Command::Tick => "tick",
+                Command::Check { .. } => "source.check",
             };
             (cli, operation)
         }
@@ -1395,8 +1404,14 @@ fn stderr_line(text: &str) {
 fn main() {
     let (cli, operation) = parse();
     let request = match cli.command {
+        // The credential probe never opens the store: opening it would create or touch stored
+        // state, and a check must leave everything as it was.
+        Command::Operation(Request::Source {
+            command: SourceRequest::Check(check),
+        }) => std::process::exit(check::run(&check.source, cli.json)),
         Command::Operation(request) => request,
         Command::Tick => std::process::exit(tick::run()),
+        Command::Check { check } => std::process::exit(check::run(&check.source, cli.json)),
         Command::Mcp { scopes } => match mcp::run(scopes) {
             Ok(()) => return,
             Err(error) => {
@@ -1411,6 +1426,16 @@ fn main() {
                 println!("{}", response.envelope());
             } else {
                 println!("{text}");
+            }
+            if let Response::SourceAdd(added) = &response {
+                // Setup keeps the source whatever the check says; the owner sees it either way,
+                // on stderr when stdout is the machine-readable envelope.
+                let report = check::setup_report(&added.source);
+                if cli.json {
+                    stderr_line(&report);
+                } else {
+                    println!("{report}");
+                }
             }
             if !response.succeeded() {
                 std::process::exit(1);

@@ -96,8 +96,8 @@ fn help_lists_exactly_what_the_catalog_defines() {
     }
 }
 
-/// spec: Every envelope is schema version 2 and validates
 /// every command's `--json` envelope is version 2, valid against the v2 schema; v1 is frozen
+/// spec: Every envelope is schema version 2 and validates
 #[test]
 #[expect(
     clippy::too_many_lines,
@@ -121,6 +121,9 @@ fn every_envelope_is_version_2_and_schema_valid() {
             "work",
         ],
         &["source", "list"],
+        &["source", "check", "demo"],
+        &["check", "demo"],
+        &["check", "missing"],
         &["coverage"],
         &["coverage", "demo"],
         &["coverage", "missing"],

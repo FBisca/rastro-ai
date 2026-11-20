@@ -22,6 +22,7 @@ use std::{
 };
 
 pub mod actions;
+pub(crate) mod check;
 mod extract;
 mod io;
 mod judge;
