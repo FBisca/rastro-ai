@@ -1,10 +1,18 @@
-//! The reference agent tool adapter: it lets Claude Code do the judgment (ADR 0012).
+//! The reference agent tool adapter: it lets Claude Code do the judgment (ADR 0012, ADR 0016).
 //!
-//! The core sends `initialize` and then one `judgment.request`. This adapter puts the core's
-//! instructions and the turns to Claude Code's non-interactive mode, with every tool, setting,
-//! MCP server and slash command turned off (the turns are untrusted text, so nothing it reads can
-//! choose what Claude Code does), and relays the candidates it returns. It checks nothing beyond
-//! "a JSON object": the core validates every candidate itself.
+//! The core sends `initialize` and then the turns of a judgment session, one `judgment.request`
+//! each. This adapter puts the core's instructions and the turns to Claude Code's non-interactive
+//! mode, with every tool, setting, MCP server and slash command turned off (the turns are
+//! untrusted text, so nothing it reads can choose what Claude Code does), and relays the
+//! candidates it returns. It checks nothing beyond "a JSON object": the core validates every
+//! candidate itself.
+//!
+//! A retry turn resumes the harness session the first turn produced, in a fresh claude process
+//! with the lockdown flags re-applied; without a usable session id it degrades to a fresh turn
+//! carrying the prior answer and the core's failure reason, and says so in the answer. The
+//! harness session id claude reports rides along with every answer, and the session store
+//! relocates under `RASTRO_HOME` when an API key keeps the run authenticated there, so its
+//! untrusted transcripts stay where Rastro can forget them.
 //!
 //! `RASTRO_CLAUDE_COMMAND` names the `claude` executable to run (default `claude`) and
 //! `RASTRO_CLAUDE_MODEL` the model; both reach it only because the manifest lists them.
@@ -16,6 +24,7 @@ use rastro_plugin_sdk::{
 use serde_json::{Value, json};
 use std::{
     io::{self, Write},
+    path::Path,
     process::{Command, Stdio},
 };
 
@@ -61,15 +70,24 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Asks Claude Code to judge the request and returns the object it answers with.
+/// Asks Claude Code to judge the request and returns the object it answers with. A retry turn
+/// resumes the harness session the prior answer names; without a usable id it runs a fresh turn
+/// and records the degradation (ADR-0016 §4).
 fn judge(request: &JudgmentRequest) -> Result<Value> {
     let program = std::env::var("RASTRO_CLAUDE_COMMAND").unwrap_or_else(|_| "claude".into());
+    let resume = request
+        .session
+        .as_ref()
+        .and_then(|session| session.prior_answer.session_id.as_deref())
+        .filter(|id| !id.is_empty());
     let mut command = Command::new(&program);
+    command.args(["-p", "--output-format", "json"]);
+    if let Some(id) = resume {
+        command.args(["--resume", id]);
+    }
+    // The lockdown kit is re-applied on every turn: launch flags do not persist across resume.
+    // Session persistence stays on so the next turn can resume what this one produced.
     command.args([
-        "-p",
-        "--output-format",
-        "json",
-        "--no-session-persistence",
         "--tools",
         "",
         "--disable-slash-commands",
@@ -84,6 +102,7 @@ fn judge(request: &JudgmentRequest) -> Result<Value> {
     if let Ok(model) = std::env::var("RASTRO_CLAUDE_MODEL") {
         command.args(["--model", &model]);
     }
+    relocate_config_dir(&mut command)?;
     let mut child = command
         .stdin(Stdio::piped())
         .stdout(Stdio::piped())
@@ -101,13 +120,51 @@ fn judge(request: &JudgmentRequest) -> Result<Value> {
     if !output.status.success() {
         bail!("claude exited with {}", output.status);
     }
-    candidates_of(&output.stdout)
+    let mut answer = candidates_of(&output.stdout)?;
+    if request.session.is_some() && resume.is_none() {
+        answer["degraded"] = json!(true);
+    }
+    Ok(answer)
 }
 
-/// The prompt: the core's instructions, then the turns as one JSON value.
+/// Keeps the harness session store under `RASTRO_HOME` (ADR-0016 §7): its files hold untrusted
+/// transcript text, so they belong on Rastro's retention surface, not in the owner's home. The
+/// move takes claude's whole config dir, including its sign-in: only an API key authenticates
+/// after it, so without one the store stays in the owner's home — the disclosed residual — rather
+/// than breaking the run. An explicit `CLAUDE_CONFIG_DIR` is the owner's choice and passes
+/// through untouched; with no home set, claude keeps its default.
+fn relocate_config_dir(command: &mut Command) -> Result<()> {
+    if std::env::var_os("CLAUDE_CONFIG_DIR").is_some_and(|dir| !dir.is_empty()) {
+        return Ok(());
+    }
+    let Some(home) = std::env::var_os("RASTRO_HOME").filter(|home| !home.is_empty()) else {
+        return Ok(());
+    };
+    if std::env::var_os("ANTHROPIC_API_KEY").is_none_or(|key| key.is_empty()) {
+        return Ok(());
+    }
+    let dir = Path::new(&home).join("claude");
+    std::fs::create_dir_all(&dir)
+        .with_context(|| format!("can't create the claude config dir {}", dir.display()))?;
+    command.env("CLAUDE_CONFIG_DIR", dir);
+    Ok(())
+}
+
+/// The prompt: the core's instructions, the session context on a retry turn, then the turns as
+/// one JSON value. The feedback and the prior answer are data, never instructions.
 fn prompt(request: &JudgmentRequest) -> String {
     let data = json!({"owner_speaker": request.owner_speaker, "turns": request.turns});
-    format!("{}\n\nData:\n{data}\n", request.instructions)
+    let mut prompt = request.instructions.clone();
+    if let Some(session) = &request.session {
+        prompt.push_str(&format!(
+            "\n\nThis is turn {} of the same judgment session. Correct the prior answer so it passes the core's checks.\nFeedback:\n{}\nPrior answer:\n{}\n",
+            session.turn,
+            json!(session.feedback),
+            json!(session.prior_answer),
+        ));
+    }
+    prompt.push_str(&format!("\n\nData:\n{data}\n"));
+    prompt
 }
 
 /// The JSON Schema of the answer: candidates with exactly `fields`.
@@ -136,7 +193,8 @@ fn schema(fields: &[String]) -> Value {
 }
 
 /// The answer object of `claude -p --output-format json`: its structured output, or its text
-/// result read as JSON.
+/// result read as JSON, carrying the harness session id claude reports so a retry turn can
+/// resume it (ADR-0016 §4). An absent or empty id means there is no usable resume.
 fn candidates_of(stdout: &[u8]) -> Result<Value> {
     let run: Value = serde_json::from_slice(stdout).context("claude's output is not JSON")?;
     if run["is_error"].as_bool() == Some(true) {
@@ -145,7 +203,7 @@ fn candidates_of(stdout: &[u8]) -> Result<Value> {
             run["result"].as_str().unwrap_or("no detail")
         );
     }
-    let answer = match run.get("structured_output") {
+    let mut answer = match run.get("structured_output") {
         Some(value) if !value.is_null() => value.clone(),
         _ => {
             let text = run["result"]
@@ -156,6 +214,9 @@ fn candidates_of(stdout: &[u8]) -> Result<Value> {
     };
     if !answer.is_object() {
         bail!("claude's answer is not a JSON object");
+    }
+    if let Some(id) = run["session_id"].as_str().filter(|id| !id.is_empty()) {
+        answer["session_id"] = json!(id);
     }
     Ok(answer)
 }
@@ -201,6 +262,7 @@ mod tests {
         );
     }
 
+    // spec: The core calls the adapter and keeps only the candidates that pass its checks
     #[test]
     fn the_answer_is_the_structured_output_or_the_result_read_as_json() {
         let structured =
@@ -211,6 +273,17 @@ mod tests {
         );
         let text = br#"{"is_error":false,"result":"{\"candidates\":[]}"}"#;
         assert_eq!(candidates_of(text).unwrap(), json!({"candidates": []}));
+        // The harness session id claude reports rides along with the answer, so a retry turn
+        // can resume it; absent or empty, there is no usable resume.
+        let with_id =
+            br#"{"is_error":false,"session_id":"sess-1","structured_output":{"candidates":[]}}"#;
+        assert_eq!(
+            candidates_of(with_id).unwrap(),
+            json!({"candidates": [], "session_id": "sess-1"})
+        );
+        let empty_id =
+            br#"{"is_error":false,"session_id":"","structured_output":{"candidates":[]}}"#;
+        assert_eq!(candidates_of(empty_id).unwrap(), json!({"candidates": []}));
         for bad in [
             &br#"{"is_error":true,"result":"overloaded"}"#[..],
             br#"{"is_error":false,"result":"not json"}"#,
