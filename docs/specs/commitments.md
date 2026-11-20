@@ -97,15 +97,19 @@ The standard vocabulary SHALL define `std:Commitment` and the predicates `std:ow
 - THEN it carries `std:owes` when it has a responsible party and is not a waiting-on, `std:owed_to` when it has a recipient, `std:due` when it states a date, and `std:waiting_on` when it is a waiting-on
 
 ### Requirement: The core calls the adapter and keeps only the candidates that pass its checks
-The core SHALL call the owner's configured agent tool adapter over the plugin protocol with the content, its own instructions and the fields it expects, and SHALL keep only the candidates that pass the core's own checks: an exact contiguous quote, the owner's involvement and a stated date the quote states.
+The core SHALL call the owner's configured agent tool adapter over the plugin protocol with the content, its own instructions and the fields it expects, SHALL execute its own gates on every answer and send a gate failure back as the next turn of the same session with core-authored feedback while turns remain under the cap (default 3 turns, per-turn timeout 600s), and SHALL keep only the candidates that pass the core's own checks, an exact contiguous quote, the owner's involvement and a stated date the quote states.
 
 #### Scenario: only the candidates the core's checks pass are kept
-- WHEN the owner imports a conversation with a configured agent tool adapter
-- THEN the core calls the adapter over the plugin protocol with the content, its own instructions and the fields it expects, and keeps only the candidates that pass the core's own checks: an exact contiguous quote, the owner's involvement and a stated date the quote states
+- WHEN the owner imports a conversation with a configured agent tool adapter and an answer passes the core's gates
+- THEN only the candidates that pass the core's own checks are kept, an exact contiguous quote, the owner's involvement and a stated date the quote states
 
-#### Scenario: a response that breaks the shape fails the run
-- WHEN an adapter's response breaks the expected shape, never answers, or answers with an error
-- THEN the run fails and the last good results stay
+#### Scenario: a gate failure earns a retry turn in the same session
+- WHEN an answer fails a shape or quote gate and turns remain under the cap
+- THEN the core sends the failure reason (gate, field, expected, actual) as the next turn of the same session, and no new session is opened
+
+#### Scenario: exhausted caps or a fatal answer fails the run stale
+- WHEN gate failures exhaust the turn cap, or the adapter never answers or answers with an error
+- THEN the run fails and the last good results stay marked stale
 
 ### Requirement: An adapter's manifest declares its kind and names no tool
 An adapter's manifest SHALL declare the kind `agent-tool-adapter` and the agent-tool capabilities it needs, never a named tool, and a manifest that names a tool or doesn't declare the kind SHALL be refused before anything runs.
@@ -150,3 +154,62 @@ The owner SHALL read the commitments of a real conversation from the `commitment
 #### Scenario: the list alone carries a conversation's hypotheses
 - WHEN the owner asks the MCP tool `commitments` for a conversation they imported
 - THEN every hypothesis comes back with the exact quote it rests on, its turn and its speaker, so the transcript is never opened by hand
+
+### Requirement: Every turn of a judgment session is recorded
+The core SHALL record the request, answer and gate verdict of every turn of a judgment session including failed turns, SHALL make only the final validated output evidence, and SHALL leave turn history out of an export.
+
+#### Scenario: failed turns are recorded
+- WHEN a run includes failed turns
+- THEN the run's history holds each turn's request, answer and gate verdict
+
+#### Scenario: only the final validated output becomes evidence
+- WHEN a run succeeds after retry turns
+- THEN only the final validated output becomes evidence
+
+#### Scenario: an export leaves turn history out
+- WHEN a database is exported
+- THEN turn history stays out
+
+### Requirement: The core matches the adapter's declared boundary enforcement before a run
+An adapter's manifest SHALL declare the boundary controls it can enforce, and the core SHALL match them against the judgment floor (tools off, no MCP servers, no setting sources) before a run and refuse the run naming any unenforceable control, never starting the adapter in a degraded-security mode.
+
+#### Scenario: a mismatch refuses the run naming the control
+- WHEN a bound adapter's manifest lacks a control the judgment floor requires
+- THEN the run is refused naming the unenforceable control and the adapter is never started
+
+#### Scenario: a full declaration lets the run proceed
+- WHEN a bound adapter declares every control the judgment floor requires
+- THEN the run proceeds
+
+### Requirement: A harness adapter is a thin CLI driver bindable for one-shot judgment
+A codex, pi or claude adapter SHALL drive its harness CLI over the shared SDK as a plugin of kind agent-tool-adapter with capability judge_text and no action permission, bindable through [commitment_adapter], and SHALL answer a one-shot judgment.request by driving its harness with the lockdown kit and relaying the structured answer.
+
+#### Scenario: a new adapter's manifest passes the check
+- WHEN a codex, pi or decision adapter's manifest is checked
+- THEN it passes as kind agent-tool-adapter with its declared capability and no named tool
+
+#### Scenario: a one-shot request drives the harness under lockdown
+- WHEN a one-shot judgment.request reaches a harness adapter
+- THEN the adapter drives its harness with tools off, no MCP servers and no setting sources, and relays the structured answer
+
+### Requirement: A session turn resumes the harness or degrades recorded
+A session-capable adapter SHALL continue a session by resuming the harness session whose id the first turn produced, in a fresh process with the lockdown flags re-applied, and SHALL degrade to a fresh turn carrying the prior answer and the failure reason when resume is unavailable, recording the degradation.
+
+#### Scenario: a retry turn resumes the harness session
+- WHEN a retry turn runs on a harness with usable resume
+- THEN the adapter resumes the persisted harness session id in a fresh process with the lockdown flags re-applied
+
+#### Scenario: an unavailable resume degrades recorded
+- WHEN the harness has no usable resume
+- THEN the adapter runs a fresh turn carrying the prior answer and the failure reason, and records the degradation
+
+### Requirement: A decision adapter scores text through the same session protocol
+A decision adapter SHALL be a plugin of kind agent-tool-adapter with capability score_text and no action permission, answering decision.request with caller-defined structured output that the core validates against the caller's schema, speaking the same capped session protocol as an agent adapter.
+
+#### Scenario: schema-valid decision output is kept
+- WHEN a decision.request reaches a decision adapter
+- THEN it answers with structured output and only output that passes the caller's schema is kept
+
+#### Scenario: a broken decision shape fails the run stale
+- WHEN a decision adapter's output breaks the caller's schema
+- THEN the run fails and the last good results stay

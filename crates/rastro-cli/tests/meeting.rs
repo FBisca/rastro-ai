@@ -38,12 +38,16 @@ env = []
 actions = []
 "#;
 
-/// Answers the plugin protocol: saves each judgment request to `request.json` and answers with
-/// `response.json` as the result. `NOISE` is a command run first, such as one writing to stderr.
+/// Answers the plugin protocol: records every launch, counts the session's turns, saves each
+/// judgment request to `request.json` and `judgment-<n>.json`, and answers turn `n` from
+/// `response-<n>.json` (falling back to `response.json`) as the result. `NOISE` is a command run
+/// first, such as one writing to stderr.
 fn adapter_script(noise: &str) -> String {
     format!(
         r#"#!/bin/sh
 {noise}
+echo launch >> "$RASTRO_HOME/launches"
+printf '0\n' > "$RASTRO_HOME/turns"
 while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
   case "$line" in
@@ -51,9 +55,16 @@ while IFS= read -r line; do
       printf '{{"jsonrpc":"2.0","id":%s,"result":{{"protocol":"1.0","manifest_id":"test-adapter"}}}}\n' "$id"
       ;;
     *'"method":"judgment.request"'*)
+      n=$(( $(cat "$RASTRO_HOME/turns" 2>/dev/null || echo 0) + 1 ))
+      printf '%s\n' "$n" > "$RASTRO_HOME/turns"
       printf '%s\n' "$line" > "$RASTRO_HOME/request.json"
+      printf '%s\n' "$line" > "$RASTRO_HOME/judgment-$n.json"
       printf '{{"jsonrpc":"2.0","id":%s,"result":' "$id"
-      cat "$RASTRO_HOME/response.json"
+      if [ -f "$RASTRO_HOME/response-$n.json" ]; then
+        cat "$RASTRO_HOME/response-$n.json"
+      else
+        cat "$RASTRO_HOME/response.json"
+      fi
       printf '}}\n'
       ;;
   esac
@@ -214,6 +225,43 @@ impl Env {
         let message: Value =
             serde_json::from_slice(&fs::read(self.path("request.json")).unwrap()).unwrap();
         message["params"].clone()
+    }
+    fn manifest(&self, text: &str) {
+        fs::write(
+            self.path("config/plugins/test-adapter/rastro-plugin.toml"),
+            text,
+        )
+        .unwrap();
+    }
+    /// How many adapter processes were launched.
+    fn launches(&self) -> usize {
+        fs::read_to_string(self.path("launches"))
+            .map(|text| text.lines().count())
+            .unwrap_or(0)
+    }
+    fn launched(&self) -> bool {
+        self.launches() > 0
+    }
+    /// Forgets the launches recorded so far, so a count names one run's processes.
+    fn forget_launches(&self) {
+        fs::write(self.path("launches"), "").unwrap();
+    }
+    /// How many judgment turns the adapter's last session was sent.
+    fn turns(&self) -> u64 {
+        fs::read_to_string(self.path("turns"))
+            .ok()
+            .and_then(|text| text.trim().parse().ok())
+            .unwrap_or(0)
+    }
+    /// The params of the `judgment.request` the adapter was sent on turn `n`.
+    fn judgment(&self, n: u64) -> Value {
+        let line = fs::read(self.path(&format!("judgment-{n}.json"))).unwrap();
+        let message: Value = serde_json::from_slice(&line).unwrap();
+        message["params"].clone()
+    }
+    /// What the adapter answers on turn `n`: the whole `result` of its response.
+    fn respond_turn(&self, n: u64, result: Value) {
+        fs::write(self.path(&format!("response-{n}.json")), result.to_string()).unwrap();
     }
     fn mcp(&self, scopes: &[&str], tool: &str, arguments: Value) -> Value {
         let mut command = self.command(&["mcp"]);
@@ -377,9 +425,69 @@ fn S2_failures_name_their_cause_and_report_incomplete_coverage() {
     assert_eq!(result["extraction"]["cause"], "extractor_output_invalid");
 }
 
-/// S3: a candidate without the owner is excluded and counted; an invalid quote fails the whole
-/// run and the last good results stay.
+/// A bound adapter whose manifest lacks a control the judgment floor requires is refused naming
+/// the unenforceable control, and the adapter is never started; a manifest declaring every
+/// control lets the run proceed.
+// spec: The core matches the adapter's declared boundary enforcement before a run
+// spec: Extraction failures name their cause and report incomplete coverage
+#[test]
+fn a_manifest_lacking_a_floor_control_is_refused_before_the_adapter_starts() {
+    let floor = ["tools_off", "no_mcp_servers", "no_setting_sources"];
+    let base = MANIFEST.replace(
+        "enforcement = [\"tools_off\", \"no_mcp_servers\", \"no_setting_sources\"]\n",
+        "",
+    );
+    for missing in floor {
+        let declared: Vec<String> = floor
+            .iter()
+            .filter(|control| **control != missing)
+            .map(|control| format!("\"{control}\""))
+            .collect();
+        let manifest = base.replace(
+            "agent_tool = { capabilities = [\"judge_text\"] }",
+            &format!(
+                "agent_tool = {{ capabilities = [\"judge_text\"] }}\nenforcement = [{}]",
+                declared.join(", ")
+            ),
+        );
+        let env = Env::new();
+        env.manifest(&manifest);
+        let (ok, result) = env.import(&["--owner-speaker", "Alice"]);
+        assert!(!ok, "{missing}: {result}");
+        assert_eq!(
+            result["extraction"]["cause"], "extractor_failed",
+            "{missing}: {result}"
+        );
+        assert!(
+            result["extraction"]["reason"]
+                .as_str()
+                .unwrap()
+                .contains(missing),
+            "{missing} not named: {result}"
+        );
+        assert!(!env.launched(), "{missing}: the adapter ran");
+    }
+    // A manifest that declares no enforcement at all lacks every control the floor requires.
+    let env = Env::new();
+    env.manifest(&base);
+    let (ok, result) = env.import(&["--owner-speaker", "Alice"]);
+    assert!(!ok, "{result}");
+    assert_eq!(result["extraction"]["cause"], "extractor_failed");
+    assert!(
+        !env.launched(),
+        "the adapter ran without declaring any control"
+    );
+    // Every control the floor requires declared: the run proceeds and the adapter starts.
+    let env = Env::new();
+    env.import_ok(&["--owner-speaker", "Alice"]);
+    assert!(env.launched(), "the adapter never started");
+}
+
+/// S3: a candidate without the owner is excluded and counted; an invalid quote earns capped
+/// retry turns in the same session, and once the cap is exhausted the whole run fails and the
+/// last good results stay.
 // spec: An unsupported candidate is excluded and an invalid quote fails the run
+// spec: The core calls the adapter and keeps only the candidates that pass its checks
 #[test]
 fn S3_unsupported_candidates_are_excluded_and_an_invalid_quote_fails_the_run() {
     let env = Env::new();
@@ -440,6 +548,7 @@ fn S3_unsupported_candidates_are_excluded_and_an_invalid_quote_fails_the_run() {
         let mut bad = good();
         bad[0]["quote"] = json!(quote);
         env.extractor(&bad);
+        env.forget_launches();
         let (ok, failed) = env.import(&["--owner-speaker", "Alice"]);
         assert!(!ok, "{quote}");
         assert_eq!(failed["extraction"]["state"], "failed", "{quote}");
@@ -449,14 +558,147 @@ fn S3_unsupported_candidates_are_excluded_and_an_invalid_quote_fails_the_run() {
             failed["results_from"]["run"], last_good["extraction"]["run"],
             "{quote}"
         );
+        // The invalid quote earned capped retry turns in one session before the run failed.
+        assert_eq!(env.turns(), 3, "{quote}: the cap is three turns by default");
+        assert_eq!(
+            env.launches(),
+            1,
+            "{quote}: the retries stayed in one session"
+        );
+        let session = &env.judgment(2)["session"];
+        assert_eq!(session["turn"], 2, "{quote}");
+        assert_eq!(
+            session["feedback"],
+            json!([{
+                "gate": "quote",
+                "field": "candidates[0].quote",
+                "expected": "an exact, contiguous piece of turn 1's text",
+                "actual": quote
+            }]),
+            "{quote}"
+        );
+        assert_eq!(env.judgment(3)["session"]["turn"], 3, "{quote}");
     }
     // A quote from another turn than the one named is invalid too.
     let mut bad = good();
     bad[0]["turn"] = json!(5);
     env.extractor(&bad);
+    env.forget_launches();
     let (ok, failed) = env.import(&["--owner-speaker", "Alice"]);
     assert!(!ok);
     assert_eq!(failed["extraction"]["cause"], "invalid_quote");
+    assert_eq!(env.turns(), 3);
+}
+
+/// A corrected quote on a retry turn succeeds the run: the failure reason rides turn 2 of the
+/// same session, and only the final validated output becomes evidence — through the import,
+/// the read, the recorded output, the spans and a replay that never starts the adapter.
+// spec: The core calls the adapter and keeps only the candidates that pass its checks
+// spec: Every turn of a judgment session is recorded
+// spec: An unsupported candidate is excluded and an invalid quote fails the run
+#[test]
+fn a_corrected_quote_on_a_retry_turn_keeps_only_the_final_output_as_evidence() {
+    let env = Env::new();
+    // Turn 1: a broken quote beside a candidate that would pass on its own.
+    let mut first = good();
+    first.truncate(2);
+    first[0]["quote"] = json!("I'll send Bob the budget by Friday!");
+    // Turn 2: the corrected candidate, a promise whose quote states no date, and a pair the
+    // owner is not part of. The candidate turn 1 proposed beside the broken quote is not
+    // proposed again.
+    let mut kept_answer = vec![good().remove(0)];
+    let mut undated = good().remove(2);
+    undated["stated_date"] = json!("by Monday");
+    kept_answer.push(undated);
+    let mut final_answer = kept_answer.clone();
+    final_answer.push(candidate(
+        3,
+        Some("Carol"),
+        Some("Dave"),
+        "email Dave the notes",
+        Some("tomorrow"),
+        "I will email Dave the notes tomorrow",
+    ));
+    env.respond_turn(1, json!({ "candidates": first, "session_id": "sess-7" }));
+    env.respond_turn(2, json!({ "candidates": final_answer }));
+    let result = env.import_ok(&["--owner-speaker", "Alice"]);
+    assert_eq!(result["extraction"]["state"], "succeeded", "{result}");
+
+    // One process, two turns: the retry stayed in the same session, carrying the failure
+    // reason and the prior answer.
+    assert_eq!(env.launches(), 1);
+    assert_eq!(env.turns(), 2);
+    assert!(env.judgment(1).get("session").is_none());
+    let session = &env.judgment(2)["session"];
+    assert_eq!(session["turn"], 2, "{session}");
+    assert_eq!(
+        session["prior_answer"],
+        json!({ "candidates": first, "session_id": "sess-7" })
+    );
+    assert_eq!(
+        session["feedback"],
+        json!([{
+            "gate": "quote",
+            "field": "candidates[0].quote",
+            "expected": "an exact, contiguous piece of turn 1's text",
+            "actual": "I'll send Bob the budget by Friday!"
+        }]),
+        "{session}"
+    );
+
+    // Only the final turn's candidates that pass the core's checks are kept: the unsupported
+    // pair is excluded and counted, a date the quote does not state reads unknown, and the
+    // passing candidate turn 1 proposed is not evidence.
+    assert_eq!(result["extraction"]["excluded"], 1, "{result}");
+    let hypotheses = result["hypotheses"].as_array().unwrap();
+    assert_eq!(hypotheses.len(), 2, "{result}");
+    assert_eq!(hypotheses[0]["promise"], "send Bob the budget");
+    assert_eq!(hypotheses[0]["quote"]["turn"], 1);
+    assert_eq!(hypotheses[1]["promise"], "update the plan");
+    assert_eq!(hypotheses[1]["stated_date"], json!({"state": "unknown"}));
+    assert_eq!(env.read()["hypotheses"], result["hypotheses"]);
+
+    // Both turns are recorded; the recorded output is the final turn's kept candidates alone,
+    // and only the turns they cite are spans.
+    let run = result["extraction"]["run"].as_i64().unwrap();
+    assert_eq!(
+        count_where(&env, "session_turn", &format!("run_id = {run}")),
+        2,
+        "both turns of the session are recorded"
+    );
+    let recorded: String = database(&env)
+        .query_row("SELECT candidates FROM meeting_output", [], |row| {
+            row.get(0)
+        })
+        .unwrap();
+    assert_eq!(
+        serde_json::from_str::<Value>(&recorded).unwrap(),
+        json!(kept_answer)
+    );
+    let spans: Vec<String> = database(&env)
+        .prepare("SELECT text FROM meeting_span WHERE text != '' ORDER BY turn")
+        .unwrap()
+        .query_map([], |row| row.get(0))
+        .unwrap()
+        .map(|text| text.unwrap())
+        .collect();
+    assert_eq!(
+        spans,
+        [
+            "I'll send Bob the budget by Friday.",
+            "I'll update the plan."
+        ]
+    );
+
+    // Replay re-derives the same evidence from the recorded output with no adapter at all.
+    fs::remove_file(env.script_path()).unwrap();
+    fs::remove_file(env.path("request.json")).unwrap();
+    env.forget_launches();
+    let replayed = env.ok(&["meeting", "replay", "weekly-1"]);
+    assert_eq!(replayed["extraction"]["replay_of"], run);
+    assert_eq!(replayed["hypotheses"], result["hypotheses"]);
+    assert_eq!(env.launches(), 0, "the replay started the adapter");
+    assert!(!env.path("request.json").exists());
 }
 
 /// S4: dates stay as stated, conditions stay in the promise, unresolved people stay unknown,
@@ -913,8 +1155,10 @@ fn S6_replay_without_recorded_output_is_an_error_and_records_nothing() {
 }
 
 /// S7: by default the supporting spans and the recorded output are kept for replay and the full
-/// transcript is not; an export leaves recorded model output out; opting in keeps the transcript.
+/// transcript is not; an export leaves recorded model output out, turn history included; opting
+/// in keeps the transcript.
 // spec: Default import retains spans and output but not the transcript
+// spec: Every turn of a judgment session is recorded
 #[test]
 fn S7_default_import_retains_spans_and_output_but_not_the_transcript() {
     let env = Env::new();
@@ -955,8 +1199,19 @@ fn S7_default_import_retains_spans_and_output_but_not_the_transcript() {
         assert!(!text.contains(model_output), "{model_output}: {text}");
     }
 
-    // Opt in: the transcript is kept, and exported.
-    env.import_ok(&["--owner-speaker", "Alice", "--retain-transcript"]);
+    // Opt in: the transcript is kept, and exported — even when the run earned a retry turn,
+    // the session's history stays out of the export.
+    let mut broken = good();
+    broken[0]["quote"] = json!("I'll send Bob the budget by Friday!");
+    env.respond_turn(1, json!({ "candidates": broken, "session_id": "sess-9" }));
+    env.respond_turn(2, json!({ "candidates": good() }));
+    let retained = env.import_ok(&["--owner-speaker", "Alice", "--retain-transcript"]);
+    let run = retained["extraction"]["run"].as_i64().unwrap();
+    assert_eq!(
+        count_where(&env, "session_turn", &format!("run_id = {run}")),
+        2,
+        "the run recorded no history to leave out"
+    );
     assert_eq!(rows(&env, "meeting_transcript"), 1);
     assert!(holds(
         &stored_bytes(&env),
@@ -965,8 +1220,17 @@ fn S7_default_import_retains_spans_and_output_but_not_the_transcript() {
     assert_eq!(env.read()["transcript_retained"], true);
     let export = env.ok(&["meeting", "export", "weekly-1"]);
     assert_eq!(export["transcript"], TRANSCRIPT);
-    // What the model proposed is still not in it.
-    assert!(!export.to_string().contains("share the roadmap with Alice"));
+    // What the model proposed is still not in it, failed turns and session feedback alike.
+    let text = export.to_string();
+    for marker in [
+        "share the roadmap with Alice",
+        "sess-9",
+        "by Friday!",
+        "candidates[0].quote",
+        "prior_answer",
+    ] {
+        assert!(!text.contains(marker), "{marker} leaked: {text}");
+    }
     assert!(export.get("hypotheses").is_none());
 
     // Importing again without the opt-in does not keep the earlier opt-in's text.
