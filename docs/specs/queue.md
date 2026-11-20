@@ -117,7 +117,7 @@ The queue's read and writes SHALL be defined once in the operation catalog, the 
 
 #### Scenario: one catalog entry, two surfaces
 - WHEN the operation schema is generated and compared with the committed one
-- THEN it lists the queue read on the CLI and MCP and its five writes on the CLI only, MCP lists seven tools, and the queue read's result is a v2 envelope
+- THEN it lists the queue read on the CLI and MCP and its five writes on the CLI only, MCP lists ten tools, and the queue read's result is a v2 envelope
 
 #### Scenario: an agent cannot answer
 - WHEN an MCP client calls a queue write

@@ -1170,25 +1170,41 @@ fn grace_text(seconds: u64) -> String {
         format!("{seconds} s")
     }
 }
-/// One line per rule, in the order the owner wrote them.
+/// One line per rule, in the order the owner wrote them, with its cap and today's count, then
+/// its pending Acts and the queued proposals it matches.
 fn rules_check_text(r: &rastro_operations::results::RulesCheckResult) -> String {
     if r.rules.is_empty() {
         return "No rules in config.toml".into();
     }
-    r.rules
-        .iter()
-        .map(|rule| {
+    let mut lines = Vec::new();
+    for rule in &r.rules {
+        let mut line = format!(
+            "{} | {} | team {} | assignee {} | grace {}",
+            display_safe(&rule.name),
+            display_safe(&rule.action),
+            display_safe(&rule.team),
+            display_safe(&rule.assignee),
+            grace_text(rule.grace_seconds)
+        );
+        match rule.daily_cap {
+            Some(cap) => line += &format!(" | {} of {cap} used today", rule.used_today),
+            None => line += &format!(" | {} used today", rule.used_today),
+        }
+        lines.push(line);
+        lines.extend(
+            rule.pending
+                .iter()
+                .map(|run| format!("  Pending: {}", action_run_text(run))),
+        );
+        lines.extend(rule.matches.iter().map(|filed| {
             format!(
-                "{} | {} | team {} | assignee {} | grace {}",
-                display_safe(&rule.name),
-                display_safe(&rule.action),
-                display_safe(&rule.team),
-                display_safe(&rule.assignee),
-                grace_text(rule.grace_seconds)
+                "  Matches: {} | {}",
+                filed.id,
+                display_safe(&filed.proposal.fields.title)
             )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+        }));
+    }
+    lines.join("\n")
 }
 fn human(response: &Response) -> String {
     let or_none = |lines: Vec<String>| {
