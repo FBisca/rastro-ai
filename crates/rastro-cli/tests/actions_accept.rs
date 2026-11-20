@@ -48,9 +48,9 @@ impl Env {
     fn keychain(&self, key: Option<&str>) {
         let script = match key {
             Some(key) => format!(
-                "#!/bin/sh\nfor a in \"$@\"; do [ \"$a\" = rastro-linear ] && echo '{key}' && exit 0; done\nexit 44\n"
+                "#!/bin/sh\necho asked >> \"$(dirname \"$0\")/asked\"\nfor a in \"$@\"; do [ \"$a\" = rastro-linear ] && echo '{key}' && exit 0; done\nexit 44\n"
             ),
-            None => "#!/bin/sh\necho 'security: The specified item could not be found in the keychain.' >&2\nexit 44\n".into(),
+            None => "#!/bin/sh\necho asked >> \"$(dirname \"$0\")/asked\"\necho 'security: The specified item could not be found in the keychain.' >&2\nexit 44\n".into(),
         };
         let security = self.tools.path().join("security");
         fs::write(&security, script).unwrap();
@@ -314,6 +314,10 @@ fn the_writer_prefers_the_environment_key_to_the_keychain_item() {
     let creates = env.linear.creates();
     assert_eq!(creates.len(), 1, "{creates:?}");
     assert_eq!(creates[0].auth.as_deref(), Some(linear_api::KEY));
+    assert!(
+        !env.tools.path().join("asked").exists(),
+        "the keychain was read although the environment had a key"
+    );
 }
 
 // spec: Linear writer shares the connector credential
