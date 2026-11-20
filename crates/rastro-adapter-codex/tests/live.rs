@@ -101,6 +101,22 @@ fn payload_types(rollout: &Path) -> Vec<String> {
         .collect()
 }
 
+/// The working roots codex recorded for the thread's turns, in order.
+fn recorded_cwds(rollout: &Path) -> Vec<String> {
+    fs::read_to_string(rollout)
+        .unwrap()
+        .lines()
+        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+        .filter_map(|event| {
+            event
+                .get("payload")
+                .and_then(|payload| payload.get("cwd"))
+                .and_then(Value::as_str)
+                .map(String::from)
+        })
+        .collect()
+}
+
 /// The payload types that would mean the harness acted with a tool: a command, a file
 /// change, an MCP or web call, a sub-agent.
 const TOOL_CALLS: [&str; 8] = [
@@ -235,4 +251,24 @@ fn a_resume_turn_continues_the_same_codex_thread() {
         .sum();
     println!("task_started events in the thread: {starts}");
     assert!(starts >= 2, "the thread holds {starts} turns, want 2");
+    // Both turns ran in the clean working root: resume does not restore the recorded cwd,
+    // so the adapter must set it, or the retry loads project documents from the launch cwd.
+    let work = fs::canonicalize(rastro_home.join("data/adapter-codex/work")).unwrap();
+    let cwds: Vec<String> = rollouts
+        .iter()
+        .flat_map(|rollout| recorded_cwds(rollout))
+        .collect();
+    println!("recorded working roots: {cwds:?}");
+    assert!(
+        cwds.len() >= 2,
+        "only {} recorded cwds: {cwds:?}",
+        cwds.len()
+    );
+    for cwd in &cwds {
+        assert_eq!(
+            fs::canonicalize(cwd).unwrap(),
+            work,
+            "a turn ran outside the work root"
+        );
+    }
 }

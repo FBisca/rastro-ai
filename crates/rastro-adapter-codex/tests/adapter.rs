@@ -6,7 +6,7 @@ use std::{
     fs,
     io::{BufRead, BufReader, Write},
     os::unix::fs::PermissionsExt,
-    path::PathBuf,
+    path::{Path, PathBuf},
     process::{Command, Stdio},
 };
 
@@ -30,6 +30,8 @@ struct Turn {
     prompt: String,
     codex_home: String,
     schema: Value,
+    /// The working directory the codex process ran in.
+    cwd: String,
 }
 
 /// What the fake `codex` does on a resume invocation.
@@ -54,9 +56,9 @@ struct Conversation {
 /// `CODEX_HOME` and schema file, and prints `fresh` on a fresh turn and `resume` on a resume.
 /// The adapter's `RASTRO_HOME` is a directory under the fake's own, and its `HOME` holds no
 /// codex login, so no credential is touched.
-fn converse(fresh: &str, resume: Resume, requests: &[Value]) -> Conversation {
-    let dir = tempfile::tempdir().unwrap();
-    let path = dir.path();
+/// Writes the fake `codex` script: it records each invocation's arguments, prompt,
+/// `CODEX_HOME`, working directory and schema file, then prints the canned JSONL.
+fn write_fake_codex(path: &Path, fresh: &str, resume: Resume) -> PathBuf {
     let fake = path.join("codex");
     let resume_branch = match resume {
         Resume::Answer(output) => format!("cat <<'EOF'\n{output}\nEOF\n"),
@@ -72,6 +74,7 @@ printf '%s' "$n" > '{0}/n'
 printf '%s\n' "$@" > "{0}/args.$n"
 cat > "{0}/prompt.$n"
 printf '%s\n' "${{CODEX_HOME:-}}" > "{0}/home.$n"
+pwd > "{0}/cwd.$n"
 prev=""
 for a in "$@"; do
   if [ "$prev" = "--output-schema" ]; then cat "$a" > "{0}/schema.$n"; fi
@@ -91,6 +94,13 @@ fi
     )
     .unwrap();
     fs::set_permissions(&fake, fs::Permissions::from_mode(0o755)).unwrap();
+    fake
+}
+
+fn converse(fresh: &str, resume: Resume, requests: &[Value]) -> Conversation {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path();
+    let fake = write_fake_codex(path, fresh, resume);
     let home = path.join("fake-home");
     fs::create_dir_all(&home).unwrap();
     let rastro_home = path.join("rastro-home");
@@ -145,6 +155,10 @@ fi
                 &fs::read_to_string(path.join(format!("schema.{n}"))).unwrap(),
             )
             .unwrap(),
+            cwd: fs::read_to_string(path.join(format!("cwd.{n}")))
+                .unwrap()
+                .trim()
+                .into(),
         })
         .collect();
     Conversation {
@@ -233,6 +247,7 @@ fn assert_lockdown(args: &[String]) {
         "mcp_servers={}",
         "plugins._default.enabled=false",
         "agents.enabled=false",
+        "project_doc_max_bytes=0",
     ] {
         assert!(
             args.windows(2).any(|w| w[0] == "-c" && w[1] == setting),
@@ -293,6 +308,11 @@ fn a_one_shot_request_drives_codex_under_lockdown_and_relays_the_answer() {
     assert!(work.is_dir(), "{}", work.display());
     assert_eq!(fs::read_dir(&work).unwrap().count(), 0);
     assert_eq!(work, conv.rastro_home.join("data/adapter-codex/work"));
+    // The codex process itself runs in the clean working root (pwd resolves symlinks).
+    assert_eq!(
+        fs::canonicalize(&turn.cwd).unwrap(),
+        fs::canonicalize(&work).unwrap()
+    );
     assert_eq!(
         turn.codex_home,
         conv.rastro_home
@@ -330,10 +350,17 @@ fn a_retry_turn_resumes_the_harness_session_in_a_fresh_process() {
     assert_eq!(retry.args[1], "resume");
     assert_eq!(retry.args[2], thread);
     assert_lockdown(&retry.args);
+    // `codex exec resume` rejects `-C`; the adapter runs it in the clean working root
+    // through the process cwd, so no project document reaches the retry turn.
     assert!(
         !retry.args.windows(2).any(|w| w[0] == "-C"),
-        "resume keeps the session's working root: {:?}",
+        "resume rejects -C: {:?}",
         retry.args
+    );
+    let work = conv.rastro_home.join("data/adapter-codex/work");
+    assert_eq!(
+        fs::canonicalize(&retry.cwd).unwrap(),
+        fs::canonicalize(&work).unwrap()
     );
     // The retry prompt carries the instructions, the data, and the session context: the
     // core's gate feedback and the prior answer being corrected.
