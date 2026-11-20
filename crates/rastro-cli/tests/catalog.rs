@@ -21,6 +21,8 @@ fn help_lists_exactly_what_the_catalog_defines() {
     for name in ["search", "coverage"] {
         let spec = catalog::find(name).unwrap();
         assert!(spec.surfaces.contains(&Surface::Cli));
+        // A shared read stays a listed tool, never deferred behind the gateway.
+        assert!(!spec.deferred, "{name}");
         let out = run(home.path(), &[name, "--help"]);
         let help = String::from_utf8(out.stdout).unwrap();
         // clap drops the final full stop of a one-line help text
@@ -94,6 +96,9 @@ fn help_lists_exactly_what_the_catalog_defines() {
         positional.sort();
         assert_eq!(shown, positional, "{name}: {help}");
     }
+    // The gateway is MCP only: the CLI has no command for it, so no help.
+    let out = run(home.path(), &["catalog", "--help"]);
+    assert!(!out.status.success(), "catalog has a CLI command");
 }
 
 /// every command's `--json` envelope is version 2, valid against the v2 schema; v1 is frozen

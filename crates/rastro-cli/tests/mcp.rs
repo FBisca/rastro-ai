@@ -270,53 +270,148 @@ fn tool<'a>(tools: &'a [Value], name: &str) -> &'a Value {
 }
 
 /// spec: Each MCP tool equals its catalog entry
-/// each tool's name, description and input schema equal the catalog entry
+/// each listed tool's name, description and input schema equal the catalog entry, and every
+/// input schema is an object, as the pinned MCP Tool schema requires
 #[test]
 fn listed_tools_equal_the_catalog_entries() {
     let env = Env::new();
     let mut session = env.start();
     session.initialize();
     let tools = session.list_tools();
-    for name in ["search", "coverage", "about", "why"] {
-        let spec = catalog::find(name).unwrap();
-        let listed = tool(&tools, name);
-        assert_eq!(listed["name"], spec.mcp_name());
-        assert_eq!(listed["description"], spec.description());
-        assert_eq!(listed["inputSchema"], spec.input_schema());
+    for listed in &tools {
+        let name = listed["name"].as_str().unwrap();
+        let spec = catalog::CATALOG
+            .iter()
+            .chain(std::iter::once(&catalog::GATEWAY))
+            .find(|spec| spec.mcp_name() == name)
+            .unwrap_or_else(|| panic!("no catalog entry for tool {name}"));
+        assert_eq!(listed["description"], spec.description(), "{name}");
+        assert_eq!(listed["inputSchema"], spec.input_schema(), "{name}");
+        // The pinned MCP revision's Tool schema requires an object input schema; a strict
+        // client rejects the whole list otherwise.
+        assert_eq!(listed["inputSchema"]["type"], "object", "{name}");
     }
 }
 
-/// spec: Only the read-only operations are tools
-/// exactly search, coverage, about, why, commitments, meeting_commitments, queue, focus, actions and rules_check, read-only; any other tool is a JSON-RPC error and runs nothing
+/// spec: MCP catalog discovers explicitly deferred reads on demand
+/// a catalog search for actions.show returns the entry's name, description and input schema
 #[test]
-fn exactly_ten_read_only_tools_and_writes_are_protocol_errors() {
+fn catalog_search_returns_the_deferred_read_entry() {
+    let env = seeded();
+    let mut session = env.start();
+    session.initialize();
+    let call = session.call(
+        "catalog",
+        json!({"mode": "search", "query": "actions.show"}),
+    );
+    let envelope = ok_result(&call["result"]);
+    assert_eq!(envelope["operation"], "catalog");
+    schema_validator()
+        .validate(envelope)
+        .unwrap_or_else(|e| panic!("{e}: {envelope}"));
+    let matches = envelope["result"]["matches"].as_array().unwrap();
+    assert_eq!(matches.len(), 1, "{envelope}");
+    let spec = catalog::find("actions.show").unwrap();
+    assert_eq!(matches[0]["name"], "actions.show");
+    assert_eq!(matches[0]["description"], spec.description());
+    assert_eq!(matches[0]["input_schema"], spec.input_schema());
+    // The schema a client calls with: one required string run.
+    assert_eq!(
+        matches[0]["input_schema"]["properties"]["run"]["type"],
+        "string"
+    );
+    assert_eq!(matches[0]["input_schema"]["required"], json!(["run"]));
+}
+
+/// spec: Catalog calls use the scoped read-only path
+/// a non-deferred name, invalid arguments or a scope override is a JSON-RPC error before anything runs
+#[test]
+fn catalog_refuses_invalid_calls_before_running_anything() {
+    let env = seeded();
+    let config = env.home.path().join("config/config.toml");
+    let config_before = fs::read(&config).unwrap();
+    let runs = |env: &Env| -> i64 {
+        env.db()
+            .query_row("SELECT count(*) FROM runs", [], |r| r.get(0))
+            .unwrap()
+    };
+    let runs_before = runs(&env);
+    let mut session = env.start();
+    session.initialize();
+    let run = "r_00000000000000000000000000000000";
+    let cases = [
+        // No mode, an unknown mode, a missing query.
+        json!({}),
+        json!({"mode": "bogus"}),
+        json!({"mode": "search"}),
+        // A scope override at the gateway level.
+        json!({"mode": "search", "query": "actions.show", "scope": "work"}),
+        json!({"mode": "call", "operation": "actions.show", "arguments": {"run": run}, "scope": "work"}),
+        // A non-deferred name: a write, a listed read, the removed read, the gateway itself,
+        // an unknown name.
+        json!({"mode": "call", "operation": "sync", "arguments": {}}),
+        json!({"mode": "call", "operation": "actions", "arguments": {}}),
+        json!({"mode": "call", "operation": "meeting.commitments", "arguments": {"meeting": "m"}}),
+        json!({"mode": "call", "operation": "catalog", "arguments": {}}),
+        json!({"mode": "call", "operation": "nope", "arguments": {}}),
+        // Invalid target arguments: missing run, an unknown field, a scope override inside.
+        json!({"mode": "call", "operation": "actions.show", "arguments": {}}),
+        json!({"mode": "call", "operation": "actions.show", "arguments": {"nope": 1}}),
+        json!({"mode": "call", "operation": "actions.show", "arguments": {"run": run, "scope": "work"}}),
+        // A call without arguments.
+        json!({"mode": "call", "operation": "actions.show"}),
+    ];
+    for arguments in cases {
+        let response = session.call("catalog", arguments.clone());
+        assert!(response.get("result").is_none(), "{arguments}: {response}");
+        assert_eq!(response["error"]["code"], -32602, "{arguments}: {response}");
+    }
+    // Nothing ran: no new run, the config untouched.
+    assert_eq!(runs(&env), runs_before);
+    assert_eq!(fs::read(&config).unwrap(), config_before);
+}
+
+/// spec: Only the read-only operations are tools
+/// exactly search, coverage, about, why, commitments, queue, focus, actions, rules_check and
+/// catalog, read-only, before and after a plugin install; a write, a CLI-only name, an unlisted
+/// deferred name or the former meeting_commitments tool is a JSON-RPC error and runs nothing
+#[test]
+fn exactly_ten_read_only_tools_and_unlisted_calls_are_protocol_errors() {
     let env = seeded();
     let config = env.home.path().join("config/config.toml");
     let config_before = fs::read(&config).unwrap();
     let mut session = env.start();
     session.initialize();
-    let tools = session.list_tools();
-    let mut names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
-    names.sort();
-    assert_eq!(
-        names,
-        [
-            "about",
-            "actions",
-            "commitments",
-            "coverage",
-            "focus",
-            "meeting_commitments",
-            "queue",
-            "rules_check",
-            "search",
-            "why"
-        ]
-    );
-    for t in &tools {
-        assert_eq!(t["annotations"]["readOnlyHint"], true, "{t}");
-        assert_eq!(t["annotations"]["openWorldHint"], false, "{t}");
-    }
+    let expected = [
+        "about",
+        "actions",
+        "catalog",
+        "commitments",
+        "coverage",
+        "focus",
+        "queue",
+        "rules_check",
+        "search",
+        "why",
+    ];
+    let assert_list = |session: &mut Session| {
+        let tools = session.list_tools();
+        let mut names: Vec<_> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+        names.sort();
+        assert_eq!(names, expected);
+        for t in &tools {
+            assert_eq!(t["annotations"]["readOnlyHint"], true, "{t}");
+            assert_eq!(t["annotations"]["openWorldHint"], false, "{t}");
+        }
+    };
+    assert_list(&mut session);
+    // Installing a plugin expands nothing: the same list here and on a fresh launch.
+    support::provider::install(&env.home.path().join("config"), |_| {});
+    assert_list(&mut session);
+    let mut fresh = env.start();
+    fresh.initialize();
+    assert_list(&mut fresh);
+    drop(fresh);
     let runs = |env: &Env| -> i64 {
         env.db()
             .query_row("SELECT count(*) FROM runs", [], |r| r.get(0))
@@ -324,23 +419,27 @@ fn exactly_ten_read_only_tools_and_writes_are_protocol_errors() {
     };
     let runs_before = runs(&env);
     let before = session.call("coverage", json!({}))["result"].clone();
-    for (name, arguments) in [
-        ("sync", json!({})),
-        (
-            "source.add",
-            json!({"name": "x", "connector": "test", "repo": "o/p", "scope": "personal"}),
-        ),
-        ("source.list", json!({})),
-        ("index.rebuild", json!({})),
-        ("claims.rebuild", json!({})),
-        (
-            "actions.propose",
-            json!({"action": "linear.create_issue", "title": "t", "why": "w"}),
-        ),
+    for name in [
+        // Writes.
+        "sync",
+        "source.add",
+        "index.rebuild",
+        "claims.rebuild",
+        "actions.propose",
+        // CLI-only reads.
+        "source.list",
+        "queue.outcomes",
+        "identity.me",
+        // The unlisted deferred read and the former meeting tool.
+        "actions.show",
+        "meeting.commitments",
     ] {
-        let response = session.call(name, arguments);
-        assert!(response.get("result").is_none(), "{name}: {response}");
-        assert_eq!(response["error"]["code"], -32602, "{name}: {response}");
+        let spec = catalog::find(name).unwrap_or_else(|| panic!("no catalog entry {name}"));
+        for called in [spec.mcp_name(), name.to_string()] {
+            let response = session.call(&called, json!({}));
+            assert!(response.get("result").is_none(), "{called}: {response}");
+            assert_eq!(response["error"]["code"], -32602, "{called}: {response}");
+        }
     }
     // Nothing ran: no new run, no new source, the config untouched.
     let after = session.call("coverage", json!({}))["result"].clone();
@@ -2533,10 +2632,10 @@ fn about_me_over_mcp_answers_one_morning_from_both_accounts() {
         [
             "about",
             "actions",
+            "catalog",
             "commitments",
             "coverage",
             "focus",
-            "meeting_commitments",
             "queue",
             "rules_check",
             "search",

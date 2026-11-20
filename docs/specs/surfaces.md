@@ -1,10 +1,10 @@
 # Surfaces
-Paths: crates/rastro-cli/src/mcp.rs, crates/rastro-cli/src/main.rs, crates/rastro-cli/tests/mcp.rs, crates/rastro-cli/tests/catalog.rs, crates/rastro-cli/tests/read_only.rs, crates/rastro-cli/tests/bounded_search_reader.rs, crates/rastro-cli/tests/about_why.rs, crates/rastro-operations/, crates/rastro-core/src/read_only.rs, crates/rastro-core/src/coverage/, crates/rastro-storage-sqlite/, schema/
+Paths: crates/rastro-cli/src/mcp.rs, crates/rastro-cli/src/main.rs, crates/rastro-cli/tests/mcp.rs, crates/rastro-cli/tests/catalog.rs, crates/rastro-cli/tests/actions_read.rs, crates/rastro-cli/tests/read_only.rs, crates/rastro-cli/tests/bounded_search_reader.rs, crates/rastro-cli/tests/about_why.rs, crates/rastro-operations/, crates/rastro-core/src/read_only.rs, crates/rastro-core/src/coverage/, crates/rastro-storage-sqlite/, schema/
 
 ## Requirements
 
 ### Requirement: The generated schema equals the committed file
-The schema generator SHALL produce `schema/operations-v2.schema.json` exactly as the operation catalog defines it, with `about` and `why` under v2 and no existing operation changed except additively as recorded in `docs/decisions/surfaces.md` (`sync`'s optional `extraction`, `claims.rebuild`'s `pairs`), and any difference between the generated and committed schema SHALL fail the test.
+The schema generator SHALL produce `schema/operations-v2.schema.json` exactly as the operation catalog defines it, with `about` and `why` under v2 and no existing operation changed except as recorded in `docs/decisions/surfaces.md` (`sync`'s optional `extraction`, `claims.rebuild`'s `pairs`, `actions.show`'s deferred MCP exposure, `meeting.commitments`'s MCP removal), and any difference between the generated and committed schema SHALL fail the test.
 
 #### Scenario: the generator's output is the committed file
 - WHEN the schema generator runs from the operation catalog
@@ -12,22 +12,22 @@ The schema generator SHALL produce `schema/operations-v2.schema.json` exactly as
 
 #### Scenario: `about` and `why` arrive additively
 - WHEN `about` and `why` are added under v2
-- THEN the schema includes them, and the existing operations keep their shape, changing only by the additive `sync` extraction and `claims.rebuild` pairs recorded in `docs/decisions/surfaces.md`
+- THEN the schema includes them, and the existing operations keep their shape, changing only as recorded in `docs/decisions/surfaces.md`
 
 ### Requirement: Help and the catalog name the same operations
-`rastro <operation> --help` SHALL list exactly the inputs, defaults and descriptions the operation catalog defines for that operation, and the CLI's command tree SHALL name exactly the catalog's operations.
+The CLI command tree SHALL match the catalog's CLI-exposed operations with help derived from their typed inputs.
 
 #### Scenario: help shows what the catalog defines
 - WHEN `rastro search --help` and `rastro coverage --help` run
 - THEN they list exactly the inputs, defaults and descriptions the catalog defines for those operations
 
 #### Scenario: the CLI tree and the catalog agree
-- WHEN the CLI's command tree is compared with the catalog
-- THEN the two name the same operations, a catalog request dispatches to a supported reader operation or is rejected, and a request, its response and the catalog give an operation one name
+- WHEN the CLI's command tree is compared with the operation catalog
+- THEN it names exactly the CLI-exposed operations and no MCP-only gateway, a catalog request dispatches to a supported reader operation or is rejected, and a request, its response and the catalog give an operation one name
 
 #### Scenario: identity's operations are CLI only
-- WHEN identity's operations are added to the catalog
-- THEN they are declared for the CLI and the MCP server stays read-only
+- WHEN the surface metadata of the identity operations is inspected
+- THEN the identity operations are CLI only
 
 ### Requirement: Each MCP tool equals its catalog entry
 Every tool the MCP server lists SHALL carry the name, description and input schema the catalog defines for that operation.
@@ -37,15 +37,41 @@ Every tool the MCP server lists SHALL carry the name, description and input sche
 - THEN each tool's name, description and input schema equal the catalog entry for that operation
 
 ### Requirement: Only the read-only operations are tools
-The MCP server SHALL list exactly `search`, `coverage`, `about`, `why`, `commitments`, `meeting_commitments`, `queue`, `focus`, `actions` and `rules_check`, each marked read-only, and SHALL answer any other tool, or a write operation such as `sync`, `source.add`, `source.list`, `index.rebuild`, `claims rebuild` or `actions.propose`, with a JSON-RPC error while running nothing.
+MCP SHALL advertise only the shared read-only tools and the read-only catalog gateway, with deferred reads callable only through the gateway.
 
 #### Scenario: exactly the read-only tools are listed
-- WHEN an MCP client lists tools
-- THEN exactly `search`, `coverage`, `about`, `why`, `commitments`, `meeting_commitments`, `queue`, `focus`, `actions` and `rules_check` appear, each marked read-only
+- WHEN a client lists tools before and after a plugin is installed
+- THEN both lists contain exactly `search`, `coverage`, `about`, `why`, `commitments`, `queue`, `focus`, `actions`, `rules_check` and `catalog`, all marked read-only
 
-#### Scenario: a write or an unknown tool runs nothing
-- WHEN it calls `sync`, `source.add`, `source.list`, `index.rebuild`, `claims rebuild` or `actions.propose`
-- THEN it gets a JSON-RPC error and nothing runs
+#### Scenario: a write or an unlisted name runs nothing
+- WHEN a client calls a write, a CLI-only name, an unlisted deferred name or the former `meeting_commitments` tool directly
+- THEN it receives a JSON-RPC error before any operation is run
+
+### Requirement: MCP catalog discovers explicitly deferred reads on demand
+Catalog search SHALL return matching explicitly deferred read operations using their canonical names, descriptions and input schemas from the typed operation catalog.
+
+#### Scenario: a canonical name finds its entry
+- WHEN a client searches the catalog for the canonical operation name `actions.show`
+- THEN the result contains the catalog entry's name, description and input schema
+
+#### Scenario: a write or a removed operation is not discoverable
+- WHEN a client searches the catalog using a query that matches only a write or a removed operation
+- THEN no deferred read matches
+
+### Requirement: Catalog calls use the scoped read-only path
+A catalog call SHALL dispatch only an explicitly deferred read with arguments validated by its typed operation entry and the scopes set at server launch.
+
+#### Scenario: the call returns the CLI's envelope
+- WHEN a client calls `actions.show` through catalog with the ID of a run visible in its launch scopes
+- THEN the call returns the `actions.show` result envelope that the CLI returns for that run
+
+#### Scenario: a hidden run reads like an unknown run
+- WHEN a client calls `actions.show` through catalog with a run ID outside its launch scopes
+- THEN the response is indistinguishable from the response for an unknown run ID
+
+#### Scenario: an invalid call runs nothing
+- WHEN a client calls catalog with a non-deferred name or invalid arguments, including an attempt to override the launch scope
+- THEN it receives a JSON-RPC error before any operation is run
 
 ### Requirement: One request gives one envelope on the CLI and over MCP
 The same `search`, `coverage`, `about` or `why` request SHALL produce equal result envelopes as `rastro … --json` and as an MCP tool call on the same data.
@@ -388,7 +414,7 @@ When one location is observed in two scopes with different types, a scoped read'
 - THEN it carries the same `resolved` field, and the schema change is additive
 
 ### Requirement: Commitments gives one envelope on the CLI and over MCP
-`rastro commitments` and the MCP tool `commitments` SHALL produce equal result envelopes on the same data, each validating against `schema/operations-v2.schema.json`, and the operation SHALL be additive within v2 with `meeting.commitments` unchanged.
+`rastro commitments` and the MCP tool `commitments` SHALL produce equal result envelopes on the same data, each validating against `schema/operations-v2.schema.json`, and the operation SHALL be additive within v2 with `meeting.commitments` kept in the catalog.
 
 #### Scenario: the CLI and the tool call agree
 - WHEN `rastro commitments` and the MCP tool `commitments` run on the same data
@@ -396,7 +422,7 @@ When one location is observed in two scopes with different types, a scoped read'
 
 #### Scenario: the operation stays additive
 - WHEN `commitments` is added under v2
-- THEN the operation is additive within v2 and `meeting.commitments` stays
+- THEN the operation is additive within v2 and `meeting.commitments` stays in the catalog
 
 ### Requirement: Linear writer shares the connector credential
 The Linear writer SHALL use the environment key first and otherwise the connector's rastro-linear keychain item, without exposing credentials in output or errors.
