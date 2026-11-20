@@ -6,6 +6,7 @@ use rastro_core::{Locations, Rastro, Scope};
 use rastro_operations::{
     catalog::{self, OperationSpec, Surface},
     envelope,
+    requests::CatalogRequest,
 };
 use rastro_storage_sqlite::SqliteStorage;
 use rmcp::{
@@ -30,7 +31,8 @@ const SHUTDOWN: Duration = Duration::from_secs(5);
 fn specs() -> impl Iterator<Item = &'static OperationSpec> {
     catalog::CATALOG
         .iter()
-        .filter(|spec| spec.exposed_on(Surface::Mcp))
+        .filter(|spec| spec.exposed_on(Surface::Mcp) && !spec.deferred)
+        .chain(std::iter::once(&catalog::GATEWAY))
 }
 
 fn tool(spec: &OperationSpec) -> Tool {
@@ -72,6 +74,31 @@ fn run_operation(
     })
 }
 
+/// What a catalog call does: search the deferred reads, or call one through the same scoped
+/// read-only path as a listed tool, returning the target operation's envelope. A bad request is
+/// a JSON-RPC error before anything runs.
+fn run_gateway(arguments: Value, scopes: Vec<Scope>) -> Result<CallToolResult, ErrorData> {
+    let request: CatalogRequest = serde_json::from_value(arguments)
+        .map_err(|e| ErrorData::invalid_params(format!("invalid arguments: {e}"), None))?;
+    match request {
+        CatalogRequest::Search { query } => Ok(CallToolResult::structured(envelope::success(
+            catalog::GATEWAY.name,
+            &catalog::search_deferred(&query),
+        ))),
+        CatalogRequest::Call {
+            operation,
+            arguments,
+        } => {
+            let spec = catalog::find(&operation)
+                .filter(|spec| spec.deferred && spec.read_only && spec.exposed_on(Surface::Mcp))
+                .ok_or_else(|| {
+                    ErrorData::invalid_params(format!("not a deferred read: {operation}"), None)
+                })?;
+            run_operation(spec, arguments, scopes)
+        }
+    }
+}
+
 impl ServerHandler for Server {
     fn get_info(&self) -> ServerConfig {
         ServerConfig::new(ServerCapabilities::builder().enable_tools().build())
@@ -93,16 +120,22 @@ impl ServerHandler for Server {
         request: CallToolRequestParams,
         _context: RequestContext<RoleServer>,
     ) -> Result<CallToolResponse, ErrorData> {
-        let spec = specs()
-            .find(|spec| spec.mcp_name() == request.name)
-            .ok_or_else(|| {
-                ErrorData::invalid_params(format!("unknown tool: {}", request.name), None)
-            })?;
         let arguments = Value::Object(request.arguments.unwrap_or_default());
         let scopes = self.scopes.clone();
-        let result = tokio::task::spawn_blocking(move || run_operation(spec, arguments, scopes))
-            .await
-            .map_err(|e| ErrorData::internal_error(format!("the call failed: {e}"), None))??;
+        let result = if request.name == catalog::GATEWAY.name {
+            tokio::task::spawn_blocking(move || run_gateway(arguments, scopes))
+                .await
+                .map_err(|e| ErrorData::internal_error(format!("the call failed: {e}"), None))??
+        } else {
+            let spec = specs()
+                .find(|spec| spec.mcp_name() == request.name)
+                .ok_or_else(|| {
+                    ErrorData::invalid_params(format!("unknown tool: {}", request.name), None)
+                })?;
+            tokio::task::spawn_blocking(move || run_operation(spec, arguments, scopes))
+                .await
+                .map_err(|e| ErrorData::internal_error(format!("the call failed: {e}"), None))??
+        };
         Ok(result.into())
     }
 }

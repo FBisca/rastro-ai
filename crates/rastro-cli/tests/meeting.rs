@@ -289,7 +289,7 @@ impl Env {
         let reply: Value = serde_json::from_str(&lines.next().unwrap().unwrap()).unwrap();
         drop(stdin);
         let _ = child.wait();
-        reply["result"].clone()
+        reply
     }
 }
 
@@ -334,33 +334,44 @@ fn S1_cli_and_agent_reads_show_owner_involved_hypotheses_in_both_directions() {
     assert_eq!(hypotheses[2]["recipient"]["state"], "unknown");
     assert_eq!(hypotheses[2]["stated_date"]["state"], "unknown");
 
-    // The agent-facing read is the same envelope; a server scoped elsewhere does not see it.
-    let mcp = env.mcp(
+    // The agent-facing read is the commitments list: the same hypotheses with their source and
+    // scope, and a server scoped elsewhere sees no source. The former meeting_commitments tool
+    // is refused before anything runs.
+    let (_, cli) = env.run(&["meeting", "commitments", "weekly-1"]);
+    let list = env.mcp(&["work"], "commitments", json!({}));
+    let sources = list["result"]["structuredContent"]["result"]["sources"]
+        .as_array()
+        .unwrap();
+    assert_eq!(sources.len(), 1, "{list}");
+    assert_eq!(sources[0]["name"], "weekly-1", "{list}");
+    assert_eq!(sources[0]["scope"], "work", "{list}");
+    // The list's hypotheses carry the standard terms, and its parties print null fields the
+    // meeting read omits; the shared content must match exactly.
+    let mut listed = sources[0]["hypotheses"].as_array().unwrap().clone();
+    let mut expected = cli["result"]["hypotheses"].as_array().unwrap().clone();
+    for hypothesis in listed.iter_mut().chain(expected.iter_mut()) {
+        let object = hypothesis.as_object_mut().unwrap();
+        object.remove("terms");
+        for party in ["responsible", "recipient"] {
+            if let Some(party) = object.get_mut(party).and_then(|p| p.as_object_mut()) {
+                party.retain(|_, value| !value.is_null());
+            }
+        }
+    }
+    assert_eq!(listed, expected, "{list}");
+    let hidden = env.mcp(&["personal"], "commitments", json!({}));
+    assert_eq!(
+        hidden["result"]["structuredContent"]["result"]["sources"],
+        json!([]),
+        "{hidden}"
+    );
+    let former = env.mcp(
         &["work"],
         "meeting_commitments",
         json!({"meeting": "weekly-1"}),
     );
-    let (_, cli) = env.run(&["meeting", "commitments", "weekly-1"]);
-    assert_eq!(mcp["structuredContent"], cli);
-    let hidden = env.mcp(
-        &["personal"],
-        "meeting_commitments",
-        json!({"meeting": "weekly-1"}),
-    );
-    assert_eq!(hidden["isError"], true);
-    let unknown = env.mcp(
-        &["personal"],
-        "meeting_commitments",
-        json!({"meeting": "nope"}),
-    );
-    assert_eq!(unknown["isError"], true);
-    let said = |reply: &Value| {
-        reply["structuredContent"]["error"]
-            .as_str()
-            .unwrap()
-            .replace("weekly-1", "nope")
-    };
-    assert_eq!(said(&hidden), said(&unknown));
+    assert!(former.get("result").is_none(), "{former}");
+    assert_eq!(former["error"]["code"], -32602, "{former}");
 }
 
 /// S2: an unmapped owner, an unconfigured extractor and an unreadable source each fail the run
@@ -1367,7 +1378,7 @@ fn S4_the_commitments_list_shows_each_scope_only_to_a_server_that_holds_it() {
     );
     for (scope, name) in [("work", "work-1"), ("personal", "home-1")] {
         let shown = env.mcp(&[scope], "commitments", json!({}));
-        let sources = shown["structuredContent"]["result"]["sources"]
+        let sources = shown["result"]["structuredContent"]["result"]["sources"]
             .as_array()
             .unwrap();
         assert_eq!(sources.len(), 1, "{shown}");

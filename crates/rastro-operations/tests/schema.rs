@@ -495,6 +495,41 @@ fn about_and_why_change_only_additively_for_identity() {
     }
 }
 
+/// spec: Only the read-only operations are tools
+/// the schema records the gateway as MCP-only and the deferred read as deferred; the former
+/// meeting tool keeps its CLI surface alone
+#[test]
+fn the_schema_records_the_gateway_and_the_deferred_exposure() {
+    use serde_json::json;
+    let committed: serde_json::Value =
+        serde_json::from_str(include_str!("../../../schema/operations-v2.schema.json")).unwrap();
+    let ops = committed["x-operations"].as_array().unwrap();
+    let op = |name: &str| ops.iter().find(|op| op["name"] == name).unwrap();
+    // The gateway is MCP only, and the envelope accepts its search result.
+    let gateway = op("catalog");
+    assert_eq!(gateway["surfaces"], json!(["mcp"]));
+    // The pinned MCP Tool schema requires an object input schema.
+    assert_eq!(gateway["input"]["type"], json!("object"));
+    assert!(gateway.get("mcp_tool").is_none());
+    assert!(gateway.get("deferred").is_none());
+    assert!(
+        committed["properties"]["operation"]["enum"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("catalog"))
+    );
+    // The deferred read is on both surfaces, marked deferred, with no tool of its own.
+    let show = op("actions.show");
+    assert_eq!(show["surfaces"], json!(["cli", "mcp"]));
+    assert_eq!(show["deferred"], json!(true));
+    assert!(show.get("mcp_tool").is_none());
+    // The former meeting tool stays a CLI operation; nothing marks it for MCP.
+    let meeting = op("meeting.commitments");
+    assert_eq!(meeting["surfaces"], json!(["cli"]));
+    assert!(meeting.get("mcp_tool").is_none());
+    assert!(meeting.get("deferred").is_none());
+}
+
 /// spec: Help and the catalog name the same operations
 /// identity operations are CLI only; MCP stays read-only (surfaces §37)
 #[test]
@@ -537,7 +572,7 @@ fn identity_operations_are_cli_only() {
 
 /// spec: The queue's operations are in the catalog
 /// One catalog entry per queue operation: the read is on the CLI and MCP, its five answers are
-/// CLI only, `queue outcomes` is a CLI-only read, MCP offers ten tools, and the queue read's
+/// CLI only, `queue outcomes` is a CLI-only read, MCP lists ten tools, and the queue read's
 /// result is a v2 envelope.
 #[test]
 fn the_queue_read_and_its_five_answers_are_cataloged_on_their_surfaces() {
@@ -606,13 +641,29 @@ fn the_queue_read_and_its_five_answers_are_cataloged_on_their_surfaces() {
             assert!(!spec.read_only, "{name}");
         }
     }
-    // MCP offers exactly ten tools, the queue's read among them.
-    let mcp: Vec<String> = (CATALOG.iter())
-        .filter(|spec| spec.exposed_on(Surface::Mcp))
+    // MCP lists exactly ten tools: the non-deferred MCP reads and the catalog gateway. The
+    // queue's read is among them; the deferred actions read and the former meeting tool are not.
+    let mut listed: Vec<String> = (CATALOG.iter())
+        .filter(|spec| spec.exposed_on(Surface::Mcp) && !spec.deferred)
         .map(|spec| spec.mcp_name())
         .collect();
-    assert_eq!(mcp.len(), 10, "{mcp:?}");
-    assert!(mcp.contains(&"queue".to_string()), "{mcp:?}");
+    listed.push(find("catalog").unwrap().mcp_name());
+    listed.sort();
+    assert_eq!(
+        listed,
+        [
+            "about",
+            "actions",
+            "catalog",
+            "commitments",
+            "coverage",
+            "focus",
+            "queue",
+            "rules_check",
+            "search",
+            "why"
+        ]
+    );
 
     // The queue read's result is a v2 envelope.
     assert_eq!(generated["properties"]["schema_version"]["const"], 2);
