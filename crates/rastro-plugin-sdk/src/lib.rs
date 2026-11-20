@@ -20,6 +20,9 @@ pub const EVIDENCE_BATCH: &str = "evidence.batch";
 pub const CLAIM_SUBMIT: &str = "claim.submit";
 /// `judgment.request` (core to agent tool adapter): content to judge, answered with candidates.
 pub const JUDGMENT_REQUEST: &str = "judgment.request";
+/// `decision.request` (core to decision adapter): the caller's instructions, input and output
+/// schema, answered with structured output the core validates against that schema (ADR-0016 §5).
+pub const DECISION_REQUEST: &str = "decision.request";
 /// The kind of plugin that lets an agent runtime do judgment (decisions/plugins.md §2, §10).
 pub const AGENT_TOOL_ADAPTER_KIND: &str = "agent-tool-adapter";
 /// The kind of plugin that executes actions (ADR 0015). It reads no evidence: it declares its
@@ -32,7 +35,13 @@ pub const ACTION_LOOKUP: &str = "action.lookup";
 /// `action.undo` (core to action provider): reverse what a run did, when the action can be undone.
 pub const ACTION_UNDO: &str = "action.undo";
 /// What an agent tool adapter may ask of an agent tool: abilities, never a named tool.
-pub const AGENT_TOOL_CAPABILITIES: [&str; 1] = ["judge_text"];
+/// `judge_text` is an agent adapter's judgment; `score_text` a decision adapter's scoring.
+pub const AGENT_TOOL_CAPABILITIES: [&str; 2] = ["judge_text", "score_text"];
+/// The boundary controls of the judgment floor (ADR-0016 §6): tools off, no MCP servers, no
+/// setting sources. An adapter declares in its manifest which of these it can enforce; the core
+/// matches that declaration against the floor before a run and refuses one that cannot enforce
+/// a control the floor requires, naming it. The floor is the core's, never task-declarable.
+pub const JUDGMENT_FLOOR: [&str; 3] = ["tools_off", "no_mcp_servers", "no_setting_sources"];
 
 /// Why a connector couldn't look (decisions/knowledge.md §18). Anything else it reports is
 /// recorded as `protocol`.
@@ -292,6 +301,30 @@ pub struct JudgmentRequest {
     pub owner_speaker: String,
     pub turns: Vec<JudgmentTurn>,
     pub fields: Vec<String>,
+    /// Present on a retry turn of the same session: the turn number, the core's gate feedback
+    /// and the prior answer being corrected. Absent on the first turn and on a one-shot request
+    /// (ADR-0016 §4); the wire is additive, so a one-shot request is unchanged.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session: Option<JudgmentSession>,
+}
+/// One gate failure the core sends back as a retry turn's feedback (ADR-0016 §8): the gate that
+/// failed, the field it checked, what it expected and what the answer held. Core-authored text,
+/// never model prose and never transcript content re-framed as instructions.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct GateFeedback {
+    pub gate: String,
+    pub field: String,
+    pub expected: String,
+    pub actual: String,
+}
+/// The session state a retry turn carries (ADR-0016 §4, §8): which turn this is, counting from
+/// 1, the gate failures it must fix, and the prior answer. A harness that cannot resume runs a
+/// fresh turn carrying this context and records the degradation.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct JudgmentSession {
+    pub turn: u64,
+    pub feedback: Vec<GateFeedback>,
+    pub prior_answer: JudgmentResponse,
 }
 /// What a candidate commitment is.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -323,6 +356,32 @@ pub struct JudgmentCandidate {
 #[serde(deny_unknown_fields)]
 pub struct JudgmentResponse {
     pub candidates: Vec<JudgmentCandidate>,
+    /// The harness session id this answer produced, when the adapter's harness keeps one; a
+    /// retry turn resumes it in a fresh process (ADR-0016 §4). Absent when there is none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// `true` when the adapter could not resume and ran a fresh turn carrying the prior answer
+    /// and the failure reason; the degradation is recorded, never silent (ADR-0016 §4). Absent
+    /// means the turn was not degraded.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub degraded: Option<bool>,
+}
+/// `decision.request` (core to decision adapter): the caller's own instructions, the input to
+/// score and the schema the output must pass. The input and schema are caller-defined JSON; the
+/// core validates the answer against the schema, the adapter never its own trust boundary
+/// (ADR-0016 §2, §5).
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct DecisionRequest {
+    pub instructions: String,
+    pub input: Value,
+    pub schema: Value,
+}
+/// The `result` of a `decision.request`: the adapter's structured output, which the core keeps
+/// only if it passes the caller's schema.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DecisionResponse {
+    pub output: Value,
 }
 /// What an agent tool adapter needs from an agent tool, in capabilities. It never names a tool
 /// (decisions/plugins.md §4): fields this declaration doesn't define are kept only to refuse it.
@@ -552,6 +611,12 @@ pub struct Manifest {
     /// On an agent tool adapter: the capabilities it needs from an agent tool, never a named tool.
     #[serde(default)]
     pub agent_tool: Option<AgentToolNeeds>,
+    /// On an agent tool adapter: the boundary controls it can enforce, named from
+    /// [`JUDGMENT_FLOOR`] (ADR-0016 §6). Absent declares none; the core refuses a run whose floor
+    /// the declaration cannot match, naming the unenforceable control, and never starts the
+    /// adapter in a degraded-security mode.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub enforcement: Vec<String>,
     #[serde(default)]
     pub extraction_rules: Vec<ExtractionRule>,
     /// Path, relative to the plugin directory, of the vocabulary this package provides.
@@ -1087,6 +1152,7 @@ impl<R: BufRead, W: Write> Transport<R, W> {
 #[allow(non_snake_case)]
 mod tests {
     use super::*;
+    use serde_json::json;
 
     const WORDS: &str = r#"definition = "d"
 not_to_confuse_with = "n"
@@ -1292,5 +1358,124 @@ evidence_requirement = "r"
             1,
         );
         assert!(Vocabulary::parse(&ok).is_ok());
+    }
+
+    /// An adapter manifest declaring one capability and the judgment floor's boundary controls,
+    /// with no named tool.
+    fn adapter_manifest(capability: &str) -> String {
+        format!(
+            "id = \"rastro-adapter-test\"\nname = \"Test adapter\"\nversion = \"0.1.0\"\n\
+             author = \"Rastro\"\nkinds = [\"agent-tool-adapter\"]\nprotocol = 1\n\
+             command = \"rastro-adapter-test\"\n\
+             agent_tool = {{ capabilities = [\"{capability}\"] }}\n\
+             enforcement = [\"tools_off\", \"no_mcp_servers\", \"no_setting_sources\"]\n\
+             [permissions]\nsubmit = []\nscopes = []\nactions = []\n"
+        )
+    }
+
+    /// S9: a codex, pi or decision adapter's manifest passes the check as kind
+    /// agent-tool-adapter with its declared capability and no named tool.
+    // spec: A harness adapter is a thin CLI driver bindable for one-shot judgment
+    // spec: An adapter's manifest declares its kind and names no tool
+    #[test]
+    fn a_harness_or_decision_adapter_manifest_passes_the_check() {
+        // codex and pi are harness adapters needing judge_text; a decision adapter needs
+        // score_text.
+        for capability in ["judge_text", "score_text"] {
+            let manifest = Manifest::parse(&adapter_manifest(capability)).unwrap();
+            manifest
+                .check_agent_tool()
+                .unwrap_or_else(|e| panic!("{capability}: {e:#}"));
+            assert_eq!(manifest.kinds, [AGENT_TOOL_ADAPTER_KIND]);
+            assert_eq!(
+                manifest.agent_tool.unwrap().capabilities,
+                [capability.to_string()]
+            );
+        }
+    }
+
+    /// A manifest keeps the boundary enforcement it declares, and one without the field still
+    /// parses: the declaration the core matches is exactly what the adapter wrote.
+    // spec: The core matches the adapter's declared boundary enforcement before a run
+    // spec: An adapter's manifest declares its kind and names no tool
+    #[test]
+    fn a_manifest_keeps_its_declared_boundary_enforcement() {
+        let manifest = Manifest::parse(&adapter_manifest("judge_text")).unwrap();
+        let wire = serde_json::to_value(&manifest).unwrap();
+        assert_eq!(
+            wire["enforcement"],
+            json!(["tools_off", "no_mcp_servers", "no_setting_sources"])
+        );
+        let bare = adapter_manifest("judge_text").replace(
+            "enforcement = [\"tools_off\", \"no_mcp_servers\", \"no_setting_sources\"]\n",
+            "",
+        );
+        let manifest = Manifest::parse(&bare).unwrap();
+        let wire = serde_json::to_value(&manifest).unwrap();
+        assert!(wire.get("enforcement").is_none(), "{wire}");
+    }
+
+    /// The judgment wire is additive: a one-shot request and answer carry no session fields,
+    /// and a retry turn's session object and the answer's session id and degradation survive
+    /// the wire unchanged.
+    // spec: The core calls the adapter and keeps only the candidates that pass its checks
+    // spec: A session turn resumes the harness or degrades recorded
+    #[test]
+    fn the_judgment_session_wire_is_additive() {
+        let one_shot = json!({
+            "instructions": "Find commitments.",
+            "owner_speaker": "Alice",
+            "turns": [{"turn": 1, "speaker": "Bob", "text": "I will send it."}],
+            "fields": ["turn", "kind", "quote"]
+        });
+        let request: JudgmentRequest = serde_json::from_value(one_shot.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&request).unwrap(), one_shot);
+
+        let retry = json!({
+            "instructions": "Find commitments.",
+            "owner_speaker": "Alice",
+            "turns": [{"turn": 1, "speaker": "Bob", "text": "I will send it."}],
+            "fields": ["turn", "kind", "quote"],
+            "session": {
+                "turn": 2,
+                "feedback": [{
+                    "gate": "quote",
+                    "field": "quote",
+                    "expected": "an exact, contiguous piece of turn 1",
+                    "actual": "I will send it tomorrow"
+                }],
+                "prior_answer": {"candidates": []}
+            }
+        });
+        let request: JudgmentRequest = serde_json::from_value(retry.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&request).unwrap(), retry);
+
+        let one_shot_answer = json!({"candidates": []});
+        let answer: JudgmentResponse = serde_json::from_value(one_shot_answer.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&answer).unwrap(), one_shot_answer);
+
+        let session_answer = json!({"candidates": [], "session_id": "s-1", "degraded": true});
+        let answer: JudgmentResponse = serde_json::from_value(session_answer.clone()).unwrap();
+        assert_eq!(serde_json::to_value(&answer).unwrap(), session_answer);
+    }
+
+    /// A decision request carries the caller's instructions, input and schema, and its answer
+    /// carries the structured output the core validates against that schema.
+    // spec: A decision adapter scores text through the same session protocol
+    #[test]
+    fn a_decision_request_and_response_round_trip() {
+        let request = json!({
+            "instructions": "Score the text.",
+            "input": {"text": "I will send it."},
+            "schema": {"type": "object", "properties": {"score": {"type": "number"}}}
+        });
+        let message = Envelope::request(1, DECISION_REQUEST, &request).unwrap();
+        let parsed: DecisionRequest = message.params().unwrap();
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), request);
+
+        let output = json!({"output": {"score": 0.9}});
+        let answer = Envelope::response(Some(1.into()), &output).unwrap();
+        let parsed: DecisionResponse = answer.result().unwrap();
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), output);
     }
 }
