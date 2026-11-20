@@ -212,6 +212,25 @@ pub struct IdentityCandidatesResult {
     pub candidates: Vec<rastro_core::identity::Candidate>,
 }
 
+/// One deferred read a catalog search matched: its canonical name, its description and its typed
+/// input schema, as the catalog defines them.
+#[derive(Debug, JsonSchema, Serialize)]
+pub struct DeferredRead {
+    /// The canonical operation name.
+    pub name: String,
+    /// What the operation does, from its catalog entry.
+    pub description: String,
+    /// The operation's input schema.
+    pub input_schema: Value,
+}
+
+/// What a catalog search returns: the deferred reads matching the query.
+#[derive(Debug, JsonSchema, Serialize)]
+pub struct CatalogSearchResult {
+    /// The matching deferred reads, each with its name, description and input schema.
+    pub matches: Vec<DeferredRead>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -31,6 +31,9 @@ pub struct OperationSpec {
     decode: fn(Value) -> serde_json::Result<Request>,
     /// Whether the operation only reads.
     pub read_only: bool,
+    /// Whether MCP offers the operation only through the catalog gateway: discoverable by
+    /// search, callable by call, never listed as a tool.
+    pub deferred: bool,
     /// CLI opens a Reader for this operation, without projection or recovery.
     pub read_path: bool,
 }
@@ -105,6 +108,7 @@ const fn spec<T: Operation + Args + JsonSchema + DeserializeOwned>() -> Operatio
         decode: |arguments| serde_json::from_value::<T>(arguments).map(T::into_request),
         read_only: T::READ_ONLY,
         read_path: T::CLI_READ_PATH,
+        deferred: T::DEFERRED,
     }
 }
 
@@ -234,6 +238,7 @@ macro_rules! operations {
             surfaces: [$($surface:ident),*], read_only: $read_only:literal
             $(, reader: $reader:ident)?
             $(, cli_read_path: $cli_read_path:literal)?
+            $(, deferred: $deferred:literal)?
          })
     )*) => {
         $(impl Operation for $input {
@@ -241,6 +246,7 @@ macro_rules! operations {
             const SURFACES: &'static [Surface] = &[$(Surface::$surface),*];
             const READ_ONLY: bool = $read_only;
             $(const CLI_READ_PATH: bool = $cli_read_path;)?
+            $(const DEFERRED: bool = $deferred;)?
             type Output = $output;
             fn into_request(self) -> Request {
                 let $value = self;
@@ -385,7 +391,7 @@ operations! {
             slot: 35, name: "actions.propose", surfaces: [Cli], read_only: false
         },
         Show(ActionsShowRequest => ActionsResult) as ActionsShow {
-            slot: 37, name: "actions.show", surfaces: [Cli], read_only: true, reader: run_read, cli_read_path: true
+            slot: 37, name: "actions.show", surfaces: [Cli, Mcp], read_only: true, reader: run_read, cli_read_path: true, deferred: true
         },
         Undo(ActionsUndoRequest => ActionsUndoResult) as ActionsUndo {
             slot: 38, name: "actions.undo", surfaces: [Cli], read_only: false
@@ -406,7 +412,7 @@ operations! {
             slot: 17, name: "meeting.import", surfaces: [Cli], read_only: false
         },
         Commitments(MeetingCommitmentsRequest => MeetingResult) as MeetingCommitments {
-            slot: 18, name: "meeting.commitments", surfaces: [Cli, Mcp], read_only: true, reader: run_read, cli_read_path: true
+            slot: 18, name: "meeting.commitments", surfaces: [Cli], read_only: true, reader: run_read, cli_read_path: true
         },
         Replay(MeetingReplayRequest => MeetingResult) as MeetingReplay {
             slot: 19, name: "meeting.replay", surfaces: [Cli], read_only: false
@@ -466,8 +472,50 @@ operations! {
     }
 }
 
+/// The deferred reads a catalog search matches: the explicitly deferred, read-only, MCP-exposed
+/// entries whose canonical name or description contains the query, case-insensitively.
+pub fn search_deferred(query: &str) -> CatalogSearchResult {
+    let query = query.to_lowercase();
+    let matches = CATALOG
+        .iter()
+        .filter(|spec| spec.deferred && spec.read_only && spec.exposed_on(Surface::Mcp))
+        .filter(|spec| {
+            spec.name.to_lowercase().contains(&query)
+                || spec.description().to_lowercase().contains(&query)
+        })
+        .map(|spec| DeferredRead {
+            name: spec.name.to_string(),
+            description: spec.description(),
+            input_schema: spec.input_schema(),
+        })
+        .collect();
+    CatalogSearchResult { matches }
+}
+
+/// The catalog gateway: the one MCP tool that discovers and calls the explicitly deferred reads.
+/// MCP only — the CLI has no command for it. It is not a `Request`: the MCP surface dispatches its
+/// two modes itself, and a call returns the target operation's envelope, so `decode` refuses.
+pub static GATEWAY: OperationSpec = OperationSpec {
+    name: "catalog",
+    surfaces: &[Surface::Mcp],
+    input: input_root::<CatalogRequest>,
+    output: output_root::<CatalogSearchResult>,
+    command: || Command::new("catalog"),
+    decode: |_| {
+        Err(serde::de::Error::custom(
+            "the catalog gateway is dispatched by the MCP server, not decoded as a request",
+        ))
+    },
+    read_only: true,
+    read_path: false,
+    deferred: false,
+};
+
 pub fn find(name: &str) -> Option<&'static OperationSpec> {
-    CATALOG.iter().find(|spec| spec.name == name)
+    CATALOG
+        .iter()
+        .chain(std::iter::once(&GATEWAY))
+        .find(|spec| spec.name == name)
 }
 /// The operation a command-line path such as `["source", "add"]` names; extra words are ignored.
 pub fn find_path(words: &[&str]) -> Option<&'static OperationSpec> {
@@ -558,14 +606,48 @@ mod tests {
     use clap::Subcommand;
 
     /// spec: Help and the catalog name the same operations
-    /// the CLI tree and the catalog name the same operations
+    /// the CLI tree names exactly the CLI-exposed operations; the MCP-only gateway is no command
     #[test]
     #[allow(non_snake_case)]
-    fn the_clap_tree_names_exactly_the_cataloged_operations() {
+    fn the_clap_tree_names_exactly_the_cli_exposed_operations() {
         let mut from_clap = command_names(&Request::augment_subcommands(Command::new("rastro")));
         from_clap.sort();
-        let mut from_catalog: Vec<_> = CATALOG.iter().map(|s| s.name.to_string()).collect();
+        let mut from_catalog: Vec<_> = CATALOG
+            .iter()
+            .filter(|s| s.exposed_on(Surface::Cli))
+            .map(|s| s.name.to_string())
+            .collect();
         from_catalog.sort();
         assert_eq!(from_clap, from_catalog);
+        // The gateway is a catalog entry, MCP only: the CLI never names it.
+        let gateway = find("catalog").expect("the catalog gateway is a catalog entry");
+        assert!(gateway.exposed_on(Surface::Mcp));
+        assert!(!gateway.exposed_on(Surface::Cli));
+        assert!(gateway.read_only);
+        assert!(!from_clap.contains(&"catalog".to_string()));
+    }
+
+    /// spec: MCP catalog discovers explicitly deferred reads on demand
+    /// a query matching only a write or a removed operation finds no deferred read
+    #[test]
+    #[allow(non_snake_case)]
+    fn catalog_search_matches_only_deferred_reads() {
+        // A write's name, the operation removed from MCP, and a phrase only a write's
+        // description carries: none is a deferred read.
+        for query in [
+            "sync",
+            "source.add",
+            "meeting.commitments",
+            "undo a done action run",
+        ] {
+            let found = search_deferred(query);
+            assert!(found.matches.is_empty(), "{query}: {:?}", found.matches);
+        }
+        // The deferred read itself is discoverable by name and by description, any case.
+        for query in ["actions.show", "ACTIONS.SHOW", "read why one action ran"] {
+            let found = search_deferred(query);
+            let names: Vec<_> = found.matches.iter().map(|m| m.name.as_str()).collect();
+            assert_eq!(names, ["actions.show"], "{query}");
+        }
     }
 }

@@ -307,3 +307,71 @@ fn a_run_is_explained_after_its_provider_is_uninstalled() {
     assert_eq!(why["reach"], "others see it", "{why}");
     assert_eq!(why["reversibility"], "can be undone", "{why}");
 }
+
+// spec: Catalog calls use the scoped read-only path
+#[test]
+fn a_catalog_call_returns_the_actions_show_cli_envelope() {
+    let env = Env::new();
+    let item = env.propose("Flaky sync test", &["--why", "owner asked in session"]);
+    env.ok_json(&["queue", "accept", &item]);
+    let id = env.ok_json(&["actions"])["runs"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let mut mcp = env.serve(&["work"]);
+    let envelope = mcp.read(
+        "catalog",
+        json!({"mode": "call", "operation": "actions.show", "arguments": {"run": id}}),
+    );
+    assert_eq!(envelope["operation"], "actions.show");
+
+    // The CLI's envelope for the same run, whole: same version, operation and result.
+    let cli: Value =
+        serde_json::from_slice(&env.rastro(&["actions", "show", &id, "--json"]).stdout).unwrap();
+    assert_eq!(envelope, cli);
+}
+
+// spec: Catalog calls use the scoped read-only path
+#[test]
+fn a_hidden_run_reads_like_an_unknown_run_through_the_catalog() {
+    let env = Env::new();
+    let item = env.propose("Flaky sync test", &["--why", "owner asked"]);
+    env.ok_json(&["queue", "accept", &item]);
+    let hidden = env.ok_json(&["actions"])["runs"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let unknown = "r_00000000000000000000000000000000".to_string();
+
+    let mut elsewhere = env.serve(&["personal"]);
+    let call = |mcp: &mut Mcp, run: &str| {
+        mcp.request(
+            "tools/call",
+            json!({"name": "catalog", "arguments": {
+                "mode": "call", "operation": "actions.show", "arguments": {"run": run}
+            }}),
+        )
+    };
+    let hidden_reply = call(&mut elsewhere, &hidden);
+    let unknown_reply = call(&mut elsewhere, &unknown);
+    for reply in [&hidden_reply, &unknown_reply] {
+        assert_eq!(reply["result"]["isError"], true, "{reply}");
+    }
+    // The whole envelope is the same but for the asked-for id: nothing says the hidden run
+    // exists elsewhere, and nothing of its proposal or why leaks.
+    let hidden_envelope = hidden_reply["result"]["structuredContent"].to_string();
+    let unknown_envelope = unknown_reply["result"]["structuredContent"].to_string();
+    assert_eq!(
+        hidden_envelope.replace(&hidden, "<run>"),
+        unknown_envelope.replace(&unknown, "<run>")
+    );
+    assert!(
+        !hidden_envelope.contains("Flaky sync test"),
+        "{hidden_envelope}"
+    );
+    assert!(
+        !hidden_envelope.contains("owner asked"),
+        "{hidden_envelope}"
+    );
+}

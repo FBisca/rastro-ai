@@ -1,6 +1,6 @@
 //! Generates `schema/operations-v2.schema.json` from the catalog.
 use crate::{
-    catalog::{CATALOG, Surface},
+    catalog::{CATALOG, GATEWAY, Surface},
     envelope::SCHEMA_VERSION,
 };
 use serde_json::{Map, Value, json};
@@ -41,7 +41,7 @@ pub fn generate() -> String {
     let mut definitions = Map::new();
     let mut operations = Vec::new();
     let mut branches = Vec::new();
-    for spec in &CATALOG {
+    for spec in CATALOG.iter().chain(std::iter::once(&GATEWAY)) {
         let input = absorb(spec.input_schema(), &mut definitions);
         let output = absorb(spec.output_schema(), &mut definitions);
         let surfaces: Vec<_> = spec.surfaces.iter().map(|s| s.as_str()).collect();
@@ -52,9 +52,14 @@ pub fn generate() -> String {
             "input": input,
             "result": output,
         });
-        // Only an operation whose MCP tool name differs from its name says so.
-        if spec.exposed_on(Surface::Mcp) && spec.mcp_name() != spec.name {
+        // Only a listed operation whose MCP tool name differs from its name says so; a deferred
+        // read has no tool of its own, and the gateway's name is its name.
+        if spec.exposed_on(Surface::Mcp) && !spec.deferred && spec.mcp_name() != spec.name {
             operation["mcp_tool"] = json!(spec.mcp_name());
+        }
+        // A deferred read is offered only through the gateway; the schema records that.
+        if spec.deferred {
+            operation["deferred"] = json!(true);
         }
         operations.push(operation);
         branches.push(json!({
@@ -64,7 +69,11 @@ pub fn generate() -> String {
             }
         }));
     }
-    let names: Vec<_> = CATALOG.iter().map(|s| s.name).collect();
+    let names: Vec<_> = CATALOG
+        .iter()
+        .map(|s| s.name)
+        .chain(std::iter::once(GATEWAY.name))
+        .collect();
     let document = json!({
         "$schema": "https://json-schema.org/draft/2020-12/schema",
         "$id": "https://rastro.dev/schema/operations-v2.schema.json",
