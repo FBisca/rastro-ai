@@ -1,0 +1,21 @@
+id = "rastro-adapter-decision"
+name = "Rastro decision adapter"
+version = "0.1.0"
+author = "Rastro"
+# It lets the owner's scoring service score text. The declaration names capabilities, never a tool.
+kinds = ["agent-tool-adapter"]
+protocol = 1
+command = "rastro-adapter-decision"
+triggers = []
+dependencies = []
+agent_tool = { capabilities = ["score_text"] }
+# No harness: one HTTP call to the configured endpoint. No tool exists to turn off, no MCP server
+# is spoken to, and no setting file is read; the contract tests prove it talks only to that endpoint.
+enforcement = ["tools_off", "no_mcp_servers", "no_setting_sources"]
+
+[permissions]
+submit = []
+scopes = []
+# The scoring endpoint's URL; it reaches the adapter only because the manifest lists it.
+env = ["RASTRO_DECISION_ENDPOINT"]
+actions = []

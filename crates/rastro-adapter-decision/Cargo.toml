@@ -1,0 +1,20 @@
+[package]
+name = "rastro-adapter-decision"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[package.metadata.rastro]
+role = "plugin"
+
+[dependencies]
+anyhow.workspace = true
+rastro-plugin-sdk = { path = "../rastro-plugin-sdk" }
+serde_json.workspace = true
+ureq = { version = "3", features = ["json"] }
+
+[dev-dependencies]
+tiny_http = "0.12"
+
+[lints]
+workspace = true

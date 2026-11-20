@@ -1139,6 +1139,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rastro-adapter-decision"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "rastro-plugin-sdk",
+ "serde_json",
+ "tiny_http",
+ "ureq",
+]
+
+[[package]]
 name = "rastro-cli"
 version = "0.1.0"
 dependencies = [
