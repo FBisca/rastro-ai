@@ -2,10 +2,11 @@
 //! report of where the credential came from and what the provider said. It reads no stored state
 //! and writes none: no evidence, no coverage, no last complete check.
 use crate::{Locations, Source, display_safe, host};
+use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 
 /// What the check of one source found.
-#[derive(Clone, Debug, Eq, PartialEq, Serialize)]
+#[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct SourceCheck {
     pub source: String,
     pub connector: String,
@@ -14,10 +15,13 @@ pub struct SourceCheck {
     /// The kind of failure, `authenticated` when there was none: `missing`, `rejected` or `failed`.
     pub result: String,
     /// Where the credential came from, by the name the owner would change; never its value.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub credential: Option<String>,
     /// What went wrong, when something did.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub reason: Option<String>,
     /// What the owner can do about it, when something went wrong.
+    #[serde(skip_serializing_if = "Option::is_none")]
     pub fix: Option<String>,
 }
 

@@ -16,6 +16,8 @@ pub struct SourceAddResult {
 pub struct SourceListResult {
     pub sources: Vec<Source>,
 }
+/// What the check of one source found: the credential's name and the provider's answer.
+pub type SourceCheckResult = rastro_core::check::SourceCheck;
 #[derive(Debug, JsonSchema, Serialize)]
 pub struct CoverageResult {
     pub coverage: Vec<Coverage>,
@@ -523,11 +525,21 @@ mod tests {
                 error: None,
                 undo: None,
             }),
+            Response::SourceCheck(SourceCheckResult {
+                source: "a".into(),
+                connector: "github".into(),
+                authenticated: true,
+                result: "authenticated".into(),
+                credential: Some("GH_TOKEN".into()),
+                reason: None,
+                fix: None,
+            }),
         ];
         let arguments = |name: &str| match name {
             "source.add" => {
                 serde_json::json!({"name": "a", "connector": "github", "repo": "o/r", "scope": "w"})
             }
+            "source.check" => serde_json::json!({"source": "a"}),
             "search" => serde_json::json!({"text": "x"}),
             "why" => serde_json::json!({"claim": "c"}),
             "about" => serde_json::json!({"entity": "github:account/1"}),

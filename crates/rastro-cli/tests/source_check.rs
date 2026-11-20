@@ -165,8 +165,8 @@ fn shown(output: &Output) -> String {
     )
 }
 
-/// spec: Source credentials can be checked without writing
 /// A Linear source with a valid key reports the credential source and success, and writes nothing.
+/// spec: Source credentials can be checked without writing
 #[test]
 fn a_linear_source_with_a_valid_key_reports_the_credential_and_authenticates() {
     let env = Env::new();
@@ -182,8 +182,8 @@ fn a_linear_source_with_a_valid_key_reports_the_credential_and_authenticates() {
     assert_eq!(env.state(), before, "a check wrote");
 }
 
-/// spec: Source credentials can be checked without writing
 /// A GitHub source with a valid token reports the credential source and success.
+/// spec: Source credentials can be checked without writing
 #[test]
 fn a_github_source_with_a_valid_token_reports_the_credential_and_authenticates() {
     let env = Env::new();
@@ -199,8 +199,8 @@ fn a_github_source_with_a_valid_token_reports_the_credential_and_authenticates()
     assert_eq!(env.state(), before, "a check wrote");
 }
 
-/// spec: Source credentials can be checked without writing
 /// A rejected key fails with a fix, exits 1, leaks no secret and writes nothing.
+/// spec: Source credentials can be checked without writing
 #[test]
 fn a_rejected_key_fails_with_a_fix_and_exits_unsuccessfully() {
     let env = Env::new();
@@ -219,8 +219,8 @@ fn a_rejected_key_fails_with_a_fix_and_exits_unsuccessfully() {
     assert_eq!(env.state(), before, "a check wrote");
 }
 
-/// spec: Source credentials can be checked without writing
 /// With no credential at all the check names what to set, sends no request and exits 1.
+/// spec: Source credentials can be checked without writing
 #[test]
 fn a_missing_credential_fails_with_a_fix_and_sends_no_request() {
     let env = Env::new();
@@ -235,8 +235,8 @@ fn a_missing_credential_fails_with_a_fix_and_sends_no_request() {
     assert_eq!(env.state(), before, "a check wrote");
 }
 
-/// spec: Source credentials can be checked without writing
 /// An agent listing MCP tools sees no check tool, though the CLI has the command.
+/// spec: Source credentials can be checked without writing
 #[test]
 fn the_check_is_a_cli_command_and_no_mcp_tool() {
     let env = Env::new();
@@ -290,8 +290,8 @@ fn the_check_is_a_cli_command_and_no_mcp_tool() {
     );
 }
 
-/// spec: Source setup reports authentication
 /// Adding a source whose credentials fail keeps it configured and explains the failure and fix.
+/// spec: Source setup reports authentication
 #[test]
 fn adding_a_source_with_bad_credentials_keeps_it_and_explains_the_failure() {
     let env = Env::new();

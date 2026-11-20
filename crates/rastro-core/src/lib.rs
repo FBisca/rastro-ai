@@ -582,6 +582,10 @@ impl<S: Storage> Rastro<S> {
     pub fn sources(&self) -> &[Source] {
         &self.config.sources
     }
+    /// Where this home's config, data and plugins live.
+    pub fn locations(&self) -> &Locations {
+        &self.locations
+    }
     pub fn coverage(&self, name: Option<&str>, all_windows: bool) -> Result<Vec<Coverage>> {
         self.storage.snapshot(|view| {
             read_only::coverage_of(

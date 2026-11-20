@@ -7,6 +7,7 @@ use rastro_core::{
 };
 use rastro_operations::{
     Request, Response, catalog, envelope,
+    requests::{SourceCheckRequest, SourceRequest},
     results::{SearchResponse, WhyResult},
 };
 use rastro_storage_sqlite::SqliteStorage;
@@ -43,8 +44,8 @@ enum Command {
     Tick,
     /// Check that a source's credentials are accepted, with one cheap call and nothing stored.
     Check {
-        /// Name of the source to check.
-        source: String,
+        #[command(flatten)]
+        check: SourceCheckRequest,
     },
 }
 fn stamp(time: DateTime<Utc>) -> String {
@@ -1222,6 +1223,7 @@ fn human(response: &Response) -> String {
     };
     match response {
         Response::SourceAdd(r) => format!("Source registered: {}", r.source.name),
+        Response::SourceCheck(r) => check::line(r),
         Response::SourceList(r) => or_none(r.sources.iter().map(|s| format!(
             "{} | Connector: {} | selector: {} | Scope: {} | Freshness rule: {} | window start: {}",
             s.name, s.connector, serde_json::to_string(&s.selector).expect("string map"), s.scope.0, s.freshness_rule, s.window_start.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true),
@@ -1387,9 +1389,14 @@ fn stderr_line(text: &str) {
 fn main() {
     let (cli, operation) = parse();
     let request = match cli.command {
+        // The credential probe never opens the store: opening it would create or touch stored
+        // state, and a check must leave everything as it was.
+        Command::Operation(Request::Source {
+            command: SourceRequest::Check(check),
+        }) => std::process::exit(check::run(&check.source, cli.json)),
         Command::Operation(request) => request,
         Command::Tick => std::process::exit(tick::run()),
-        Command::Check { source } => std::process::exit(check::run(&source, cli.json)),
+        Command::Check { check } => std::process::exit(check::run(&check.source, cli.json)),
         Command::Mcp { scopes } => match mcp::run(scopes) {
             Ok(()) => return,
             Err(error) => {

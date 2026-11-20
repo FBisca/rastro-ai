@@ -1,12 +1,12 @@
-//! `rastro check <source>`: whether a source's credentials are accepted. One cheap call through
-//! the connector; nothing stored is read or written. It is a CLI command only, never an
-//! operation, so no MCP tool exposes it.
+//! `rastro check <source>` (the catalog's `source.check`, also run as `rastro source check`):
+//! whether a source's credentials are accepted. One cheap call through the connector; nothing
+//! stored is read or written. It is CLI-only, so no MCP tool exposes it.
 use rastro_core::{
     Config, Locations, Source, check::SourceCheck, check::check_source, display_safe,
 };
 use rastro_operations::envelope;
 
-fn line(check: &SourceCheck) -> String {
+pub(crate) fn line(check: &SourceCheck) -> String {
     let mut text = format!("Source {}: ", display_safe(&check.source));
     if check.authenticated {
         text += "authenticated";
