@@ -215,9 +215,9 @@ fn a_tick_leaves_a_run_another_process_is_executing_untouched() {
         .spawn()
         .unwrap();
     env.linear.wait_for_creates(1);
-    // The accept looked the id up, found nothing, and created the issue.
+    // The accept looked the id up, found nothing, resolved the team and assignee, and created the issue.
     let before = env.operations();
-    assert_eq!(before, ["IssueLookup", "IssueCreate"]);
+    assert_eq!(before, ["IssueLookup", "Teams", "Viewer", "IssueCreate"]);
 
     let out = env.rastro(&["tick"]);
 

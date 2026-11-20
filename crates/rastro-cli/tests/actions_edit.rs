@@ -89,17 +89,17 @@ fn an_edited_action_proposal_creates_the_issue_with_the_edited_title() {
 
     let creates = env.linear.creates();
     assert_eq!(creates.len(), 1, "{creates:?}");
-    // Besides the create, only the lookup of the run's id before it.
+    // Besides the create, only the lookup of the run's id and of its team and assignee ids.
     assert_eq!(
         env.linear.requests().len(),
-        2,
+        4,
         "{:?}",
         env.linear.requests()
     );
     let input = creates[0].input();
     assert_eq!(input["title"], "Sync test flakes in CI");
-    assert_eq!(input["teamId"], "ENG");
-    assert_eq!(input["assigneeId"], "me");
+    assert_eq!(input["teamId"], linear_api::TEAM_ENG.id);
+    assert_eq!(input["assigneeId"], linear_api::OWNER.id);
     let runs = env.runs();
     assert_eq!(runs.len(), 1, "{runs:?}");
     assert_eq!(runs[0]["status"], "done");
