@@ -12,6 +12,7 @@ use rastro_operations::{
 use rastro_storage_sqlite::SqliteStorage;
 use std::ffi::OsString;
 
+mod check;
 mod mcp;
 mod tick;
 
@@ -40,6 +41,11 @@ enum Command {
     },
     /// Sync every source past its freshness rule; a schedule calls this.
     Tick,
+    /// Check that a source's credentials are accepted, with one cheap call and nothing stored.
+    Check {
+        /// Name of the source to check.
+        source: String,
+    },
 }
 fn stamp(time: DateTime<Utc>) -> String {
     time.to_rfc3339_opts(SecondsFormat::Millis, true)
@@ -1345,6 +1351,7 @@ fn parse() -> (Cli, &'static str) {
                 Command::Operation(request) => request.name(),
                 Command::Mcp { .. } => "mcp",
                 Command::Tick => "tick",
+                Command::Check { .. } => "source.check",
             };
             (cli, operation)
         }
@@ -1382,6 +1389,7 @@ fn main() {
     let request = match cli.command {
         Command::Operation(request) => request,
         Command::Tick => std::process::exit(tick::run()),
+        Command::Check { source } => std::process::exit(check::run(&source, cli.json)),
         Command::Mcp { scopes } => match mcp::run(scopes) {
             Ok(()) => return,
             Err(error) => {
@@ -1396,6 +1404,16 @@ fn main() {
                 println!("{}", response.envelope());
             } else {
                 println!("{text}");
+            }
+            if let Response::SourceAdd(added) = &response {
+                // Setup keeps the source whatever the check says; the owner sees it either way,
+                // on stderr when stdout is the machine-readable envelope.
+                let report = check::setup_report(&added.source);
+                if cli.json {
+                    stderr_line(&report);
+                } else {
+                    println!("{report}");
+                }
             }
             if !response.succeeded() {
                 std::process::exit(1);

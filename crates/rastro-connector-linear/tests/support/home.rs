@@ -31,10 +31,12 @@ impl Env {
     /// A home with these plugins and source `l` (connector `linear`, scope `work`), and an
     /// empty keychain.
     pub fn new(rastro: &Path, api: &str, plugins: &[Install]) -> Self {
-        let env = Self {
+        // Setup's own credential check goes to a port nobody listens on, so the API under test
+        // sees only what the test asks of it.
+        let mut env = Self {
             home: TempDir::new().unwrap(),
             tools: TempDir::new().unwrap(),
-            api: api.into(),
+            api: "http://127.0.0.1:1".into(),
             key: Some(super::api::KEY.into()),
             rastro: rastro.into(),
         };
@@ -58,6 +60,7 @@ impl Env {
             "--scope",
             "work",
         ]);
+        env.api = api.into();
         env
     }
     /// The `security` command the connector finds on `PATH`: it answers `key` for the item

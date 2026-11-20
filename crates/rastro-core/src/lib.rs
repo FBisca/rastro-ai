@@ -1,4 +1,5 @@
 pub mod actions;
+pub mod check;
 pub mod claims;
 pub mod commitments;
 pub mod coverage;

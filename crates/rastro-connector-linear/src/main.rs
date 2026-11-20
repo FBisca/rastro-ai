@@ -76,7 +76,54 @@ struct Run<'a, R, W> {
     keep_original: bool,
 }
 
+/// `--check`: one cheap authenticated call, and one line on stdout saying where the credential
+/// came from and whether Linear accepted it. Reads nothing else, writes nothing, and never
+/// prints the key.
+fn check() {
+    let base = std::env::var("RASTRO_LINEAR_API_URL").unwrap_or_else(|_| DEFAULT_API.into());
+    let found = api::credential().filter(|(_, key)| key.bytes().all(|b| b.is_ascii_graphic()));
+    let report = match found {
+        None => json!({
+            "result": "missing",
+            "reason": "no Linear API key was found",
+            "fix": "Set LINEAR_API_KEY in the environment rastro runs with, or store the key in \
+                    the macOS keychain item rastro-linear",
+        }),
+        Some(_) if !api::loopback(&base) && base != DEFAULT_API => json!({
+            "result": "failed",
+            "reason": "RASTRO_LINEAR_API_URL is not a loopback address",
+            "fix": "Unset RASTRO_LINEAR_API_URL",
+        }),
+        Some((credential, key)) => {
+            let name = credential.name();
+            match Client::new(&base, key).query(VIEWER, json!({})) {
+                Ok(_) => json!({"result": "authenticated", "credential": name}),
+                Err(Failure {
+                    reason: "auth" | "forbidden",
+                    ..
+                }) => json!({
+                    "result": "rejected",
+                    "credential": name,
+                    "reason": "Linear rejected the API key",
+                    "fix": format!("Create a new personal API key in Linear and update the {name}"),
+                }),
+                Err(failure) => json!({
+                    "result": "failed",
+                    "credential": name,
+                    "reason": format!("could not reach Linear ({})", failure.reason),
+                    "fix": "Check the network and run the check again",
+                }),
+            }
+        }
+    };
+    println!("{report}");
+}
+
 fn main() -> Result<()> {
+    if std::env::args().nth(1).as_deref() == Some("--check") {
+        check();
+        return Ok(());
+    }
     let mut transport = Transport::new(io::stdin().lock(), io::stdout().lock());
     let request = transport.read()?.context("core closed before initialize")?;
     let params: InitializeParams = request.params()?;
