@@ -1,6 +1,6 @@
 #![allow(non_snake_case)]
 use rastro_core::{Scope, Source, Storage};
-use rastro_storage_sqlite::SqliteStorage;
+use rastro_storage_sqlite::{SessionTurn, SqliteStorage};
 use rusqlite::Connection;
 use std::fs;
 
@@ -51,7 +51,7 @@ fn stored_evidence_rejects_updates_and_deletes() {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 26);
+        assert_eq!(version, 27);
     }
 }
 
@@ -94,7 +94,7 @@ fn migrations_apply_once_in_timestamp_order_and_unknown_ones_are_refused() {
         .unwrap();
     connection.pragma_update(None, "user_version", 1).unwrap();
     SqliteStorage::open(&legacy).unwrap();
-    assert_eq!(names(&connection).len(), 26);
+    assert_eq!(names(&connection).len(), 27);
 }
 
 /// spec: Every migration applies once in timestamp order
@@ -1199,6 +1199,83 @@ fn S8_an_export_leaves_the_recorded_output_and_the_spans_out() {
     for derived in ["budget", "Friday", "roadmap"] {
         assert!(!text.contains(derived), "{derived} leaked: {text}");
     }
+}
+
+/// The session-turn rename keeps every recorded turn: a database written before the rename
+/// still holds each turn's request, answer and verdict, the old table is gone, and the history
+/// still names only a run that exists.
+// spec: Every turn of a judgment session is recorded
+#[test]
+fn the_session_turn_rename_keeps_every_recorded_turn() {
+    let home = tempfile::tempdir().unwrap();
+    let path = home.path().join("rastro.sqlite3");
+    let before = before_migration("202611201100_session_turn_rename");
+    let before: Vec<(&str, &str)> = before
+        .iter()
+        .map(|(name, sql)| (name.as_str(), sql.as_str()))
+        .collect();
+    drop(SqliteStorage::open_with(&path, &before).unwrap());
+    let connection = Connection::open(&path).unwrap();
+    connection
+        .execute_batch(
+            "PRAGMA foreign_keys = ON;
+             INSERT INTO meeting (id, scope, captured_at, created_at)
+             VALUES ('weekly-1', 'work', '2026-11-10T10:00:00.000Z', '2026-11-10T10:00:00.000Z');
+             INSERT INTO meeting_run (meeting_id, started_at, finished_at, state, cause, reason,
+                 extractor, owner_speaker, turns_total, turns_read, excluded)
+             VALUES ('weekly-1', '2026-11-10T10:00:00.000Z', '2026-11-10T10:01:00.000Z', 'failed',
+                 'invalid_quote', 'the quote is not contiguous', 'test-adapter', 'Alice', 2, 2, 0);
+             INSERT INTO judgment_turn (run_id, turn, request, answer, verdict)
+             VALUES (1, 1, '{\"turn\":1}', '{\"candidates\":[]}', '{\"passed\":false}'),
+                    (1, 2, '{\"turn\":2}', NULL, '{\"passed\":false}');",
+        )
+        .unwrap();
+    drop(connection);
+
+    let storage = SqliteStorage::open(&path).unwrap();
+    assert_eq!(
+        storage.session_turns(1).unwrap(),
+        vec![
+            SessionTurn {
+                turn: 1,
+                request: "{\"turn\":1}".into(),
+                answer: Some("{\"candidates\":[]}".into()),
+                verdict: "{\"passed\":false}".into(),
+            },
+            SessionTurn {
+                turn: 2,
+                request: "{\"turn\":2}".into(),
+                answer: None,
+                verdict: "{\"passed\":false}".into(),
+            },
+        ]
+    );
+    drop(storage);
+    let connection = Connection::open(&path).unwrap();
+    let old: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'judgment_turn'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(old, 0, "the rename left the old table behind");
+    // The history still names only a run that exists (the meeting_run key stays).
+    assert!(
+        connection
+            .execute(
+                "INSERT INTO session_turn (run_id, turn, request, answer, verdict)
+                 VALUES (999, 1, '{}', NULL, '{}')",
+                [],
+            )
+            .is_err()
+    );
+    let broken: i64 = connection
+        .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(broken, 0);
 }
 
 /// Every migration before the one named, read from the directory, in name order.
