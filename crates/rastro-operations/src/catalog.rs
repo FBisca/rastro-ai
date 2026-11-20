@@ -492,13 +492,22 @@ pub fn search_deferred(query: &str) -> CatalogSearchResult {
     CatalogSearchResult { matches }
 }
 
+/// The gateway's input schema: the typed modes under the object root the pinned MCP Tool
+/// schema requires. Every mode is an object, so the root says so; a oneOf root without a type
+/// would let a strict client reject the whole tool list.
+fn gateway_input() -> Value {
+    let mut schema = input_root::<CatalogRequest>();
+    schema["type"] = Value::String("object".to_string());
+    schema
+}
+
 /// The catalog gateway: the one MCP tool that discovers and calls the explicitly deferred reads.
 /// MCP only — the CLI has no command for it. It is not a `Request`: the MCP surface dispatches its
 /// two modes itself, and a call returns the target operation's envelope, so `decode` refuses.
 pub static GATEWAY: OperationSpec = OperationSpec {
     name: "catalog",
     surfaces: &[Surface::Mcp],
-    input: input_root::<CatalogRequest>,
+    input: gateway_input,
     output: output_root::<CatalogSearchResult>,
     command: || Command::new("catalog"),
     decode: |_| {

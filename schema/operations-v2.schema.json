@@ -8153,7 +8153,8 @@
             "type": "object"
           }
         ],
-        "title": "CatalogRequest"
+        "title": "CatalogRequest",
+        "type": "object"
       },
       "name": "catalog",
       "result": {

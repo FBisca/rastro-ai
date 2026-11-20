@@ -508,6 +508,8 @@ fn the_schema_records_the_gateway_and_the_deferred_exposure() {
     // The gateway is MCP only, and the envelope accepts its search result.
     let gateway = op("catalog");
     assert_eq!(gateway["surfaces"], json!(["mcp"]));
+    // The pinned MCP Tool schema requires an object input schema.
+    assert_eq!(gateway["input"]["type"], json!("object"));
     assert!(gateway.get("mcp_tool").is_none());
     assert!(gateway.get("deferred").is_none());
     assert!(

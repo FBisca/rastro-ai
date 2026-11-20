@@ -270,19 +270,26 @@ fn tool<'a>(tools: &'a [Value], name: &str) -> &'a Value {
 }
 
 /// spec: Each MCP tool equals its catalog entry
-/// each tool's name, description and input schema equal the catalog entry
+/// each listed tool's name, description and input schema equal the catalog entry, and every
+/// input schema is an object, as the pinned MCP Tool schema requires
 #[test]
 fn listed_tools_equal_the_catalog_entries() {
     let env = Env::new();
     let mut session = env.start();
     session.initialize();
     let tools = session.list_tools();
-    for name in ["search", "coverage", "about", "why"] {
-        let spec = catalog::find(name).unwrap();
-        let listed = tool(&tools, name);
-        assert_eq!(listed["name"], spec.mcp_name());
-        assert_eq!(listed["description"], spec.description());
-        assert_eq!(listed["inputSchema"], spec.input_schema());
+    for listed in &tools {
+        let name = listed["name"].as_str().unwrap();
+        let spec = catalog::CATALOG
+            .iter()
+            .chain(std::iter::once(&catalog::GATEWAY))
+            .find(|spec| spec.mcp_name() == name)
+            .unwrap_or_else(|| panic!("no catalog entry for tool {name}"));
+        assert_eq!(listed["description"], spec.description(), "{name}");
+        assert_eq!(listed["inputSchema"], spec.input_schema(), "{name}");
+        // The pinned MCP revision's Tool schema requires an object input schema; a strict
+        // client rejects the whole list otherwise.
+        assert_eq!(listed["inputSchema"]["type"], "object", "{name}");
     }
 }
 
