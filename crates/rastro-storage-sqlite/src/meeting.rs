@@ -9,11 +9,11 @@ use rastro_core::meeting::{
 };
 use rusqlite::{Connection, OptionalExtension, params};
 
-/// One turn of a run's judgment session, as the run's history keeps it (ADR 0016 §3): the
+/// One turn of a run's session, as the run's history keeps it (ADR 0016 §3): the
 /// request the core sent, the adapter's answer and the core's gate verdict. Failed turns are
 /// kept like any other; an export leaves them out, and forgetting the meeting removes them.
 #[derive(Clone, Debug, Eq, PartialEq)]
-pub struct JudgmentTurn {
+pub struct SessionTurn {
     /// Counted from 1 within the session.
     pub turn: usize,
     /// The request the core sent, as the wire JSON.
@@ -32,10 +32,10 @@ fn count(row: &rusqlite::Row, index: usize) -> rusqlite::Result<usize> {
 pub(crate) fn record_turn(
     connection: &mut Connection,
     run_id: i64,
-    turn: &JudgmentTurn,
+    turn: &SessionTurn,
 ) -> Result<()> {
     connection.execute(
-        "INSERT INTO judgment_turn (run_id, turn, request, answer, verdict)
+        "INSERT INTO session_turn (run_id, turn, request, answer, verdict)
          VALUES (?1, ?2, ?3, ?4, ?5)",
         params![
             run_id,
@@ -48,14 +48,14 @@ pub(crate) fn record_turn(
     Ok(())
 }
 
-pub(crate) fn turns(connection: &Connection, run_id: i64) -> Result<Vec<JudgmentTurn>> {
+pub(crate) fn turns(connection: &Connection, run_id: i64) -> Result<Vec<SessionTurn>> {
     Ok(connection
         .prepare(
-            "SELECT turn, request, answer, verdict FROM judgment_turn
+            "SELECT turn, request, answer, verdict FROM session_turn
              WHERE run_id = ?1 ORDER BY turn",
         )?
         .query_map([run_id], |r| {
-            Ok(JudgmentTurn {
+            Ok(SessionTurn {
                 turn: count(r, 0)?,
                 request: r.get(1)?,
                 answer: r.get(2)?,
@@ -537,7 +537,7 @@ pub(crate) fn forget(connection: &mut Connection, meeting: &str) -> Result<Optio
     let recorded_output = delete("meeting_output", of_runs)?;
     let spans = delete("meeting_span", of_runs)?;
     delete("meeting_speaker", of_runs)?;
-    delete("judgment_turn", of_runs)?;
+    delete("session_turn", of_runs)?;
     let transcript = delete("meeting_transcript", "meeting_id = ?1")? > 0;
     let runs = delete("meeting_run", "meeting_id = ?1")?;
     delete("meeting", "id = ?1")?;
