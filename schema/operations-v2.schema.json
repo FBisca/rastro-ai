@@ -146,6 +146,27 @@
       ],
       "type": "object"
     },
+    "ActionCapWait": {
+      "additionalProperties": false,
+      "description": "The rule and daily cap that keep a matching proposal waiting in the queue: the rule already\nstarted its cap of Act runs this local calendar day.",
+      "properties": {
+        "cap": {
+          "description": "The rule's daily cap, reached today.",
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "rule": {
+          "description": "The rule the proposal matched.",
+          "type": "string"
+        }
+      },
+      "required": [
+        "rule",
+        "cap"
+      ],
+      "type": "object"
+    },
     "ActionCell": {
       "additionalProperties": false,
       "description": "The cell a run belongs to: its action and the context it hangs on, the Linear team.",
@@ -4720,6 +4741,17 @@
               "additionalProperties": false,
               "description": "What `actions propose` returns: the proposal as it now waits in the queue, and the Act run a\nmatching rule started for it, when one did.",
               "properties": {
+                "cap": {
+                  "anyOf": [
+                    {
+                      "$ref": "#/$defs/ActionCapWait"
+                    },
+                    {
+                      "type": "null"
+                    }
+                  ],
+                  "description": "The rule whose daily cap keeps the proposal waiting in the queue; absent otherwise."
+                },
                 "id": {
                   "description": "The queue item's id: the content address of everything below except `proposed_at`.",
                   "type": "string"
@@ -7284,6 +7316,17 @@
         "additionalProperties": false,
         "description": "What `actions propose` returns: the proposal as it now waits in the queue, and the Act run a\nmatching rule started for it, when one did.",
         "properties": {
+          "cap": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/ActionCapWait"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "description": "The rule whose daily cap keeps the proposal waiting in the queue; absent otherwise."
+          },
           "id": {
             "description": "The queue item's id: the content address of everything below except `proposed_at`.",
             "type": "string"

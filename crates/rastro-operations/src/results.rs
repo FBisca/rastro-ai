@@ -441,6 +441,7 @@ mod tests {
                     proposed_at: "2026-11-19T09:00:00Z".parse().unwrap(),
                 },
                 run: None,
+                cap: None,
             }),
             Response::Actions(rastro_core::actions::Runs {
                 runs: vec![],
