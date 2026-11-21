@@ -104,7 +104,7 @@ The core SHALL call the owner's configured agent tool adapter over the plugin pr
 - THEN only the candidates that pass the core's own checks are kept, an exact contiguous quote, the owner's involvement and a stated date the quote states
 
 #### Scenario: a gate failure earns a retry turn in the same session
-- WHEN an answer fails a shape or quote gate and turns remain under the cap
+- WHEN an answer fails a shape or span gate and turns remain under the cap
 - THEN the core sends the failure reason (gate, field, expected, actual) as the next turn of the same session, and no new session is opened
 
 #### Scenario: exhausted caps or a fatal answer fails the run stale
