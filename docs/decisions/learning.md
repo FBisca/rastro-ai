@@ -56,5 +56,19 @@ Status: agreed 2026-11-04, except where marked open. North star: `../concept.md`
 ## Experiments
 - **Rubber-stamp guard.** Approvals given faster than the item could be read count as low-attention and carry little weight. To be tried and measured; drop it if it doesn't help.
 
+## Added 2026-11-20 (roadmap slice 9 plan)
+20. **Ignoring lowers usefulness and priority, not trust** (closes `../open-questions.md` #1, confirming §13).
+21. **Trust state is derived.** A cell's level, its evidence counts and the learning journal are computed at read from runs, owner intents and shown reports; no new state table, and a rebuild reproduces them. Pin and reset are owner intents written from the CLI; ceilings stay the owner's config. Cells are `{action, team}` until actions carry more context. Trust reads compute from visible scopes only. Thresholds live in `[learning]` in `config.toml`.
+22. **Demotion signals.** One undo drops a level; two or more undos in the last 20 drop the cell to Ask. A retract or edit landing on a claim a run cited counts as an undo. Stopped and returned runs demote nothing: nothing ran. "Don't do this" is not a distinct outcome: reject covers pre-run, undo post-run.
+23. **Decay window.** A cell unused for 30 days drops a level the next time it is used; configurable in `[learning]`.
+24. **Usefulness in slice 9.** Per plugin: engagement (acted on ÷ seen, terminal shown reports only), time to action, cost as wall time plus adapter turns, and cost per accepted item ("—" at zero accepts). No shown reports reads "unmeasured", never 0. No plugin-protocol change: tokens and money wait for adapters that report them. MCP read logging (`surfaces.md` §16) lands as an audit log that never marks an item seen.
+
 ## Open
-- Whether ignoring an item means it's useless needs a deeper look. See `../open-questions.md`.
+None.
+
+## Deferred from slice 9 (2026-11-20)
+Slice 9 ships visibility, not the proposal engines. Owner call, tracked in `../roadmap.md`'s parking lot:
+- **Kill rule (§12) and duplicate/stale rate (§11):** no usefulness data exists yet (no store holds outcomes today); the rate would need new already-known counters per source run. The queue's known-first check already enforces the target of 0. Revisit once slice 9's data accumulates.
+- **Trust spreading (§8):** cells in code are `{action, team}`; no wider context exists to spread to. Waits for actions that carry person, project, source or channel.
+- **View/notification usefulness (§2, §5):** no view or notification surface exists before slices 10–11; nothing to measure. Lands with those surfaces.
+- **Rubber-stamp guard:** stays parked in `../open-questions.md` #2; an experiment to measure, not to build blind.

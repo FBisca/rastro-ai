@@ -1,0 +1,64 @@
+# Meeting validation v1. Frozen for recordings made before these rules were saved.
+# A candidate must name the owner on one side, and the quote must support that involvement.
+[[rules]]
+kind = "require"
+[rules.predicate]
+test = "all"
+
+[[rules.predicate.of]]
+test = "any"
+of = [
+    { test = "equal", left = { source = "field", name = "responsible" }, right = { source = "input_label" } },
+    { test = "equal", left = { source = "field", name = "recipient" }, right = { source = "input_label" } },
+]
+
+[[rules.predicate.of]]
+test = "any"
+
+[[rules.predicate.of.of]]
+test = "equal"
+left = { source = "turn_label", turn_field = "turn", at = "current" }
+right = { source = "input_label" }
+
+[[rules.predicate.of.of]]
+test = "contains_label"
+field = "quote"
+label = { source = "input_label" }
+
+# Second-person phrasing in a turn next to the owner's supports only the recipient side.
+[[rules.predicate.of.of]]
+test = "all"
+
+[[rules.predicate.of.of.of]]
+test = "not"
+of = { test = "equal", left = { source = "field", name = "responsible" }, right = { source = "input_label" } }
+
+[[rules.predicate.of.of.of]]
+test = "contains_word"
+field = "quote"
+words = ["you", "your", "yours", "yourself", "you'll", "you're", "you've", "you'd"]
+
+[[rules.predicate.of.of.of]]
+test = "any"
+of = [
+    { test = "equal", left = { source = "turn_label", turn_field = "turn", at = "previous" }, right = { source = "input_label" } },
+    { test = "equal", left = { source = "turn_label", turn_field = "turn", at = "next" }, right = { source = "input_label" } },
+]
+
+# The input label set contains only explicit speaker mappings backed by bot evidence.
+[[rules]]
+kind = "require"
+[rules.predicate]
+test = "not"
+[rules.predicate.of]
+test = "any"
+of = [
+    { test = "in_input_labels", field = "responsible" },
+    { test = "in_input_labels", field = "recipient" },
+]
+
+# An unsupported date reads unknown; it does not invalidate an otherwise supported candidate.
+[[rules]]
+kind = "ground"
+field = "stated_date"
+in_field = "quote"

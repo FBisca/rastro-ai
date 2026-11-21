@@ -188,11 +188,20 @@ done
             &TaskInput {
                 owner_speaker: "",
                 turns: &turns,
+                labels: None,
             },
             3,
             Duration::from_secs(5),
         )
     }
+}
+
+fn proposed(output: &task::TaskOutput) -> Vec<&Value> {
+    output
+        .candidates
+        .iter()
+        .map(|candidate| &candidate.proposed)
+        .collect()
 }
 
 /// spec: Task templates run without domain logic in the core runner
@@ -209,7 +218,7 @@ fn the_runner_returns_validated_blog_shaped_results() {
     });
     env.respond(json!({ "candidates": [published(), second] }));
     let output = env.run(&TaskTemplate::parse(BLOG).unwrap()).unwrap();
-    assert_eq!(output.candidates, vec![published(), second]);
+    assert_eq!(proposed(&output), vec![&published(), &second]);
     assert_eq!(output.excluded, 0);
     assert_eq!(output.history.len(), 1);
     assert_eq!(output.history[0].verdict, r#"{"passed":true}"#);
@@ -310,7 +319,7 @@ fn a_gate_failure_earns_a_retry_turn_in_the_same_session() {
         json!({ "candidates": [published()], "session_id": "sess-2" }),
     );
     let output = env.run(&TaskTemplate::parse(BLOG).unwrap()).unwrap();
-    assert_eq!(output.candidates, vec![published()]);
+    assert_eq!(proposed(&output), vec![&published()]);
     assert_eq!(output.history.len(), 2);
     assert_eq!(env.launches(), 1, "the retry opened a new process");
     assert_eq!(env.turns(), 2);
@@ -347,7 +356,7 @@ fn a_declared_exclusion_counts_the_candidate_without_a_retry() {
     env.respond(json!({ "candidates": [draft, published()] }));
     let output = env.run(&TaskTemplate::parse(BLOG).unwrap()).unwrap();
     assert_eq!(output.excluded, 1);
-    assert_eq!(output.candidates, vec![published()]);
+    assert_eq!(proposed(&output), vec![&published()]);
     assert_eq!(output.history.len(), 1);
     assert_eq!(output.history[0].verdict, r#"{"passed":true}"#);
     assert_eq!(env.turns(), 1, "the exclusion caused a retry turn");

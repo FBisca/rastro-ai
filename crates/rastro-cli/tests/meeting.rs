@@ -1867,7 +1867,18 @@ fn forgetting_a_meeting_removes_its_saved_replay_contract() {
 #[test]
 fn a_selected_local_template_reaches_the_adapter() {
     let env = Env::new();
-    let local = local_template(LOCAL_INSTRUCTIONS);
+    // Inline rules are also valid TOML. This template only displays a date if it appears in
+    // the proposed promise as well as the quote.
+    let local = format!(
+        r#"instructions = {}
+        rules = [
+            {{ kind = "span", quote_field = "quote", turn_field = "turn" }},
+            {{ kind = "equals", field = "promise", value = "update the plan", disposition = "exclude" }},
+            {{ kind = "ground", field = "stated_date", in_field = "promise" }},
+        ]
+        {LOCAL_FIELDS}{LOCAL_QUOTE_FIELD}"#,
+        Value::String(LOCAL_INSTRUCTIONS.into())
+    );
     fs::write(env.path("config/meeting-local.toml"), &local).unwrap();
     env.select_template("meeting-local.toml");
 
@@ -1901,11 +1912,14 @@ fn a_selected_local_template_reaches_the_adapter() {
     assert_eq!(hypotheses[0]["promise"], "send Bob the budget");
     assert_eq!(hypotheses[1]["promise"], "share the roadmap with Alice");
     assert_eq!(imported["extraction"]["excluded"], 1, "{imported}");
-    // The contract saved for replay is the selected template's, not the bundled one.
-    let saved: String = database(&env)
-        .query_row("SELECT contract FROM meeting_contract", [], |r| r.get(0))
-        .unwrap();
-    assert_eq!(saved, local);
+    assert_eq!(hypotheses[0]["stated_date"], json!({"state": "unknown"}));
+
+    // Replay still applies the selected contract after the template and adapter are gone.
+    fs::remove_file(env.path("config/meeting-local.toml")).unwrap();
+    fs::remove_file(env.script_path()).unwrap();
+    let replayed = env.ok(&["meeting", "replay", "weekly-1"]);
+    assert_eq!(replayed["hypotheses"], imported["hypotheses"], "{replayed}");
+    assert_eq!(env.launches(), 1);
 }
 
 /// S6: a selected template that cannot be loaded or does not meet the meeting contract stops the
@@ -1959,4 +1973,10 @@ fn an_unusable_selection_stops_the_import_without_the_adapter_or_a_fallback() {
     fs::write(env.path("config/incompatible.toml"), incompatible).unwrap();
     env.select_template("incompatible.toml");
     unusable(&env, "quote");
+
+    // A span rule that excludes would skip the required retry and could replace last-good results.
+    let exclude_quote = format!("{LOCAL_SPAN_RULE}disposition = \"exclude\"\n");
+    let incompatible = local_template(LOCAL_INSTRUCTIONS).replace(LOCAL_SPAN_RULE, &exclude_quote);
+    fs::write(env.path("config/incompatible.toml"), incompatible).unwrap();
+    unusable(&env, "span rule over quote and turn must fail");
 }

@@ -60,6 +60,12 @@ impl Client {
         Ok(body)
     }
 
+    /// One page of `conversations.replies`, with the call's fixed params.
+    pub fn conversations_replies(&self, params: &[(&str, &str)]) -> Result<Value, Failure> {
+        let (body, _) = self.get("conversations.replies", params)?;
+        Ok(body)
+    }
+
     /// Whose token it is: `auth.test`'s `user_id`.
     pub fn viewer_id(&self) -> Result<String, Failure> {
         let (body, _) = self.get("auth.test", &[])?;
