@@ -6,12 +6,18 @@ use rastro_core::{
 };
 use rastro_storage_sqlite::SqliteStorage;
 
+use crate::render;
+
 /// What the tick tells the owner, and the exit code: 0 when every unfinished run was finished and
 /// every source that needed a sync got one, or when another tick was already running; 1 naming
 /// each run and each source that failed.
 fn outcome(tick: &Tick) -> (String, Vec<String>, i32) {
     match tick {
-        Tick::AlreadyRunning => ("A tick is already running; nothing to do".into(), vec![], 0),
+        Tick::AlreadyRunning => (
+            render::nothing_recorded("A tick is already running"),
+            vec![],
+            0,
+        ),
         Tick::Ran(TickReport {
             runs_finished,
             runs_failed,
@@ -19,14 +25,13 @@ fn outcome(tick: &Tick) -> (String, Vec<String>, i32) {
             fresh,
             failed,
         }) => {
-            let said = format!(
-                "Finished {} action run(s), {} failed; synced {} source(s), {} already fresh, {} failed",
-                runs_finished.len(),
-                runs_failed.len(),
-                synced.len(),
-                fresh.len(),
-                failed.len()
-            );
+            let said = render::Block::new("Tick finished")
+                .field("Action runs finished", runs_finished.len())
+                .field("Action runs failed", runs_failed.len())
+                .field("Sources synced", synced.len())
+                .field("Sources already fresh", fresh.len())
+                .field("Sources failed", failed.len())
+                .to_string();
             let runs = runs_failed.iter().map(|(run, why)| {
                 format!(
                     "action run {} failed: {}",

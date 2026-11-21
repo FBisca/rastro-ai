@@ -15,6 +15,7 @@ use std::ffi::OsString;
 
 mod check;
 mod mcp;
+mod render;
 mod tick;
 
 #[derive(Parser)]
@@ -72,72 +73,108 @@ fn coverage_line(c: &Coverage) -> String {
     }
     line
 }
-fn window_line(w: &CoverageWindow) -> String {
-    let mut line = format!(
-        "  [{}, {}) | {} | Selection: {}",
-        stamp(w.from),
-        stamp(w.to),
-        w.state.as_str(),
-        display_safe(&w.selection)
+/// One source's coverage as a block: its state and times, then each window as a field.
+fn coverage_block(c: &Coverage) -> render::Block {
+    let header = if c.registered {
+        display_safe(&c.source)
+    } else {
+        format!("{} (Not in config)", display_safe(&c.source))
+    };
+    let mut block = render::Block::new(header)
+        .field("Scope", display_safe(&c.scope.0))
+        .field("Coverage", c.state.as_str())
+        .maybe("Last checked", c.last_checked.map(render::time))
+        .maybe("Fresh until", c.fresh_until.map(render::time))
+        .maybe("Reason", c.reason.as_deref().map(display_safe));
+    if c.windows.len() < c.windows_total {
+        block = block.field(
+            "Windows",
+            format!(
+                "showing {} of {} (--all-windows lists every one)",
+                c.windows.len(),
+                c.windows_total
+            ),
+        );
+    }
+    for window in &c.windows {
+        block = block.field("Window", window_value(window));
+    }
+    block
+}
+/// One coverage window as its source block's field: the half-open interval, what it found,
+/// its selection, and what a failed or partial look adds.
+fn window_value(w: &CoverageWindow) -> String {
+    let mut value = format!(
+        "[{}, {}) {}",
+        render::time(w.from),
+        render::time(w.to),
+        w.state.as_str()
     );
+    value += &format!(", Selection: {}", display_safe(&w.selection));
     if let Some(reason) = &w.reason {
-        line += &format!(" | Reason: {}", display_safe(reason));
+        value += &format!(", Reason: {}", display_safe(reason));
     }
     for gap in &w.gaps {
-        line += &format!(
-            " | Gap: {} ({})",
+        value += &format!(
+            ", Gap: {} ({})",
             display_safe(&gap.selection),
             display_safe(&gap.reason)
         );
     }
     if let Some(at) = w.retry_at {
-        line += &format!(" | Retry at: {}", stamp(at));
+        value += &format!(", Retry at: {}", render::time(at));
     }
-    line
+    value
 }
-fn coverage_block(c: &Coverage) -> String {
-    let mut lines = vec![coverage_line(c)];
-    if c.windows.len() < c.windows_total {
-        lines.push(format!(
-            "  Windows: showing {} of {} (--all-windows lists every one)",
-            c.windows.len(),
-            c.windows_total
-        ));
-    }
-    lines.extend(c.windows.iter().map(window_line));
-    lines.join("\n")
+/// One source as a block: its name, then the fields its registration saved.
+fn source_block(s: &rastro_core::Source) -> render::Block {
+    render::Block::new(display_safe(&s.name))
+        .field("Connector", display_safe(&s.connector))
+        .field(
+            "Selector",
+            serde_json::to_string(&s.selector).expect("string map"),
+        )
+        .field("Scope", display_safe(&s.scope.0))
+        .field("Freshness rule", &s.freshness_rule)
+        .field("Window start", render::time(s.window_start))
 }
-fn sync_line(run: &RunReport) -> String {
-    let counts = &run.counts;
-    let mut line = format!(
-        "{} | {} | Plugin: {} {} | submitted {}, accepted {}, rejected {}, unchanged {} | Coverage: {}",
-        run.source,
-        run.status,
-        run.plugin_id,
-        run.plugin_version,
-        counts.submitted,
-        counts.accepted,
-        counts.rejected,
-        counts.unchanged,
-        run.coverage.as_str()
-    );
-    if let Some(reason) = &run.reason {
-        line += &format!(" | Reason: {}", display_safe(reason));
-    }
+/// One sync run as a block: how it ended, its plugin and tally, and the extraction it ran.
+fn sync_block(run: &RunReport) -> render::Block {
+    let mut block = render::Block::new(display_safe(&run.source))
+        .field("Status", &run.status)
+        .field(
+            "Plugin",
+            format!(
+                "{} {}",
+                display_safe(&run.plugin_id),
+                display_safe(&run.plugin_version)
+            ),
+        )
+        .field("Counts", tally(&run.counts))
+        .field("Coverage", run.coverage.as_str())
+        .maybe("Reason", run.reason.as_deref().map(display_safe));
     if let Some(e) = &run.extraction {
-        line += &format!(
-            "\n  Extractor: {} {} | {} | evidence {} | claims submitted {}, accepted {}, rejected {}, unchanged {}",
-            display_safe(&e.extractor),
-            e.extractor_version,
-            e.state.as_str(),
-            e.evidence,
-            e.counts.submitted,
-            e.counts.accepted,
-            e.counts.rejected,
-            e.counts.unchanged
-        );
+        block = block
+            .field(
+                "Extractor",
+                format!(
+                    "{} {}",
+                    display_safe(&e.extractor),
+                    display_safe(&e.extractor_version)
+                ),
+            )
+            .field("Extraction", e.state.as_str())
+            .field("Evidence", e.evidence)
+            .field("Claims", tally(&e.counts));
     }
-    line
+    block
+}
+/// One tally as a field value: the four counts in the order the owner reads them.
+fn tally(counts: &rastro_core::Counts) -> String {
+    format!(
+        "submitted {}, accepted {}, rejected {}, unchanged {}",
+        counts.submitted, counts.accepted, counts.rejected, counts.unchanged
+    )
 }
 fn extraction_line(pair: &rastro_core::runs::ExtractionPair) -> String {
     format!(
@@ -1350,26 +1387,27 @@ fn trust_journal_text(journal: &rastro_core::trust::TrustJournal) -> String {
         .join("\n")
 }
 fn human(response: &Response) -> String {
-    let or_none = |lines: Vec<String>| {
-        if lines.is_empty() {
-            "No sources registered".into()
+    let or_none = |blocks: Vec<render::Block>| {
+        if blocks.is_empty() {
+            render::empty("sources registered")
         } else {
-            lines.join("\n")
+            render::records(blocks)
         }
     };
     match response {
         Response::SourceAdd(r) => format!("Source registered: {}", r.source.name),
         Response::SourceCheck(r) => check::line(r),
-        Response::SourceList(r) => or_none(r.sources.iter().map(|s| format!(
-            "{} | Connector: {} | selector: {} | Scope: {} | Freshness rule: {} | window start: {}",
-            s.name, s.connector, serde_json::to_string(&s.selector).expect("string map"), s.scope.0, s.freshness_rule, s.window_start.to_rfc3339_opts(chrono::SecondsFormat::AutoSi, true),
-        )).collect()),
+        Response::SourceList(r) => or_none(r.sources.iter().map(source_block).collect()),
         Response::Coverage(r) => or_none(r.coverage.iter().map(coverage_block).collect()),
-        Response::Sync(r) => or_none(r.runs.iter().map(sync_line).collect()),
+        Response::Sync(r) => or_none(r.runs.iter().map(sync_block).collect()),
         Response::ClaimsRebuild(r) => {
             let mut text = format!("Claims rebuilt: {} claims", r.claims);
             // A pair that is not current never started; its stored output was carried over.
-            for pair in r.pairs.iter().filter(|p| p.state != ExtractionState::Current) {
+            for pair in r
+                .pairs
+                .iter()
+                .filter(|p| p.state != ExtractionState::Current)
+            {
                 text += &format!(
                     "\n  Carried over: {} | {} | Extractor: {} {} | {}",
                     pair.source,

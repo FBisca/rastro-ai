@@ -317,10 +317,7 @@ fn adding_a_source_with_bad_credentials_keeps_it_and_explains_the_failure() {
         "{text}"
     );
     assert!(!text.contains(wrong), "{text}");
-    let list = env.rastro(&[], &["source", "list"]);
-    assert!(
-        shown(&list).contains("work | Connector: linear"),
-        "{}",
-        shown(&list)
-    );
+    let list = shown(&env.rastro(&[], &["source", "list"]));
+    assert!(list.lines().any(|l| l == "work"), "{list}");
+    assert!(list.contains("Connector: linear"), "{list}");
 }

@@ -175,11 +175,11 @@ fn past_freshness_or_after_a_failed_attempt_coverage_is_unknown_with_its_evidenc
     assert!(stale.get("reason").is_none(), "{stale}");
     let human =
         String::from_utf8(env.rastro_at(&["coverage", "project"], Some(&later)).stdout).unwrap();
-    // The human line prints milliseconds, `--json` drops zero ones: same instant.
+    // The human block prints minute precision; `--json` keeps the full instant.
     let checked_at: chrono::DateTime<chrono::Utc> = checked.parse().unwrap();
     assert!(
         human.contains("unknown")
-            && human.contains(&checked_at.to_rfc3339_opts(chrono::SecondsFormat::Millis, true)),
+            && human.contains(&checked_at.format("%Y-%m-%d %H:%M UTC").to_string()),
         "{human}"
     );
     // The connector goes away; the latest attempt fails inside the freshness rule.
@@ -546,12 +546,7 @@ fn coverage_lists_each_window_with_its_state_selection_and_retry_time() {
     same_instant(&listed[0]["from"], &listed[1]["to"], "");
     assert!(listed[1].get("retry_at").is_none());
     let human = env.ok(&["coverage", "project"]);
-    for expected in [
-        "rate_limited",
-        "2030-01-01T00:00:00.000Z",
-        "authored",
-        "found",
-    ] {
+    for expected in ["rate_limited", "2030-01-01 00:00 UTC", "authored", "found"] {
         assert!(human.contains(expected), "missing {expected}: {human}");
     }
     // The next sync starts where the last complete window ended, not after the failed one.
@@ -848,10 +843,11 @@ fn a_whole_second_last_checked_is_the_same_instant_in_human_and_json() {
     let printed = human
         .split("Last checked: ")
         .nth(1)
-        .and_then(|rest| rest.split_whitespace().next())
+        .and_then(|rest| rest.lines().next())
         .unwrap_or_else(|| panic!("no last checked in {human}"));
-    let from_human: chrono::DateTime<chrono::Utc> = printed.parse().unwrap();
-    assert_eq!(from_json, from_human, "{human} vs {json}");
+    let from_human = chrono::NaiveDateTime::parse_from_str(printed, "%Y-%m-%d %H:%M UTC")
+        .unwrap_or_else(|e| panic!("{printed:?}: {e}"));
+    assert_eq!(from_json.naive_utc(), from_human, "{human} vs {json}");
     assert_eq!(from_json.timestamp(), 1_793_786_400);
 }
 
@@ -1045,4 +1041,104 @@ fn hits_under_the_old_scope_carry_the_old_pairs_coverage_and_new_ones_the_new() 
 }
 fn json_scopes() -> toml::Value {
     toml::Value::Array(vec!["personal".into(), "work".into()])
+}
+
+/// spec: Human records render as blocks
+/// Two registered sources read as two blocks with one blank line between them.
+#[test]
+fn two_coverage_source_blocks_are_separated_by_a_blank_line() {
+    let env = Env::new();
+    env.add_source("project");
+    env.add_source("other");
+    let human = env.ok(&["coverage"]);
+    let blocks: Vec<&str> = human.trim_end().split("\n\n").collect();
+    assert_eq!(blocks.len(), 2, "{human}");
+    let mut headers: Vec<&str> = blocks
+        .iter()
+        .map(|block| block.lines().next().unwrap())
+        .collect();
+    headers.sort_unstable();
+    assert_eq!(headers, ["other", "project"], "{human}");
+    for block in &blocks {
+        assert!(
+            block.lines().count() >= 2,
+            "a block carries labelled fields: {human}"
+        );
+        for line in block.lines().skip(1) {
+            assert!(line.starts_with("  "), "field not indented: {human}");
+            assert!(line[2..].contains(": "), "field not labelled: {human}");
+        }
+    }
+    assert!(!human.contains(" | "), "pipe-packed line: {human}");
+}
+
+/// spec: Human timestamps share one format
+/// After a sync the checked and fresh-until times print as `YYYY-MM-DD HH:MM UTC`.
+#[test]
+fn coverage_checked_and_fresh_until_print_as_minute_precision_utc() {
+    use chrono::Timelike as _;
+    let env = Env::new();
+    synced_once(&env);
+    let stored = coverage_of(&env, None);
+    let human = env.ok(&["coverage", "project"]);
+    for (label, field) in [
+        ("Last checked", "last_checked"),
+        ("Fresh until", "fresh_until"),
+    ] {
+        let prefix = format!("{label}: ");
+        let line = human
+            .lines()
+            .find(|l| l.trim_start().starts_with(&prefix))
+            .unwrap_or_else(|| panic!("no {label} field in {human}"));
+        let value = line.trim_start().strip_prefix(&prefix).unwrap();
+        let shown = chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M UTC")
+            .unwrap_or_else(|e| panic!("{label}: {value:?} is not YYYY-MM-DD HH:MM UTC: {e}"));
+        let at: chrono::DateTime<chrono::Utc> = stored[field].as_str().unwrap().parse().unwrap();
+        let minute = at
+            .naive_utc()
+            .with_second(0)
+            .unwrap()
+            .with_nanosecond(0)
+            .unwrap();
+        assert_eq!(
+            shown, minute,
+            "{label} names a different instant than --json"
+        );
+    }
+}
+
+/// spec: Human timestamps share one format
+/// The same coverage read under --json keeps full RFC 3339 times and the committed v2 schema,
+/// while the human read prints minutes.
+#[test]
+fn coverage_json_keeps_full_rfc3339_while_the_human_read_prints_minutes() {
+    let env = Env::new();
+    synced_once(&env);
+    let human = env.ok(&["coverage", "project"]);
+    let line = human
+        .lines()
+        .find(|l| l.trim_start().starts_with("Last checked: "))
+        .unwrap_or_else(|| panic!("no Last checked field in {human}"));
+    let value = line.trim_start().strip_prefix("Last checked: ").unwrap();
+    chrono::NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M UTC")
+        .unwrap_or_else(|e| panic!("human Last checked {value:?} is not minute precision: {e}"));
+    // `env.json` validates the envelope against the committed v2 schema.
+    let envelope = env.json(&["coverage", "project"]);
+    assert_eq!(envelope["schema_version"], 2);
+    let coverage = &envelope["result"]["coverage"][0];
+    for field in ["last_checked", "fresh_until"] {
+        let text = coverage[field].as_str().unwrap();
+        let _: chrono::DateTime<chrono::Utc> = text
+            .parse()
+            .unwrap_or_else(|e| panic!("{field}: {text:?} is not RFC 3339: {e}"));
+        let time_of_day = text
+            .split('T')
+            .nth(1)
+            .unwrap_or_else(|| panic!("{field}: {text:?}"));
+        assert_eq!(
+            time_of_day.split(':').count(),
+            3,
+            "{field}: {text:?} lost its seconds"
+        );
+    }
 }

@@ -6,23 +6,25 @@ use rastro_core::{
 };
 use rastro_operations::envelope;
 
+use crate::render;
+
+/// The check as a block: the source and its result in the header, then the credential, the
+/// reason and the fix, each on its own line when present.
 pub(crate) fn line(check: &SourceCheck) -> String {
-    let mut text = format!("Source {}: ", display_safe(&check.source));
-    if check.authenticated {
-        text += "authenticated";
+    let header = if check.authenticated {
+        format!("Source {}: authenticated", display_safe(&check.source))
     } else {
-        text += &format!("could not authenticate ({})", check.result);
-    }
-    if let Some(credential) = &check.credential {
-        text += &format!(" | Credential: {credential}");
-    }
-    if let Some(reason) = &check.reason {
-        text += &format!(" | Reason: {reason}");
-    }
-    if let Some(fix) = &check.fix {
-        text += &format!(" | Fix: {fix}");
-    }
-    text
+        format!(
+            "Source {}: could not authenticate ({})",
+            display_safe(&check.source),
+            check.result
+        )
+    };
+    render::Block::new(header)
+        .maybe("Credential", check.credential.as_deref())
+        .maybe("Reason", check.reason.as_deref())
+        .maybe("Fix", check.fix.as_deref())
+        .to_string()
 }
 
 /// What source setup says after it saved `source`: the check's line.
