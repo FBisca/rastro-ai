@@ -33,7 +33,7 @@ Status: `todo` · `planning` · `doing` · `done`
 |---|---|---|---|---|---|
 | 8a | **First action, proposed** | Have an agent in any session propose a Linear issue through Rastro, accept it in one step, and get it created once, with its justification kept in Rastro (never in Linear), `actions show` to ask why, and an undo. One idempotent `rastro tick`, called by launchd, keeps sources fresh and retries failed runs. Switch day: the next Linear issue you have an agent create goes through Rastro | 7 | levels §1–6, §9; knowledge §43, §74; plugins §34–36 | done (`plans/2026-11-19-first-act/plan.yaml`, spec `specs/actions.md`; switch day 2026-11-20) |
 | 8b | **First Act** | Let that action run at Act through a rule you write, with a grace window you can stop, an optional daily budget, and `rules check` to see what a rule would do now | 8a | levels (all), §13–20; knowledge §75; surfaces §55 | done (`plans/2026-11-19-act-by-rule/plan.yaml`, spec `specs/actions.md`; switch day 2026-11-20) |
-| 9 | **Learned trust and usefulness** | See trust per cell grow from your outcomes: promotion is proposed to you, demotion is automatic. Includes a trust view, a learning journal, and usefulness and cost per plugin, so dead parts are visible | 8b | learning (all); plugins §9 | todo |
+| 9 | **Learned trust and usefulness** | See trust per cell grow from your outcomes: promotion is proposed to you, demotion is automatic. Includes a trust view, a learning journal, and usefulness and cost per plugin, so dead parts are visible | 8b | learning (all); plugins §9 | planning (`plans/2026-11-20-learned-trust/plan.yaml`) |
 
 ## M4: Where I already am
 **Client use: daily rituals** in your vault and terminal, with interruptions you control.
@@ -55,11 +55,14 @@ Status: `todo` · `planning` · `doing` · `done`
 | 16 | **Sharing** | Share scoped claims with another owner, who receives them as evidence from a person and accepts them explicitly | 13, 14 | sharing (all) | todo |
 
 ## Parking lot
+- Kill rule and duplicate/stale rate: the usefulness proposal engine (narrow/slow/remove after W low weeks) and per-plugin quality counters, once slice 9's usefulness data accumulates (`decisions/learning.md`, deferred 2026-11-20).
+- Trust spreading to wider cells: propose widening a cell once actions carry person, project, source or channel contexts (`decisions/learning.md` §8, deferred 2026-11-20).
+- Usefulness for views and notification types: measured when their surfaces land in slices 10–11 (deferred from slice 9, 2026-11-20).
 - News radar, project updates in the owner's voice, "find agent work a plain rule could do": workflows after 12.
 - Windows support.
 - Optional agent-runtime adapter for owners already running the fleet; default agent adapters are thin CLI drivers over a shared SDK (`decisions/plugins.md` §36, amended 2026-11-20).
 - Commitments from GitHub and Linear comments: the slice-5 extractor bound to those sources, once their connectors read comments.
-- Slack and mail through the work companion, once commitments prove useful; Slack per approved channel, each with its own coverage. Meetings already shipped as slice 5's first source (`specs/meetings.md`, `adr/0011`): a local transcript import, not a work-companion integration.
+- Slack through a native connector on the owner's own Slack app, per approved channel, each with its own coverage (`decisions/plugins.md` §50); mail through the work companion. Both once commitments prove useful. Meetings already shipped as slice 5's first source (`specs/meetings.md`, `adr/0011`): a local transcript import, not a work-companion integration.
 - A versioned structured read contract from the work companion (asked of its maintainers), then a generic MCP bridge with private mapping packs.
 - Agentic connectors (an agent chooses what to read), first for online research. Amends plugins §13 and needs a read broker that constrains tools, scopes and arguments; evidence stays what the broker captured, and "empty" only comes from deterministic reads.
 - Open judgment (M6 candidate, end goal): task-template plugins, generic agent-adapters (thin CLI drivers + SDK), decision-adapters (System-1) and decision tasks; first candidates duplicate/stale triage and categorization (`decisions/plugins.md` §38–43, `adr/0016-judgment-sessions-capped-retry-turns.md`). First delivery unchanged.

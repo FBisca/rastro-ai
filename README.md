@@ -89,5 +89,6 @@ flowchart LR
   class s4b done
   class s5,s6,s7 done
   class s8a,s8b done
-  class s9,s10,s11,s12,s13,s14,s15,s16 todo
+  class s9 planning
+  class s10,s11,s12,s13,s14,s15,s16 todo
 ```
