@@ -1,0 +1,25 @@
+id = "slack"
+name = "Rastro Slack connector"
+version = "0.2.0"
+author = "Rastro"
+kinds = ["connector"]
+protocol = 1
+command = "rastro-connector-slack"
+triggers = []
+dependencies = []
+
+[permissions]
+# A message, its author, and whose token it is.
+submit = ["message", "user", "viewer"]
+# Both scopes, so the owner chooses per source which one the channel belongs to.
+scopes = ["personal", "work"]
+env = ["SLACK_USER_TOKEN", "RASTRO_SLACK_API_URL"]
+actions = []
+
+[[source_options]]
+name = "channel"
+required = true
+# A channel id: C (public) or G (private) and an uppercase alphanumeric body. A name like
+# `general` is refused; the conversation guard at sync decides what the id may read.
+pattern = '[CG][A-Z0-9]{8,}'
+help = "Slack channel id, like C0123ABCDE — not a channel name"
