@@ -5,10 +5,12 @@ use std::path::{Path, PathBuf};
 
 use toml::Value;
 
-/// The plugin crates: the GitHub and Linear connectors and extractors, and the test extractor.
-const PLUGINS: [&str; 5] = [
+/// The plugin crates: the GitHub and Linear connectors and extractors, the Slack connector,
+/// and the test extractor.
+const PLUGINS: [&str; 6] = [
     "rastro-connector-github",
     "rastro-connector-linear",
+    "rastro-connector-slack",
     "rastro-extractor-github",
     "rastro-extractor-linear",
     "rastro-test-extractor",
