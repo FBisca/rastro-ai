@@ -2522,3 +2522,191 @@ fn the_owner_works_one_queue_end_to_end_in_one_sitting() {
         "{outcomes}"
     );
 }
+
+/// An Ask cell's match surfaces as a question, not an action proposal: the queue lists it naming
+/// the action and title, the terminal read renders it, and no run starts for it. The cell is driven
+/// to Ask through the real propose/undo boundary against the scripted fake provider, so no outside
+/// system is called; the done runs are seeded with the store's own result record.
+mod ask {
+    use super::support;
+    use rastro_core::{Storage, actions::RunResult};
+    use rastro_storage_sqlite::SqliteStorage;
+    use serde_json::Value;
+    use std::{fs, process::Command};
+    use tempfile::TempDir;
+
+    const NOW: &str = "2026-11-03T10:00:00Z";
+
+    struct Env {
+        home: TempDir,
+    }
+
+    impl Env {
+        fn new() -> Self {
+            let env = Self {
+                home: tempfile::tempdir().unwrap(),
+            };
+            let config = env.home.path().join("config");
+            support::provider::install(&config, |_| {});
+            fs::write(
+                config.join("config.toml"),
+                "[[sources]]\nname = \"linear-work\"\nconnector = \"linear\"\nselector = {}\n\
+                 scope = \"work\"\nfreshness_rule = \"1h\"\nwindow_start = \"2026-08-01T00:00:00Z\"\n\
+                 keep_original = false\n",
+            )
+            .unwrap();
+            env
+        }
+
+        fn add_rule(&self) {
+            let config = self.home.path().join("config/config.toml");
+            let text = fs::read_to_string(&config).unwrap();
+            fs::write(
+                &config,
+                format!(
+                    "{text}\n[[rules]]\nname = \"my-issues\"\naction = \"linear.create_issue\"\n\
+                     team = \"H\"\nassignee = \"me\"\n"
+                ),
+            )
+            .unwrap();
+        }
+
+        fn rastro_at(&self, now: &str, args: &[&str]) -> std::process::Output {
+            Command::new(support::rastro())
+                .env("RASTRO_HOME", self.home.path())
+                .env("RASTRO_NOW", now)
+                .args(args)
+                .output()
+                .unwrap()
+        }
+
+        fn ok_json_at(&self, now: &str, args: &[&str]) -> Value {
+            let out = self.rastro_at(now, &[args, &["--json"]].concat());
+            assert!(
+                out.status.success(),
+                "{args:?}: {}{}",
+                String::from_utf8_lossy(&out.stderr),
+                String::from_utf8_lossy(&out.stdout)
+            );
+            serde_json::from_slice::<Value>(&out.stdout).unwrap()["result"].clone()
+        }
+
+        fn db(&self) -> SqliteStorage {
+            SqliteStorage::open(&self.home.path().join("data/rastro.sqlite3")).unwrap()
+        }
+
+        fn propose(&self, title: &str, now: &str) -> Value {
+            self.ok_json_at(
+                now,
+                &[
+                    "actions",
+                    "propose",
+                    "linear.create_issue",
+                    "--title",
+                    title,
+                    "--team",
+                    "H",
+                    "--why",
+                    "owner asked",
+                ],
+            )
+        }
+
+        fn act_run(&self, title: &str, now: &str) -> String {
+            let proposed = self.propose(title, now);
+            assert_eq!(proposed["run"]["status"], "pending", "{proposed}");
+            let id = proposed["run"]["id"].as_str().unwrap().to_string();
+            self.db()
+                .record_action_result(
+                    &id,
+                    &RunResult {
+                        identifier: format!("H-{title}"),
+                        url: format!("https://fake.invalid/H-{title}"),
+                        finished_at: now.parse().unwrap(),
+                    },
+                )
+                .unwrap();
+            id
+        }
+
+        fn undo(&self, run: &str, now: &str) {
+            let undone = self.ok_json_at(now, &["actions", "undo", run]);
+            assert_eq!(undone["status"], "undone", "{undone}");
+        }
+
+        fn seed_ask(&self) {
+            self.add_rule();
+            let first = self.act_run("Issue 1", "2026-11-01T10:00:00Z");
+            let second = self.act_run("Issue 2", "2026-11-02T10:00:00Z");
+            self.undo(&first, "2026-11-01T12:00:00Z");
+            self.undo(&second, "2026-11-02T12:00:00Z");
+            let cell = self.ok_json_at(NOW, &["trust"])["cells"][0].clone();
+            assert_eq!(cell["level"], "ask", "{cell}");
+        }
+    }
+
+    // spec: An Ask cell asks instead of proposing
+    #[test]
+    fn an_ask_cells_match_is_listed_as_a_question_naming_the_action_and_title() {
+        let env = Env::new();
+        env.seed_ask();
+        let proposed = env.propose("Ask issue", NOW);
+        assert!(
+            proposed["run"].is_null(),
+            "an Ask match starts no run: {proposed}"
+        );
+        let item = proposed["id"].as_str().unwrap().to_string();
+
+        // The queue lists a question naming the action and title, not an action proposal.
+        let items = env.ok_json_at(NOW, &["queue"])["items"]
+            .as_array()
+            .unwrap()
+            .clone();
+        let question = items
+            .iter()
+            .find(|queued| queued["id"] == item)
+            .unwrap_or_else(|| panic!("the queue holds no item for {item}: {items:?}"));
+        assert_eq!(question["kind"], "question", "{question}");
+        assert_eq!(
+            question["action"]["action"], "linear.create_issue",
+            "{question}"
+        );
+        assert_eq!(
+            question["action"]["fields"]["title"], "Ask issue",
+            "{question}"
+        );
+
+        // The terminal read renders the question naming the action and title.
+        let printed = env.rastro_at(NOW, &["queue"]);
+        assert!(
+            printed.status.success(),
+            "queue: {}{}",
+            String::from_utf8_lossy(&printed.stderr),
+            String::from_utf8_lossy(&printed.stdout)
+        );
+        let text = String::from_utf8_lossy(&printed.stdout);
+        let line = text
+            .lines()
+            .find(|line| line.contains(&item))
+            .unwrap_or_else(|| panic!("{text}"));
+        assert!(line.contains("Question"), "{line}");
+        let body = text
+            .lines()
+            .skip_while(|line| !line.contains(&item))
+            .take(3)
+            .collect::<Vec<_>>()
+            .join("\n");
+        assert!(body.contains("linear.create_issue"), "{body}");
+        assert!(body.contains("Ask issue"), "{body}");
+
+        // No run started for the Ask match.
+        let runs = env.ok_json_at(NOW, &["actions"])["runs"]
+            .as_array()
+            .unwrap()
+            .clone();
+        assert!(
+            runs.iter().all(|run| run["proposal"] != item),
+            "an Ask match started a run: {runs:?}"
+        );
+    }
+}

@@ -51,7 +51,7 @@ use crate::identity::{
 };
 use crate::knowledge::{AboutOptions, ClaimSummary};
 use crate::meeting::{Cause, RunState};
-use crate::{CoverageState, Rastro, ReadStorage, Reader, Scope, Snapshot, Storage};
+use crate::{Config, CoverageState, Rastro, ReadStorage, Reader, Scope, Snapshot, Storage};
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use schemars::JsonSchema;
@@ -1048,6 +1048,41 @@ pub(crate) fn read(
     Ok(queue)
 }
 
+/// [`read`] with the trust gate applied: a matching rule's proposal whose cell sits at Ask asks
+/// instead of proposing. Such an item keeps its content address and its action payload but reads
+/// as a question, so the owner answers it yes or no in one step ([`super::answers`]) rather than
+/// accepting a proposal a rule would otherwise have run. A pending Act is left as it is: its
+/// re-check at grace end decides it. Every other item reads exactly as [`read`] gives it.
+pub(crate) fn read_with_trust(
+    config: &Config,
+    view: &dyn crate::read_only::Snapshot,
+    scopes: &[crate::Scope],
+) -> Result<Queue> {
+    let mut queue = read(view, scopes)?;
+    for item in &mut queue.items {
+        if item.kind != ItemKind::ActionProposal || item.act.is_some() {
+            continue;
+        }
+        let Some(proposal) = &item.action else {
+            continue;
+        };
+        if config.matching_rule(proposal).is_none() {
+            continue;
+        }
+        let level = crate::trust::cell_level(
+            config,
+            view,
+            scopes,
+            &proposal.action,
+            &proposal.fields.team,
+        )?;
+        if level == crate::trust::Level::Ask {
+            item.kind = ItemKind::Question;
+        }
+    }
+    Ok(queue)
+}
+
 /// The proposals a run settled, which no longer wait in the queue: every proposal whose run is
 /// past pending, unless the run was `returned`. Each status is decided here, so a new one cannot
 /// fall through to "still waiting" unnoticed.
@@ -1138,7 +1173,8 @@ pub enum Standing {
 impl<S: Storage> Rastro<S> {
     /// The queue over every scope, on a writing open.
     pub fn queue(&mut self) -> Result<Queue> {
-        self.storage.snapshot(|view| read(view, &[]))
+        self.storage
+            .snapshot(|view| read_with_trust(&self.config, view, &[]))
     }
 
     /// Records one shown report per item a terminal read printed, at the time it printed them.
@@ -1157,6 +1193,7 @@ impl<S: ReadStorage> Reader<S> {
     pub fn queue(&mut self) -> Result<Queue> {
         let Self {
             locations,
+            config,
             storage,
             scopes,
             ..
@@ -1165,7 +1202,7 @@ impl<S: ReadStorage> Reader<S> {
             let Some(view) = view else {
                 return Ok(Queue::empty());
             };
-            read(view, scopes)
+            read_with_trust(config, view, scopes)
         })
     }
 }
