@@ -328,7 +328,7 @@ fn search_results_carry_the_citation_and_coverage() {
 fn search_without_a_match_states_the_coverage_of_each_source() {
     let env = synced_env();
     let human = env.ok(&["search", "zebra"]);
-    assert!(human.contains("no evidence found"), "{human}");
+    assert!(human.contains("No evidence found"), "{human}");
     assert!(
         human.contains("project\n  Scope: personal\n  Coverage: found"),
         "{human}"
