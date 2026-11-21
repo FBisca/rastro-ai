@@ -1,10 +1,10 @@
 # Learning: trust per cell
 
-Paths: crates/rastro-core/src/trust/, crates/rastro-core/src/actions/, crates/rastro-core/src/tick.rs, crates/rastro-core/src/read_only.rs, crates/rastro-core/src/lib.rs, crates/rastro-operations/, crates/rastro-cli/src/, crates/rastro-cli/tests/trust.rs, crates/rastro-cli/tests/trust_demotion.rs, schema/
+Paths: crates/rastro-core/src/trust/, crates/rastro-core/src/actions/, crates/rastro-core/src/queue/, crates/rastro-core/src/tick.rs, crates/rastro-core/src/read_only.rs, crates/rastro-core/src/lib.rs, crates/rastro-operations/, crates/rastro-cli/src/, crates/rastro-cli/tests/trust.rs, crates/rastro-cli/tests/trust_demotion.rs, crates/rastro-cli/tests/trust_ask.rs, crates/rastro-cli/tests/queue.rs, schema/
 
 Trust answers "should it act alone?" per cell — one action × team pair — and is derived from outcomes, never stored (`../decisions/learning.md` §1, §5; `../decisions/levels.md`). A cell's level and the evidence behind it are computed at read from the runs and owner intents the visible scopes hold, under the configurable thresholds of `[learning]`; promotion is always proposed to the owner, never self-applied, and demotion is automatic and visible (`../decisions/learning.md` §6–7, §14). The trust view is a core read like the queue, defined once in the operation catalog (`../adr/0007-typed-operation-catalog.md`) and offered on the CLI and, deferred, through the MCP catalog gateway.
 
-This file holds the trust-view, demotion and decay requirements of the learned-trust slice; the slice's remaining requirements (the Ask answer, pin and reset, the journal read, usefulness and cost, read logging) land with their tickets.
+This file holds the trust-view, demotion, decay and Ask-answer requirements of the learned-trust slice; the slice's remaining requirements (pin and reset, the journal read, usefulness and cost, read logging) land with their tickets.
 
 ## Requirements
 
@@ -81,3 +81,18 @@ A cell unused for the configured decay window, default 30 days, SHALL drop one l
 #### Scenario: decay applies at next use
 - WHEN a cell at Act last ran 31 days ago and a new proposal uses it
 - THEN the cell reads Propose and the journal names the decay with its window
+
+### Requirement: An Ask cell asks instead of proposing
+A match whose cell sits at Ask SHALL surface as a queue question naming the action, SHALL start no run, and SHALL run the action once when the owner answers yes or reject it when the owner answers no.
+
+#### Scenario: an Ask match becomes a question
+- WHEN a rule matches a proposal whose cell is at Ask
+- THEN rastro queue lists a question naming the action and title, and rastro actions lists no run
+
+#### Scenario: answering yes runs once
+- WHEN the owner answers the Ask question yes
+- THEN the action runs exactly once as an accepted proposal would, and the fake Linear server receives one create
+
+#### Scenario: answering no rejects
+- WHEN the owner answers the Ask question no
+- THEN nothing runs and the question's outcome reads rejected
