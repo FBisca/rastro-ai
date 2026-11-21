@@ -137,6 +137,12 @@ pub trait Snapshot {
     fn shown_reports(&self) -> Result<Vec<crate::queue::ShownReport>> {
         Ok(Default::default())
     }
+    /// Each plugin's runs visible to `scopes` (empty: every scope), ordered by plugin id: the
+    /// wall time of its finished runs in milliseconds, the adapter turns they used, and the ids
+    /// of the runs whose content a shown report names. A plugin with no finished run is absent.
+    fn plugin_runs(&self, _scopes: &[Scope]) -> Result<Vec<crate::trust::PluginRuns>> {
+        Ok(Vec::new())
+    }
     /// Every standard statement an observed commitment holds, by the commitment's id and with the
     /// first moment the record shows it known, visible to `scopes` (empty: every scope): what says
     /// when an item's statements began to be held, and so when the queue began leaving it out.

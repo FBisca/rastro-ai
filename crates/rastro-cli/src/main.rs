@@ -905,6 +905,20 @@ fn queue_text(queue: &rastro_core::queue::Queue) -> String {
                     claim.id, claim.status, c.intent
                 ));
             }
+            ItemKind::Question if item.action.is_some() => {
+                let action = item.action.as_ref().expect("an Ask question carries one");
+                lines.push(format!(
+                    "Question | Id: {} | Source: {source} | Scope: {}",
+                    item.id,
+                    display_safe(&item.source.scope)
+                ));
+                lines.push(format!(
+                    "  Ask | Action: {} | Title: {} | Team: {} | Answer yes to run it once, no to reject it",
+                    display_safe(&action.action),
+                    display_safe(&action.fields.title),
+                    display_safe(&action.fields.team),
+                ));
+            }
             ItemKind::Question => {
                 let q = item.question.as_ref().expect("a question item carries one");
                 lines.push(format!("Question | Id: {} | Source: {source}", item.id));
@@ -1229,9 +1243,11 @@ fn rules_check_text(r: &rastro_operations::results::RulesCheckResult) -> String 
     lines.join("\n")
 }
 /// What `trust` lists: each cell's level, the counts behind it, its last change and what the
-/// next promotion needs; an empty store says it holds no trust history.
+/// next promotion needs, then each plugin's engagement, time to action and cost; an empty
+/// store says it holds no trust history.
 fn trust_text(trust: &rastro_core::trust::Trust) -> String {
-    if trust.cells.is_empty() {
+    use rastro_core::trust::{CostPerAccepted, Engagement};
+    if trust.cells.is_empty() && trust.plugins.is_empty() {
         return "The store holds no trust history: no action has run".into();
     }
     let mut lines = Vec::new();
@@ -1263,13 +1279,52 @@ fn trust_text(trust: &rastro_core::trust::Trust) -> String {
             lines.push(format!("  {reset}"));
         }
     }
+    for plugin in &trust.plugins {
+        let engagement = match plugin.engagement {
+            Engagement::Measured { acted, seen } => format!("{acted} of {seen}"),
+            Engagement::Unmeasured(_) => "unmeasured".into(),
+        };
+        let mut line = format!(
+            "{} | Engagement: {}",
+            display_safe(&plugin.plugin),
+            engagement
+        );
+        if let Some(seconds) = plugin.time_to_action_seconds {
+            line += &format!(" | Time to action: {seconds}s");
+        }
+        line += &format!(
+            " | Cost: {}, {} turns",
+            wall_text(plugin.cost.wall_ms),
+            plugin.cost.turns
+        );
+        let per_accepted = match plugin.cost_per_accepted {
+            CostPerAccepted::Measured(cost) => format!(
+                " | Per accepted: {}, {} turns",
+                wall_text(cost.wall_ms),
+                cost.turns
+            ),
+            CostPerAccepted::Dash(_) => " | Per accepted: —".to_string(),
+        };
+        line += &per_accepted;
+        lines.push(line);
+    }
     lines.join("\n")
 }
+
+/// A wall time the owner reads: whole seconds when they are whole, milliseconds otherwise.
+fn wall_text(ms: i64) -> String {
+    if ms % 1000 == 0 {
+        format!("{}s", ms / 1000)
+    } else {
+        format!("{ms}ms")
+    }
+}
+
 /// One cell's trust as the terminal reads it: the row `trust` prints, on its own.
 fn trust_cell_text(cell: &rastro_core::trust::TrustCell) -> String {
-    trust_text(&rastro_core::trust::Trust {
-        cells: vec![cell.clone()],
-    })
+    let mut trust = rastro_core::trust::Trust::empty();
+    trust.cells.push(cell.clone());
+    trust_text(&trust)
 }
 /// What `trust journal` lists: every level change, newest first, each with its cell, the levels
 /// it moved between, its cause and its time; an empty store says no level has changed.

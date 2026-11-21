@@ -394,7 +394,7 @@ The `actions` read of one Act run SHALL show its level `act`, the copy of the ru
 - THEN the fake Linear server has received one delete of that issue, and the run reads `undone`
 
 ### Requirement: The owner checks what each rule does now
-`rastro rules check` SHALL show, for each rule, its match, grace, cap, today's count, its pending Acts and the queued proposals it matches, on the CLI and over MCP, and SHALL record nothing.
+`rastro rules check` SHALL show, for each rule, its match, grace, cap, today's count, its pending Acts and the queued proposals it matches, on the CLI and over MCP, and SHALL record nothing but the read log row an MCP call appends.
 
 #### Scenario: today's count and pending Acts
 - WHEN rule `my-issues` with `daily_cap = 5` started two Act runs today and one of them is pending

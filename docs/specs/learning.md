@@ -1,10 +1,10 @@
 # Learning: trust per cell
 
-Paths: crates/rastro-core/src/trust/, crates/rastro-core/src/actions/, crates/rastro-core/src/tick.rs, crates/rastro-core/src/read_only.rs, crates/rastro-core/src/lib.rs, crates/rastro-operations/, crates/rastro-cli/src/, crates/rastro-cli/tests/trust.rs, crates/rastro-cli/tests/trust_demotion.rs, crates/rastro-cli/tests/trust_controls.rs, crates/rastro-cli/tests/trust_journal.rs, schema/
+Paths: crates/rastro-core/src/trust/, crates/rastro-core/src/actions/, crates/rastro-core/src/queue/, crates/rastro-core/src/tick.rs, crates/rastro-core/src/read_only.rs, crates/rastro-core/src/lib.rs, crates/rastro-operations/, crates/rastro-cli/src/, crates/rastro-cli/tests/trust.rs, crates/rastro-cli/tests/trust_demotion.rs, crates/rastro-cli/tests/trust_ask.rs, crates/rastro-cli/tests/trust_usefulness.rs, crates/rastro-cli/tests/trust_controls.rs, crates/rastro-cli/tests/trust_journal.rs, crates/rastro-cli/tests/queue.rs, crates/rastro-storage-sqlite/migrations/, crates/rastro-storage-sqlite/src/, crates/rastro-cli/tests/mcp_read_log.rs, crates/rastro-cli/tests/mcp.rs, schema/
 
-Trust answers "should it act alone?" per cell — one action × team pair — and is derived from outcomes, never stored (`../decisions/learning.md` §1, §5; `../decisions/levels.md`). A cell's level and the evidence behind it are computed at read from the runs and owner intents the visible scopes hold, under the configurable thresholds of `[learning]`; promotion is always proposed to the owner, never self-applied, and demotion is automatic and visible (`../decisions/learning.md` §6–7, §14). The trust view is a core read like the queue, defined once in the operation catalog (`../adr/0007-typed-operation-catalog.md`) and offered on the CLI and, deferred, through the MCP catalog gateway.
+Trust answers "should it act alone?" per cell — one action × team pair — and is derived from outcomes, never stored (`../decisions/learning.md` §1, §5; `../decisions/levels.md`). A cell's level and the evidence behind it are computed at read from the runs and owner intents the visible scopes hold, under the configurable thresholds of `[learning]`; promotion is always proposed to the owner, never self-applied, and demotion is automatic and visible (`../decisions/learning.md` §6–7, §14). The trust view is a core read like the queue, defined once in the operation catalog (`../adr/0007-typed-operation-catalog.md`) and offered on the CLI and, deferred, through the MCP catalog gateway. A machine read is audited, never mistaken for the owner having seen an item.
 
-This file holds the trust-view, demotion, decay, journal and owner-control requirements of the learned-trust slice; the slice's remaining requirements (the Ask answer, usefulness and cost, read logging) land with their tickets.
+This file holds the trust-view, demotion, decay, Ask-answer, usefulness and cost, read-logging, journal and owner-control requirements of the learned-trust slice.
 
 ## Requirements
 
@@ -81,6 +81,54 @@ A cell unused for the configured decay window, default 30 days, SHALL drop one l
 #### Scenario: decay applies at next use
 - WHEN a cell at Act last ran 31 days ago and a new proposal uses it
 - THEN the cell reads Propose and the journal names the decay with its window
+
+### Requirement: An Ask cell asks instead of proposing
+A match whose cell sits at Ask SHALL surface as a queue question naming the action, SHALL start no run, and SHALL run the action once when the owner answers yes or reject it when the owner answers no.
+
+#### Scenario: an Ask match becomes a question
+- WHEN a rule matches a proposal whose cell is at Ask
+- THEN rastro queue lists a question naming the action and title, and rastro actions lists no run
+
+#### Scenario: answering yes runs once
+- WHEN the owner answers the Ask question yes
+- THEN the action runs exactly once as an accepted proposal would, and the fake Linear server receives one create
+
+#### Scenario: answering no rejects
+- WHEN the owner answers the Ask question no
+- THEN nothing runs and the question's outcome reads rejected
+
+### Requirement: Usefulness is visible per plugin
+rastro trust SHALL show per-plugin engagement as acted on over seen from terminal shown reports with the time to action, reading unmeasured where no shown reports exist.
+
+#### Scenario: engagement is measured
+- WHEN a plugin's items were shown 10 times by terminal reads and acted on 6
+- THEN its engagement reads 6 of 10 with the time to action from the outcomes' waits
+
+#### Scenario: unseen is unmeasured
+- WHEN a plugin has runs but no shown reports
+- THEN its engagement reads unmeasured, never 0
+
+### Requirement: Cost is wall time plus adapter turns
+A plugin's cost SHALL be the wall time of its runs plus the adapter turns they used, and cost per accepted item SHALL read a dash when nothing was accepted.
+
+#### Scenario: cost and cost per accepted
+- WHEN a plugin ran 120 seconds over 4 turns and 2 of its items were accepted
+- THEN its cost reads 120 seconds and 4 turns, and cost per accepted reads 60 seconds and 2 turns
+
+#### Scenario: zero accepts divides nothing
+- WHEN a plugin's runs accepted nothing
+- THEN its cost per accepted reads a dash, not a division by zero
+
+### Requirement: MCP reads are logged, never seen
+The MCP server SHALL log each read call with its tool, arguments and time, and the log SHALL never write a shown report.
+
+#### Scenario: an MCP read is logged
+- WHEN an MCP client calls the queue tool
+- THEN a read log row names the tool, arguments and time, and no shown report is written
+
+#### Scenario: a terminal read is not an MCP read
+- WHEN the same queue read runs on the terminal
+- THEN a shown report is written and no read log row is
 
 ### Requirement: The learning journal records every level change
 rastro trust journal SHALL list every level change with its cause and time, newest first, derived from the same evidence as the trust view.
