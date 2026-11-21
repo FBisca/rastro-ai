@@ -7,8 +7,8 @@
 use super::{Connector, Limits, Plugin, allowed_environment, check, find, handshake, resolve};
 use crate::Locations;
 use rastro_plugin_sdk::{
-    AGENT_TOOL_ADAPTER_KIND, AdapterInitializeParams, Envelope, JUDGMENT_FLOOR, JUDGMENT_REQUEST,
-    JudgmentRequest, PROTOCOL_VERSION, Role,
+    AGENT_TOOL_ADAPTER_KIND, AdapterInitializeParams, Envelope, JUDGMENT_REQUEST, JudgmentRequest,
+    PROTOCOL_VERSION, Role,
 };
 use serde_json::Value;
 use std::{
@@ -58,7 +58,23 @@ impl JudgmentSession {
         id: &str,
         timeout: Duration,
     ) -> Result<Self, JudgmentFailure> {
-        let plugin = adapter(locations, id)?;
+        Self::open_with_boundary(locations, id, timeout, &[])
+    }
+
+    /// Opens a session whose adapter must enforce the judgment floor and the task's boundary
+    /// profile `boundary` (ADR-0016 §6): controls beyond the floor the task demands. A manifest
+    /// that cannot enforce one of them refuses the run naming it, before the adapter starts.
+    ///
+    /// # Errors
+    /// As [`JudgmentSession::open`], and [`JudgmentFailure::Failed`] naming a required control
+    /// the manifest does not declare it can enforce.
+    pub fn open_with_boundary(
+        locations: &Locations,
+        id: &str,
+        timeout: Duration,
+        boundary: &[String],
+    ) -> Result<Self, JudgmentFailure> {
+        let plugin = adapter(locations, id, boundary)?;
         let mut command = Command::new(resolve(&plugin.dir, &plugin.manifest.command));
         command
             .env_clear()
@@ -146,8 +162,12 @@ impl JudgmentSession {
     }
 }
 
-/// The installed adapter `id`, if it passes its checks.
-fn adapter(locations: &Locations, id: &str) -> Result<Plugin, JudgmentFailure> {
+/// The installed adapter `id`, if it passes its checks and can enforce the floor and `boundary`.
+fn adapter(
+    locations: &Locations,
+    id: &str,
+    boundary: &[String],
+) -> Result<Plugin, JudgmentFailure> {
     let refused =
         |why: String| JudgmentFailure::Failed(format!("the adapter {id} is refused: {why}"));
     let (manifest, dir) = find(locations, id).ok_or_else(|| {
@@ -162,17 +182,18 @@ fn adapter(locations: &Locations, id: &str) -> Result<Plugin, JudgmentFailure> {
         .manifest
         .check_agent_tool()
         .map_err(|error| refused(format!("{error:#}")))?;
-    // The judgment floor is non-negotiable (ADR-0016 §6): a manifest that cannot enforce one of
-    // its controls refuses the run naming it, before the adapter starts. There is no
-    // degraded-security mode.
-    let missing: Vec<&str> = JUDGMENT_FLOOR
-        .iter()
-        .filter(|control| !plugin.manifest.enforcement.iter().any(|c| c == *control))
-        .copied()
-        .collect();
+    // The judgment floor is non-negotiable (ADR-0016 §6), and a task's boundary can demand
+    // more lockdown, never less: a manifest that cannot enforce one of the required controls
+    // refuses the run naming it, before the adapter starts. There is no degraded-security mode.
+    let missing = plugin.manifest.unenforceable(boundary);
     if !missing.is_empty() {
+        let source = if boundary.is_empty() {
+            "the judgment floor"
+        } else {
+            "the judgment floor and the task's boundary"
+        };
         return Err(refused(format!(
-            "the judgment floor requires {}, which its manifest does not declare it can enforce",
+            "{source} requires {}, which its manifest does not declare it can enforce",
             missing.join(", ")
         )));
     }

@@ -90,3 +90,18 @@ A mapped speaker label SHALL resolve to its existing identity, an unmapped perso
 #### Scenario: the mappings decide the identity
 - WHEN a speaker label is explicitly mapped or left unmapped
 - THEN the mapped existing identity is used and an unmapped person remains unknown without name-based identity inference
+
+### Requirement: Task templates run without domain logic in the core runner
+Core SHALL execute task templates without containing plugin-specific instructions, validation or exclusion rules, or runner branches keyed on the template ID.
+
+#### Scenario: a synthetic blog task runs through the unchanged runner
+- WHEN a synthetic blog template with fields and text checks different from the meeting template is passed to the task runner
+- THEN the unchanged runner evaluates the blog declarations and returns the validated blog-shaped result
+
+#### Scenario: an unenforceable control refuses the run before any text
+- WHEN an adapter cannot enforce a control required by the core floor or the task template
+- THEN the run is refused before the adapter receives any transcript text
+
+#### Scenario: a declared exclusion counts without a retry
+- WHEN a valid candidate matches a declared exclusion rule
+- THEN the candidate is counted as excluded without causing a retry

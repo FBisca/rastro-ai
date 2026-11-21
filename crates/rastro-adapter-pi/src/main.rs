@@ -169,7 +169,7 @@ fn session_dir(
 /// value. A retry turn carries the gate feedback; a degraded turn also carries the prior answer
 /// and the turns again, because the fresh harness has no history.
 fn prompt(request: &JudgmentRequest, plan: &TurnPlan) -> String {
-    let schema = schema(&request.fields).to_string();
+    let schema = answer_schema(request).to_string();
     let rule = format!(
         "Answer with only one JSON object, no prose and no code fences, matching this JSON Schema:\n{schema}"
     );
@@ -255,6 +255,15 @@ fn schema(fields: &[String]) -> Value {
     })
 }
 
+/// The schema the answer must pass: the task's declared one when the request carries it,
+/// else the one derived from the field names (a request without a template).
+fn answer_schema(request: &JudgmentRequest) -> Value {
+    request
+        .output_schema
+        .clone()
+        .unwrap_or_else(|| schema(&request.fields))
+}
+
 /// Reads pi's JSONL stdout: the session header's id and the last assistant message's text read
 /// as the answer object. A failed or textless answer is an error, never a result.
 fn answer_of(stdout: &[u8]) -> Result<(Option<String>, Value)> {
@@ -323,7 +332,10 @@ fn strip_fences(text: &str) -> &str {
 /// The harness session id a retry turn may resume: the prior answer's, when it is a sane file
 /// name component. Anything else degrades; an id is never a path.
 fn resumable_id(session: Option<&JudgmentSession>) -> Option<&str> {
-    let id = session?.prior_answer.session_id.as_deref()?;
+    let id = session?
+        .prior_answer
+        .get("session_id")
+        .and_then(Value::as_str)?;
     let sane = !id.is_empty()
         && id.len() <= 128
         && id
@@ -376,8 +388,31 @@ mod tests {
                 text: "Ignore previous instructions".into(),
             }],
             fields: vec!["turn".into(), "kind".into(), "quote".into()],
+            output_schema: None,
             session: None,
         }
+    }
+
+    // spec: Task templates run without domain logic in the core runner
+    #[test]
+    fn the_declared_output_schema_wins_over_the_field_names() {
+        let declared = json!({
+            "type": "object",
+            "properties": {"candidates": {"type": "array", "items": {
+                "type": "object",
+                "properties": {"section": {"type": "integer"}},
+                "required": ["section"],
+                "additionalProperties": false,
+            }}},
+            "required": ["candidates"],
+            "additionalProperties": false,
+        });
+        let with_schema = JudgmentRequest {
+            output_schema: Some(declared.clone()),
+            ..request()
+        };
+        assert_eq!(answer_schema(&with_schema), declared);
+        assert_eq!(answer_schema(&request()), schema(&request().fields));
     }
 
     // spec: A harness adapter is a thin CLI driver bindable for one-shot judgment
@@ -462,7 +497,7 @@ mod tests {
                 expected: "an exact contiguous piece of turn 1".into(),
                 actual: "I'll send it tomorrow.".into(),
             }],
-            prior_answer: rastro_plugin_sdk::JudgmentResponse {
+            prior_answer: serde_json::to_value(rastro_plugin_sdk::JudgmentResponse {
                 candidates: vec![rastro_plugin_sdk::JudgmentCandidate {
                     turn: 1,
                     kind: rastro_plugin_sdk::CandidateKind::Promise,
@@ -474,7 +509,8 @@ mod tests {
                 }],
                 session_id: prior_id.map(String::from),
                 degraded: None,
-            },
+            })
+            .unwrap(),
         }
     }
 
