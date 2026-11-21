@@ -38,6 +38,8 @@ const PERSON_PREFIX: &str = "rastro:person/";
 const CLAIM_DOMAIN: &str = "claim/";
 /// The prefix of the domain of an intent about one action run: `action_run/<run id>`.
 pub const ACTION_RUN_DOMAIN: &str = "action_run/";
+/// The identifier prefix of the domain a trust control names: one cell, `trust/<action>/<team>`.
+pub const TRUST_DOMAIN: &str = "trust/";
 /// The identifier prefix of the `std:Commitment` an accepted queue item becomes.
 const COMMITMENT_PREFIX: &str = "std:commitment/";
 /// The type of the commitment an accepted queue item becomes, asserted by the acceptance.
@@ -76,9 +78,15 @@ pub enum IntentKind {
     /// Stop a pending Act run: the owner ends it before its grace ends. It names the run and its
     /// source's scope, and is what makes the run read `stopped`: it never executes.
     Stop,
+    /// Pin a trust cell at a level: the owner freezes it against learning in both directions.
+    /// It names the cell — one action and team — and the level it holds.
+    Pin,
+    /// Reset a trust cell: the owner clears its learned history back to its baseline — Act with
+    /// a matching rule, Propose without. It names the cell and carries no level.
+    Reset,
 }
 impl IntentKind {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 16] = [
         Self::CreatePerson,
         Self::Name,
         Self::Link,
@@ -93,6 +101,8 @@ impl IntentKind {
         Self::Confirm,
         Self::UndoAction,
         Self::Stop,
+        Self::Pin,
+        Self::Reset,
     ];
     pub fn as_str(self) -> &'static str {
         match self {
@@ -110,6 +120,8 @@ impl IntentKind {
             Self::Confirm => "confirm",
             Self::UndoAction => "undo_action",
             Self::Stop => "stop",
+            Self::Pin => "pin",
+            Self::Reset => "reset",
         }
     }
     /// The core validates kinds; storage keeps them as text with no SQL enum.
@@ -280,6 +292,15 @@ pub enum Targets {
         #[serde(default, skip_serializing_if = "Vec::is_empty")]
         linked: Vec<EntityTarget>,
     },
+    /// A trust cell an owner control names: one action and team, and the level a pin holds. A
+    /// reset carries no level: it restores the cell's baseline.
+    Cell {
+        version: u32,
+        action: String,
+        team: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        level: Option<crate::trust::Level>,
+    },
 }
 /// The Person a question's yes holds its accounts by.
 #[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -347,7 +368,7 @@ impl Targets {
                 }
                 entities
             }
-            Self::Claim { .. } | Self::ClaimSet { .. } => vec![],
+            Self::Claim { .. } | Self::ClaimSet { .. } | Self::Cell { .. } => vec![],
             // A queue item is not an entity; an accepted proposal's commitment and the parties
             // it maps are, so the issuer must see them.
             Self::Proposal {
@@ -362,7 +383,8 @@ impl Targets {
             | Self::Claim { version, .. }
             | Self::ClaimSet { version, .. }
             | Self::Proposal { version, .. }
-            | Self::Answer { version, .. } => *version,
+            | Self::Answer { version, .. }
+            | Self::Cell { version, .. } => *version,
         }
     }
     /// The claim the targets review, when they name one.
@@ -377,6 +399,20 @@ impl Targets {
         match self {
             Self::Proposal { item, .. } => item.as_deref(),
             Self::Answer { item, .. } => Some(item),
+            _ => None,
+        }
+    }
+    /// The trust cell the targets name, when they name one: its action and team.
+    pub fn cell(&self) -> Option<(&str, &str)> {
+        match self {
+            Self::Cell { action, team, .. } => Some((action, team)),
+            _ => None,
+        }
+    }
+    /// The level a pin holds, when the targets name a pinned cell.
+    pub fn pinned_level(&self) -> Option<crate::trust::Level> {
+        match self {
+            Self::Cell { level, .. } => *level,
             _ => None,
         }
     }
@@ -509,6 +545,10 @@ impl Intent {
                 .targets
                 .queue_item()
                 .map(|run| format!("{ACTION_RUN_DOMAIN}{run}")),
+            IntentKind::Pin | IntentKind::Reset => self
+                .targets
+                .cell()
+                .map(|(action, team)| format!("{TRUST_DOMAIN}{action}/{team}")),
             // A missed report needs no item, so its domain names only what it is.
             IntentKind::Missed => Some(match self.targets.queue_item() {
                 Some(item) => format!("queue/{item}"),
@@ -602,6 +642,94 @@ impl Intent {
         );
         Ok(())
     }
+    /// Whether the kind's targets fit its shape: the entity a creation or a name names,
+    /// the pair a link or a merge pairs, the claim a correction reviews, the item an answer
+    /// names, the cell a trust control names.
+    fn shape_fits(&self) -> Result<bool> {
+        let plain = |text: &str| !text.is_empty() && !text.chars().any(char::is_whitespace);
+        Ok(match self.kind {
+            IntentKind::CreatePerson | IntentKind::Name => {
+                matches!(&self.targets, Targets::Entity { entity, .. } if entity.identifier.starts_with(PERSON_PREFIX))
+            }
+            IntentKind::Link => {
+                matches!(&self.targets, Targets::Pair { symmetric: false, endpoints, .. } if endpoints[0].role == "account" && endpoints[1].role == "person")
+            }
+            IntentKind::CannotLink => {
+                matches!(&self.targets, Targets::Pair { symmetric: true, endpoints, .. } if endpoints[0].id < endpoints[1].id)
+            }
+            IntentKind::SameAs => {
+                matches!(&self.targets, Targets::Pair { symmetric: true, endpoints, .. } if endpoints[0].id < endpoints[1].id)
+            }
+            // An undo takes the targets of the intent it undoes, so the log's check of that
+            // target stands for the claim a correction named.
+            IntentKind::Undo => !matches!(&self.targets, Targets::ClaimSet { .. }),
+            // A correction names the claim it reviewed: the statement it said, the revision the
+            // owner read and the lifecycle state it binds to.
+            IntentKind::Confirm | IntentKind::Reject | IntentKind::Edit
+                if self.targets.claim().is_some() =>
+            {
+                self.check_review()?;
+                true
+            }
+            IntentKind::Confirm => false,
+            // The run's id sits where a queue item's does: the item an undo or a stop names is
+            // the run.
+            IntentKind::Accept
+            | IntentKind::Edit
+            | IntentKind::Reject
+            | IntentKind::UndoAction
+            | IntentKind::Stop => {
+                matches!(&self.targets, Targets::Proposal { item: Some(item), .. } if plain(item))
+            }
+            // A pin names its cell and the level it holds; the action and team are plain words.
+            IntentKind::Pin => {
+                matches!(&self.targets, Targets::Cell { action, team, level: Some(_), .. } if plain(action) && plain(team))
+            }
+            // A reset names its cell and carries no level: the baseline is the rule's to give.
+            IntentKind::Reset => {
+                matches!(&self.targets, Targets::Cell { action, team, level: None, .. } if plain(action) && plain(team))
+            }
+            IntentKind::Missed => match &self.targets {
+                Targets::Proposal {
+                    item: Some(item), ..
+                } => plain(item),
+                Targets::Proposal { item: None, .. } => true,
+                _ => false,
+            },
+            IntentKind::Answer => match &self.targets {
+                Targets::Answer {
+                    item,
+                    endpoints,
+                    yes,
+                    person,
+                    linked,
+                    ..
+                } => {
+                    let accounts = endpoints[0].role == "account"
+                        && endpoints[1].role == "account"
+                        && endpoints[0].id != endpoints[1].id;
+                    // What it links is what it decided: one of its own accounts.
+                    let links = (linked.iter()).all(|account| {
+                        account.role == "account"
+                            && endpoints.iter().any(|endpoint| endpoint.id == account.id)
+                    });
+                    plain(item)
+                        && accounts
+                        && links
+                        && if *yes {
+                            // A yes names the Person that holds them; a created one is named.
+                            person.as_ref().is_some_and(|answer| {
+                                answer.entity.role == "person"
+                                    && (!answer.created || answer.name.is_some())
+                            })
+                        } else {
+                            person.is_none() && linked.is_empty()
+                        }
+                }
+                _ => false,
+            },
+        })
+    }
     /// Checks the row on its own: the envelope, the JSON shapes and the kind's target shape.
     /// What it says about other intents (an undo's target) is checked against the log.
     #[expect(
@@ -661,80 +789,7 @@ impl Intent {
         if let Some([a, b]) = self.targets.endpoints() {
             ensure!(a.id != b.id, "an intent can't pair an entity with itself");
         }
-        let shape_fits = match self.kind {
-            IntentKind::CreatePerson | IntentKind::Name => {
-                matches!(&self.targets, Targets::Entity { entity, .. } if entity.identifier.starts_with(PERSON_PREFIX))
-            }
-            IntentKind::Link => {
-                matches!(&self.targets, Targets::Pair { symmetric: false, endpoints, .. } if endpoints[0].role == "account" && endpoints[1].role == "person")
-            }
-            IntentKind::CannotLink => {
-                matches!(&self.targets, Targets::Pair { symmetric: true, endpoints, .. } if endpoints[0].id < endpoints[1].id)
-            }
-            IntentKind::SameAs => {
-                matches!(&self.targets, Targets::Pair { symmetric: true, endpoints, .. } if endpoints[0].id < endpoints[1].id)
-            }
-            // An undo takes the targets of the intent it undoes, so the log's check of that
-            // target stands for the claim a correction named.
-            IntentKind::Undo => !matches!(&self.targets, Targets::ClaimSet { .. }),
-            // A correction names the claim it reviewed: the statement it said, the revision the
-            // owner read and the lifecycle state it binds to.
-            IntentKind::Confirm | IntentKind::Reject | IntentKind::Edit
-                if self.targets.claim().is_some() =>
-            {
-                self.check_review()?;
-                true
-            }
-            IntentKind::Confirm => false,
-            // The run's id sits where a queue item's does: the item an undo or a stop names is
-            // the run.
-            IntentKind::Accept
-            | IntentKind::Edit
-            | IntentKind::Reject
-            | IntentKind::UndoAction
-            | IntentKind::Stop => {
-                matches!(&self.targets, Targets::Proposal { item: Some(item), .. } if plain(item))
-            }
-            IntentKind::Missed => match &self.targets {
-                Targets::Proposal {
-                    item: Some(item), ..
-                } => plain(item),
-                Targets::Proposal { item: None, .. } => true,
-                _ => false,
-            },
-            IntentKind::Answer => match &self.targets {
-                Targets::Answer {
-                    item,
-                    endpoints,
-                    yes,
-                    person,
-                    linked,
-                    ..
-                } => {
-                    let accounts = endpoints[0].role == "account"
-                        && endpoints[1].role == "account"
-                        && endpoints[0].id != endpoints[1].id;
-                    // What it links is what it decided: one of its own accounts.
-                    let links = (linked.iter()).all(|account| {
-                        account.role == "account"
-                            && endpoints.iter().any(|endpoint| endpoint.id == account.id)
-                    });
-                    plain(item)
-                        && accounts
-                        && links
-                        && if *yes {
-                            // A yes names the Person that holds them; a created one is named.
-                            person.as_ref().is_some_and(|answer| {
-                                answer.entity.role == "person"
-                                    && (!answer.created || answer.name.is_some())
-                            })
-                        } else {
-                            person.is_none() && linked.is_empty()
-                        }
-                }
-                _ => false,
-            },
-        };
+        let shape_fits = self.shape_fits()?;
         ensure!(
             shape_fits,
             "a {} intent doesn't take these targets",
@@ -972,6 +1027,8 @@ pub struct Resolution {
     pub merges: BTreeMap<(String, String), String>,
     /// Sorted endpoint ids to the cannot-link intent in force.
     pub cannot: BTreeMap<(String, String), String>,
+    /// Cell (action, team) to the pin intent in force on it.
+    pub pins: BTreeMap<(String, String), String>,
     /// Claim id to the confirmation in force on it: the latest correction of the claim, when
     /// that is a confirmation.
     pub confirmed: BTreeMap<String, String>,
@@ -1112,7 +1169,17 @@ impl Resolution {
                 IntentKind::Accept
                 | IntentKind::Missed
                 | IntentKind::UndoAction
-                | IntentKind::Stop => {}
+                | IntentKind::Stop
+                | IntentKind::Reset => {}
+                // A newer pin on a cell takes the place of the one in force; the older held
+                // its stretch until this one.
+                IntentKind::Pin => {
+                    if let Some((action, team)) = intent.targets.cell()
+                        && let Some(older) = r.pins.insert((action.into(), team.into()), id.clone())
+                    {
+                        r.status.insert(older, (IntentStatus::Superseded, Some(id)));
+                    }
+                }
                 IntentKind::Edit if intent.targets.claim().is_none() => {}
                 // The latest valid correction of a claim is the one in force.
                 IntentKind::Confirm => {
@@ -1221,6 +1288,8 @@ impl Resolution {
             | IntentKind::Missed
             | IntentKind::UndoAction
             | IntentKind::Stop
+            | IntentKind::Pin
+            | IntentKind::Reset
             | IntentKind::Confirm => {}
             IntentKind::Undo => {
                 let undone = intent.undo_of.as_deref().unwrap_or_default();
@@ -1243,6 +1312,9 @@ impl Resolution {
                     }
                     IntentKind::CreatePerson => bail!("creating a Person can't be undone"),
                     IntentKind::Name | IntentKind::Link | IntentKind::SameAs => {}
+                    // A pin is the owner's freeze on a cell; taking it back lets learning move
+                    // the level again. A reset taken back restores the history it cleared.
+                    IntentKind::Pin | IntentKind::Reset => {}
                     IntentKind::Answer => {
                         let Targets::Answer { yes, person, .. } = &target.targets else {
                             bail!("an answer names the question it answered");

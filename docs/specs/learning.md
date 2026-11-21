@@ -1,10 +1,10 @@
 # Learning: trust per cell
 
-Paths: crates/rastro-core/src/trust/, crates/rastro-core/src/actions/, crates/rastro-core/src/tick.rs, crates/rastro-core/src/read_only.rs, crates/rastro-core/src/lib.rs, crates/rastro-operations/, crates/rastro-cli/src/, crates/rastro-cli/tests/trust.rs, crates/rastro-cli/tests/trust_demotion.rs, schema/
+Paths: crates/rastro-core/src/trust/, crates/rastro-core/src/actions/, crates/rastro-core/src/tick.rs, crates/rastro-core/src/read_only.rs, crates/rastro-core/src/lib.rs, crates/rastro-operations/, crates/rastro-cli/src/, crates/rastro-cli/tests/trust.rs, crates/rastro-cli/tests/trust_demotion.rs, crates/rastro-cli/tests/trust_controls.rs, crates/rastro-cli/tests/trust_journal.rs, schema/
 
 Trust answers "should it act alone?" per cell — one action × team pair — and is derived from outcomes, never stored (`../decisions/learning.md` §1, §5; `../decisions/levels.md`). A cell's level and the evidence behind it are computed at read from the runs and owner intents the visible scopes hold, under the configurable thresholds of `[learning]`; promotion is always proposed to the owner, never self-applied, and demotion is automatic and visible (`../decisions/learning.md` §6–7, §14). The trust view is a core read like the queue, defined once in the operation catalog (`../adr/0007-typed-operation-catalog.md`) and offered on the CLI and, deferred, through the MCP catalog gateway.
 
-This file holds the trust-view, demotion and decay requirements of the learned-trust slice; the slice's remaining requirements (the Ask answer, pin and reset, the journal read, usefulness and cost, read logging) land with their tickets.
+This file holds the trust-view, demotion, decay, journal and owner-control requirements of the learned-trust slice; the slice's remaining requirements (the Ask answer, usefulness and cost, read logging) land with their tickets.
 
 ## Requirements
 
@@ -81,3 +81,21 @@ A cell unused for the configured decay window, default 30 days, SHALL drop one l
 #### Scenario: decay applies at next use
 - WHEN a cell at Act last ran 31 days ago and a new proposal uses it
 - THEN the cell reads Propose and the journal names the decay with its window
+
+### Requirement: The learning journal records every level change
+rastro trust journal SHALL list every level change with its cause and time, newest first, derived from the same evidence as the trust view.
+
+#### Scenario: changes carry their causes
+- WHEN a cell was demoted by an undo and later decayed
+- THEN the journal lists both changes newest first, each naming its cause and time
+
+### Requirement: Pin and reset are owner intents
+rastro trust pin and rastro trust reset SHALL record owner intents that a rebuild replays, a pin SHALL hold the level against learning in both directions, and a reset SHALL clear the cell's learned history back to its baseline.
+
+#### Scenario: a pin holds against demotion
+- WHEN a cell pinned at Propose has a run undone
+- THEN its level stays Propose and the journal names the pin holding it
+
+#### Scenario: a reset restores the baseline
+- WHEN a demoted cell with a rule is reset
+- THEN its level returns to Act, a cell without a rule returns to Propose, and the journal names the reset

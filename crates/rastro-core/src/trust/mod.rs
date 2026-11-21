@@ -11,7 +11,7 @@
 //! and time, so the cell carries its journal and the row names the last change. A cell no
 //! visible run touches is absent, and an empty store lists no cells.
 use crate::actions::{Filed, Run, RunStatus};
-use crate::identity::{Intent, IntentKind, IntentStatus, Resolution};
+use crate::identity::{self, Intent, IntentKind, IntentStatus, Payload, Resolution, Targets};
 use crate::read_only::Snapshot;
 use crate::{Config, Rastro, ReadStorage, Reader, Scope, Storage};
 use anyhow::{Context, Result};
@@ -72,7 +72,7 @@ impl LearningConfig {
 }
 
 /// A cell's level: Act, Propose or Ask (levels §1).
-#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Level {
     Ask,
@@ -87,6 +87,16 @@ impl Level {
             Self::Ask => "ask",
             Self::Propose => "propose",
             Self::Act => "act",
+        }
+    }
+
+    /// The level a word names, as the owner types it on the command line.
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "ask" => Some(Self::Ask),
+            "propose" => Some(Self::Propose),
+            "act" => Some(Self::Act),
+            _ => None,
         }
     }
 
@@ -165,6 +175,71 @@ impl Trust {
     }
 }
 
+/// The cell a journal change names: one action and team.
+#[derive(Clone, Debug, JsonSchema, Serialize)]
+#[schemars(rename = "TrustJournalCell")]
+pub struct JournalCell {
+    pub action: String,
+    pub team: String,
+}
+
+/// One level change as the journal lists it: the cell it moved, the levels it moved between,
+/// what caused it and when.
+#[derive(Clone, Debug, JsonSchema, Serialize)]
+#[schemars(rename = "TrustJournalChange")]
+pub struct JournalChange {
+    pub cell: JournalCell,
+    pub from: Level,
+    pub to: Level,
+    pub cause: String,
+    pub at: DateTime<Utc>,
+}
+
+/// What `trust journal` returns: every level change the visible cells derived, newest first.
+#[derive(Debug, JsonSchema, Serialize)]
+#[schemars(rename = "TrustJournal")]
+pub struct TrustJournal {
+    pub changes: Vec<JournalChange>,
+}
+
+impl TrustJournal {
+    pub fn empty() -> Self {
+        Self {
+            changes: Vec::new(),
+        }
+    }
+}
+
+/// Derives the journal from the same evidence as the trust view: every visible cell's changes,
+/// newest first. A change held at the same instant as another reads after it, the reverse of
+/// the order the cells derived them in.
+pub(crate) fn trust_journal(
+    config: &Config,
+    view: Option<&dyn Snapshot>,
+    scopes: &[Scope],
+) -> Result<TrustJournal> {
+    let trust = trust_view(config, view, scopes)?;
+    let mut changes: Vec<JournalChange> = trust
+        .cells
+        .iter()
+        .flat_map(|cell| {
+            cell.changes.iter().map(move |change| JournalChange {
+                cell: JournalCell {
+                    action: cell.action.clone(),
+                    team: cell.team.clone(),
+                },
+                from: change.from,
+                to: change.to,
+                cause: change.cause.clone(),
+                at: change.at,
+            })
+        })
+        .collect();
+    changes.sort_by_key(|change| change.at);
+    changes.reverse();
+    Ok(TrustJournal { changes })
+}
+
 /// Derives the trust view from one snapshot: the runs and proposals the scopes see, grouped by
 /// cell.
 pub(crate) fn trust_view(
@@ -178,11 +253,7 @@ pub(crate) fn trust_view(
     let runs = view.action_runs(scopes)?;
     let proposals = view.action_proposals(scopes)?;
     let intents = view.intents()?;
-    let kinds: BTreeMap<&str, IntentKind> = intents
-        .iter()
-        .map(|intent| (intent.id.as_str(), intent.kind))
-        .collect();
-    let corrections = corrections(&intents);
+    let resolution = Resolution::of(&intents);
     let mut cells: BTreeMap<(String, String), Vec<&Run>> = BTreeMap::new();
     for run in &runs {
         cells
@@ -213,8 +284,8 @@ pub(crate) fn trust_view(
                     &team,
                     &runs,
                     &proposals,
-                    &kinds,
-                    &corrections,
+                    &intents,
+                    &resolution,
                 )
             })
             .collect::<Result<Vec<_>>>()?,
@@ -230,14 +301,22 @@ pub(crate) fn cell_level(
     action: &str,
     team: &str,
 ) -> Result<Level> {
+    Ok(derive_cell_from_view(config, view, scopes, action, team)?.level)
+}
+
+/// One cell's trust from the snapshot's runs, proposals and intents, whether or not any run
+/// touches it yet: a pin or a reset returns the cell it just changed.
+fn derive_cell_from_view(
+    config: &Config,
+    view: &dyn Snapshot,
+    scopes: &[Scope],
+    action: &str,
+    team: &str,
+) -> Result<TrustCell> {
     let runs = view.action_runs(scopes)?;
     let proposals = view.action_proposals(scopes)?;
     let intents = view.intents()?;
-    let kinds: BTreeMap<&str, IntentKind> = intents
-        .iter()
-        .map(|intent| (intent.id.as_str(), intent.kind))
-        .collect();
-    let corrections = corrections(&intents);
+    let resolution = Resolution::of(&intents);
     let runs: Vec<&Run> = runs
         .iter()
         .filter(|run| run.action == action && run.fields.team == team)
@@ -246,16 +325,15 @@ pub(crate) fn cell_level(
         .iter()
         .filter(|filed| filed.proposal.action == action && filed.proposal.fields.team == team)
         .collect();
-    Ok(derive_cell(
+    derive_cell(
         config,
         action,
         team,
         &runs,
         &proposals,
-        &kinds,
-        &corrections,
-    )?
-    .level)
+        &intents,
+        &resolution,
+    )
 }
 
 /// What happened to one run, terminally: a kept run is a clean outcome unless the owner accepted
@@ -286,8 +364,10 @@ struct Correction {
 /// The corrections that land on each claim, oldest first: a `reject` retracts it and an `edit`
 /// fixes its object, both ending what rests on it. An undone intent corrects nothing; a later
 /// correction supersedes an earlier one without erasing the change it caused.
-fn corrections(intents: &[Intent]) -> BTreeMap<&str, Vec<Correction>> {
-    let resolution = Resolution::of(intents);
+fn corrections<'a>(
+    intents: &'a [Intent],
+    resolution: &Resolution,
+) -> BTreeMap<&'a str, Vec<Correction>> {
     let mut map: BTreeMap<&str, Vec<Correction>> = BTreeMap::new();
     for intent in intents {
         let word = match intent.kind {
@@ -405,25 +485,130 @@ fn proposed_rule(action: &str, team: &str) -> Result<String> {
     ))
 }
 
-/// The level a cell sits at and its journal, folded from its outcomes and its uses in time
-/// order. Every undo or correction drops one level, and `repeat_undos` undos inside the last
-/// `undo_window` outcomes drop straight to Ask; a gap of `decay_days` or more between two uses
-/// decays the cell one level at the later use, naming the idle days and the window. The fold
-/// only ever moves down — promotion is never self-applied — and each move it makes is one entry
-/// of the journal, oldest first.
+/// A pin's stretch on a cell: the level it holds, from its intent's time until the intent that
+/// superseded it, or none while it still holds. An undone pin holds nothing: the replay removes
+/// its contribution, as it does for an undone correction.
+struct PinStretch {
+    level: Level,
+    start: DateTime<Utc>,
+    end: Option<DateTime<Utc>>,
+}
+
+/// The cell's owner controls from the intent log: its pin stretches, oldest first, and the
+/// times its resets cleared its learned history. An undone control contributes nothing.
+fn controls(
+    intents: &[Intent],
+    resolution: &Resolution,
+    action: &str,
+    team: &str,
+) -> (Vec<PinStretch>, Vec<DateTime<Utc>>) {
+    let mut pins: Vec<PinStretch> = Vec::new();
+    let mut resets: Vec<DateTime<Utc>> = Vec::new();
+    for intent in intents {
+        if intent.targets.cell() != Some((action, team)) {
+            continue;
+        }
+        let status = resolution.status.get(&intent.id);
+        if matches!(status, Some((IntentStatus::Undone, _))) {
+            continue;
+        }
+        match intent.kind {
+            IntentKind::Pin => {
+                let Some(level) = intent.targets.pinned_level() else {
+                    continue;
+                };
+                let end = match status {
+                    Some((IntentStatus::Superseded, Some(by))) => intents
+                        .iter()
+                        .find(|candidate| candidate.id == *by)
+                        .map(|candidate| candidate.issued_at),
+                    _ => None,
+                };
+                pins.push(PinStretch {
+                    level,
+                    start: intent.issued_at,
+                    end,
+                });
+            }
+            IntentKind::Reset => resets.push(intent.issued_at),
+            _ => {}
+        }
+    }
+    pins.sort_by_key(|pin| pin.start);
+    resets.sort();
+    (pins, resets)
+}
+
+/// A demotion a pin holds lands in the journal as a held entry naming the pin and the cause it
+/// held; without a pin it moves the level when it moves at all.
+fn hold_or_move(
+    level: &mut Level,
+    pinned: Option<Level>,
+    changes: &mut Vec<LevelChange>,
+    to: Level,
+    cause: String,
+    at: DateTime<Utc>,
+) {
+    if let Some(held) = pinned {
+        changes.push(LevelChange {
+            from: *level,
+            to: *level,
+            cause: format!("pin holds at {}: {}", held.as_str(), cause),
+            at,
+        });
+    } else if to != *level {
+        changes.push(LevelChange {
+            from: *level,
+            to,
+            cause,
+            at,
+        });
+        *level = to;
+    }
+}
+
+/// The level a cell sits at and its journal, folded from its outcomes, its uses and its owner
+/// controls in time order. Every undo or correction drops one level, and `repeat_undos` undos
+/// inside the last `undo_window` outcomes drop straight to Ask; a gap of `decay_days` or more
+/// between two uses decays the cell one level at the later use, naming the idle days and the
+/// window. A pin holds the exact level against learning in both directions while its stretch
+/// lasts, and a reset clears the learned history back to the baseline. The fold only ever moves
+/// down on its own — promotion is never self-applied — and each move it makes, and each demotion
+/// a pin holds, is one entry of the journal, oldest first.
 fn fold_level(
     baseline: Level,
     learning: &LearningConfig,
     outcomes: &[Outcome],
     uses: &[DateTime<Utc>],
+    pins: &[PinStretch],
+    resets: &[DateTime<Utc>],
 ) -> (Level, Vec<LevelChange>) {
     enum FoldEvent<'a> {
         Outcome(&'a Outcome),
         Decay(String),
+        Pin(Level),
+        PinEnd,
+        Reset,
+    }
+    // At one instant a pin's stretch ends before the next begins, a reset clears before the
+    // outcomes at that instant count, a pin holds before an outcome lands, and an outcome
+    // precedes the decay its use completes.
+    fn rank(event: &FoldEvent) -> u8 {
+        match event {
+            FoldEvent::PinEnd => 0,
+            FoldEvent::Reset => 1,
+            FoldEvent::Pin(_) => 2,
+            FoldEvent::Outcome(_) => 3,
+            FoldEvent::Decay(_) => 4,
+        }
     }
     let decays = uses.windows(2).filter_map(|pair| {
         let idle_days = (pair[1] - pair[0]).num_days();
-        (idle_days >= learning.decay_days).then(|| {
+        // A reset between two uses forgets the earlier one: the gap spans no history.
+        let spans_reset = resets
+            .iter()
+            .any(|reset| *reset > pair[0] && *reset <= pair[1]);
+        (idle_days >= learning.decay_days && !spans_reset).then(|| {
             (
                 pair[1],
                 format!(
@@ -437,13 +622,45 @@ fn fold_level(
         .iter()
         .map(|outcome| (outcome.at, FoldEvent::Outcome(outcome)))
         .chain(decays.map(|(at, cause)| (at, FoldEvent::Decay(cause))))
+        .chain(pins.iter().flat_map(|pin| {
+            std::iter::once((pin.start, FoldEvent::Pin(pin.level)))
+                .chain(pin.end.map(|at| (at, FoldEvent::PinEnd)))
+        }))
+        .chain(resets.iter().map(|at| (*at, FoldEvent::Reset)))
         .collect();
-    events.sort_by_key(|(at, _)| *at);
+    events.sort_by_key(|(at, event)| (*at, rank(event)));
     let mut level = baseline;
+    let mut pinned: Option<Level> = None;
     let mut changes: Vec<LevelChange> = Vec::new();
     let mut recent: Vec<&Outcome> = Vec::new();
     for (at, event) in events {
-        let (to, cause) = match event {
+        match event {
+            FoldEvent::PinEnd => pinned = None,
+            FoldEvent::Pin(to) => {
+                pinned = Some(to);
+                if to != level {
+                    changes.push(LevelChange {
+                        from: level,
+                        to,
+                        cause: format!("pin at {}", to.as_str()),
+                        at,
+                    });
+                    level = to;
+                }
+            }
+            FoldEvent::Reset => {
+                recent.clear();
+                // A pin, if any, still holds: a reset clears learning, not the owner's freeze.
+                if pinned.is_none() && level != baseline {
+                    changes.push(LevelChange {
+                        from: level,
+                        to: baseline,
+                        cause: "reset".into(),
+                        at,
+                    });
+                    level = baseline;
+                }
+            }
             FoldEvent::Outcome(outcome) => {
                 recent.push(outcome);
                 if recent.len() > learning.undo_window {
@@ -461,18 +678,13 @@ fn fold_level(
                 } else {
                     level.below()
                 };
-                (to, outcome.cause.clone().expect("an undo names its cause"))
+                let cause = outcome.cause.clone().expect("an undo names its cause");
+                hold_or_move(&mut level, pinned, &mut changes, to, cause, at);
             }
-            FoldEvent::Decay(cause) => (level.below(), cause),
-        };
-        if to != level {
-            changes.push(LevelChange {
-                from: level,
-                to,
-                cause,
-                at,
-            });
-            level = to;
+            FoldEvent::Decay(cause) => {
+                let to = level.below();
+                hold_or_move(&mut level, pinned, &mut changes, to, cause, at);
+            }
         }
     }
     (level, changes)
@@ -485,16 +697,36 @@ fn derive_cell(
     team: &str,
     runs: &[&Run],
     proposals: &[&Filed],
-    kinds: &BTreeMap<&str, IntentKind>,
-    corrections: &BTreeMap<&str, Vec<Correction>>,
+    intents: &[Intent],
+    resolution: &Resolution,
 ) -> Result<TrustCell> {
     let learning = &config.learning;
-    let outcomes = outcomes(runs, proposals, kinds, corrections);
-    let clean: Vec<&Outcome> = outcomes
+    let kinds: BTreeMap<&str, IntentKind> = intents
         .iter()
+        .map(|intent| (intent.id.as_str(), intent.kind))
+        .collect();
+    let corrections = corrections(intents, resolution);
+    let (pins, resets) = controls(intents, resolution, action, team);
+    let outcomes = outcomes(runs, proposals, &kinds, &corrections);
+    // A reset clears the learned history: only outcomes at or after the last reset count as
+    // the cell's evidence. The fold still sees them all — the journal keeps every change it
+    // derived, and the reset event clears the undo window at its time.
+    let last_reset = resets.last().copied();
+    let counted: Vec<&Outcome> = outcomes
+        .iter()
+        .filter(|outcome| last_reset.is_none_or(|reset| outcome.at >= reset))
+        .collect();
+    let clean: Vec<&Outcome> = counted
+        .iter()
+        .copied()
         .filter(|outcome| matches!(outcome.kind, OutcomeKind::Clean))
         .collect();
-    let window: Vec<&Outcome> = outcomes.iter().rev().take(learning.undo_window).collect();
+    let window: Vec<&Outcome> = counted
+        .iter()
+        .rev()
+        .take(learning.undo_window)
+        .copied()
+        .collect();
     let undos = window
         .iter()
         .filter(|outcome| matches!(outcome.kind, OutcomeKind::Undo))
@@ -520,7 +752,7 @@ fn derive_cell(
         .chain(proposals.iter().map(|filed| filed.proposed_at))
         .collect();
     uses.sort();
-    let (level, changes) = fold_level(baseline, learning, &outcomes, &uses);
+    let (level, changes) = fold_level(baseline, learning, &outcomes, &uses, &pins, &resets);
     let demoted = level != baseline;
     let last_change = changes.last().cloned();
     let rule_text = (eligible && !demoted && !has_rule(config, action, team))
@@ -568,6 +800,64 @@ impl<S: Storage> Rastro<S> {
         self.storage
             .snapshot(|view| trust_view(config, Some(view), &[]))
     }
+
+    /// Pins the cell `action` × `team` at `level`: the owner's intent holds the level against
+    /// learning in both directions until a newer pin takes its place or the owner undoes it.
+    /// A rebuild replays it. Returns the cell as it then reads.
+    pub fn trust_pin(&mut self, action: &str, team: &str, level: Level) -> Result<TrustCell> {
+        self.issue(|_, _| {
+            let intent = identity::new_intent(
+                IntentKind::Pin,
+                String::new(),
+                Targets::Cell {
+                    version: identity::SHAPE_VERSION,
+                    action: action.into(),
+                    team: team.into(),
+                    level: Some(level),
+                },
+                Payload::empty(),
+                None,
+            )?;
+            Ok((vec![intent], None, false))
+        })?;
+        self.trust_cell(action, team)
+    }
+
+    /// Resets the cell `action` × `team`: the owner's intent clears its learned history back to
+    /// its baseline — Act with a matching rule, Propose without. A rebuild replays it. Returns
+    /// the cell as it then reads.
+    pub fn trust_reset(&mut self, action: &str, team: &str) -> Result<TrustCell> {
+        self.issue(|_, _| {
+            let intent = identity::new_intent(
+                IntentKind::Reset,
+                String::new(),
+                Targets::Cell {
+                    version: identity::SHAPE_VERSION,
+                    action: action.into(),
+                    team: team.into(),
+                    level: None,
+                },
+                Payload::empty(),
+                None,
+            )?;
+            Ok((vec![intent], None, false))
+        })?;
+        self.trust_cell(action, team)
+    }
+
+    /// One cell's trust over every scope, derived even when no visible run touches it yet.
+    fn trust_cell(&mut self, action: &str, team: &str) -> Result<TrustCell> {
+        let config = &self.config;
+        self.storage
+            .snapshot(|view| derive_cell_from_view(config, view, &[], action, team))
+    }
+
+    /// The learning journal over every scope, on a writing open.
+    pub fn trust_journal(&mut self) -> Result<TrustJournal> {
+        let config = &self.config;
+        self.storage
+            .snapshot(|view| trust_journal(config, Some(view), &[]))
+    }
 }
 
 impl<S: ReadStorage> Reader<S> {
@@ -581,6 +871,19 @@ impl<S: ReadStorage> Reader<S> {
         } = self;
         crate::read_only::snapshot(locations, storage, scopes, |view, _| {
             trust_view(config, view, scopes)
+        })
+    }
+
+    /// The learning journal the reader's scopes see.
+    pub fn trust_journal(&mut self) -> Result<TrustJournal> {
+        let Self {
+            locations,
+            config,
+            storage,
+            scopes,
+        } = self;
+        crate::read_only::snapshot(locations, storage, scopes, |view, _| {
+            trust_journal(config, view, scopes)
         })
     }
 }

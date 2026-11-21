@@ -1265,6 +1265,35 @@ fn trust_text(trust: &rastro_core::trust::Trust) -> String {
     }
     lines.join("\n")
 }
+/// One cell's trust as the terminal reads it: the row `trust` prints, on its own.
+fn trust_cell_text(cell: &rastro_core::trust::TrustCell) -> String {
+    trust_text(&rastro_core::trust::Trust {
+        cells: vec![cell.clone()],
+    })
+}
+/// What `trust journal` lists: every level change, newest first, each with its cell, the levels
+/// it moved between, its cause and its time; an empty store says no level has changed.
+fn trust_journal_text(journal: &rastro_core::trust::TrustJournal) -> String {
+    if journal.changes.is_empty() {
+        return "The store holds no trust history: no level has changed".into();
+    }
+    journal
+        .changes
+        .iter()
+        .map(|change| {
+            format!(
+                "{} | {} | Team: {} | {} -> {} | {}",
+                stamp(change.at),
+                display_safe(&change.cell.action),
+                display_safe(&change.cell.team),
+                change.from.as_str(),
+                change.to.as_str(),
+                display_safe(&change.cause)
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+}
 fn human(response: &Response) -> String {
     let or_none = |lines: Vec<String>| {
         if lines.is_empty() {
@@ -1315,6 +1344,9 @@ fn human(response: &Response) -> String {
         Response::Focus(r) => focus_text(r),
         Response::QueueOutcomes(r) => outcomes_text(r),
         Response::Trust(r) => trust_text(r),
+        Response::TrustJournal(r) => trust_journal_text(r),
+        Response::TrustPin(r) => format!("Pinned:\n{}", trust_cell_text(r)),
+        Response::TrustReset(r) => format!("Reset:\n{}", trust_cell_text(r)),
         Response::QueueAccept(r)
         | Response::QueueEdit(r)
         | Response::QueueReject(r)

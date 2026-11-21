@@ -34,7 +34,7 @@ The core's own language. Code, docs, plugins and the interface all use these wor
 | **Context** | What a level hangs on: a person, project, source or channel. The most specific match wins | |
 | **Cell** | One action × context pair, with its level and the trust behind it | |
 | **Proposal / Question** | One pending Propose or Ask | |
-| **Intent** | A typed input from the owner: `confirm`, `accept`, `edit`, `reject`, `answer`, `undo`, `stop`, `promote`, `missed`; identity adds `create_person`, `name`, `link`, `cannot_link`, `same_as` | |
+| **Intent** | A typed input from the owner: `confirm`, `accept`, `edit`, `reject`, `answer`, `undo`, `undo_action`, `stop`, `missed`, `pin`, `reset`; identity adds `create_person`, `name`, `link`, `cannot_link`, `same_as` | |
 | **Outcome** | What happened to a proposal, question, action run or notification. A queue item's is accepted, accepted with edits, rejected, answered, ignored or became moot, derived from the intents and the shown reports (`decisions/learning.md` §16–19) | |
 | **Shown report** | The record that a terminal queue read printed one item, and when: its source run and the standard statements it expressed, so an outcome can tell an item a run dropped from one the queue settled. An item no intent answered that left the queue reads ignored when a run of its source dropped its content first, and became moot when its statements were known first, whichever came first and never re-derived later; an item still waiting is never ignored. Only the terminal read records one, never `--json` or an MCP call | Outcome |
 | **Missed** | The owner reports something Rastro should have caught | |
@@ -42,6 +42,8 @@ The core's own language. Code, docs, plugins and the interface all use these wor
 | **Usefulness** | Should it do this at all? Derived from outcomes, per plugin, workflow, view or notification type | Trust |
 | **Promotion / demotion** | A level going up (always proposed to the owner) or down (automatic and visible) | |
 | **Pin** | An owner-frozen level that learning doesn't change | |
+| **Reset** | The owner's intent that clears a cell's learned history back to its baseline: Act with a matching rule, Propose without | Undo: a reset takes back no run |
+| **Learning journal** | Every level change a cell derived, each with its cause and time, read newest first as `rastro trust journal`; derived from the same evidence as the trust view, never stored | Intent history: the log of every owner intent |
 | **Rule** | Explicit config the owner writes. The only path to Acts that are irreversible, public, or based on shared claims | Learned level |
 | **Policy pack** | A shareable plugin of rules and defaults. It can only lower levels or restrict | Rule |
 | **Plugin** | An add-on of one or more kinds: connector, extractor, vocabulary, workflow, action provider, renderer, view, policy pack, agent tool adapter | |
