@@ -17,6 +17,7 @@ pub mod rules;
 pub mod runs;
 pub mod search;
 pub mod tick;
+pub mod trust;
 use anyhow::{Context, Result, ensure};
 use chrono::{DateTime, Duration, Utc};
 use schemars::JsonSchema;
@@ -195,6 +196,9 @@ pub struct Config {
     /// `[grace]`: how long a rule waits before it runs, by its action's sensitivity.
     #[serde(default, skip_serializing_if = "rules::GraceTable::is_empty")]
     pub grace: rules::GraceTable,
+    /// `[learning]`: the thresholds trust derives under; empty keeps the defaults.
+    #[serde(default, skip_serializing_if = "trust::LearningConfig::is_empty")]
+    pub learning: trust::LearningConfig,
     /// `[[rules]]`: what the owner lets Rastro do without asking.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub rules: Vec<rules::Rule>,
@@ -217,6 +221,7 @@ impl Config {
             );
         }
         rules::validate(&config, locations)?;
+        config.learning.validate()?;
         if let Some(adapter) = &config.commitment_adapter {
             adapter.validate()?;
         }

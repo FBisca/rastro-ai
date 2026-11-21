@@ -1228,6 +1228,43 @@ fn rules_check_text(r: &rastro_operations::results::RulesCheckResult) -> String 
     }
     lines.join("\n")
 }
+/// What `trust` lists: each cell's level, the counts behind it, its last change and what the
+/// next promotion needs; an empty store says it holds no trust history.
+fn trust_text(trust: &rastro_core::trust::Trust) -> String {
+    if trust.cells.is_empty() {
+        return "The store holds no trust history: no action has run".into();
+    }
+    let mut lines = Vec::new();
+    for cell in &trust.cells {
+        let mut line = format!(
+            "{} | Team: {} | Level: {} | Clean: {} | Undos: {}",
+            display_safe(&cell.action),
+            display_safe(&cell.team),
+            cell.level.as_str(),
+            cell.clean,
+            cell.undos
+        );
+        if let Some(change) = &cell.last_change {
+            line += &format!(
+                " | Last change: {} at {}",
+                display_safe(&change.cause),
+                stamp(change.at)
+            );
+        }
+        lines.push(line);
+        lines.push(format!(
+            "  Next promotion: {}",
+            display_safe(&cell.promotion.needs)
+        ));
+        if let Some(rule) = &cell.promotion.rule_text {
+            lines.push(rule.clone());
+        }
+        if let Some(reset) = &cell.promotion.reset_command {
+            lines.push(format!("  {reset}"));
+        }
+    }
+    lines.join("\n")
+}
 fn human(response: &Response) -> String {
     let or_none = |lines: Vec<String>| {
         if lines.is_empty() {
@@ -1277,6 +1314,7 @@ fn human(response: &Response) -> String {
         Response::RulesCheck(r) => rules_check_text(r),
         Response::Focus(r) => focus_text(r),
         Response::QueueOutcomes(r) => outcomes_text(r),
+        Response::Trust(r) => trust_text(r),
         Response::QueueAccept(r)
         | Response::QueueEdit(r)
         | Response::QueueReject(r)

@@ -400,6 +400,9 @@ operations! {
             slot: 40, name: "actions.stop", surfaces: [Cli], read_only: false
         },
     }
+    Trust(TrustRequest => TrustResult) {
+        slot: 42, name: "trust", surfaces: [Cli, Mcp], read_only: true, reader: run_read, cli_read_path: true, deferred: true
+    }
     /// Check the owner's rules.
     Rules / RulesRequest {
         Check(RulesCheckRequest => RulesCheckResult) as RulesCheck {
@@ -657,6 +660,12 @@ mod tests {
             let found = search_deferred(query);
             let names: Vec<_> = found.matches.iter().map(|m| m.name.as_str()).collect();
             assert_eq!(names, ["actions.show"], "{query}");
+        }
+        // The trust read is deferred too: discoverable by name and by description.
+        for query in ["trust", "TRUST", "each cell's trust"] {
+            let found = search_deferred(query);
+            let names: Vec<_> = found.matches.iter().map(|m| m.name.as_str()).collect();
+            assert_eq!(names, ["trust"], "{query}");
         }
     }
 }

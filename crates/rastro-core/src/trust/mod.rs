@@ -1,0 +1,381 @@
+//! The trust view: each cell's level and the evidence behind it, derived at read from the runs
+//! and owner intents the visible scopes hold. Nothing stores a cell or a level: a cell is the
+//! run's action and its team, and its level, counts and eligibility are computed from what
+//! happened to its runs, under the thresholds of `[learning]`.
+//!
+//! Promotion is proposed, never self-applied: an eligible cell with no rule is shown the exact
+//! `[[rules]]` entry that raises it, and a demoted cell the reset command that restores its
+//! baseline. Demotion is automatic: undos drop the level, and the row names the last change with
+//! its cause. A cell no visible run touches is absent, and an empty store lists no cells.
+use crate::actions::{Run, RunStatus};
+use crate::identity::IntentKind;
+use crate::read_only::Snapshot;
+use crate::{Config, Rastro, ReadStorage, Reader, Scope, Storage};
+use anyhow::{Context, Result};
+use chrono::{DateTime, Utc};
+use schemars::JsonSchema;
+use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
+
+/// `[learning]`: the thresholds trust derives under. Each omitted entry keeps its default:
+/// 10 clean outcomes over 7 days with 0 undos in the last 20, repeated undos from 2, decay after
+/// 30 days.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(deny_unknown_fields, default)]
+pub struct LearningConfig {
+    /// How many clean outcomes a cell needs to become eligible for promotion.
+    pub clean_min: usize,
+    /// How many days the clean outcomes must span, first to last.
+    pub clean_days: i64,
+    /// How many of the cell's last outcomes the undo count reads.
+    pub undo_window: usize,
+    /// How many undos in that window drop the cell to Ask.
+    pub repeat_undos: usize,
+    /// How many idle days drop a level at the cell's next use.
+    pub decay_days: i64,
+}
+
+impl Default for LearningConfig {
+    fn default() -> Self {
+        Self {
+            clean_min: 10,
+            clean_days: 7,
+            undo_window: 20,
+            repeat_undos: 2,
+            decay_days: 30,
+        }
+    }
+}
+
+impl LearningConfig {
+    pub(crate) fn is_empty(&self) -> bool {
+        *self == Self::default()
+    }
+
+    /// Every threshold is a positive count of outcomes or days: zero would read no evidence or
+    /// no window at all.
+    pub(crate) fn validate(&self) -> Result<()> {
+        for (name, value) in [
+            ("clean_min", self.clean_min as i64),
+            ("clean_days", self.clean_days),
+            ("undo_window", self.undo_window as i64),
+            ("repeat_undos", self.repeat_undos as i64),
+            ("decay_days", self.decay_days),
+        ] {
+            anyhow::ensure!(value > 0, "[learning] {name} must be positive");
+        }
+        Ok(())
+    }
+}
+
+/// A cell's level: Act, Propose or Ask (levels §1).
+#[derive(Clone, Copy, Debug, Eq, JsonSchema, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Level {
+    Ask,
+    Propose,
+    Act,
+}
+
+impl Level {
+    /// The word the owner reads and the JSON carries.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Ask => "ask",
+            Self::Propose => "propose",
+            Self::Act => "act",
+        }
+    }
+
+    /// One level down; Ask is the floor.
+    fn below(self) -> Self {
+        match self {
+            Self::Act => Self::Propose,
+            Self::Propose | Self::Ask => Self::Ask,
+        }
+    }
+}
+
+/// A level change: what caused it and when.
+#[derive(Clone, Debug, JsonSchema, Serialize)]
+#[schemars(rename = "TrustLevelChange")]
+pub struct LevelChange {
+    pub cause: String,
+    pub at: DateTime<Utc>,
+}
+
+/// What the cell's next promotion needs: whether the evidence qualifies it, the sentence saying
+/// what to do, and the exact rule text or reset command when one is proposed.
+#[derive(Clone, Debug, JsonSchema, Serialize)]
+#[schemars(rename = "TrustPromotion")]
+pub struct Promotion {
+    /// Whether the cell's outcomes meet the promotion bar: enough clean outcomes over enough
+    /// days with no undo in its last outcomes.
+    pub eligible: bool,
+    /// What the next promotion needs, in words.
+    pub needs: String,
+    /// The exact `[[rules]]` entry to add to config.toml; present for an eligible cell with no
+    /// rule.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub rule_text: Option<String>,
+    /// The command that restores a demoted cell's baseline; present for an eligible demoted
+    /// cell.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub reset_command: Option<String>,
+}
+
+/// One cell's trust: its level, the evidence counts behind it, its last level change and what
+/// the next promotion needs.
+#[derive(Clone, Debug, JsonSchema, Serialize)]
+#[schemars(rename = "TrustCell")]
+pub struct TrustCell {
+    pub action: String,
+    pub team: String,
+    pub level: Level,
+    /// How many clean outcomes the cell holds: kept runs the owner accepted unchanged, or a
+    /// rule started.
+    pub clean: usize,
+    /// How many of the cell's last outcomes are undos.
+    pub undos: usize,
+    /// The last level change with its cause; absent when the level never changed.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_change: Option<LevelChange>,
+    pub promotion: Promotion,
+}
+
+/// What `trust` returns: every visible cell, by action and team.
+#[derive(Debug, JsonSchema, Serialize)]
+#[schemars(rename = "Trust")]
+pub struct Trust {
+    pub cells: Vec<TrustCell>,
+}
+
+impl Trust {
+    pub fn empty() -> Self {
+        Self { cells: Vec::new() }
+    }
+}
+
+/// Derives the trust view from one snapshot: the runs the scopes see, grouped by cell.
+pub(crate) fn trust_view(
+    config: &Config,
+    view: Option<&dyn Snapshot>,
+    scopes: &[Scope],
+) -> Result<Trust> {
+    let Some(view) = view else {
+        return Ok(Trust::empty());
+    };
+    let runs = view.action_runs(scopes)?;
+    let intents = view.intents()?;
+    let kinds: BTreeMap<&str, IntentKind> = intents
+        .iter()
+        .map(|intent| (intent.id.as_str(), intent.kind))
+        .collect();
+    let mut cells: BTreeMap<(String, String), Vec<&Run>> = BTreeMap::new();
+    for run in &runs {
+        cells
+            .entry((run.action.clone(), run.fields.team.clone()))
+            .or_default()
+            .push(run);
+    }
+    Ok(Trust {
+        cells: cells
+            .into_iter()
+            .map(|((action, team), runs)| derive_cell(config, &action, &team, &runs, &kinds))
+            .collect::<Result<Vec<_>>>()?,
+    })
+}
+
+/// What happened to one run, terminally: a kept run is a clean outcome unless the owner accepted
+/// it with edits, and an undone run is an undo. A run still accepted, pending, returned, stopped
+/// or failed is no outcome: nothing terminal happened to it.
+#[derive(Clone, Copy)]
+enum OutcomeKind {
+    Clean,
+    Edited,
+    Undo,
+}
+
+struct Outcome {
+    kind: OutcomeKind,
+    at: DateTime<Utc>,
+}
+
+/// The cell's outcomes, oldest first: one per run that reached a terminal state.
+fn outcomes(runs: &[&Run], kinds: &BTreeMap<&str, IntentKind>) -> Vec<Outcome> {
+    let mut outcomes = Vec::new();
+    for run in runs {
+        match run.status {
+            RunStatus::Done => {
+                let edited = run
+                    .accept_intent
+                    .as_deref()
+                    .is_some_and(|id| matches!(kinds.get(id), Some(IntentKind::Edit)));
+                outcomes.push(Outcome {
+                    kind: if edited {
+                        OutcomeKind::Edited
+                    } else {
+                        OutcomeKind::Clean
+                    },
+                    at: run.accepted_at,
+                });
+            }
+            RunStatus::Undone => {
+                // An undone run holds its undo intent; storage derives the status from it.
+                if let Some(undo) = &run.undo {
+                    outcomes.push(Outcome {
+                        kind: OutcomeKind::Undo,
+                        at: undo.at,
+                    });
+                }
+            }
+            RunStatus::Accepted
+            | RunStatus::Pending
+            | RunStatus::Returned
+            | RunStatus::Stopped
+            | RunStatus::Failed => {}
+        }
+    }
+    outcomes.sort_by_key(|outcome| outcome.at);
+    outcomes
+}
+
+/// Whether the owner's rules already raise this cell: a rule matching its action and team.
+fn has_rule(config: &Config, action: &str, team: &str) -> bool {
+    config
+        .rules
+        .iter()
+        .any(|rule| rule.action.as_deref() == Some(action) && rule.team.as_deref() == Some(team))
+}
+
+/// The exact `[[rules]]` entry that raises the cell: a real rule, serialized as the owner would
+/// paste it, so adding it to config.toml loads and matches.
+fn proposed_rule(action: &str, team: &str) -> Result<String> {
+    let rule = crate::rules::Rule {
+        name: format!("trust-{action}-{team}"),
+        action: Some(action.into()),
+        team: Some(team.into()),
+        assignee: Some(crate::actions::OWNER.into()),
+        grace: None,
+        daily_cap: None,
+    };
+    Ok(format!(
+        "[[rules]]\n{}",
+        toml::to_string_pretty(&rule).context("serializing the proposed rule")?
+    ))
+}
+
+/// One cell's trust from its runs, oldest first.
+fn derive_cell(
+    config: &Config,
+    action: &str,
+    team: &str,
+    runs: &[&Run],
+    kinds: &BTreeMap<&str, IntentKind>,
+) -> Result<TrustCell> {
+    let learning = &config.learning;
+    let outcomes = outcomes(runs, kinds);
+    let clean: Vec<&Outcome> = outcomes
+        .iter()
+        .filter(|outcome| matches!(outcome.kind, OutcomeKind::Clean))
+        .collect();
+    let window: Vec<&Outcome> = outcomes.iter().rev().take(learning.undo_window).collect();
+    let undos = window
+        .iter()
+        .filter(|outcome| matches!(outcome.kind, OutcomeKind::Undo))
+        .count();
+    let span_days = match (clean.first(), clean.last()) {
+        (Some(first), Some(last)) => (last.at - first.at).num_days(),
+        _ => 0,
+    };
+    let eligible =
+        clean.len() >= learning.clean_min && span_days >= learning.clean_days && undos == 0;
+    // The baseline: the owner's rule raises the cell to Act; without one it sits at Propose.
+    let baseline = if has_rule(config, action, team) {
+        Level::Act
+    } else {
+        Level::Propose
+    };
+    // Demotion is automatic: repeated undos in the window drop the cell to Ask; any undo in its
+    // history drops it one level below its baseline, and it stays there until the owner resets
+    // it — promotion is never self-applied.
+    let total_undos = outcomes
+        .iter()
+        .filter(|outcome| matches!(outcome.kind, OutcomeKind::Undo))
+        .count();
+    let level = if undos >= learning.repeat_undos {
+        Level::Ask
+    } else if total_undos > 0 {
+        baseline.below()
+    } else {
+        baseline
+    };
+    let demoted = level != baseline;
+    let last_change = outcomes
+        .iter()
+        .rev()
+        .find(|outcome| matches!(outcome.kind, OutcomeKind::Undo))
+        .map(|undo| LevelChange {
+            cause: "undo".into(),
+            at: undo.at,
+        });
+    let rule_text = (eligible && !demoted && !has_rule(config, action, team))
+        .then(|| proposed_rule(action, team))
+        .transpose()?;
+    let reset_command =
+        (eligible && demoted).then(|| format!("rastro trust reset {action} {team}"));
+    let needs = if level == Level::Act {
+        "Nothing to promote: the cell is at Act".to_string()
+    } else if reset_command.is_some() {
+        "Reset the cell to restore its baseline".to_string()
+    } else if rule_text.is_some() {
+        "Add the proposed rule to config.toml to raise the cell to Act".to_string()
+    } else {
+        format!(
+            "{} clean outcomes over {} days with 0 undos in the last {}: now {} clean over \
+             {span_days} days, {undos} undos",
+            learning.clean_min,
+            learning.clean_days,
+            learning.undo_window,
+            clean.len()
+        )
+    };
+    Ok(TrustCell {
+        action: action.into(),
+        team: team.into(),
+        level,
+        clean: clean.len(),
+        undos,
+        last_change,
+        promotion: Promotion {
+            eligible,
+            needs,
+            rule_text,
+            reset_command,
+        },
+    })
+}
+
+impl<S: Storage> Rastro<S> {
+    /// The trust view over every scope, on a writing open.
+    pub fn trust(&mut self) -> Result<Trust> {
+        let config = &self.config;
+        self.storage
+            .snapshot(|view| trust_view(config, Some(view), &[]))
+    }
+}
+
+impl<S: ReadStorage> Reader<S> {
+    /// The trust view the reader's scopes see.
+    pub fn trust(&mut self) -> Result<Trust> {
+        let Self {
+            locations,
+            config,
+            storage,
+            scopes,
+        } = self;
+        crate::read_only::snapshot(locations, storage, scopes, |view, _| {
+            trust_view(config, view, scopes)
+        })
+    }
+}
