@@ -169,7 +169,7 @@ Hits SHALL carry the coverage of the `(source, scope)` pair they were read under
 - THEN no line reaches stdout
 
 ### Requirement: Reads change no row and take no exclusive config lock
-A `search` or `coverage` call through the read-only path SHALL change no row in any table, SHALL take no exclusive lock on the config, and SHALL leave the database's journal mode as it found it; the writing open SHALL switch the database to WAL, an old database included. The read-only path itself writes nothing; an MCP read call additionally appends one read log row through a separate writing open — never a shown report — and a refused read appends nothing.
+A `search` or `coverage` call through the read-only path SHALL change no row in any table, SHALL take no exclusive lock on the config, and SHALL leave the database's journal mode as it found it; the writing open SHALL switch the database to WAL, an old database included. The read-only path itself writes nothing; an MCP read call additionally appends one read log row through a separate writing open — never a shown report, and a failed append never replaces the read's own answer — and a refused read appends nothing.
 
 #### Scenario: a read leaves the store untouched
 - WHEN `search` and `coverage` calls run through the read-only path

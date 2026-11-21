@@ -305,3 +305,35 @@ fn an_mcp_queue_read_is_logged_and_writes_no_shown_report() {
         .unwrap();
     assert_eq!(shown, 0, "an MCP read never marks an item seen");
 }
+
+/// spec: MCP reads are logged, never seen
+/// a read that ran answers even when the read log can't be written: the append never masks the
+/// read's own outcome
+#[test]
+fn a_read_answers_even_when_the_read_log_cannot_be_written() {
+    use std::os::unix::fs::PermissionsExt;
+    let env = Env::new();
+    let mut session = env.start("2026-11-19T10:04:00Z");
+    session.initialize();
+    ok_result(&session.call("queue", json!({}))["result"]);
+    // The database file becomes read-only while its directory stays writable: the read still
+    // opens (the WAL side files live in the directory), but the append can't write the file.
+    let database = env.database();
+    let before = fs::metadata(&database).unwrap().permissions();
+    fs::set_permissions(&database, fs::Permissions::from_mode(0o444)).unwrap();
+    let writable = fs::OpenOptions::new().write(true).open(&database).is_ok();
+    let call = session.call("queue", json!({}));
+    fs::set_permissions(&database, before).unwrap();
+    if writable {
+        // As root nothing is refused; there is nothing to check.
+        return;
+    }
+    ok_result(&call["result"]);
+    let (status, stderr) = session.finish();
+    assert!(status.success());
+    let stderr = String::from_utf8_lossy(&stderr);
+    assert!(
+        stderr.contains("read log append failed"),
+        "no diagnostic: {stderr}"
+    );
+}

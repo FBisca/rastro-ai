@@ -1063,6 +1063,12 @@ fn a_pending_or_unknown_migration_after_start_is_a_tool_error_and_the_server_kee
     session.initialize();
     ok_result(&session.call("coverage", json!({}))["result"]);
     let last = last_migration(&env.db());
+    let logged = |env: &Env| -> i64 {
+        env.db()
+            .query_row("SELECT count(*) FROM read_log", [], |r| r.get(0))
+            .unwrap()
+    };
+    let after_first = logged(&env);
 
     // Pending: the database lacks a migration this build knows.
     env.db()
@@ -1073,6 +1079,11 @@ fn a_pending_or_unknown_migration_after_start_is_a_tool_error_and_the_server_kee
         assert!(message.contains("pending migrations"), "{message}");
         assert!(message.contains(&last), "{message}");
     }
+    assert_eq!(
+        logged(&env),
+        after_first,
+        "a refused read appended a read log row"
+    );
     env.db()
         .execute(
             "INSERT INTO schema_migrations (name, applied_at) VALUES (?1, 'now')",
@@ -1091,6 +1102,12 @@ fn a_pending_or_unknown_migration_after_start_is_a_tool_error_and_the_server_kee
     let message = tool_error(&session.call("search", json!({"text": "body"})), "search");
     assert!(message.contains("299912312359_future"), "{message}");
     assert!(message.contains("doesn't know"), "{message}");
+    // The successful coverage read above logged one row; the unknown-migration refusal logged none.
+    assert_eq!(
+        logged(&env),
+        after_first + 1,
+        "a refused read appended a read log row"
+    );
     env.db()
         .execute(
             "DELETE FROM schema_migrations WHERE name = '299912312359_future'",
@@ -1104,7 +1121,7 @@ fn a_pending_or_unknown_migration_after_start_is_a_tool_error_and_the_server_kee
 }
 
 /// spec: An operation failure is a tool error and a bad request is a protocol error
-/// a store whose read log can't be written (no write access to the WAL side files) is a tool error
+/// a store that can't be read (no write access to create the WAL side files) is a tool error
 #[test]
 fn an_unavailable_store_is_a_tool_error_and_the_server_keeps_serving() {
     let env = seeded();
@@ -1134,10 +1151,7 @@ fn an_unavailable_store_is_a_tool_error_and_the_server_keeps_serving() {
         return;
     }
     let message = tool_error(&call, "coverage");
-    assert!(
-        message.contains("readonly") || message.contains("unable to open"),
-        "{message}"
-    );
+    assert!(message.contains("can't be read"), "{message}");
     tool_error(&search, "search");
     let again = session.call("coverage", json!({}));
     ok_result(&again["result"]);

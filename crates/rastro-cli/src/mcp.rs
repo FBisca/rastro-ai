@@ -4,7 +4,7 @@
 //! a machine read can never make an item look seen. tokio and rmcp live in this module only; the
 //! core stays synchronous and runs through `spawn_blocking`.
 use anyhow::{Context, Result};
-use rastro_core::{Locations, Rastro, Scope};
+use rastro_core::{Locations, Rastro, Refusal, Scope};
 use rastro_operations::{
     catalog::{self, OperationSpec, Surface},
     envelope,
@@ -70,17 +70,29 @@ fn run_operation(
         let mut reader =
             Rastro::open_read_only_scoped(locations, SqliteStorage::open_read_only, scopes)?;
         let response = request.run_read(&mut reader);
-        // The store was read: append the call's audit row, naming the tool and the arguments it
-        // ran with. A refused open (a pending or unknown migration, an unreadable store) never
-        // reaches here, so a refused read writes nothing. With no database the read answered
-        // from the config: nothing was read, so nothing is logged and no file is created.
-        if database.try_exists()? {
+        // Append the audit row only for a read that ran. A typed refusal — a pending or unknown
+        // migration, a store that can't be read without writing — is raised inside the read and
+        // means the store was never read, so it appends nothing; with no database the read
+        // answered from the config, so there is nothing to log and no file to create. The append
+        // is best-effort and never replaces the read's own outcome: a read that ran answers even
+        // when the log can't be written.
+        let refused = matches!(&response, Err(e) if e.downcast_ref::<Refusal>().is_some());
+        let logged = (|| -> Result<()> {
+            if refused || !database.try_exists()? {
+                return Ok(());
+            }
             SqliteStorage::append_read_log(
                 &database,
                 &spec.mcp_name(),
                 &arguments_json,
                 rastro_core::coverage::now()?,
-            )?;
+            )
+        })();
+        if let Err(error) = logged {
+            eprintln!(
+                "rastro: the read log append failed: {}",
+                bounded(&format!("{error:#}"))
+            );
         }
         response
     });
