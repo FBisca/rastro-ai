@@ -236,15 +236,23 @@ fn the_actions_read_lists_a_pending_act_with_the_time_it_runs_and_its_stop_comma
     let run = run.expect("a matching proposal starts a pending Act");
     let stop = format!("rastro actions stop {run}");
 
-    // The owner's list says when it runs and how to stop it.
+    // The owner's list says when it runs and how to stop it, as a block.
     let text = stdout(&env.rastro(&["actions"], READ_AT));
-    let line = text
-        .lines()
-        .find(|line| line.contains(&run))
-        .unwrap_or_else(|| panic!("no run line in: {text}"));
-    assert!(line.contains("pending"), "{line}");
-    assert!(line.contains("10:10"), "{line}");
-    assert!(line.contains(&stop), "{line}");
+    let block = text
+        .split("\n\n")
+        .find(|block| block.starts_with(&format!("Run {run}")))
+        .unwrap_or_else(|| panic!("no run block in: {text}"));
+    assert!(block.lines().any(|l| l == "  Status: pending"), "{block}");
+    assert!(
+        block
+            .lines()
+            .any(|l| l == "  Runs at: 2026-11-19 10:10 UTC"),
+        "{block}"
+    );
+    assert!(
+        block.lines().any(|l| l == format!("  Stop: {stop}")),
+        "{block}"
+    );
 
     // The machine read carries the same: pending, due at 10:10, with the stop command.
     let listed = env.ok_json(&["actions"], READ_AT)["runs"].clone();
