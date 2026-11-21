@@ -1070,6 +1070,17 @@
       ],
       "type": "object"
     },
+    "CostPerAccepted": {
+      "anyOf": [
+        {
+          "$ref": "#/$defs/TrustCost"
+        },
+        {
+          "$ref": "#/$defs/Dash"
+        }
+      ],
+      "description": "The cost per accepted item: the cost divided by the accepts, or a dash when nothing was\naccepted — never a division by zero."
+    },
     "Counts": {
       "additionalProperties": false,
       "properties": {
@@ -1233,6 +1244,13 @@
       ],
       "type": "object"
     },
+    "Dash": {
+      "description": "The dash a cost per accepted reads when nothing was accepted, in the JSON as on the\nterminal.",
+      "enum": [
+        "—"
+      ],
+      "type": "string"
+    },
     "DeferredRead": {
       "additionalProperties": false,
       "description": "One deferred read a catalog search matched: its canonical name, its description and its typed\ninput schema, as the catalog defines them.",
@@ -1255,6 +1273,34 @@
         "input_schema"
       ],
       "type": "object"
+    },
+    "Engagement": {
+      "anyOf": [
+        {
+          "additionalProperties": false,
+          "properties": {
+            "acted": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "seen": {
+              "format": "uint",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "acted",
+            "seen"
+          ],
+          "type": "object"
+        },
+        {
+          "$ref": "#/$defs/Unmeasured"
+        }
+      ],
+      "description": "A plugin's engagement: acted on over seen, each item counted once, from the terminal's\nshown reports; `unmeasured` where no shown report names the plugin's runs — unseen is not\nignored, and never reads 0."
     },
     "Entity": {
       "additionalProperties": false,
@@ -3615,6 +3661,26 @@
       ],
       "type": "string"
     },
+    "TrustCost": {
+      "additionalProperties": false,
+      "description": "What a plugin's runs cost: their wall time in milliseconds plus the adapter turns they\nused.",
+      "properties": {
+        "turns": {
+          "format": "uint",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "wall_ms": {
+          "format": "int64",
+          "type": "integer"
+        }
+      },
+      "required": [
+        "wall_ms",
+        "turns"
+      ],
+      "type": "object"
+    },
     "TrustLevelChange": {
       "additionalProperties": false,
       "description": "A level change: the levels it moved between, what caused it and when. One entry of the\ncell's journal; the trust view names the last of them.",
@@ -3638,6 +3704,37 @@
         "to",
         "cause",
         "at"
+      ],
+      "type": "object"
+    },
+    "TrustPlugin": {
+      "additionalProperties": false,
+      "description": "One plugin's usefulness and cost: its engagement, the time to action, what its runs cost\nand what that cost reads per accepted item.",
+      "properties": {
+        "cost": {
+          "$ref": "#/$defs/TrustCost"
+        },
+        "cost_per_accepted": {
+          "$ref": "#/$defs/CostPerAccepted",
+          "description": "The cost over the plugin's accepted items — an accept unchanged or with edits — in\nwhole milliseconds and turns, divided down; a dash when nothing was accepted."
+        },
+        "engagement": {
+          "$ref": "#/$defs/Engagement"
+        },
+        "plugin": {
+          "type": "string"
+        },
+        "time_to_action_seconds": {
+          "description": "The mean seconds from an item's first shown report to the intent that answered it,\nover the plugin's acted-on items; absent when nothing was acted on.",
+          "format": "double",
+          "type": "number"
+        }
+      },
+      "required": [
+        "plugin",
+        "engagement",
+        "cost",
+        "cost_per_accepted"
       ],
       "type": "object"
     },
@@ -3667,6 +3764,13 @@
         "needs"
       ],
       "type": "object"
+    },
+    "Unmeasured": {
+      "description": "The word an unmeasured engagement reads, in the JSON as on the terminal.",
+      "enum": [
+        "unmeasured"
+      ],
+      "type": "string"
     },
     "UnreadSource": {
       "additionalProperties": false,
@@ -5493,17 +5597,24 @@
             },
             "result": {
               "additionalProperties": false,
-              "description": "What `trust` returns: every visible cell, by action and team.",
+              "description": "What `trust` returns: every visible cell, by action and team, and every visible plugin's\nusefulness and cost.",
               "properties": {
                 "cells": {
                   "items": {
                     "$ref": "#/$defs/TrustCell"
                   },
                   "type": "array"
+                },
+                "plugins": {
+                  "items": {
+                    "$ref": "#/$defs/TrustPlugin"
+                  },
+                  "type": "array"
                 }
               },
               "required": [
-                "cells"
+                "cells",
+                "plugins"
               ],
               "title": "Trust",
               "type": "object"
@@ -8267,17 +8378,24 @@
       "name": "trust",
       "result": {
         "additionalProperties": false,
-        "description": "What `trust` returns: every visible cell, by action and team.",
+        "description": "What `trust` returns: every visible cell, by action and team, and every visible plugin's\nusefulness and cost.",
         "properties": {
           "cells": {
             "items": {
               "$ref": "#/$defs/TrustCell"
             },
             "type": "array"
+          },
+          "plugins": {
+            "items": {
+              "$ref": "#/$defs/TrustPlugin"
+            },
+            "type": "array"
           }
         },
         "required": [
-          "cells"
+          "cells",
+          "plugins"
         ],
         "title": "Trust",
         "type": "object"
