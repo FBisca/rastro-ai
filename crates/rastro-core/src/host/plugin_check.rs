@@ -25,7 +25,9 @@ const KNOWN_KINDS: [&str; 5] = [
 ];
 
 /// What one synthetic run found: the counts a sync would record, each protocol violation with
-/// its reason, and a warning per manifest kind the core does not know.
+/// its reason, and a warning per manifest kind the core does not know. Violation and warning
+/// text is terminal-safe: connector- and manifest-supplied text has its control characters
+/// escaped where the string is built.
 #[derive(Debug, Serialize)]
 pub struct PluginCheck {
     pub plugin_id: String,
@@ -62,25 +64,28 @@ pub fn run(locations: &Locations, id: &str, options: BTreeMap<String, String>) -
         Ok(plugin) => plugin,
         Err(reason) => {
             check.violations.push(match reason {
-                "not_installed" => format!("plugin {id} is not installed"),
-                _ => format!("plugin {id} fails its check"),
+                "not_installed" => format!("plugin {} is not installed", display_safe(id)),
+                _ => format!("plugin {} fails its check", display_safe(id)),
             });
             return check;
         }
     };
     for kind in &plugin.manifest.kinds {
         if !KNOWN_KINDS.contains(&kind.as_str()) {
-            check.warnings.push(format!("unknown kind: {kind}"));
+            check
+                .warnings
+                .push(format!("unknown kind: {}", display_safe(kind)));
         }
     }
     if let Err(error) = plugin.manifest.check_source_options(&options) {
-        check.violations.push(format!("{error:#}"));
+        check.violations.push(display_safe(&format!("{error:#}")));
         return check;
     }
     let Some(scope) = plugin.manifest.permissions.scopes.first() else {
-        check
-            .violations
-            .push(format!("plugin {id} declares no scope to bind"));
+        check.violations.push(format!(
+            "plugin {} declares no scope to bind",
+            display_safe(id)
+        ));
         return check;
     };
     let to = Utc::now();
@@ -120,7 +125,7 @@ pub fn run(locations: &Locations, id: &str, options: BTreeMap<String, String>) -
             if finish.status != "ok" {
                 verdicts.push(format!(
                     "run finished {}: {}",
-                    finish.status,
+                    display_safe(&finish.status),
                     display_safe(finish.reason.as_deref().unwrap_or("no reason given"))
                 ));
             }
@@ -143,7 +148,7 @@ pub fn run(locations: &Locations, id: &str, options: BTreeMap<String, String>) -
             });
         }
         Ok(Err(_)) => {}
-        Err(error) => verdicts.push(format!("storage error: {error:#}")),
+        Err(error) => verdicts.push(display_safe(&format!("storage error: {error:#}"))),
     }
     check.counts = session.counts;
     check.coverage = session.coverage.map(|report| report.status);

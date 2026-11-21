@@ -192,6 +192,56 @@ fn an_unknown_manifest_kind_warns_and_a_clean_run_exits_zero() {
     assert!(text.contains("mail"), "{text}");
 }
 
+/// spec: Connector text is escaped on the terminal
+/// Control characters in connector-supplied text — a rejected kind, an unexpected method,
+/// a manifest kind, a finish status — reach the check's terminal escaped, never raw.
+#[test]
+fn connector_text_reaches_the_check_terminal_escaped() {
+    // A rejected kind, an unknown manifest kind and an unexpected method, all carrying ESC.
+    let env = Env::with_manifest(|m| {
+        m["kinds"] = toml::Value::Array(vec!["connector".into(), "mail\u{1b}x".into()]);
+    });
+    let mut kinded = evidence();
+    kinded["params"]["kind"] = json!("issue\u{1b}]52;c;pwned\u{7}");
+    env.script(&[
+        init(),
+        send(kinded),
+        send(json!({"jsonrpc": "2.0", "method": "bogus\u{1b}m"})),
+    ]);
+    let output = env.check(&[]);
+    let text = both(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("kind not permitted"), "{text}");
+    assert!(text.contains("unexpected message"), "{text}");
+    assert!(text.contains("unknown kind"), "{text}");
+    assert_escaped(&output.stdout);
+
+    // A finish status carrying ESC.
+    let env = Env::new();
+    env.script(&[
+        init(),
+        complete(),
+        json!({"do": "finish", "status": "ok\u{1b}x", "submitted": 0}),
+    ]);
+    let output = env.check(&[]);
+    let text = both(&output);
+    assert!(!output.status.success(), "{text}");
+    assert!(text.contains("run finished"), "{text}");
+    assert_escaped(&output.stdout);
+}
+
+/// The check's stdout carries no raw control byte: only printable text and newlines, with
+/// control characters shown in their escaped form.
+fn assert_escaped(stdout: &[u8]) {
+    assert!(
+        stdout.iter().all(|b| *b >= 0x20 || *b == b'\n'),
+        "raw control bytes on the terminal: {:?}",
+        String::from_utf8_lossy(stdout)
+    );
+    let text = String::from_utf8_lossy(stdout);
+    assert!(text.contains("\\u{1b}"), "no escaped ESC in {text}");
+}
+
 /// spec: Plugin check stays on the CLI
 /// The check is a CLI command, and an agent listing MCP tools sees no plugin check tool.
 #[test]

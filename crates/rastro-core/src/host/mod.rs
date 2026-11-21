@@ -785,7 +785,9 @@ fn converse(
                     },
                     Err(why) => {
                         relay.line(&format!("rejected evidence: {why}"));
-                        session.violations.push(format!("rejected evidence: {why}"));
+                        session
+                            .violations
+                            .push(format!("rejected evidence: {}", display_safe(&why)));
                         session.counts.rejected += 1;
                     }
                 }
@@ -828,7 +830,7 @@ fn converse(
             _ => {
                 session.violations.push(format!(
                     "unexpected message: {}",
-                    message.method.as_deref().unwrap_or("a response")
+                    display_safe(message.method.as_deref().unwrap_or("a response"))
                 ));
                 return Ok(Err("protocol"));
             }
