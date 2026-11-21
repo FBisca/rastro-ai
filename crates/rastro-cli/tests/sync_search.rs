@@ -330,11 +330,11 @@ fn search_without_a_match_states_the_coverage_of_each_source() {
     let human = env.ok(&["search", "zebra"]);
     assert!(human.contains("no evidence found"), "{human}");
     assert!(
-        human.contains("project | Scope: personal | Coverage: found"),
+        human.contains("project\n  Scope: personal\n  Coverage: found"),
         "{human}"
     );
     assert!(
-        human.contains("other | Scope: personal | Coverage: never looked"),
+        human.contains("other\n  Scope: personal\n  Coverage: never looked"),
         "{human}"
     );
     let none = env.json(&["search", "zebra"]);

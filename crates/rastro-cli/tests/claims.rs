@@ -2027,6 +2027,7 @@ fn a_claim_shared_by_a_carried_and_a_rebuilt_pair_equals_the_incremental_one() {
 
 /// claims/R46: rebuild lists every pair, and the CLI prints a line per carried-over pair
 /// spec: A rebuild lists every pair
+/// spec: Human records render as blocks
 #[test]
 fn rebuild_lists_its_pairs_and_the_cli_prints_the_carried_over_ones() {
     let env = two_extractors();
@@ -2062,6 +2063,11 @@ fn rebuild_lists_its_pairs_and_the_cli_prints_the_carried_over_ones() {
         .collect();
     assert_eq!(lines.len(), 1, "{human}");
     assert!(lines[0].contains("not_installed"), "{human}");
+    assert!(
+        !lines[0].contains(" | "),
+        "pipe-packed carried-over line: {}",
+        lines[0]
+    );
 }
 
 /// claims/R47: rebuilding a copy of the owner's database with the extractor hidden keeps its claims.

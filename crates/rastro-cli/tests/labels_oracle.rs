@@ -589,8 +589,8 @@ fn S10_cli_text_shows_the_escaped_label_after_the_id_and_json_equals_mcp() {
     );
     let line = text
         .lines()
-        .find(|l| l.contains(&state))
-        .unwrap_or_else(|| panic!("no line for claim {state}: {text}"));
+        .find(|l| l.contains(PR) && l.contains("code:state"))
+        .unwrap_or_else(|| panic!("no claim header for {state}: {text}"));
     let id_at = line.find(PR).unwrap_or_else(|| panic!("no id: {line}"));
     let label_at = line
         .find("Login ")
