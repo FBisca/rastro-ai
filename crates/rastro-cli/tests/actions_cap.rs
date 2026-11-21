@@ -146,6 +146,12 @@ fn past_the_cap_a_matching_proposal_waits_in_the_queue() {
     for part in ["queue", "my-issues", "cap of 2"] {
         assert!(answer.contains(part), "{part} missing from: {answer}");
     }
+    // The waiting answer is a block too: the proposal's id on the header line.
+    assert!(
+        answer.lines().any(|l| l.starts_with("Proposed q_")),
+        "{answer}"
+    );
+    assert!(!answer.contains(" | "), "pipe-packed line: {answer}");
     let third = env.propose("Third", now);
     assert!(third.get("run").is_none(), "{third}");
     assert_eq!(

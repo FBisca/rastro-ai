@@ -177,6 +177,7 @@ fn propose<'a>(title: &'a str, extra: &[&'a str]) -> Vec<&'a str> {
 }
 
 // spec: A matching rule starts an Act
+// spec: Human records render as blocks
 #[test]
 fn a_matching_proposal_starts_a_pending_act_and_sends_nothing() {
     let env = Env::with_linear("H");
@@ -210,14 +211,38 @@ fn a_matching_proposal_starts_a_pending_act_and_sends_nothing() {
         assert!(answer.contains(part), "{part} missing from: {answer}");
     }
 
-    // The owner's list says the same in words.
+    // The answer reads as a block: the proposal's id on the header line, then one labelled
+    // field per line, and no pipe-packed line.
+    let proposal = run["proposal"].as_str().unwrap();
+    assert!(
+        answer.lines().any(|l| l == format!("Proposed {proposal}")),
+        "{answer}"
+    );
+    for field in [
+        "  Source: linear linear-work",
+        "  Scope: work",
+        "  Action: linear.create_issue",
+        "  Title: T",
+        "  Team: H",
+        "  Assignee: me",
+        "  Why: W",
+    ] {
+        assert!(
+            answer.lines().any(|l| l == field),
+            "{field} missing: {answer}"
+        );
+    }
+    assert!(!answer.contains(" | "), "pipe-packed line: {answer}");
+
+    // The owner's list says the same in words: the run as a block, its status and level on
+    // their own lines.
     let listed = stdout(&env.rastro(&["actions"]));
-    let line = listed
-        .lines()
-        .find(|line| line.contains(id))
-        .unwrap_or_else(|| panic!("no run line in: {listed}"));
-    assert!(line.contains("pending"), "{line}");
-    assert!(line.contains("act"), "{line}");
+    let block = listed
+        .split("\n\n")
+        .find(|block| block.starts_with(&format!("Run {id}")))
+        .unwrap_or_else(|| panic!("no run block in: {listed}"));
+    assert!(block.lines().any(|l| l == "  Status: pending"), "{block}");
+    assert!(block.lines().any(|l| l == "  Level: act"), "{block}");
 
     // Nothing reached Linear: the grace window is the owner's chance to stop it.
     assert_eq!(env.linear.as_ref().unwrap().requests().len(), 0);
@@ -268,6 +293,7 @@ fn a_possible_duplicate_waits_in_the_queue() {
 }
 
 // spec: An Act run explains itself
+// spec: Human records render as blocks
 #[test]
 fn an_act_run_shows_the_rule_it_started_under_and_no_accept() {
     let env = Env::fake("H");
@@ -303,6 +329,8 @@ fn an_act_run_shows_the_rule_it_started_under_and_no_accept() {
     ] {
         assert!(text.contains(part), "{part} missing from: {text}");
     }
+    assert!(text.lines().any(|l| l == "Why: owner asked"), "{text}");
+    assert!(!text.contains(" | "), "pipe-packed line: {text}");
     assert!(!text.contains("Accepted:"), "{text}");
 }
 

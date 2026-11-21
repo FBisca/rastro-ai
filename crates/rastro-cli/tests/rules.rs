@@ -41,18 +41,23 @@ fn rule(name: &str, extra: &str) -> String {
 }
 
 // spec: Owner rules live in config
+// spec: Human records render as blocks
 #[test]
 fn a_valid_rule_is_listed_with_its_action_team_and_assignee() {
     let home = home(&rule("my-issues", ""));
     let out = rastro(&home, &["rules", "check"]);
     assert!(out.status.success(), "{}", stderr(&out));
     let text = stdout(&out);
-    let line = text
-        .lines()
-        .find(|line| line.contains("my-issues"))
-        .unwrap_or_else(|| panic!("no line for my-issues in:\n{text}"));
-    for part in ["linear.create_issue", "team H", "assignee me"] {
-        assert!(line.contains(part), "{part} missing from: {line}");
+    assert!(text.lines().any(|l| l == "my-issues"), "{text}");
+    for field in [
+        "  Action: linear.create_issue",
+        "  Team: H",
+        "  Assignee: me",
+    ] {
+        assert!(
+            text.lines().any(|l| l == field),
+            "{field} missing from: {text}"
+        );
     }
 }
 
@@ -92,11 +97,11 @@ fn a_rule_whose_assignee_is_not_the_owner_fails_the_check() {
 #[test]
 fn a_rules_grace_is_its_own_else_the_tables_else_the_default() {
     let cases = [
-        ("no table, no own grace", rule("r", ""), "grace 10 min"),
+        ("no table, no own grace", rule("r", ""), "Grace: 10 min"),
         (
             "table sets medium",
             format!("[grace]\nmedium = \"3m\"\n\n{}", rule("r", "")),
-            "grace 3 min",
+            "Grace: 3 min",
         ),
         (
             "own grace beats the table",
@@ -104,7 +109,7 @@ fn a_rules_grace_is_its_own_else_the_tables_else_the_default() {
                 "[grace]\nmedium = \"3m\"\n\n{}",
                 rule("r", "grace = \"1m\"")
             ),
-            "grace 1 min",
+            "Grace: 1 min",
         ),
     ];
     for (case, config, expected) in cases {
