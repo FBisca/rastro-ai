@@ -9,13 +9,20 @@ role = "plugin"
 
 [dependencies]
 anyhow.workspace = true
+chrono.workspace = true
 rastro-plugin-sdk = { path = "../rastro-plugin-sdk" }
 serde_json.workspace = true
 ureq = { version = "3", features = ["json"] }
 
 [dev-dependencies]
+chrono.workspace = true
+rusqlite = { version = "0.38", features = ["bundled"] }
+serde_json.workspace = true
 # Parses the shipped YAML app manifest template in the tests; production code reads no YAML.
 serde_yaml_ng = "0.10"
+tempfile = "3"
+tiny_http = "0.12"
+toml.workspace = true
 
 [lints]
 workspace = true
