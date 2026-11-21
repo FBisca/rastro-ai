@@ -1,0 +1,695 @@
+{
+  "$defs": {
+    "ActionDeclaration": {
+      "description": "One action an action provider declares: its name and what it risks (decisions/levels.md §4).\n`reach` and `reversibility` are read as text so a missing or unknown one is refused naming it.",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "reach": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "reversibility": {
+          "default": null,
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "AgentToolNeeds": {
+      "description": "What an agent tool adapter needs from an agent tool, in capabilities. It never names a tool\n(decisions/plugins.md §4): fields this declaration doesn't define are kept only to refuse it.",
+      "properties": {
+        "capabilities": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "capabilities"
+      ],
+      "type": "object"
+    },
+    "CoverageGap": {
+      "description": "A part of a read that couldn't be looked at, such as an unreadable `/user/emails`: the run stays found or ok.",
+      "properties": {
+        "reason": {
+          "type": "string"
+        },
+        "selection": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "selection",
+        "reason"
+      ],
+      "type": "object"
+    },
+    "CoverageStatus": {
+      "enum": [
+        "complete",
+        "couldnt_look"
+      ],
+      "type": "string"
+    },
+    "ExtractionRule": {
+      "description": "An extraction rule an extractor declares; only deterministic ones may yield observed claims.",
+      "properties": {
+        "deterministic": {
+          "type": "boolean"
+        },
+        "id": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "id",
+        "deterministic"
+      ],
+      "type": "object"
+    },
+    "Manifest": {
+      "description": "`rastro-plugin.toml`. A request: the source's grant can only narrow it.",
+      "properties": {
+        "action": {
+          "default": [],
+          "description": "On an action provider: the actions it declares, each with its reach and reversibility\n(`[[action]]`). Any other plugin that declares one is refused.",
+          "items": {
+            "$ref": "#/$defs/ActionDeclaration"
+          },
+          "type": "array"
+        },
+        "agent_tool": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/AgentToolNeeds"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "description": "On an agent tool adapter: the capabilities it needs from an agent tool, never a named tool."
+        },
+        "author": {
+          "type": "string"
+        },
+        "command": {
+          "type": "string"
+        },
+        "default_extractor": {
+          "default": null,
+          "description": "On a connector: the extractor bound by default to its sources.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "dependencies": {
+          "default": [],
+          "description": "Vocabularies (namespaces) an extractor uses.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "enforcement": {
+          "description": "On an agent tool adapter: the boundary controls it can enforce — the judgment floor's\n([`JUDGMENT_FLOOR`]) and any additional control a task's boundary demands (ADR-0016 §6).\nAbsent declares none; the core refuses a run whose floor or task boundary the declaration\ncannot match, naming the unenforceable control, and never starts the adapter in a\ndegraded-security mode.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "extraction_rules": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/ExtractionRule"
+          },
+          "type": "array"
+        },
+        "id": {
+          "type": "string"
+        },
+        "kinds": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "name": {
+          "type": "string"
+        },
+        "permissions": {
+          "$ref": "#/$defs/Permissions"
+        },
+        "protocol": {
+          "format": "uint32",
+          "minimum": 0,
+          "type": "integer"
+        },
+        "single_source": {
+          "default": false,
+          "description": "On a connector: it takes one source at most, because what it reads doesn't depend on the\nsource (one credential reads the same data whatever the source says), so a second source\nwould read the same data into another scope. `source add` refuses a second one.",
+          "type": "boolean"
+        },
+        "source_options": {
+          "default": [],
+          "description": "On a connector: the options a source of it takes (`source add --option key=value`).\nA manifest declaring none refuses any option.",
+          "items": {
+            "$ref": "#/$defs/SourceOption"
+          },
+          "type": "array"
+        },
+        "triggers": {
+          "default": [],
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "version": {
+          "type": "string"
+        },
+        "vocabulary": {
+          "default": null,
+          "description": "Path, relative to the plugin directory, of the vocabulary this package provides.",
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "name",
+        "version",
+        "author",
+        "kinds",
+        "protocol",
+        "command",
+        "permissions"
+      ],
+      "title": "Manifest",
+      "type": "object"
+    },
+    "Permissions": {
+      "properties": {
+        "actions": {
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "env": {
+          "default": [],
+          "description": "Environment variables the plugin needs (for example `GH_TOKEN`). It starts with a\ncleared environment plus the basics (`PATH`, `HOME`, `TMPDIR`, `LANG`, `LC_*`).",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "scopes": {
+          "description": "Scopes the plugin may be bound to. A source whose scope isn't listed is refused;\nan empty list declares no scopes, so every source is refused.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
+        "submit": {
+          "description": "Evidence kinds the plugin may submit.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        }
+      },
+      "required": [
+        "submit",
+        "scopes",
+        "actions"
+      ],
+      "type": "object"
+    },
+    "RunBinding": {
+      "description": "What the core binds a run to. Evidence and coverage inherit all of it.",
+      "properties": {
+        "keep_original": {
+          "default": false,
+          "description": "The source opted in to keeping the full original: send each observation's `original`.\nWithout it the core drops any original.",
+          "type": "boolean"
+        },
+        "run_id": {
+          "format": "int64",
+          "type": "integer"
+        },
+        "scope": {
+          "type": "string"
+        },
+        "selector": {
+          "additionalProperties": {
+            "type": "string"
+          },
+          "type": "object"
+        },
+        "source": {
+          "type": "string"
+        },
+        "window": {
+          "$ref": "#/$defs/Window"
+        }
+      },
+      "required": [
+        "run_id",
+        "source",
+        "scope",
+        "selector",
+        "window"
+      ],
+      "type": "object"
+    },
+    "SourceOption": {
+      "description": "One option a connector's sources take.",
+      "properties": {
+        "help": {
+          "default": "",
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "pattern": {
+          "default": null,
+          "description": "A regular expression the whole value must match.",
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "required": {
+          "default": false,
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "name"
+      ],
+      "type": "object"
+    },
+    "Window": {
+      "description": "Half-open window `[from, to)` of RFC 3339 timestamps.",
+      "properties": {
+        "from": {
+          "format": "date-time",
+          "type": "string"
+        },
+        "to": {
+          "format": "date-time",
+          "type": "string"
+        }
+      },
+      "required": [
+        "from",
+        "to"
+      ],
+      "type": "object"
+    }
+  },
+  "$id": "https://rastro.dev/schema/plugin-protocol-v1.schema.json",
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "description": "One line of the connector protocol a sync exchanges, and the plugin manifest at #/$defs/Manifest. Generated from rastro-plugin-sdk; do not edit.",
+  "oneOf": [
+    {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "number"
+          ]
+        },
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "const": "initialize"
+        },
+        "params": {
+          "properties": {
+            "manifest_id": {
+              "type": "string"
+            },
+            "protocol": {
+              "type": "string"
+            },
+            "run": {
+              "$ref": "#/$defs/RunBinding"
+            }
+          },
+          "required": [
+            "protocol",
+            "manifest_id",
+            "run"
+          ],
+          "title": "InitializeParams",
+          "type": "object"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "number"
+          ]
+        },
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "result": {
+          "properties": {
+            "manifest_id": {
+              "type": "string"
+            },
+            "protocol": {
+              "type": "string"
+            }
+          },
+          "required": [
+            "protocol",
+            "manifest_id"
+          ],
+          "title": "InitializeResult",
+          "type": "object"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "const": "evidence.submit"
+        },
+        "params": {
+          "description": "`evidence.submit`. Every field is optional on the wire so the core, not the parser,\ndecides what to reject. The core sets the capture time.",
+          "properties": {
+            "end": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "field": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "kind": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "location": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "original": {
+              "description": "The item or comment as the connector read it. Sent only when the binding says\n`keep_original`; the core stores it beside the observation.\nAn explicit `null` is kept as `Some(Value::Null)`, distinct from an omitted field."
+            },
+            "quote": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "scope": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source_updated_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "start": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": [
+                "integer",
+                "null"
+              ]
+            },
+            "trust_class": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "window": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Window"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inherited from the binding; a different one is rejected."
+            }
+          },
+          "title": "EvidenceSubmit",
+          "type": "object"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "const": "coverage.report"
+        },
+        "params": {
+          "description": "`coverage.report`. Whether it was found or empty is the core's call.",
+          "properties": {
+            "gaps": {
+              "items": {
+                "$ref": "#/$defs/CoverageGap"
+              },
+              "type": "array"
+            },
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "retry_at": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "scope": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "selection": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "source": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "$ref": "#/$defs/CoverageStatus"
+            },
+            "window": {
+              "anyOf": [
+                {
+                  "$ref": "#/$defs/Window"
+                },
+                {
+                  "type": "null"
+                }
+              ],
+              "description": "Inherited from the binding; a different one is rejected."
+            }
+          },
+          "required": [
+            "status"
+          ],
+          "title": "CoverageReport",
+          "type": "object"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "number"
+          ]
+        },
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "method": {
+          "const": "run.finish"
+        },
+        "params": {
+          "description": "`run.finish` request: the plugin's own view (items, or claims for an extractor). The core's counts are the authority.",
+          "properties": {
+            "reason": {
+              "type": [
+                "string",
+                "null"
+              ]
+            },
+            "status": {
+              "type": "string"
+            },
+            "submitted": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "status",
+            "submitted"
+          ],
+          "title": "RunFinish",
+          "type": "object"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "method",
+        "params"
+      ],
+      "type": "object"
+    },
+    {
+      "additionalProperties": false,
+      "properties": {
+        "id": {
+          "type": [
+            "string",
+            "number"
+          ]
+        },
+        "jsonrpc": {
+          "const": "2.0"
+        },
+        "result": {
+          "properties": {
+            "accepted": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "rejected": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "submitted": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            },
+            "unchanged": {
+              "format": "uint64",
+              "minimum": 0,
+              "type": "integer"
+            }
+          },
+          "required": [
+            "submitted",
+            "accepted",
+            "rejected",
+            "unchanged"
+          ],
+          "title": "Counts",
+          "type": "object"
+        }
+      },
+      "required": [
+        "jsonrpc",
+        "id",
+        "result"
+      ],
+      "type": "object"
+    }
+  ],
+  "title": "Rastro plugin protocol v1"
+}
