@@ -1,0 +1,183 @@
+schema: plan/2
+slug: chat-commitments
+goal: >-
+  The owner sees commitment hypotheses from the chat threads they opted in, next to meeting ones in the same
+  commitments list, with speakers identified by account, threads re-read when they change, and meetings
+  behaving exactly as before.
+spec: docs/specs/commitments.md
+archive: promote
+
+requirements:
+  added:
+    - title: Meetings keep their behaviour in the conversation store
+      shall: >-
+        Moving meetings into the store shared by every conversation kind SHALL keep each existing meeting's
+        hypotheses, staleness, replay and forgetting unchanged.
+      scenarios:
+        - id: S1
+          name: a meeting imported before the move
+          when: a database holding a meeting imported before the move is migrated and the list is read
+          then: the list shows the same hypotheses, stale flag and coverage as before the migration
+        - id: S2
+          name: replay after the move
+          when: that meeting is replayed after the migration
+          then: the replay succeeds with no adapter call
+
+    - title: A chat source's threads reach the adapter only after its opt-in
+      shall: >-
+        Only a chat source added with `--extract-commitments` SHALL have its threads sent to the bound adapter,
+        and its extracted threads SHALL appear in the commitments list as sources of kind `chat`.
+      scenarios:
+        - id: S3
+          name: a source without the opt-in
+          when: a chat source added without `--extract-commitments` syncs a thread the owner is in and the tick runs
+          then: the adapter receives no request
+        - id: S4
+          name: a source with the opt-in
+          when: a chat source added with `--extract-commitments` syncs a thread the owner is in and the tick runs
+          then: the adapter receives that thread, and the list shows a source of kind `chat` named by the channel source and the thread
+        - id: S5
+          name: a hidden channel hides its threads
+          when: a reader limited to other scopes reads the commitments list
+          then: no `chat` source of that channel appears
+
+    - title: A changed thread is extracted again after its source syncs
+      shall: >-
+        After an opted-in chat source syncs, the tick SHALL extract each thread whose messages changed since its
+        last extraction, and only those, and a successful run SHALL replace that thread's hypotheses.
+      scenarios:
+        - id: S6
+          name: a thread gains a reply
+          when: an extracted thread gains a reply and the tick runs
+          then: the thread is extracted again and its hypotheses are replaced by the new run's
+        - id: S7
+          name: nothing changed
+          when: no message of any extracted thread changed and the tick runs
+          then: the adapter receives no request
+        - id: S8
+          name: a reply is edited
+          when: a reply's text changes after its thread was extracted and the tick runs
+          then: the thread is extracted again
+
+    - title: Chat turns come from message evidence
+      shall: >-
+        The core SHALL build one turn per message of a thread in post order, labelled by its author's display
+        name with the author's id appended when two authors share a name, and SHALL resolve mentions to labels
+        in the turn text.
+      scenarios:
+        - id: S9
+          name: a multi-line message
+          when: a message whose text has a second line starting `Note:` is extracted
+          then: the adapter receives one turn for that message and no speaker named `Note`
+        - id: S10
+          name: two authors share a name
+          when: two authors with the same display name write in one thread
+          then: their turn labels differ by the authors' ids
+        - id: S11
+          name: a mention
+          when: a message mentions the token owner by id
+          then: the turn text the adapter receives carries the owner's label in place of the mention
+
+    - title: Chat parties are identified by account
+      shall: >-
+        The token owner's turns SHALL be the owner's, and every other author SHALL resolve to its account by id,
+        never by name, so a candidate whose party is a bot account is excluded.
+      scenarios:
+        - id: S12
+          name: the owner promises
+          when: the token owner promises something in a thread
+          then: the hypothesis names `me` as responsible
+        - id: S13
+          name: another author asks the owner
+          when: another author asks the owner for something in a thread
+          then: the hypothesis names that author's account as responsible for the ask and `me` as recipient
+        - id: S14
+          name: a bot author
+          when: a candidate's party is an author whose account is a bot
+          then: the candidate is excluded and counted
+
+    - title: A thread that cannot be extracted is skipped and counted
+      shall: >-
+        A thread the owner is not in, or one larger than the transcript cap, SHALL be skipped without a failed
+        run and counted in its source's coverage with the reason.
+      scenarios:
+        - id: S15
+          name: the owner is not in the thread
+          when: an opted-in source syncs a thread the owner is not in and the tick runs
+          then: the adapter receives no request for it and coverage counts it skipped because the owner is absent
+        - id: S16
+          name: a thread over the cap
+          when: a thread's turns exceed the transcript cap
+          then: the adapter receives no request for it and coverage counts it skipped because it is too large
+
+tickets:
+  - id: T1
+    delivers: >-
+      Meetings move into a conversation store with a kind column, with the ADR 0011 amendment, the glossary's
+      Conversation term and the chat amendment to `docs/decisions/meetings.md` §3, and every existing meeting
+      behaving as before.
+    satisfies: [S1, S2]
+    paths:
+      - crates/rastro-storage-sqlite/src/meeting.rs
+      - crates/rastro-storage-sqlite/src/commitments.rs
+      - crates/rastro-storage-sqlite/migrations/
+      - crates/rastro-storage-sqlite/tests/migrations.rs
+      - crates/rastro-core/src/meeting.rs
+      - crates/rastro-cli/tests/meeting.rs
+      - docs/adr/0011-meeting-commitment-hypotheses.md
+      - docs/GLOSSARY.md
+      - docs/decisions/meetings.md
+    size: regular
+    difficulty: complex
+    risk: [migration, state]
+  - id: T2
+    delivers: >-
+      The `--extract-commitments` opt-in on a source, the tick extracting new threads of opted-in chat sources
+      through the bundled template, and `chat` sources in the commitments list and schema on the CLI and over
+      MCP, recorded in `docs/decisions/surfaces.md`.
+    satisfies: [S3, S4, S5]
+    paths:
+      - crates/rastro-core/src/commitments/
+      - crates/rastro-core/src/tick.rs
+      - crates/rastro-operations/
+      - crates/rastro-cli/src/main.rs
+      - schema/operations-v2.schema.json
+      - docs/decisions/surfaces.md
+      - crates/rastro-test-connector/
+      - crates/rastro-cli/tests/chat_commitments.rs
+    size: regular
+    difficulty: complex
+    risk: [state, external]
+    blocked_by: [T1]
+  - id: T3
+    delivers: >-
+      Turns built from message evidence with display-name labels, id suffixes on shared names and resolved
+      mentions; the owner and other authors resolved by account; bot parties excluded; threads without the
+      owner or over the cap skipped and counted.
+    satisfies: [S9, S10, S11, S12, S13, S14, S15, S16]
+    paths:
+      - crates/rastro-core/src/commitments/
+      - crates/rastro-cli/tests/chat_commitments.rs
+    size: regular
+    difficulty: complex
+    risk: [state]
+    blocked_by: [T2]
+  - id: T4
+    delivers: >-
+      Change detection: the tick re-extracts only threads whose messages changed since their last extraction,
+      replacing their hypotheses on success.
+    satisfies: [S6, S7, S8]
+    paths:
+      - crates/rastro-core/src/commitments/
+      - crates/rastro-core/src/tick.rs
+      - crates/rastro-storage-sqlite/src/commitments.rs
+      - crates/rastro-cli/tests/chat_commitments.rs
+    size: regular
+    difficulty: complex
+    risk: [state, retry-idempotency]
+    blocked_by: [T3]
+approval:
+  by: felippe.bisca@gmail.com
+  at: '2026-11-21T14:27:17.552853+00:00'
+  base: 8a122308cb38fed9e26ff1edb1e3bee6d764972d
+  digest: 73a35c5751637ece9af06b4d58a4fbe0199d55ac845341eaa485bc4682ad2f17

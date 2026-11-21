@@ -1,0 +1,66 @@
+schema: plan/2
+slug: slack-identity
+goal: >-
+  A synced Slack channel tells Rastro who its people are: the token owner is the owner's Person, each author is
+  a Slack account with its names, and bots never link to anyone.
+spec: docs/specs/identity.md
+archive: promote
+
+requirements:
+  added:
+    - title: The Slack token owner holds me
+      shall: >-
+        When the owner's Person exists, a Slack sync that records the token owner SHALL hold that Slack account
+        by the owner's Person with a token-owner justification.
+      scenarios:
+        - id: S1
+          name: a Slack sync records the token owner
+          when: "`me` exists and a Slack source syncs against the scripted API"
+          then: the token owner's `slack:user/<id>` account is `held_by` `me` with a token-owner justification
+
+    - title: A Slack sync records accounts with their names
+      shall: >-
+        A Slack source SHALL be bound to the Slack extractor, and each author it records SHALL become a
+        `slack:user/<id>` entity typed `slack:Account` with its name and display-name aliases.
+      scenarios:
+        - id: S2
+          name: authors become accounts
+          when: a Slack source syncs messages from two authors against the scripted API
+          then: each author is a `slack:user/<id>` entity typed `slack:Account` with its name and display-name aliases
+
+    - title: A Slack bot never links
+      shall: >-
+        A Slack author recorded as a bot SHALL be typed `slack:Bot`, and SHALL never be held by a Person or
+        offered as a link candidate.
+      scenarios:
+        - id: S3
+          name: a bot author
+          when: a Slack sync records an author whose profile says it is a bot
+          then: the account is typed `slack:Bot` and no Person holds it
+        - id: S4
+          name: a bot that shares a name
+          when: a Slack bot's folded name equals the name of another source's account
+          then: no link candidate is offered for the pair
+
+tickets:
+  - id: T1
+    delivers: >-
+      A Slack extractor and vocabulary in the owner-approved `slack` namespace, bound as the Slack connector's
+      default extractor: token owner to `me`, authors to `slack:Account` with name aliases, bots to `slack:Bot`,
+      with the namespace approval recorded in `docs/decisions/plugins.md`.
+    satisfies: [S1, S2, S3, S4]
+    paths:
+      - crates/rastro-extractor-slack/
+      - crates/rastro-extractor-slack/tests/
+      - crates/rastro-connector-slack/rastro-plugin.toml
+      - Cargo.toml
+      - scripts/affected-tests.test.sh
+      - docs/decisions/plugins.md
+    size: regular
+    difficulty: complex
+    risk: [state]
+approval:
+  by: felippe.bisca@gmail.com
+  at: '2026-11-21T14:27:17.025111+00:00'
+  base: 8a122308cb38fed9e26ff1edb1e3bee6d764972d
+  digest: ef88841b6c5f2ccb8816d19631bf31201bb62f0b373aeb808228c181d3920cdf
