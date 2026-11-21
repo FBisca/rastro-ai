@@ -238,12 +238,13 @@ fn speakers_of(c: &Connection, run: i64) -> Result<Vec<(String, Identity)>> {
 /// The latest good run's record, for replay.
 pub(crate) fn recording(view: &View, meeting: &str) -> Result<Option<Recording>> {
     let c = view.0;
-    let Some((run, extractor, owner, total, excluded, scope, captured, candidates)) = c
+    let Some((run, extractor, owner, total, excluded, scope, captured, candidates, contract)) = c
         .query_row(
             "SELECT r.id, r.extractor, r.owner_speaker, r.turns_total, r.excluded, m.scope,
-                    m.captured_at, o.candidates
+                    m.captured_at, o.candidates, ct.contract
              FROM meeting_run r JOIN meeting m ON m.id = r.meeting_id
              JOIN meeting_output o ON o.run_id = r.id
+             LEFT JOIN meeting_contract ct ON ct.run_id = r.id
              WHERE r.meeting_id = ?1 AND r.state = 'succeeded'
              ORDER BY r.id DESC LIMIT 1",
             [meeting],
@@ -257,6 +258,7 @@ pub(crate) fn recording(view: &View, meeting: &str) -> Result<Option<Recording>>
                     r.get::<_, String>(5)?,
                     r.get::<_, String>(6)?,
                     r.get::<_, String>(7)?,
+                    r.get::<_, Option<String>>(8)?,
                 ))
             },
         )
@@ -291,6 +293,7 @@ pub(crate) fn recording(view: &View, meeting: &str) -> Result<Option<Recording>>
         candidates,
         spans,
         speakers: speakers_of(c, run)?,
+        contract,
     }))
 }
 
@@ -424,6 +427,7 @@ pub(crate) fn record(connection: &mut Connection, run: &RunRecord) -> Result<i64
             "meeting_output",
             "meeting_span",
             "meeting_speaker",
+            "meeting_contract",
         ] {
             transaction.execute(
                 &format!(
@@ -486,6 +490,10 @@ pub(crate) fn record(connection: &mut Connection, run: &RunRecord) -> Result<i64
                 params![run_id, label, identity.id, identity.identifier],
             )?;
         }
+        transaction.execute(
+            "INSERT INTO meeting_contract (run_id, contract) VALUES (?1, ?2)",
+            params![run_id, recorded.contract],
+        )?;
     }
     match &run.transcript {
         TranscriptKeep::Untouched => {}
@@ -529,6 +537,7 @@ pub(crate) fn forget(connection: &mut Connection, meeting: &str) -> Result<Optio
     let recorded_output = delete("meeting_output", of_runs)?;
     let spans = delete("meeting_span", of_runs)?;
     delete("meeting_speaker", of_runs)?;
+    delete("meeting_contract", of_runs)?;
     delete("session_turn", of_runs)?;
     let transcript = delete("meeting_transcript", "meeting_id = ?1")? > 0;
     let runs = delete("meeting_run", "meeting_id = ?1")?;

@@ -570,7 +570,7 @@ fn S3_unsupported_candidates_are_excluded_and_an_invalid_quote_fails_the_run() {
         assert_eq!(
             session["feedback"],
             json!([{
-                "gate": "quote",
+                "gate": "span",
                 "field": "candidates[0].quote",
                 "expected": "an exact, contiguous piece of turn 1's text",
                 "actual": quote
@@ -638,7 +638,7 @@ fn a_corrected_quote_on_a_retry_turn_keeps_only_the_final_output_as_evidence() {
     assert_eq!(
         session["feedback"],
         json!([{
-            "gate": "quote",
+            "gate": "span",
             "field": "candidates[0].quote",
             "expected": "an exact, contiguous piece of turn 1's text",
             "actual": "I'll send Bob the budget by Friday!"
@@ -1470,4 +1470,205 @@ fn S2_the_commitments_list_holds_every_source_and_the_filters_narrow_it() {
     assert_eq!(nothing["sources"], json!([]), "{nothing}");
     let no_term = env.ok(&["commitments", "--term", "std:supertype"]);
     assert_eq!(no_term["sources"], json!([]), "{no_term}");
+}
+
+/// S4: with no template override, the bundled meeting template drives the import: its declared
+/// output schema reaches the adapter, and the validated candidates become the same hypotheses on
+/// the CLI and through the shared MCP read.
+// spec: Meeting imports select the bundled or owner-configured task template
+#[test]
+fn a_default_import_runs_the_bundled_meeting_template() {
+    let env = Env::new();
+    let imported = env.import_ok(&["--owner-speaker", "Alice"]);
+    let hypotheses = imported["hypotheses"].as_array().unwrap();
+    assert_eq!(hypotheses.len(), 3, "{imported}");
+    assert_eq!(hypotheses[0]["promise"], "send Bob the budget");
+    assert_eq!(hypotheses[1]["promise"], "share the roadmap with Alice");
+    assert_eq!(hypotheses[2]["promise"], "update the plan");
+
+    // The bundled template, not core code, names the request's fields and output schema.
+    let request = env.request();
+    let schema = &request["output_schema"];
+    assert!(
+        schema.is_object(),
+        "the bundled template's output schema must reach the adapter: {request}"
+    );
+    let properties = &schema["properties"]["candidates"]["items"]["properties"];
+    for field in [
+        "turn",
+        "kind",
+        "responsible",
+        "recipient",
+        "promise",
+        "stated_date",
+        "quote",
+    ] {
+        assert!(
+            properties.get(field).is_some(),
+            "the bundled template does not declare {field}: {schema}"
+        );
+    }
+    assert_eq!(
+        request["fields"],
+        json!([
+            "turn",
+            "kind",
+            "responsible",
+            "recipient",
+            "promise",
+            "stated_date",
+            "quote"
+        ]),
+        "{request}"
+    );
+
+    // The shared MCP read shows the same hypotheses the bundled template produced.
+    let list = env.mcp(&["work"], "commitments", json!({}));
+    let sources = list["result"]["structuredContent"]["result"]["sources"]
+        .as_array()
+        .unwrap();
+    assert_eq!(sources.len(), 1, "{list}");
+    assert_eq!(sources[0]["name"], "weekly-1", "{list}");
+    let listed = sources[0]["hypotheses"].as_array().unwrap();
+    assert_eq!(listed.len(), 3, "{list}");
+    let promises = |hs: &[Value]| -> Vec<String> {
+        hs.iter()
+            .map(|h| h["promise"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(promises(listed), promises(hypotheses), "{list}");
+}
+
+/// S7: a run recorded under a template since changed replays against the contract saved with it,
+/// not the current bundled default, and never calls a model. The saved contract here also excludes
+/// promises, so replay keeps none of them — proof the saved rules ran, not the bundled ones.
+// spec: Replay needs no model call and forgetting removes what was retained
+#[test]
+fn replay_uses_the_saved_contract_after_the_original_template_changed() {
+    let env = Env::new();
+    let imported = env.import_ok(&["--owner-speaker", "Alice"]);
+    assert_eq!(imported["hypotheses"].as_array().unwrap().len(), 3);
+
+    // The run's original contract differs from the current bundled default: it also excludes
+    // every promise. This stands in for a template that has since changed or been uninstalled.
+    let saved: String = database(&env)
+        .query_row("SELECT contract FROM meeting_contract", [], |r| r.get(0))
+        .unwrap();
+    let changed = format!(
+        "{saved}\n[[rules]]\nkind = \"equals\"\nfield = \"kind\"\nvalue = \"promise\"\ndisposition = \"exclude\"\n"
+    );
+    database(&env)
+        .execute("UPDATE meeting_contract SET contract = ?1", [changed])
+        .unwrap();
+
+    // The adapter is gone; nothing may be sent to it.
+    fs::remove_file(env.script_path()).unwrap();
+    fs::remove_file(env.path("request.json")).unwrap();
+    let replayed = env.ok(&["meeting", "replay", "weekly-1"]);
+    assert!(
+        !env.path("request.json").exists(),
+        "the replay called a model"
+    );
+    assert_eq!(replayed["extraction"]["state"], "succeeded", "{replayed}");
+    assert_eq!(
+        replayed["extraction"]["replay_of"],
+        imported["extraction"]["run"]
+    );
+    // The saved contract's exclusion ran on replay: all three promises are left out and counted.
+    assert_eq!(replayed["hypotheses"], json!([]), "{replayed}");
+    assert_eq!(replayed["extraction"]["excluded"], 3, "{replayed}");
+}
+
+/// S8: a run recorded before template contracts were saved replays under the frozen legacy
+/// contract, ignoring the template currently selected. The recording here predates candidate kinds
+/// too: the current bundled selection requires a kind and refuses a kind-less answer, yet replay
+/// restores the kind-less candidates as promises under the legacy rules, with no model call.
+// spec: Replay needs no model call and forgetting removes what was retained
+#[test]
+fn replay_of_a_pre_contract_recording_ignores_the_selected_template() {
+    let env = Env::new();
+    let mut kinds = good();
+    kinds[0]["kind"] = json!("ask");
+    kinds[1]["kind"] = json!("waiting_on");
+    env.extractor(&kinds);
+    let imported = env.import_ok(&["--owner-speaker", "Alice"]);
+    let kind_of = |read: &Value| -> Vec<String> {
+        read["hypotheses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["kind"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(kind_of(&imported), ["ask", "waiting_on", "promise"]);
+
+    // The template currently selected (the bundled default) requires a kind: a kind-less answer
+    // fails it. This is the selection a pre-contract replay must ignore.
+    let mut kindless = good();
+    for candidate in &mut kindless {
+        candidate.as_object_mut().unwrap().remove("kind");
+    }
+    env.extractor(&kindless);
+    let (ok, refused) = env.import(&["--owner-speaker", "Alice"]);
+    assert!(!ok, "{refused}");
+    assert_eq!(
+        refused["extraction"]["cause"], "extractor_output_invalid",
+        "{refused}"
+    );
+
+    // The first run's recording now predates contracts and kinds: no saved contract, no kind field.
+    database(&env)
+        .execute("DELETE FROM meeting_contract", [])
+        .unwrap();
+    let recorded: String = database(&env)
+        .query_row("SELECT candidates FROM meeting_output", [], |r| r.get(0))
+        .unwrap();
+    let mut candidates: Vec<Value> = serde_json::from_str(&recorded).unwrap();
+    for candidate in &mut candidates {
+        candidate.as_object_mut().unwrap().remove("kind");
+    }
+    database(&env)
+        .execute(
+            "UPDATE meeting_output SET candidates = ?1",
+            [serde_json::to_string(&candidates).unwrap()],
+        )
+        .unwrap();
+
+    // The adapter is gone; replay restores the kind-less recording as promises under the legacy
+    // contract, not the kind-requiring template currently selected.
+    fs::remove_file(env.script_path()).unwrap();
+    fs::remove_file(env.path("request.json")).unwrap();
+    let replayed = env.ok(&["meeting", "replay", "weekly-1"]);
+    assert!(
+        !env.path("request.json").exists(),
+        "the replay called a model"
+    );
+    assert_eq!(replayed["extraction"]["state"], "succeeded", "{replayed}");
+    assert_eq!(
+        replayed["extraction"]["replay_of"],
+        imported["extraction"]["run"]
+    );
+    assert_eq!(
+        kind_of(&replayed),
+        ["promise", "promise", "promise"],
+        "the legacy contract must restore the kind-less recording as promises: {replayed}"
+    );
+}
+
+/// S9: forgetting a meeting removes the contract saved for replay along with its spans and
+/// recorded output.
+// spec: Replay needs no model call and forgetting removes what was retained
+#[test]
+fn forgetting_a_meeting_removes_its_saved_replay_contract() {
+    let env = Env::new();
+    env.import_ok(&["--owner-speaker", "Alice"]);
+    assert_eq!(rows(&env, "meeting_contract"), 1);
+    assert!(rows(&env, "meeting_span") > 0);
+    assert_eq!(rows(&env, "meeting_output"), 1);
+
+    let forgotten = env.ok(&["meeting", "forget", "weekly-1"]);
+    assert_eq!(forgotten["meeting"], "weekly-1");
+    assert_eq!(rows(&env, "meeting_contract"), 0, "the contract survived");
+    assert_eq!(rows(&env, "meeting_span"), 0);
+    assert_eq!(rows(&env, "meeting_output"), 0);
 }

@@ -64,11 +64,19 @@ A meeting re-imported with changed text SHALL keep its last-good results marked 
 - THEN the last-good results are replaced by the successful new execution, without duplicating the meeting
 
 ### Requirement: Replay needs no model call and forgetting removes what was retained
-A replay of recorded output SHALL need no model call, and forgetting a meeting SHALL remove the retained spans and recorded output for it.
+Replay SHALL validate recorded output without calling a model using the saved contract or the bundled legacy contract for old runs, with forgetting removing all retained replay data for that meeting.
 
-#### Scenario: replay and forget
-- WHEN recorded output is replayed, or the meeting is forgotten
-- THEN replay requires no model call and forgetting removes retained spans and recorded output for the meeting
+#### Scenario: replay uses the saved contract after the template changed
+- WHEN a recorded meeting run is replayed after its original template has changed or been uninstalled
+- THEN replay validates the recorded output using the saved contract without calling a model
+
+#### Scenario: a pre-contract run replays under the bundled legacy rules
+- WHEN a meeting run from before template contracts were recorded is replayed with a different template currently selected
+- THEN replay uses the bundled legacy rules without calling a model
+
+#### Scenario: forgetting removes the saved contract
+- WHEN the owner forgets a meeting that has a saved contract
+- THEN its retained spans, recorded output and saved contract are removed
 
 ### Requirement: Default import retains spans and output but not the transcript
 An import without full-transcript retention opt-in SHALL retain the supporting spans and the recorded output for replay, SHALL not retain the full transcript, and an export SHALL omit recorded model output.
@@ -105,3 +113,18 @@ Core SHALL execute task templates without containing plugin-specific instruction
 #### Scenario: a declared exclusion counts without a retry
 - WHEN a valid candidate matches a declared exclusion rule
 - THEN the candidate is counted as excluded without causing a retry
+
+### Requirement: Meeting imports select the bundled or owner-configured task template
+A meeting import SHALL use the bundled meeting task template unless the owner explicitly selects a compatible local replacement.
+
+#### Scenario: a default import runs the bundled template
+- WHEN the owner imports a supported transcript using existing adapter configuration and no template override
+- THEN the bundled template produces the existing CLI and shared MCP meeting hypotheses from the validated candidates
+
+#### Scenario: a selected local template reaches the adapter
+- WHEN the owner imports with a compatible local template selected and an unchanged adapter binding
+- THEN the adapter receives the selected template's rendered instructions
+
+#### Scenario: an incompatible selection stops the import
+- WHEN the selected local template cannot be loaded or does not meet the meeting input and result contract
+- THEN the import reports the selected template error without calling the adapter or falling back

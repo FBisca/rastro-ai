@@ -368,13 +368,13 @@ fn S1_only_the_candidates_the_cores_checks_pass_are_kept() {
     assert_eq!(kinds, ["promise", "waiting_on", "ask"]);
 }
 
-/// S2: an answer that fails a shape or quote gate earns the failure reason as the next turn
+/// S2: an answer that fails a shape or span gate earns the failure reason as the next turn
 /// of the same session while turns remain under the cap: gate, field, expected and actual,
 /// the prior answer along, and no new session opened.
 // spec: The core calls the adapter and keeps only the candidates that pass its checks
 #[test]
 fn S2_a_gate_failure_earns_a_retry_turn_in_the_same_session() {
-    // The quote gate: a quote that is not an exact, contiguous piece of its turn.
+    // The span gate: a quote that is not an exact, contiguous piece of its turn.
     let env = Env::new();
     let broken = broken_quote();
     env.respond_turn(1, json!({ "candidates": broken }));
@@ -401,7 +401,7 @@ fn S2_a_gate_failure_earns_a_retry_turn_in_the_same_session() {
     assert_eq!(
         session["feedback"],
         json!([{
-            "gate": "quote",
+            "gate": "span",
             "field": "candidates[0].quote",
             "expected": "an exact, contiguous piece of turn 1's text",
             "actual": "I'll send Bob the budget by Friday!"
@@ -425,11 +425,12 @@ fn S2_a_gate_failure_earns_a_retry_turn_in_the_same_session() {
     assert_eq!(env.turns(), 2);
     let session = &env.judgment(2)["session"];
     assert_eq!(session["turn"], 2, "{session}");
-    // The broken answer is not the judgment shape; its harness session id still rides along
-    // so the retry can resume it, and the feedback names what was there.
+    // The broken answer is not the judgment shape; the retry carries the whole prior answer in
+    // the task's own shape, its harness session id still riding along so the retry can resume it,
+    // and the feedback names what was there.
     assert_eq!(
         session["prior_answer"],
-        json!({ "candidates": [], "session_id": "sess-1" })
+        json!({ "candidates": broken, "session_id": "sess-1" })
     );
     assert_eq!(
         session["feedback"],
@@ -448,7 +449,7 @@ fn S2_a_gate_failure_earns_a_retry_turn_in_the_same_session() {
 // spec: The core calls the adapter and keeps only the candidates that pass its checks
 #[test]
 fn S3_gate_failures_that_exhaust_the_turn_cap_fail_the_run_stale() {
-    // The quote gate, every turn, under the default cap of three turns.
+    // The span gate, every turn, under the default cap of three turns.
     let env = Env::new();
     let last_good = env.import_ok();
     env.forget_launches();
@@ -749,7 +750,7 @@ fn S8_a_full_enforcement_declaration_lets_the_run_proceed() {
 // spec: Every turn of a judgment session is recorded
 #[test]
 fn S4_a_runs_history_holds_each_turns_request_answer_and_gate_verdict() {
-    // A retry run: turn 1 fails the quote gate, turn 2 passes. Both turns are recorded.
+    // A retry run: turn 1 fails the span gate, turn 2 passes. Both turns are recorded.
     let env = Env::new();
     let broken = broken_quote();
     env.respond_turn(1, json!({ "candidates": broken, "session_id": "sess-1" }));
@@ -758,7 +759,7 @@ fn S4_a_runs_history_holds_each_turns_request_answer_and_gate_verdict() {
     let run = result["extraction"]["run"].as_i64().unwrap();
     let history = env.history(run);
     assert_eq!(history.len(), 2, "{history:?}");
-    // Turn 1: the request the core sent, the answer it got, and the quote gate's verdict.
+    // Turn 1: the request the core sent, the answer it got, and the span gate's verdict.
     assert_eq!(history[0]["turn"], 1);
     assert_eq!(history[0]["request"], env.judgment(1));
     assert_eq!(
@@ -889,7 +890,7 @@ fn a_retry_turn_carries_the_harness_session_id_the_first_turn_produced() {
         1,
         json!({ "candidates": broken_quote(), "session_id": "sess-1" }),
     );
-    // Turn 2 fails the quote gate again, and its answer names no session id.
+    // Turn 2 fails the span gate again, and its answer names no session id.
     env.respond_turn(2, json!({ "candidates": broken_quote() }));
     env.respond_turn(3, json!({ "candidates": good() }));
     let result = env.import_ok();

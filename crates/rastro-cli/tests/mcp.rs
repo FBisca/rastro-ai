@@ -564,7 +564,7 @@ fn launch_migrates_recovers_and_turns_on_wal_before_the_first_answer() {
          DROP TABLE shown_report;
          DROP TABLE session_turn;
          DROP TABLE meeting_transcript; DROP TABLE meeting_speaker; DROP TABLE meeting_span;
-         DROP TABLE meeting_output; DROP TABLE meeting_hypothesis; DROP TABLE meeting_run;
+         DROP TABLE meeting_output; DROP TABLE meeting_contract; DROP TABLE meeting_hypothesis; DROP TABLE meeting_run;
          DROP TABLE meeting;
          DROP TABLE automatic_justification; ALTER TABLE coverage DROP COLUMN gaps_json;
          DROP TABLE intent_justification; DROP TABLE intent;

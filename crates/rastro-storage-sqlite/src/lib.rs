@@ -35,7 +35,7 @@ const INTENT_END: &str = "202611081000_intent_justification_end";
 /// A migration that starts with this line rebuilds a table other tables name, so the open runs
 /// it with foreign keys off and checks them before it commits.
 const FOREIGN_KEYS_OFF: &str = "-- foreign_keys = off";
-const MIGRATIONS: [(&str, &str); 27] = [
+const MIGRATIONS: [(&str, &str); 28] = [
     (
         "202611041200_initial",
         include_str!("../migrations/202611041200_initial.sql"),
@@ -143,6 +143,10 @@ const MIGRATIONS: [(&str, &str); 27] = [
     (
         "202611201100_session_turn_rename",
         include_str!("../migrations/202611201100_session_turn_rename.sql"),
+    ),
+    (
+        "202611211000_meeting_replay_contract",
+        include_str!("../migrations/202611211000_meeting_replay_contract.sql"),
     ),
 ];
 

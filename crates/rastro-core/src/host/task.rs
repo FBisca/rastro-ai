@@ -45,6 +45,12 @@ pub struct TaskOutput {
 pub struct TaskFailure {
     pub reason: String,
     pub history: Vec<TaskTurn>,
+    /// The gate whose failure exhausted the turn cap, when gate failures ended the run; `None`
+    /// when the adapter itself broke or was refused (a system failure).
+    pub gate: Option<String>,
+    /// The adapter failure that ended the run, when it was a system failure rather than gate
+    /// failures exhausting the cap.
+    pub system: Option<JudgmentFailure>,
 }
 
 /// Runs the task template over the input with the installed adapter `adapter`: at most `cap`
@@ -68,8 +74,10 @@ pub fn run(
         Ok(session) => session,
         Err(failure) => {
             return Err(TaskFailure {
-                reason: failure_reason(failure),
+                reason: failure_reason(&failure),
                 history: Vec::new(),
+                gate: None,
+                system: Some(failure),
             });
         }
     };
@@ -115,14 +123,19 @@ fn run_turns(
         let value = match session.turn(&request) {
             Ok(value) => value,
             Err(failure) => {
-                let reason = failure_reason(failure);
+                let reason = failure_reason(&failure);
                 history.push(TaskTurn {
                     turn,
                     request: sent,
                     answer: None,
                     verdict: system_verdict(&reason),
                 });
-                return Err(TaskFailure { reason, history });
+                return Err(TaskFailure {
+                    reason,
+                    history,
+                    gate: None,
+                    system: Some(failure),
+                });
             }
         };
         // Persist the first harness session id the session produced: every retry turn resumes
@@ -172,7 +185,27 @@ fn run_turns(
             feedback_details(&feedback)
         ),
         history,
+        gate: Some(gate.to_string()),
+        system: None,
     })
+}
+
+/// Re-checks recorded output against a saved contract with no model call: the same shape and
+/// rule gates a run executes, over the turns the record retains (decisions/plugins.md §48).
+/// Returns the kept candidates and the count a declared exclusion matched, or the gate failures
+/// the record no longer passes.
+pub fn check(
+    template: &TaskTemplate,
+    turns: &[JudgmentTurn],
+    answer: &Value,
+) -> Result<(Vec<Value>, usize), Vec<GateFeedback>> {
+    match evaluate(template, turns, answer) {
+        Evaluation::Pass {
+            candidates,
+            excluded,
+        } => Ok((candidates, excluded)),
+        Evaluation::Retry(feedback) => Err(feedback),
+    }
 }
 
 /// The prior answer a retry turn carries: the whole recorded response in the task's own
@@ -456,9 +489,9 @@ fn feedback_details(feedback: &[GateFeedback]) -> String {
 }
 
 /// A session failure's reason: the adapter broke, or its answer was not the protocol's shape.
-fn failure_reason(failure: JudgmentFailure) -> String {
+fn failure_reason(failure: &JudgmentFailure) -> String {
     match failure {
-        JudgmentFailure::Failed(reason) | JudgmentFailure::Invalid(reason) => reason,
+        JudgmentFailure::Failed(reason) | JudgmentFailure::Invalid(reason) => reason.clone(),
     }
 }
 
