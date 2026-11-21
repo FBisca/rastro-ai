@@ -1,6 +1,8 @@
 //! A scripted Slack Web API on loopback: it answers the connector's fixed calls from a [`World`]
-//! and records every request. It applies no window filter: the messages it holds are the ones
-//! the call is assumed to select, so the connector's own filtering is what a test observes.
+//! and records every request. `conversations.history` applies no window filter: the messages it
+//! holds are the ones the call is assumed to select, so the connector's own filtering is what a
+//! test observes. `conversations.replies` selects by the call's `oldest`/`latest` as Slack
+//! documents (exclusive unless `inclusive=true`), so a boundary read is the API's behaviour too.
 #![allow(dead_code)]
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
@@ -61,6 +63,11 @@ impl Reply {
 /// pages are `page_size` long and a cursor is the offset of the next page. Thread replies live
 /// in `replies`, served only by `conversations.replies` (oldest first, the parent leading, as
 /// Slack does); `conversations.history` serves the messages, thread parents included.
+///
+/// `conversations.replies` selects replies by the call's `oldest`/`latest`, exclusive unless
+/// `inclusive=true`, as Slack documents; the parent always leads, it is the anchor the call
+/// names. `conversations.history` applies no window filter: the messages it holds are the ones
+/// the call is assumed to select, so the connector's own filtering is what a test observes.
 #[derive(Clone)]
 pub struct World {
     pub viewer: String,
@@ -126,7 +133,10 @@ impl World {
                 messages.extend(
                     self.replies
                         .iter()
-                        .filter(|r| r["thread_ts"].as_str() == Some(thread_ts))
+                        .filter(|r| {
+                            r["thread_ts"].as_str() == Some(thread_ts)
+                                && r["ts"].as_str().is_some_and(|ts| selects(req, ts))
+                        })
                         .cloned(),
                 );
                 let from: usize = req
@@ -179,6 +189,27 @@ pub fn from_ts(ts: &str) -> DateTime<Utc> {
     }
     let micros: u32 = frac[..6].parse().unwrap();
     DateTime::from_timestamp(secs, micros * 1000).unwrap()
+}
+/// Whether the call's `oldest`/`latest` select a message: Slack excludes the bounds unless
+/// `inclusive=true`. An absent bound selects everything on its side. Slack's ts is fixed-width
+/// epoch seconds, so string order is time order.
+pub fn selects(req: &Req, ts: &str) -> bool {
+    let inclusive = req.params.get("inclusive").is_some_and(|v| v == "true");
+    let after = |bound: &String| {
+        if inclusive {
+            ts >= bound.as_str()
+        } else {
+            ts > bound.as_str()
+        }
+    };
+    let before = |bound: &String| {
+        if inclusive {
+            ts <= bound.as_str()
+        } else {
+            ts < bound.as_str()
+        }
+    };
+    req.params.get("oldest").is_none_or(after) && req.params.get("latest").is_none_or(before)
 }
 /// A plain public channel the token owner can read.
 pub fn channel() -> Value {

@@ -371,6 +371,10 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
                 ("channel", channel.as_str()),
                 ("oldest", oldest.as_str()),
                 ("latest", latest.as_str()),
+                // Slack's bounds are exclusive by default: inclusive returns [oldest, latest],
+                // so a thread started exactly at the lookback's edge is still found, and the
+                // half-open filter below drops the latest edge.
+                ("inclusive", "true"),
                 ("limit", "200"),
             ];
             if !cursor.is_empty() {
@@ -430,7 +434,10 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
     }
 
     /// Every page of one thread's replies in the window, following the API's cursor until it
-    /// says there is no more.
+    /// says there is no more. `inclusive` asks Slack for `[oldest, latest]`: its bounds are
+    /// exclusive by default, which would leave out a reply posted exactly at the window's
+    /// start — the previous sync left it out too, so it would never be stored. The half-open
+    /// filter in `read_message` drops the latest edge instead.
     fn replies_pages(&mut self, thread_ts: &str) -> Result<(), Failure> {
         let channel = self.channel.clone();
         let oldest = slack_ts(self.window_from);
@@ -443,6 +450,7 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
                 ("ts", thread_ts),
                 ("oldest", oldest.as_str()),
                 ("latest", latest.as_str()),
+                ("inclusive", "true"),
                 ("limit", "200"),
             ];
             if !cursor.is_empty() {

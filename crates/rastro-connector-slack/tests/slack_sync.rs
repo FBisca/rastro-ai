@@ -552,6 +552,12 @@ fn a_reply_to_a_thread_started_before_the_window_is_stored_with_its_thread_start
         history.params.get("latest").map(String::as_str),
         Some(ts(to).as_str())
     );
+    // Slack's bounds are exclusive unless asked otherwise: the read must include its oldest
+    // edge, and the connector's half-open filter drops the latest one.
+    assert_eq!(
+        history.params.get("inclusive").map(String::as_str),
+        Some("true")
+    );
     let replies: Vec<_> = requests
         .iter()
         .filter(|r| r.method == "conversations.replies")
@@ -569,6 +575,10 @@ fn a_reply_to_a_thread_started_before_the_window_is_stored_with_its_thread_start
         assert_eq!(
             req.params.get("latest").map(String::as_str),
             Some(ts(to).as_str())
+        );
+        assert_eq!(
+            req.params.get("inclusive").map(String::as_str),
+            Some("true")
         );
     }
 }
@@ -663,8 +673,13 @@ fn a_reply_at_the_second_windows_start_is_stored_exactly_once() {
             "conversations.replies" => {
                 let (parent, reply) = pin.as_ref().expect("history comes first");
                 (req.params.get("ts").map(String::as_str) == parent["ts"].as_str()).then(|| {
+                    // The parent leads; the reply is selected by the call's bounds, as Slack does.
+                    let mut messages = vec![parent.clone()];
+                    if selects(req, reply["ts"].as_str().unwrap()) {
+                        messages.push(reply.clone());
+                    }
                     Reply::ok(json!({
-                        "ok": true, "messages": [parent, reply], "has_more": false,
+                        "ok": true, "messages": messages, "has_more": false,
                         "response_metadata": {"next_cursor": ""},
                     }))
                 })
