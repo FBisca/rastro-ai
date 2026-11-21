@@ -649,6 +649,11 @@
           "type": "string"
         },
         {
+          "const": "template_invalid",
+          "description": "The selected local meeting template cannot be loaded or does not meet the meeting contract.",
+          "type": "string"
+        },
+        {
           "const": "extractor_unconfigured",
           "description": "No extractor is configured.",
           "type": "string"
