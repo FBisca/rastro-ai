@@ -249,7 +249,8 @@ fn catalog_declares_claim_cli_read_paths_without_changing_existing_routes() {
                 "focus",
                 "actions",
                 "actions.show",
-                "rules.check"
+                "rules.check",
+                "trust"
             ]
             .contains(&spec.name)
         );

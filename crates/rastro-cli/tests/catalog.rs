@@ -138,6 +138,7 @@ fn every_envelope_is_version_2_and_schema_valid() {
         &["index", "rebuild"],
         &["search"],
         &["focus"],
+        &["trust"],
     ];
     for args in commands {
         let mut full = args.to_vec();

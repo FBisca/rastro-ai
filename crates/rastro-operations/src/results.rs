@@ -68,6 +68,8 @@ pub type QueueResult = rastro_core::queue::Queue;
 pub type FocusResult = rastro_core::focus::Report;
 /// Every outcome of the queue, newest first, with what was shown and what was acted on.
 pub type OutcomesResult = rastro_core::queue::Outcomes;
+/// What `trust` returns: every visible cell's trust.
+pub type TrustResult = rastro_core::trust::Trust;
 /// The runs `actions` lists, oldest first.
 pub type ActionsResult = rastro_core::actions::Runs;
 /// The action proposal `actions propose` recorded, as it now waits in the queue, with the Act
@@ -553,6 +555,7 @@ mod tests {
                 reason: None,
                 fix: None,
             }),
+            Response::Trust(TrustResult::empty()),
         ];
         let arguments = |name: &str| match name {
             "source.add" => {
