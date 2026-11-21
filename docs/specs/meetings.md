@@ -128,3 +128,7 @@ A meeting import SHALL use the bundled meeting task template unless the owner ex
 #### Scenario: an incompatible selection stops the import
 - WHEN the selected local template cannot be loaded or does not meet the meeting input and result contract
 - THEN the import reports the selected template error without calling the adapter or falling back
+
+#### Scenario: a replacement cannot turn an invalid quote into an exclusion
+- WHEN a selected local template declares an exact-quote rule that only excludes invalid candidates
+- THEN the import reports the selected template error before calling the adapter and keeps the last good results
