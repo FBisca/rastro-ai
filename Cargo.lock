@@ -1224,9 +1224,14 @@ name = "rastro-connector-slack"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "chrono",
  "rastro-plugin-sdk",
+ "rusqlite",
  "serde_json",
  "serde_yaml_ng",
+ "tempfile",
+ "tiny_http",
+ "toml",
  "ureq",
 ]
 

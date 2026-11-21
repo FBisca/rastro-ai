@@ -1,5 +1,6 @@
 //! A blocking Slack Web API client for the connector's fixed calls, the credential it reads,
 //! and the typed "couldn't look" reasons.
+use chrono::{SecondsFormat, Utc};
 use serde_json::Value;
 use std::{process::Command, time::Duration};
 
@@ -7,10 +8,14 @@ use std::{process::Command, time::Duration};
 #[derive(Debug)]
 pub struct Failure {
     pub reason: &'static str,
+    pub retry_at: Option<String>,
 }
 impl Failure {
     pub fn new(reason: &'static str) -> Self {
-        Self { reason }
+        Self {
+            reason,
+            retry_at: None,
+        }
     }
 }
 
@@ -39,24 +44,57 @@ impl Client {
     /// `auth.test`: the one cheap authenticated call. Returns the scopes Slack reports for the
     /// token in `X-OAuth-Scopes`, or `None` when the answer carries no such header.
     pub fn auth_test(&self) -> Result<Option<String>, Failure> {
-        let (_, scopes) = self.get("auth.test")?;
+        let (_, scopes) = self.get("auth.test", &[])?;
         Ok(scopes)
+    }
+
+    /// `conversations.info`: the conversation's flags, read before any history.
+    pub fn conversations_info(&self, channel: &str) -> Result<Value, Failure> {
+        let (body, _) = self.get("conversations.info", &[("channel", channel)])?;
+        Ok(body)
+    }
+
+    /// One page of `conversations.history`, with the call's fixed params.
+    pub fn conversations_history(&self, params: &[(&str, &str)]) -> Result<Value, Failure> {
+        let (body, _) = self.get("conversations.history", params)?;
+        Ok(body)
+    }
+
+    /// Whose token it is: `auth.test`'s `user_id`.
+    pub fn viewer_id(&self) -> Result<String, Failure> {
+        let (body, _) = self.get("auth.test", &[])?;
+        body["user_id"]
+            .as_str()
+            .map(str::to_string)
+            .ok_or(Failure::new("protocol"))
+    }
+
+    /// `users.info`: one author's profile.
+    pub fn users_info(&self, user: &str) -> Result<Value, Failure> {
+        let (body, _) = self.get("users.info", &[("user", user)])?;
+        Ok(body)
     }
 
     /// One fixed call. Slack answers `ok: false` with an `error` code even on HTTP 200; both
     /// the code and the status map to typed reasons, never raw error text.
-    fn get(&self, method: &str) -> Result<(Value, Option<String>), Failure> {
-        let mut response = self
+    fn get(
+        &self,
+        method: &str,
+        params: &[(&str, &str)],
+    ) -> Result<(Value, Option<String>), Failure> {
+        let mut request = self
             .agent
             .get(&format!("{}/{method}", self.base))
             .header("Authorization", &format!("Bearer {}", self.token))
-            .header("User-Agent", "rastro-connector-slack")
-            .call()
-            .map_err(|error| match error {
-                ureq::Error::Timeout(_) => Failure::new("timeout"),
-                ureq::Error::TooManyRedirects => Failure::new("protocol"),
-                _ => Failure::new("network"),
-            })?;
+            .header("User-Agent", "rastro-connector-slack");
+        for (name, value) in params {
+            request = request.query(name, value);
+        }
+        let mut response = request.call().map_err(|error| match error {
+            ureq::Error::Timeout(_) => Failure::new("timeout"),
+            ureq::Error::TooManyRedirects => Failure::new("protocol"),
+            _ => Failure::new("network"),
+        })?;
         let status = response.status().as_u16();
         let header = |name: &str| {
             response
@@ -66,12 +104,20 @@ impl Client {
                 .map(str::to_string)
         };
         let scopes = header("x-oauth-scopes");
+        let retry_at = retry_at(&header);
         let body: Option<Value> = response.body_mut().read_json().ok();
+        let failure = |reason: &'static str| match reason {
+            "rate_limited" => Failure {
+                reason,
+                retry_at: retry_at.clone(),
+            },
+            _ => Failure::new(reason),
+        };
         if status == 429 {
-            return Err(Failure::new("rate_limited"));
+            return Err(failure("rate_limited"));
         }
         if let Some(error) = body.as_ref().and_then(|b| b["error"].as_str()) {
-            return Err(Failure::new(match error {
+            return Err(failure(match error {
                 "invalid_auth" | "not_authed" | "token_revoked" | "token_expired"
                 | "account_inactive" => "auth",
                 "missing_scope" => "forbidden",
@@ -84,14 +130,25 @@ impl Client {
         }
         match status {
             200..=299 => {}
-            500..=599 => return Err(Failure::new("network")),
-            _ => return Err(Failure::new("protocol")),
+            500..=599 => return Err(failure("network")),
+            _ => return Err(failure("protocol")),
         }
         match body {
             Some(body) if body["ok"] == true => Ok((body, scopes)),
             _ => Err(Failure::new("protocol")),
         }
     }
+}
+
+/// When to retry after a rate limit: `Retry-After` in seconds from the response. The connector
+/// reports the time instead of waiting: the host kills a connector silent for 60 seconds.
+fn retry_at(header: &dyn Fn(&str) -> Option<String>) -> Option<String> {
+    header("retry-after")
+        .and_then(|v| v.parse::<i64>().ok())
+        .map(|seconds| {
+            (Utc::now() + chrono::Duration::seconds(seconds))
+                .to_rfc3339_opts(SecondsFormat::Millis, true)
+        })
 }
 
 /// Where the user token came from.

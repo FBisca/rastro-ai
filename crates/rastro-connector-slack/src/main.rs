@@ -3,21 +3,39 @@
 //!
 //! It speaks the Rastro plugin protocol on stdin/stdout. The token comes from `SLACK_USER_TOKEN`,
 //! else the macOS keychain item `rastro-slack`, and is never stored.
+//!
+//! # What it records
+//! Each field is one observation at a location that is the record's canonical identifier:
+//! - a message at `slack:message/<channel>/<ts>`: `/text` as untrusted content, stored raw with
+//!   its mention markup; `/user`, `/thread_ts`, `/subtype` and `/edited/ts` structured. The
+//!   update time is the edit time when the message was edited, else the post time;
+//! - an author at `slack:user/<id>`: `/id`, `/is_bot`, `/name` and `/real_name` structured;
+//! - whose token it is, at `slack:viewer`: `/id`. One slot, so another token's owner replaces it.
+//!
+//! The conversation is looked up before any history read: a channel shared outside the
+//! workspace, a direct or a group message is never read. System messages (joins, topic changes)
+//! are skipped; bot messages are kept as evidence. An author profile the API won't give is a
+//! coverage gap, and the messages stay.
 mod api;
 
 use anyhow::{Context, Result, bail};
 use api::{Client, Failure};
+use chrono::{DateTime, SecondsFormat, Utc};
 use rastro_plugin_sdk::{
-    COVERAGE_REPORT, CoverageReport, CoverageStatus, Envelope, InitializeParams, InitializeResult,
-    PROTOCOL_VERSION, RUN_FINISH, RunBinding, RunFinish, Transport,
+    COVERAGE_REPORT, CoverageGap, CoverageReport, CoverageStatus, EVIDENCE_SUBMIT, Envelope,
+    InitializeParams, InitializeResult, PROTOCOL_VERSION, RUN_FINISH, RunBinding, RunFinish,
+    Transport,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use std::{
-    collections::HashSet,
+    collections::{BTreeSet, HashSet},
     io::{self, BufRead, Write},
 };
 
 const DEFAULT_API: &str = "https://slack.com/api";
+
+const STRUCTURED: &str = "structured";
+const UNTRUSTED: &str = "untrusted content";
 
 /// The only scopes a Slack token may hold: the five read scopes, and no others.
 const READ_SCOPES: [&str; 5] = [
@@ -103,6 +121,7 @@ fn check() {
                 }),
                 Err(Failure {
                     reason: "auth" | "forbidden",
+                    ..
                 }) => json!({
                     "result": "rejected",
                     "credential": name,
@@ -138,30 +157,31 @@ fn main() -> Result<()> {
     )?)?;
 
     let mut submitted = 0;
-    let outcome = sync(&mut transport, &params.run, &mut submitted);
+    let mut gaps = Vec::new();
+    let outcome = sync(&mut transport, &params.run, &mut submitted, &mut gaps);
     let failure = outcome.err();
     let report = CoverageReport {
-        gaps: Vec::new(),
+        gaps,
         status: if failure.is_none() {
             CoverageStatus::Complete
         } else {
             CoverageStatus::CouldntLook
         },
         selection: None,
-        reason: failure.map(str::to_string),
-        retry_at: None,
+        reason: failure.as_ref().map(|f| f.reason.to_string()),
+        retry_at: failure.as_ref().and_then(|f| f.retry_at.clone()),
         source: None,
         scope: None,
         window: None,
     };
     transport.send(&Envelope::notification(COVERAGE_REPORT, report)?)?;
-    if let Some(reason) = &failure {
-        eprintln!("slack connector: could not look: {reason}");
+    if let Some(failure) = &failure {
+        eprintln!("slack connector: could not look: {}", failure.reason);
     }
     let finish = RunFinish {
         status: if failure.is_none() { "ok" } else { "failed" }.into(),
         submitted,
-        reason: failure.map(str::to_string),
+        reason: failure.map(|f| f.reason.to_string()),
     };
     transport.send(&Envelope::request(1, RUN_FINISH, finish)?)?;
     if transport.read()?.is_none() {
@@ -170,18 +190,307 @@ fn main() -> Result<()> {
     Ok(())
 }
 
-/// Reading is not built yet: a run fails typed rather than claiming coverage it never read.
+/// The read of one run: the channel's messages in the window, its authors and the token owner.
+struct Run<'a, R, W> {
+    transport: &'a mut Transport<R, W>,
+    client: Client,
+    channel: String,
+    window_from: DateTime<Utc>,
+    window_to: DateTime<Utc>,
+    seen: HashSet<String>,
+    authors: BTreeSet<String>,
+    submitted: u64,
+    /// The host said the source keeps originals: attach the raw record.
+    keep_original: bool,
+    gaps: Vec<CoverageGap>,
+}
+
+/// The record an observation belongs to: its kind and location, when the source last updated
+/// it, and the record as read.
+struct Record<'a> {
+    kind: &'a str,
+    location: String,
+    updated: Option<String>,
+    original: &'a Value,
+}
+
+/// Reads the named channel's messages in the window. Evidence goes out as each page is read,
+/// so a failure part-way keeps what was already submitted.
 fn sync<R: BufRead, W: Write>(
-    _transport: &mut Transport<R, W>,
-    _binding: &RunBinding,
-    _submitted: &mut u64,
-) -> Result<(), &'static str> {
-    Err("protocol")
+    transport: &mut Transport<R, W>,
+    binding: &RunBinding,
+    submitted: &mut u64,
+    gaps: &mut Vec<CoverageGap>,
+) -> Result<(), Failure> {
+    let channel = binding
+        .selector
+        .get("channel")
+        .ok_or(Failure::new("protocol"))?
+        .clone();
+    // The override is for tests: it may only point at this machine, so no real token or
+    // request can be sent anywhere else.
+    let base = match std::env::var("RASTRO_SLACK_API_URL") {
+        Ok(base) if api::loopback(&base) => base,
+        Ok(_) => return Err(Failure::new("protocol")),
+        Err(_) => DEFAULT_API.into(),
+    };
+    // A token no HTTP header can carry is the token's fault, not the network's.
+    let token = api::credential()
+        .filter(|(_, token)| token.bytes().all(|b| b.is_ascii_graphic()))
+        .map(|(_, token)| token)
+        .ok_or(Failure::new("auth"))?;
+    let time = |t: &str| t.parse().map_err(|_| Failure::new("protocol"));
+    let mut run = Run {
+        transport,
+        client: Client::new(&base, token),
+        channel,
+        window_from: time(&binding.window.from)?,
+        window_to: time(&binding.window.to)?,
+        seen: HashSet::new(),
+        authors: BTreeSet::new(),
+        submitted: 0,
+        keep_original: binding.keep_original,
+        gaps: Vec::new(),
+    };
+    let result = run.read_all();
+    *submitted = run.submitted;
+    *gaps = std::mem::take(&mut run.gaps);
+    result
+}
+
+impl<R: BufRead, W: Write> Run<'_, R, W> {
+    /// The conversation is looked up before any history read; then every page of the window's
+    /// messages goes out as it is read, so a failure part-way keeps what was already submitted.
+    fn read_all(&mut self) -> Result<(), Failure> {
+        let info = self.client.conversations_info(&self.channel)?;
+        let channel = &info["channel"];
+        if !channel.is_object() {
+            return Err(Failure::new("protocol"));
+        }
+        // A conversation shared outside the workspace, a direct or a group message is never
+        // read, whatever its id prefix.
+        let flag = |name: &str| channel[name].as_bool().unwrap_or(false);
+        if flag("is_ext_shared") || flag("is_shared") || flag("is_im") || flag("is_mpim") {
+            return Err(Failure::new("forbidden"));
+        }
+        // Whose token it is: one observation in a fixed slot, so another token's owner
+        // replaces it.
+        let viewer_id = self.client.viewer_id()?;
+        let viewer = json!({"user_id": viewer_id});
+        let record = Record {
+            kind: "viewer",
+            location: "slack:viewer".into(),
+            updated: None,
+            original: &viewer,
+        };
+        self.submit(&record, "/id", Some(&viewer_id), STRUCTURED)?;
+        self.history_pages()?;
+        self.read_authors()
+    }
+
+    /// Each message author's profile, read once per author. The messages are already stored;
+    /// a profile the API won't give is a coverage gap, not a lost run.
+    fn read_authors(&mut self) -> Result<(), Failure> {
+        for id in std::mem::take(&mut self.authors) {
+            let body = match self.client.users_info(&id) {
+                Ok(body) => body,
+                Err(failure) => {
+                    self.profile_gap(failure.reason);
+                    continue;
+                }
+            };
+            let user = &body["user"];
+            if user["id"].as_str() != Some(id.as_str()) {
+                self.profile_gap("protocol");
+                continue;
+            }
+            let record = Record {
+                kind: "user",
+                location: format!("slack:user/{id}"),
+                updated: None,
+                original: user,
+            };
+            let is_bot = user["is_bot"].as_bool().map(|b| b.to_string());
+            self.submit(&record, "/id", Some(&id), STRUCTURED)?;
+            self.submit(&record, "/is_bot", is_bot.as_deref(), STRUCTURED)?;
+            self.submit(&record, "/name", text(user, "/name"), STRUCTURED)?;
+            self.submit(&record, "/real_name", text(user, "/real_name"), STRUCTURED)?;
+        }
+        Ok(())
+    }
+
+    /// An author profile couldn't be read: reported once per reason, and the run goes on.
+    fn profile_gap(&mut self, reason: &str) {
+        if !self
+            .gaps
+            .iter()
+            .any(|g| g.selection == "user profiles" && g.reason == reason)
+        {
+            self.gaps.push(CoverageGap {
+                selection: "user profiles".into(),
+                reason: reason.into(),
+            });
+        }
+    }
+
+    /// Every page of the window's history, following the API's cursor until it says there is
+    /// no more.
+    fn history_pages(&mut self) -> Result<(), Failure> {
+        let channel = self.channel.clone();
+        let oldest = slack_ts(self.window_from);
+        let latest = slack_ts(self.window_to);
+        let mut cursor = String::new();
+        let mut cursors = HashSet::new();
+        loop {
+            let mut params = vec![
+                ("channel", channel.as_str()),
+                ("oldest", oldest.as_str()),
+                ("latest", latest.as_str()),
+                ("limit", "200"),
+            ];
+            if !cursor.is_empty() {
+                params.push(("cursor", cursor.as_str()));
+            }
+            let page = self.client.conversations_history(&params)?;
+            let messages = page["messages"]
+                .as_array()
+                .ok_or(Failure::new("protocol"))?;
+            for message in messages {
+                self.read_message(message)?;
+            }
+            if page["has_more"] != true {
+                return Ok(());
+            }
+            // A cursor seen before would page forever.
+            let next = text(&page, "/response_metadata/next_cursor")
+                .filter(|c| !c.is_empty() && cursors.insert(c.to_string()))
+                .ok_or(Failure::new("protocol"))?;
+            cursor = next.to_string();
+        }
+    }
+
+    fn read_message(&mut self, message: &Value) -> Result<(), Failure> {
+        let ts = text(message, "/ts").ok_or(Failure::new("protocol"))?;
+        let at = slack_time(ts).ok_or(Failure::new("protocol"))?;
+        // The window is half-open: a message posted at or after `to` belongs to a later one.
+        if at < self.window_from || at >= self.window_to || !self.seen.insert(ts.to_string()) {
+            return Ok(());
+        }
+        let subtype = text(message, "/subtype");
+        if system_message(subtype) {
+            return Ok(());
+        }
+        if let Some(author) = text(message, "/user") {
+            self.authors.insert(author.to_string());
+        }
+        let record = Record {
+            kind: "message",
+            location: format!("slack:message/{}/{}", self.channel, ts),
+            // The edit time when the message was edited, else the post time.
+            updated: Some(
+                text(message, "/edited/ts")
+                    .and_then(slack_time)
+                    .unwrap_or(at)
+                    .to_rfc3339_opts(SecondsFormat::Millis, true),
+            ),
+            original: message,
+        };
+        // The text is stored raw, mention markup and all: a quote must equal the stored bytes.
+        self.submit(&record, "/text", text(message, "/text"), UNTRUSTED)?;
+        self.submit(&record, "/user", text(message, "/user"), STRUCTURED)?;
+        self.submit(
+            &record,
+            "/thread_ts",
+            text(message, "/thread_ts"),
+            STRUCTURED,
+        )?;
+        self.submit(
+            &record,
+            "/edited/ts",
+            text(message, "/edited/ts"),
+            STRUCTURED,
+        )?;
+        self.submit(&record, "/subtype", subtype, STRUCTURED)?;
+        Ok(())
+    }
+
+    /// One observation: the whole text of one field. Empty or missing text is skipped.
+    fn submit(
+        &mut self,
+        record: &Record,
+        field: &str,
+        text: Option<&str>,
+        trust_class: &str,
+    ) -> Result<(), Failure> {
+        let Some(text) = text.filter(|t| !t.is_empty()) else {
+            return Ok(());
+        };
+        let mut params = json!({
+            "kind": record.kind, "location": record.location, "field": field, "start": 0,
+            "end": text.len(), "quote": text, "trust_class": trust_class,
+        });
+        if let Some(updated) = &record.updated {
+            params["source_updated_at"] = json!(updated);
+        }
+        if self.keep_original {
+            params["original"] = record.original.clone();
+        }
+        Envelope::notification(EVIDENCE_SUBMIT, params)
+            .and_then(|m| self.transport.send(&m))
+            .map_err(|_| Failure::new("protocol"))?;
+        self.submitted += 1;
+        Ok(())
+    }
+}
+
+/// The text of a string field, or `None` when it is missing, null or not a string.
+fn text<'a>(node: &'a Value, pointer: &str) -> Option<&'a str> {
+    node.pointer(pointer).and_then(Value::as_str)
+}
+
+/// Whether a message is a system message (a join, a topic change, ...) rather than someone's
+/// words. Bot messages carry the `bot_message` subtype and are kept as evidence.
+fn system_message(subtype: Option<&str>) -> bool {
+    subtype.is_some_and(|s| s != "bot_message")
+}
+
+/// Slack's time: epoch seconds with a fractional part, e.g. `1785542400.000100`.
+fn slack_time(ts: &str) -> Option<DateTime<Utc>> {
+    let (secs, frac) = ts.split_once('.').unwrap_or((ts, "0"));
+    let secs: i64 = secs.parse().ok()?;
+    let mut frac: String = frac.chars().take(9).collect();
+    while frac.len() < 9 {
+        frac.push('0');
+    }
+    let nanos: u32 = frac.parse().ok()?;
+    DateTime::from_timestamp(secs, nanos)
+}
+
+/// A window bound as Slack's `oldest`/`latest`: epoch seconds with a microsecond fraction.
+fn slack_ts(at: DateTime<Utc>) -> String {
+    format!("{}.{:06}", at.timestamp(), at.timestamp_subsec_micros())
 }
 #[cfg(test)]
 #[allow(non_snake_case)]
 mod tests {
-    use super::scope_verdict;
+    use super::{scope_verdict, system_message};
+
+    /// spec: A Slack sync stores each message's fields as evidence
+    #[test]
+    fn every_subtype_but_bot_message_is_a_system_message() {
+        assert!(!system_message(None));
+        assert!(!system_message(Some("bot_message")));
+        for subtype in [
+            "channel_join",
+            "channel_leave",
+            "channel_topic",
+            "channel_purpose",
+            "channel_name",
+            "group_join",
+        ] {
+            assert!(system_message(Some(subtype)), "{subtype}");
+        }
+    }
 
     /// The five read scopes, as the spec names them: the expected set is not derived from the
     /// code under test.
