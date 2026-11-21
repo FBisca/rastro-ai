@@ -874,60 +874,56 @@ fn queue_source_kind(kind: rastro_core::queue::SourceKind) -> &'static str {
     }
 }
 
-/// The lines of an action proposal: what it would do, the assignee and why, and what it cites.
-fn action_proposal_lines(action: &rastro_core::actions::Proposal) -> Vec<String> {
-    let fields = &action.fields;
-    let mut lines = vec![format!(
-        "  {} | Title: {} | Team: {} | Assignee: {} | Why: {}",
-        display_safe(&action.action),
-        display_safe(&fields.title),
-        display_safe(&fields.team),
-        display_safe(&fields.assignee),
-        display_safe(&action.why)
-    )];
-    if let Some(description) = &fields.description {
-        lines.push(format!("  Description: {}", display_safe(description)));
-    }
-    if !action.cites.is_empty() {
-        let cites: Vec<String> = action.cites.iter().map(|c| display_safe(c)).collect();
-        lines.push(format!("  Cites: {}", cites.join(", ")));
-    }
-    lines
-}
-
-/// What `actions propose` recorded: the proposal's id, what it would do, and the run a matching
-/// rule started or the queue it waits in.
+/// What `actions propose` recorded: the proposal as a block — its id on the header line, its
+/// source and fields — then the run a matching rule started, or the queue it waits in. A
+/// proposal that already has a run records nothing, and its answer says so.
 fn actions_propose_text(proposed: &rastro_core::actions::Proposed) -> String {
     let filed = &proposed.filed;
-    let head = format!(
-        "Proposed {} | Source: {} {} | Scope: {}",
-        filed.id,
-        queue_source_kind(filed.source.kind),
-        display_safe(&filed.source.name),
-        display_safe(&filed.source.scope)
-    );
-    let mut lines = match &proposed.run {
-        Some(run) if run.status == rastro_core::actions::RunStatus::Pending => match run.due_at {
-            Some(due) => vec![format!(
-                "{head} | Run {} runs at {} unless stopped: {}",
-                run.id,
-                due.format("%Y-%m-%d %H:%M"),
-                rastro_core::actions::stop_command(&run.id)
-            )],
-            None => vec![format!("{head} | Run {}", run.id)],
-        },
-        Some(run) => vec![format!("{head} | Already has a run"), action_run_text(run)],
-        None => match &proposed.cap {
-            Some(wait) => vec![format!(
-                "{head} | Waiting in the queue: the rule {} reached its daily cap of {}",
-                display_safe(&wait.rule),
-                wait.cap
-            )],
-            None => vec![format!("{head} | Waiting in the queue; nothing has run")],
-        },
-    };
-    lines.extend(action_proposal_lines(&filed.proposal));
-    lines.join("\n")
+    let block = render::Block::new(format!("Proposed {}", filed.id))
+        .field(
+            "Source",
+            format!(
+                "{} {}",
+                queue_source_kind(filed.source.kind),
+                display_safe(&filed.source.name)
+            ),
+        )
+        .field("Scope", display_safe(&filed.source.scope));
+    match &proposed.run {
+        Some(run) if run.status == rastro_core::actions::RunStatus::Pending => {
+            let value = match run.due_at {
+                Some(due) => format!(
+                    "{} runs at {} unless stopped: {}",
+                    run.id,
+                    render::time(due),
+                    rastro_core::actions::stop_command(&run.id)
+                ),
+                None => run.id.clone(),
+            };
+            let block = block.field("Run", value);
+            action_fields(block, &filed.proposal).to_string()
+        }
+        Some(run) => {
+            let block = action_fields(block, &filed.proposal);
+            format!(
+                "{}\n\n{}",
+                render::records([block, action_run_block(run)]),
+                render::nothing_recorded("Already has a run")
+            )
+        }
+        None => {
+            let waiting = match &proposed.cap {
+                Some(wait) => format!(
+                    "waiting in the queue: the rule {} reached its daily cap of {}",
+                    display_safe(&wait.rule),
+                    wait.cap
+                ),
+                None => "waiting in the queue; nothing has run".into(),
+            };
+            let block = block.field("Status", waiting);
+            action_fields(block, &filed.proposal).to_string()
+        }
+    }
 }
 
 /// The queue: its explanatory preamble, then each proposal or question as a block — its id on its
@@ -1170,37 +1166,44 @@ fn outcome_block(outcome: &rastro_core::queue::Outcome) -> render::Block {
         .maybe("Waited", outcome.waited_seconds.map(|s| format!("{s}s")))
 }
 
-/// What a queue answer recorded: the item it named, then each owner intent.
+/// What a queue answer recorded: the item it named, then each owner intent, then the run it
+/// started as a block.
 fn queue_answer_text(result: &rastro_operations::results::QueueAnswerResult) -> String {
     let mut lines = Vec::new();
     if let Some(item) = &result.item {
         lines.push(format!("Item: {item}"));
     }
     lines.push(intents_text(&result.intents, "Nothing recorded"));
-    lines.extend(result.run.iter().map(action_run_text));
-    lines.join("\n")
+    let mut text = lines.join("\n");
+    if let Some(run) = &result.run {
+        text += &format!("\n\n{}", action_run_block(run));
+    }
+    text
 }
 
-/// One action run: its id, status, level, the action and where it wrote, and the issue it created.
-fn action_run_text(run: &rastro_core::actions::Run) -> String {
-    let mut line = format!(
-        "Run {} | {} | Level: {} | {} | Source: {} {} | Scope: {} | Title: {} | Team: {} | Assignee: {}",
-        run.id,
-        run.status.as_str(),
-        run.level.as_str(),
-        display_safe(&run.action),
-        queue_source_kind(run.source.kind),
-        display_safe(&run.source.name),
-        display_safe(&run.source.scope),
-        display_safe(&run.fields.title),
-        display_safe(&run.fields.team),
-        display_safe(&run.fields.assignee)
-    );
+/// One action run as a block: its id on the header line, then its status, level, what it wrote
+/// and where, the issue it created, and what ended or undid it.
+fn action_run_block(run: &rastro_core::actions::Run) -> render::Block {
+    let mut block = render::Block::new(format!("Run {}", run.id))
+        .field("Status", run.status.as_str())
+        .field("Level", run.level.as_str())
+        .field("Action", display_safe(&run.action))
+        .field(
+            "Source",
+            format!(
+                "{} {}",
+                queue_source_kind(run.source.kind),
+                display_safe(&run.source.name)
+            ),
+        )
+        .field("Scope", display_safe(&run.source.scope))
+        .field("Title", display_safe(&run.fields.title))
+        .field("Team", display_safe(&run.fields.team))
+        .field("Assignee", display_safe(&run.fields.assignee));
     if let (Some(identifier), Some(url)) = (&run.identifier, &run.url) {
-        line += &format!(
-            " | Issue: {} {}",
-            display_safe(identifier),
-            display_safe(url)
+        block = block.field(
+            "Issue",
+            format!("{} {}", display_safe(identifier), display_safe(url)),
         );
     }
     if let Some(due) = run.due_at {
@@ -1209,65 +1212,71 @@ fn action_run_text(run: &rastro_core::actions::Run) -> String {
         } else {
             "Grace ended"
         };
-        line += &format!(" | {label}: {}", stamp(due));
+        block = block.field(label, render::time(due));
     }
     if let Some(stop) = &run.stop_command {
-        line += &format!(" | Stop: {stop}");
+        block = block.field("Stop", stop);
     }
     if let Some(error) = &run.error {
-        line += &format!(
-            " | Error: {} | Attempts: {}",
-            display_safe(error),
-            run.attempts
-        );
+        block = block
+            .field("Error", display_safe(error))
+            .field("Attempts", run.attempts);
     }
     if let Some(undo) = &run.undo {
-        line += &format!(
-            " | Undone: intent {}, {}",
-            display_safe(&undo.intent),
-            undo.at.format("%Y-%m-%d %H:%M")
+        block = block.field(
+            "Undone",
+            format!(
+                "intent {}, {}",
+                display_safe(&undo.intent),
+                render::time(undo.at)
+            ),
         );
     }
-    line
+    block
 }
 
-/// What `actions` lists: each run, or that none has run.
+/// What `actions` lists: each run as a block, or that none has run; a shown run carries its why
+/// as a second block.
 fn actions_text(runs: &rastro_core::actions::Runs) -> String {
     if runs.runs.is_empty() {
-        return "No action has run".into();
+        return render::empty("action has run");
     }
-    let mut text = (runs.runs.iter())
-        .map(action_run_text)
-        .collect::<Vec<_>>()
-        .join("\n");
+    let mut blocks: Vec<_> = runs.runs.iter().map(action_run_block).collect();
     if let Some(why) = &runs.why {
-        text += &action_why_text(why, runs.runs.first().and_then(|run| run.rule.as_ref()));
+        blocks.push(action_why_block(
+            why,
+            runs.runs.first().and_then(|run| run.rule.as_ref()),
+        ));
     }
-    text
+    render::records(blocks)
 }
 
-/// Why one run happened, under its line: the why, each cited claim, the rule or the accept that
-/// authorized it, and the risk.
-fn action_why_text(
+/// Why one run happened, as its own block: the why on the header line, then each cited claim,
+/// the rule or the accept that authorized it, where the proposal stands in the queue, and the
+/// cell's level and risk.
+fn action_why_block(
     why: &rastro_core::actions::RunWhy,
     rule: Option<&rastro_core::rules::RuleCopy>,
-) -> String {
-    let mut text = format!("\nWhy: {}", display_safe(&why.proposal.why));
+) -> render::Block {
+    let mut block = render::Block::new(format!("Why: {}", display_safe(&why.proposal.why)));
     for claim in &why.cited {
-        text += &format!(
-            "\nCites: {} ({} support{})",
-            display_safe(&claim.claim.claim.id),
-            claim.claim.support_count,
-            if claim.claim.support_count == 1 {
-                ""
-            } else {
-                "s"
-            }
+        block = block.field(
+            "Cites",
+            format!(
+                "{} ({} support{})",
+                display_safe(&claim.claim.claim.id),
+                claim.claim.support_count,
+                if claim.claim.support_count == 1 {
+                    ""
+                } else {
+                    "s"
+                }
+            ),
         );
     }
     if let Some(rule) = rule {
-        text += &format!(
-            "\nRule: {} | {} | team {} | assignee {} | grace {}",
+        let mut value = format!(
+            "{}, {}, team {}, assignee {}, grace {}",
             display_safe(&rule.name),
             display_safe(&rule.action),
             display_safe(&rule.team),
@@ -1275,26 +1284,29 @@ fn action_why_text(
             grace_text(rule.grace_seconds)
         );
         if let Some(cap) = rule.daily_cap {
-            text += &format!(" | cap {cap} a day");
+            value += &format!(", cap {cap} a day");
         }
+        block = block.field("Rule", value);
     }
     if let Some(accept) = &why.accept {
-        text += &format!(
-            "\nAccepted: intent {}, {}",
-            accept.intent,
-            accept.at.format("%Y-%m-%d %H:%M")
+        block = block.field(
+            "Accepted",
+            format!("intent {}, {}", accept.intent, render::time(accept.at)),
         );
     }
-    text += &format!("\nQueue: {}", standing_text(&why.queue));
-    text += &format!(
-        "\nLevel: {} | Cell: {} x {} | Reach: {} | Reversibility: {}",
-        why.level,
-        display_safe(&why.cell.action),
-        display_safe(&why.cell.team),
-        why.reach,
-        why.reversibility
-    );
-    text
+    block
+        .field("Queue", standing_text(&why.queue))
+        .field("Level", why.level)
+        .field(
+            "Cell",
+            format!(
+                "{} x {}",
+                display_safe(&why.cell.action),
+                display_safe(&why.cell.team)
+            ),
+        )
+        .field("Reach", why.reach)
+        .field("Reversibility", why.reversibility)
 }
 
 /// Where the run's proposal stands in the queue, in the owner's words: one line, by the same
@@ -1359,109 +1371,116 @@ fn grace_text(seconds: u64) -> String {
         format!("{seconds} s")
     }
 }
-/// One line per rule, in the order the owner wrote them, with its cap and today's count, then
-/// its pending Acts and the queued proposals it matches.
+/// One block per rule, in the order the owner wrote them: its action, team, assignee, grace and
+/// today's count against its cap, with the queued proposals it matches as fields; each pending
+/// Act it started follows as its own block.
 fn rules_check_text(r: &rastro_operations::results::RulesCheckResult) -> String {
     if r.rules.is_empty() {
-        return "No rules in config.toml".into();
+        return render::empty("rules in config.toml");
     }
-    let mut lines = Vec::new();
+    let mut blocks = Vec::new();
     for rule in &r.rules {
-        let mut line = format!(
-            "{} | {} | team {} | assignee {} | grace {}",
-            display_safe(&rule.name),
-            display_safe(&rule.action),
-            display_safe(&rule.team),
-            display_safe(&rule.assignee),
-            grace_text(rule.grace_seconds)
-        );
-        match rule.daily_cap {
-            Some(cap) => line += &format!(" | {} of {cap} used today", rule.used_today),
-            None => line += &format!(" | {} used today", rule.used_today),
-        }
-        lines.push(line);
-        lines.extend(
-            rule.pending
-                .iter()
-                .map(|run| format!("  Pending: {}", action_run_text(run))),
-        );
-        lines.extend(rule.matches.iter().map(|filed| {
-            format!(
-                "  Matches: {} | {}",
-                filed.id,
-                display_safe(&filed.proposal.fields.title)
-            )
-        }));
-    }
-    lines.join("\n")
-}
-/// What `trust` lists: each cell's level, the counts behind it, its last change and what the
-/// next promotion needs, then each plugin's engagement, time to action and cost; an empty
-/// store says it holds no trust history.
-fn trust_text(trust: &rastro_core::trust::Trust) -> String {
-    use rastro_core::trust::{CostPerAccepted, Engagement};
-    if trust.cells.is_empty() && trust.plugins.is_empty() {
-        return "The store holds no trust history: no action has run".into();
-    }
-    let mut lines = Vec::new();
-    for cell in &trust.cells {
-        let mut line = format!(
-            "{} | Team: {} | Level: {} | Clean: {} | Undos: {}",
-            display_safe(&cell.action),
-            display_safe(&cell.team),
-            cell.level.as_str(),
-            cell.clean,
-            cell.undos
-        );
-        if let Some(change) = &cell.last_change {
-            line += &format!(
-                " | Last change: {} at {}",
-                display_safe(&change.cause),
-                stamp(change.at)
+        let used = match rule.daily_cap {
+            Some(cap) => format!("{} of {cap}", rule.used_today),
+            None => format!("{}", rule.used_today),
+        };
+        let mut block = render::Block::new(display_safe(&rule.name))
+            .field("Action", display_safe(&rule.action))
+            .field("Team", display_safe(&rule.team))
+            .field("Assignee", display_safe(&rule.assignee))
+            .field("Grace", grace_text(rule.grace_seconds))
+            .field("Used today", used);
+        for filed in &rule.matches {
+            block = block.field(
+                "Matches",
+                format!(
+                    "{} ({})",
+                    filed.id,
+                    display_safe(&filed.proposal.fields.title)
+                ),
             );
         }
-        lines.push(line);
-        lines.push(format!(
-            "  Next promotion: {}",
-            display_safe(&cell.promotion.needs)
-        ));
+        blocks.push(block);
+        blocks.extend(rule.pending.iter().map(action_run_block));
+    }
+    render::records(blocks)
+}
+/// What `trust` lists: each cell as a block — its level, the counts behind it, its last change
+/// and what the next promotion needs, with the proposed rule entry verbatim when one is offered
+/// — then each plugin's engagement, time to action and cost; an empty store says it holds no
+/// trust history.
+fn trust_text(trust: &rastro_core::trust::Trust) -> String {
+    if trust.cells.is_empty() && trust.plugins.is_empty() {
+        return render::empty("trust history: no action has run");
+    }
+    let mut records = Vec::new();
+    for cell in &trust.cells {
+        let mut text = trust_cell_block(cell).to_string();
         if let Some(rule) = &cell.promotion.rule_text {
-            lines.push(rule.clone());
+            // The exact entry to paste into config.toml, verbatim under its cell.
+            text += &format!("\n{rule}");
         }
-        if let Some(reset) = &cell.promotion.reset_command {
-            lines.push(format!("  {reset}"));
-        }
+        records.push(text);
     }
     for plugin in &trust.plugins {
-        let engagement = match plugin.engagement {
-            Engagement::Measured { acted, seen } => format!("{acted} of {seen}"),
-            Engagement::Unmeasured(_) => "unmeasured".into(),
-        };
-        let mut line = format!(
-            "{} | Engagement: {}",
-            display_safe(&plugin.plugin),
-            engagement
+        records.push(trust_plugin_block(plugin).to_string());
+    }
+    records.join("\n\n")
+}
+
+/// One cell's trust as a block: its action on the header line, then its team, level, the counts
+/// behind the level, its last change and what the next promotion needs.
+fn trust_cell_block(cell: &rastro_core::trust::TrustCell) -> render::Block {
+    let mut block = render::Block::new(display_safe(&cell.action))
+        .field("Team", display_safe(&cell.team))
+        .field("Level", cell.level.as_str())
+        .field("Clean", cell.clean)
+        .field("Undos", cell.undos);
+    if let Some(change) = &cell.last_change {
+        block = block.field(
+            "Last change",
+            format!(
+                "{} at {}",
+                display_safe(&change.cause),
+                render::time(change.at)
+            ),
         );
-        if let Some(seconds) = plugin.time_to_action_seconds {
-            line += &format!(" | Time to action: {seconds}s");
-        }
-        line += &format!(
-            " | Cost: {}, {} turns",
+    }
+    block = block.field("Next promotion", display_safe(&cell.promotion.needs));
+    if let Some(reset) = &cell.promotion.reset_command {
+        block = block.field("Reset", reset);
+    }
+    block
+}
+
+/// One plugin's usefulness and cost as a block: its name on the header line, then its
+/// engagement, time to action, cost and cost per accepted item.
+fn trust_plugin_block(plugin: &rastro_core::trust::TrustPlugin) -> render::Block {
+    use rastro_core::trust::{CostPerAccepted, Engagement};
+    let engagement = match plugin.engagement {
+        Engagement::Measured { acted, seen } => format!("{acted} of {seen}"),
+        Engagement::Unmeasured(_) => "unmeasured".into(),
+    };
+    let mut block =
+        render::Block::new(display_safe(&plugin.plugin)).field("Engagement", engagement);
+    if let Some(seconds) = plugin.time_to_action_seconds {
+        block = block.field("Time to action", format!("{seconds}s"));
+    }
+    block = block.field(
+        "Cost",
+        format!(
+            "{}, {} turns",
             wall_text(plugin.cost.wall_ms),
             plugin.cost.turns
-        );
-        let per_accepted = match plugin.cost_per_accepted {
-            CostPerAccepted::Measured(cost) => format!(
-                " | Per accepted: {}, {} turns",
-                wall_text(cost.wall_ms),
-                cost.turns
-            ),
-            CostPerAccepted::Dash(_) => " | Per accepted: —".to_string(),
-        };
-        line += &per_accepted;
-        lines.push(line);
-    }
-    lines.join("\n")
+        ),
+    );
+    let per_accepted = match plugin.cost_per_accepted {
+        CostPerAccepted::Measured(cost) => {
+            format!("{}, {} turns", wall_text(cost.wall_ms), cost.turns)
+        }
+        CostPerAccepted::Dash(_) => "—".into(),
+    };
+    block.field("Per accepted", per_accepted)
 }
 
 /// A wall time the owner reads: whole seconds when they are whole, milliseconds otherwise.
@@ -1479,28 +1498,29 @@ fn trust_cell_text(cell: &rastro_core::trust::TrustCell) -> String {
     trust.cells.push(cell.clone());
     trust_text(&trust)
 }
-/// What `trust journal` lists: every level change, newest first, each with its cell, the levels
-/// it moved between, its cause and its time; an empty store says no level has changed.
+/// What `trust journal` lists: every level change as a block, newest first — its time on the
+/// header line, then its cell, the levels it moved between and its cause; an empty store says
+/// no level has changed.
 fn trust_journal_text(journal: &rastro_core::trust::TrustJournal) -> String {
     if journal.changes.is_empty() {
-        return "The store holds no trust history: no level has changed".into();
+        return render::empty("trust history: no level has changed");
     }
-    journal
-        .changes
-        .iter()
-        .map(|change| {
-            format!(
-                "{} | {} | Team: {} | {} -> {} | {}",
-                stamp(change.at),
-                display_safe(&change.cell.action),
-                display_safe(&change.cell.team),
-                change.from.as_str(),
-                change.to.as_str(),
-                display_safe(&change.cause)
+    render::records(journal.changes.iter().map(|change| {
+        render::Block::new(render::time(change.at))
+            .field(
+                "Cell",
+                format!(
+                    "{} x {}",
+                    display_safe(&change.cell.action),
+                    display_safe(&change.cell.team)
+                ),
             )
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
+            .field(
+                "Change",
+                format!("{} -> {}", change.from.as_str(), change.to.as_str()),
+            )
+            .field("Cause", display_safe(&change.cause))
+    }))
 }
 /// A rebuild's summary: the claim count, then one line per carried-over pair — a pair that is not
 /// current never started, its stored output was carried over.
@@ -1552,8 +1572,8 @@ fn human(response: &Response) -> String {
         Response::Queue(r) => queue_text(r),
         Response::Actions(r) => actions_text(r),
         Response::ActionsShow(r) => actions_text(r),
-        Response::ActionsUndo(r) => format!("Undone: {}", action_run_text(r)),
-        Response::ActionsStop(r) => format!("Stopped: {}", action_run_text(r)),
+        Response::ActionsUndo(r) => format!("Undone: {}", action_run_block(r)),
+        Response::ActionsStop(r) => format!("Stopped: {}", action_run_block(r)),
         Response::ActionsPropose(r) => actions_propose_text(r),
         Response::RulesCheck(r) => rules_check_text(r),
         Response::Focus(r) => focus_text(r),

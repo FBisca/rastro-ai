@@ -119,6 +119,8 @@ fn stdout(out: &Output) -> String {
 }
 
 // spec: The owner checks what each rule does now
+// spec: Human records render as blocks
+// spec: Human timestamps share one format
 #[test]
 fn rules_check_shows_todays_count_against_the_cap_and_lists_the_pending_act() {
     let env = Env::new();
@@ -155,25 +157,44 @@ fn rules_check_shows_todays_count_against_the_cap_and_lists_the_pending_act() {
     );
     assert_eq!(rule["matches"], json!([]), "{check}");
 
-    // The owner's read says the same: the count against the cap, and the pending run listed.
+    // The owner's read says the same: the rule as a block with the count against the cap, and
+    // the pending run as its own block with its due time and stop command.
     let text = stdout(&env.rastro(&["rules", "check"], READ_AT));
-    assert!(text.contains("2 of 5 used today"), "{text}");
-    let line = text
-        .lines()
-        .find(|line| line.contains(&pending))
+    assert!(text.lines().any(|l| l == "my-issues"), "{text}");
+    for field in [
+        "  Action: linear.create_issue",
+        "  Team: H",
+        "  Assignee: me",
+        "  Grace: 10 min",
+        "  Used today: 2 of 5",
+    ] {
+        assert!(text.lines().any(|l| l == field), "{field} missing: {text}");
+    }
+    let block = text
+        .split("\n\n")
+        .find(|block| block.starts_with(&format!("Run {pending}")))
         .unwrap_or_else(|| panic!("the pending run is not listed: {text}"));
-    assert!(line.contains("pending"), "{line}");
-    assert!(line.contains("10:10"), "{line}");
+    assert!(block.lines().any(|l| l == "  Status: pending"), "{block}");
     assert!(
-        line.contains(&format!("rastro actions stop {pending}")),
-        "{line}"
+        block
+            .lines()
+            .any(|l| l == "  Runs at: 2026-11-19 10:10 UTC"),
+        "{block}"
     );
+    assert!(
+        block
+            .lines()
+            .any(|l| l == format!("  Stop: rastro actions stop {pending}")),
+        "{block}"
+    );
+    assert!(!text.contains(" | "), "pipe-packed line: {text}");
 
     // A check sends nothing: the fake provider was never called.
     assert_eq!(support::provider::calls(&env.config_dir()), "");
 }
 
 // spec: The owner checks what each rule does now
+// spec: Human records render as blocks
 #[test]
 fn rules_check_lists_the_queued_proposals_a_rule_matches() {
     let env = Env::new();
@@ -199,14 +220,16 @@ fn rules_check_lists_the_queued_proposals_a_rule_matches() {
         "{check}"
     );
 
-    // The owner's read names the proposal under the rule.
+    // The owner's read names the proposal under the rule, on one labelled field line.
     let text = stdout(&env.rastro(&["rules", "check"], READ_AT));
+    assert!(text.lines().any(|l| l == "my-issues"), "{text}");
     let line = text
         .lines()
         .find(|line| line.contains(early["id"].as_str().unwrap()))
         .unwrap_or_else(|| panic!("the matching proposal is not listed: {text}"));
     assert!(line.contains("Before the rule"), "{line}");
     assert!(!text.contains(other["id"].as_str().unwrap()), "{text}");
+    assert!(!text.contains(" | "), "pipe-packed line: {text}");
 
     // Listing the match starts nothing: the proposal still waits, and nothing was sent.
     let runs = env.ok_json(&["actions"], READ_AT)["runs"].clone();
