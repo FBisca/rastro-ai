@@ -4,7 +4,7 @@ Paths: crates/rastro-core/src/trust/, crates/rastro-core/src/actions/, crates/ra
 
 Trust answers "should it act alone?" per cell — one action × team pair — and is derived from outcomes, never stored (`../decisions/learning.md` §1, §5; `../decisions/levels.md`). A cell's level and the evidence behind it are computed at read from the runs and owner intents the visible scopes hold, under the configurable thresholds of `[learning]`; promotion is always proposed to the owner, never self-applied, and demotion is automatic and visible (`../decisions/learning.md` §6–7, §14). The trust view is a core read like the queue, defined once in the operation catalog (`../adr/0007-typed-operation-catalog.md`) and offered on the CLI and, deferred, through the MCP catalog gateway. A machine read is audited, never mistaken for the owner having seen an item.
 
-This file holds the trust-view, demotion, decay, Ask-answer, usefulness and cost, read-logging, journal and owner-control requirements of the learned-trust slice.
+This file holds the trust-view, demotion, decay, Ask-answer, usefulness and cost, read-logging, catalog exposure, journal and owner-control requirements of the learned-trust slice.
 
 ## Requirements
 
@@ -129,6 +129,21 @@ The MCP server SHALL log each read call with its tool, arguments and time, and t
 #### Scenario: a terminal read is not an MCP read
 - WHEN the same queue read runs on the terminal
 - THEN a shown report is written and no read log row is
+
+### Requirement: Trust operations ride the catalog
+trust, trust.journal, trust.pin and trust.reset SHALL be catalog operations, the reads CLI and deferred MCP reads through the catalog gateway and the writes CLI only, leaving the fixed MCP tool list unchanged.
+
+#### Scenario: catalog search finds the reads
+- WHEN an MCP client searches the catalog for trust
+- THEN the result names trust and trust.journal with their descriptions and input schemas
+
+#### Scenario: the gateway answers as the CLI
+- WHEN an MCP client calls trust through catalog under a set of launch scopes
+- THEN the result equals the CLI's rastro trust --json under the same scopes
+
+#### Scenario: the fixed tool list is unchanged
+- WHEN a client lists the MCP tools
+- THEN the list is exactly search, coverage, about, why, commitments, queue, focus, actions, rules_check and catalog, all read-only
 
 ### Requirement: The learning journal records every level change
 rastro trust journal SHALL list every level change with its cause and time, newest first, derived from the same evidence as the trust view.
