@@ -1,8 +1,10 @@
 //! `rastro mcp`: the MCP server (ADR 0006). It speaks MCP revision 2025-11-25 over stdio,
-//! offers the catalog's MCP operations, and opens the store read-only for every call. tokio and
-//! rmcp live in this module only; the core stays synchronous and runs through `spawn_blocking`.
+//! offers the catalog's MCP operations, and opens the store read-only for every call. Each read
+//! that ran appends one read log row through a separate writing open — never a shown report, so
+//! a machine read can never make an item look seen. tokio and rmcp live in this module only; the
+//! core stays synchronous and runs through `spawn_blocking`.
 use anyhow::{Context, Result};
-use rastro_core::{Locations, Rastro, Scope};
+use rastro_core::{Locations, Rastro, Refusal, Scope};
 use rastro_operations::{
     catalog::{self, OperationSpec, Surface},
     envelope,
@@ -52,19 +54,47 @@ struct Server {
     scopes: Vec<Scope>,
 }
 
-/// What one tool call does, off the async runtime: open read-only, run, wrap the envelope.
+/// What one tool call does, off the async runtime: open read-only, run, log the read, wrap the
+/// envelope.
 fn run_operation(
     spec: &'static OperationSpec,
     arguments: Value,
     scopes: Vec<Scope>,
 ) -> Result<CallToolResult, ErrorData> {
+    let arguments_json = arguments.to_string();
     let request = spec
         .decode(arguments)
         .map_err(|e| ErrorData::invalid_params(format!("invalid arguments: {e}"), None))?;
     let outcome = Locations::resolve().and_then(|locations| {
+        let database = locations.database();
         let mut reader =
             Rastro::open_read_only_scoped(locations, SqliteStorage::open_read_only, scopes)?;
-        request.run_read(&mut reader)
+        let response = request.run_read(&mut reader);
+        // Append the audit row only for a read that ran. A typed refusal — a pending or unknown
+        // migration, a store that can't be read without writing — is raised inside the read and
+        // means the store was never read, so it appends nothing; with no database the read
+        // answered from the config, so there is nothing to log and no file to create. The append
+        // is best-effort and never replaces the read's own outcome: a read that ran answers even
+        // when the log can't be written.
+        let refused = matches!(&response, Err(e) if e.downcast_ref::<Refusal>().is_some());
+        let logged = (|| -> Result<()> {
+            if refused || !database.try_exists()? {
+                return Ok(());
+            }
+            SqliteStorage::append_read_log(
+                &database,
+                &spec.mcp_name(),
+                &arguments_json,
+                rastro_core::coverage::now()?,
+            )
+        })();
+        if let Err(error) = logged {
+            eprintln!(
+                "rastro: the read log append failed: {}",
+                bounded(&format!("{error:#}"))
+            );
+        }
+        response
     });
     Ok(match outcome {
         Ok(response) => CallToolResult::structured(response.envelope()),

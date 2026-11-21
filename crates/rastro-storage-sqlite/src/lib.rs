@@ -36,7 +36,7 @@ const INTENT_END: &str = "202611081000_intent_justification_end";
 /// A migration that starts with this line rebuilds a table other tables name, so the open runs
 /// it with foreign keys off and checks them before it commits.
 const FOREIGN_KEYS_OFF: &str = "-- foreign_keys = off";
-const MIGRATIONS: [(&str, &str); 28] = [
+const MIGRATIONS: [(&str, &str); 29] = [
     (
         "202611041200_initial",
         include_str!("../migrations/202611041200_initial.sql"),
@@ -148,6 +148,10 @@ const MIGRATIONS: [(&str, &str); 28] = [
     (
         "202611211000_meeting_replay_contract",
         include_str!("../migrations/202611211000_meeting_replay_contract.sql"),
+    ),
+    (
+        "202611211100_read_log",
+        include_str!("../migrations/202611211100_read_log.sql"),
     ),
 ];
 
@@ -310,6 +314,27 @@ impl SqliteStorage {
         connection.busy_timeout(BUSY_TIMEOUT)?;
         connection.execute_batch("PRAGMA foreign_keys = ON;")?;
         Ok(Some(Self { connection }))
+    }
+    /// Appends one MCP read call to the read log: the tool, its arguments as JSON, and when it
+    /// ran. Opens the existing database for writing without creating a file or applying a
+    /// migration — the server's launch already migrated — and leaves the journal mode as it
+    /// found it. Insert-only: the log is what a machine read, never a shown report.
+    pub fn append_read_log(
+        path: &Path,
+        tool: &str,
+        arguments_json: &str,
+        at: DateTime<Utc>,
+    ) -> Result<()> {
+        let connection = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_WRITE | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        connection.busy_timeout(BUSY_TIMEOUT)?;
+        connection.execute(
+            "INSERT INTO read_log (tool, arguments_json, at) VALUES (?1, ?2, ?3)",
+            params![tool, arguments_json, stamp(at)],
+        )?;
+        Ok(())
     }
 }
 /// Reads through one connection; for a read-only open, inside one transaction.
