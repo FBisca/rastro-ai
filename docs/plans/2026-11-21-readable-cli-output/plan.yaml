@@ -1,0 +1,117 @@
+schema: plan/2
+slug: readable-cli-output
+goal: "The owner reads every rastro command's human output as labelled blocks with one timestamp format and one empty-result voice, while --json, exit codes and queue behaviour stay exactly as they are."
+spec: docs/specs/surfaces.md
+archive: promote
+
+requirements:
+  added:
+    - title: Human records render as blocks
+      shall: "The CLI's human output SHALL render every record as a block — its quote or header line first, then one labelled field per line — with blank lines between records and no pipe-packed field lines."
+      scenarios:
+        - id: S1
+          when: "`rastro search <query>` runs with matching evidence"
+          then: "each match prints its quote on one line and every citation field (link, field, span, captured time, trust class, scope, source) on its own indented line"
+        - id: S2
+          when: "`rastro coverage` runs with two registered sources"
+          then: "the two source blocks are separated by a blank line"
+        - id: S3
+          when: "`rastro queue` prints pending items"
+          then: "each item's content-addressed id stands on its own line, byte-for-byte the id a queue answer names"
+    - title: Human timestamps share one format
+      shall: "Every timestamp in the CLI's human output SHALL render as `YYYY-MM-DD HH:MM UTC` at minute precision, while `--json` output keeps its full RFC 3339 times."
+      scenarios:
+        - id: S4
+          when: "`rastro coverage` runs after a sync"
+          then: "its checked and fresh-until times print as `YYYY-MM-DD HH:MM UTC`"
+        - id: S5
+          when: "the same coverage read runs with `--json`"
+          then: "its envelope keeps full RFC 3339 timestamps and validates against the committed v2 schema"
+    - title: Empty and no-op results speak with one voice
+      shall: "An empty human read SHALL print one sentence starting `No ` that names what is absent, and a write that changed nothing SHALL end its message with `; nothing recorded`."
+      scenarios:
+        - id: S6
+          when: "queue, coverage and search run on a store with nothing to show"
+          then: "each prints a sentence starting `No ` naming what is absent"
+        - id: S7
+          when: "a write that changes nothing runs, such as undoing a run with nothing to undo"
+          then: "its human message ends with `; nothing recorded`"
+
+tickets:
+  - id: T1
+    delivers: "A shared render module in the CLI (block builder, one timestamp format, one empty voice) whose module docs are the pattern guide for future commands, the coverage, source list, sync summary, check and tick output restyled onto it, and the style decisions recorded in docs/decisions/surfaces.md."
+    satisfies: [S2, S4, S5]
+    paths:
+      - crates/rastro-cli/src/render.rs
+      - crates/rastro-cli/src/main.rs
+      - crates/rastro-cli/src/check.rs
+      - crates/rastro-cli/src/tick.rs
+      - crates/rastro-cli/tests/coverage.rs
+      - crates/rastro-cli/tests/registration.rs
+      - crates/rastro-cli/tests/source_check.rs
+      - crates/rastro-cli/tests/tick.rs
+      - crates/rastro-cli/tests/resync.rs
+      - docs/decisions/surfaces.md
+    size: regular
+    difficulty: complex
+    blocked_by: []
+  - id: T2
+    delivers: "search, about, why and claims reads restyled onto the render module: quotes verbatim and escaped, trust class beside each quote, citation fields one per line."
+    satisfies: [S1]
+    paths:
+      - crates/rastro-cli/src/main.rs
+      - crates/rastro-cli/src/render.rs
+      - crates/rastro-cli/tests/bounded_search.rs
+      - crates/rastro-cli/tests/bounded_search_reader.rs
+      - crates/rastro-cli/tests/about_why.rs
+      - crates/rastro-cli/tests/claims.rs
+      - crates/rastro-cli/tests/snapshots.rs
+    size: regular
+    difficulty: complex
+    blocked_by: [T1]
+  - id: T3
+    delivers: "queue items, answers, outcomes and focus restyled: each item id on its own line, shown reports still recorded once per printed item and never for --json or MCP reads."
+    satisfies: [S3, S6]
+    paths:
+      - crates/rastro-cli/src/main.rs
+      - crates/rastro-cli/src/render.rs
+      - crates/rastro-cli/tests/queue.rs
+      - crates/rastro-cli/tests/focus.rs
+      - crates/rastro-cli/tests/focus_read.rs
+      - crates/rastro-cli/tests/as_of.rs
+    size: regular
+    difficulty: complex
+    blocked_by: [T2]
+    risk: [state]
+  - id: T4
+    delivers: "actions list, show, propose, stop and undo, trust and rules output restyled; the packed run line becomes a block and no-op writes end with '; nothing recorded'."
+    satisfies: [S7]
+    paths:
+      - crates/rastro-cli/src/main.rs
+      - crates/rastro-cli/src/render.rs
+      - crates/rastro-cli/tests/actions_read.rs
+      - crates/rastro-cli/tests/actions_undo.rs
+      - crates/rastro-cli/tests/actions_stop.rs
+      - crates/rastro-cli/tests/trust.rs
+      - crates/rastro-cli/tests/rules_check.rs
+    size: regular
+    difficulty: complex
+    blocked_by: [T3]
+  - id: T5
+    delivers: "the remaining surfaces restyled: identity, claim corrections, meeting import and commitments reads and writes; meeting export keeps its JSON payload; the last bespoke empty and no-op strings move to the one voice."
+    satisfies: [S6, S7]
+    paths:
+      - crates/rastro-cli/src/main.rs
+      - crates/rastro-cli/src/render.rs
+      - crates/rastro-cli/tests/identity.rs
+      - crates/rastro-cli/tests/corrections.rs
+      - crates/rastro-cli/tests/meeting.rs
+      - crates/rastro-cli/tests/commitments.rs
+    size: regular
+    difficulty: complex
+    blocked_by: [T4]
+approval:
+  by: felippe.bisca@gmail.com
+  at: '2026-11-21T14:34:08.844226+00:00'
+  base: 8a122308cb38fed9e26ff1edb1e3bee6d764972d
+  digest: 95288f54f52ac559eeba16b5ca88a081d94cff5f9329a882c219d1e8b019a191
