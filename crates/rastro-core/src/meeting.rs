@@ -45,9 +45,15 @@ pub const DEFAULT_MAX_TURNS: u64 = 3;
 /// The bundled meeting task template (decisions/plugins.md §48): the instructions, output shape
 /// and generic gates a meeting import runs through the generic runner. The declarations are data,
 /// not core code; the runner executes them without knowing what a meeting is. A run records this
-/// contract with its output, and a run recorded before contracts were saved replays under it as
-/// the bundled legacy rules.
+/// contract with its output so replay stays stable even if the bundled template later changes.
 const BUNDLED_TEMPLATE: &str = include_str!("meeting_template.toml");
+
+/// The frozen legacy meeting replay contract (decisions/plugins.md §48): the rules a run recorded
+/// before template contracts were saved replays under. It is never edited and is independent of the
+/// bundled template, so old recordings keep their interpretation whatever the bundled template
+/// becomes. It makes `kind` optional: recordings made before candidates had a kind omit it, and
+/// replay restores them as promises.
+const LEGACY_CONTRACT: &str = include_str!("meeting_legacy.toml");
 
 /// Parses the bundled meeting template. The bundled declarations are a fixed, checked invariant.
 fn bundled_template() -> TaskTemplate {
@@ -1084,11 +1090,12 @@ impl<S: Storage> Rastro<S> {
         let bots = self.storage.snapshot(|view| bot_labels(view, &mapped))?;
         let outcome = (|| -> Result<(Validated, Recorded), Failure> {
             // The contract saved with the run governs replay; a run recorded before contracts were
-            // saved replays under the bundled legacy rules (decisions/plugins.md §48).
+            // saved replays under the frozen legacy contract, never the current bundled template
+            // (decisions/plugins.md §48).
             let contract = recording
                 .contract
                 .clone()
-                .unwrap_or_else(|| BUNDLED_TEMPLATE.to_string());
+                .unwrap_or_else(|| LEGACY_CONTRACT.to_string());
             let template = match TaskTemplate::parse(&contract) {
                 Ok(template) => template,
                 Err(error) => {
@@ -1317,6 +1324,55 @@ mod tests {
             template.boundary.is_empty(),
             "the floor is the core's, not the template's"
         );
+    }
+
+    /// The frozen legacy contract is independent of the bundled template and makes `kind` optional,
+    /// so a recording made before candidates had a kind replays as a promise even though the current
+    /// bundled template requires a kind.
+    // spec: Replay needs no model call and forgetting removes what was retained
+    #[test]
+    fn the_legacy_contract_restores_a_kind_less_recording_as_a_promise() {
+        assert_ne!(
+            LEGACY_CONTRACT, BUNDLED_TEMPLATE,
+            "the legacy contract must stay frozen"
+        );
+        let legacy = TaskTemplate::parse(LEGACY_CONTRACT).unwrap();
+        let kind = |t: &TaskTemplate| t.field("kind").unwrap().required;
+        assert!(
+            !kind(&legacy),
+            "the legacy contract must accept a missing kind"
+        );
+        assert!(
+            kind(&bundled_template()),
+            "the bundled template requires a kind"
+        );
+
+        // A kind-less candidate the legacy contract passes and the core restores as a promise.
+        let judgment_turns = [JudgmentTurn {
+            turn: 1,
+            speaker: "Alice".into(),
+            text: "I'll send it.".into(),
+        }];
+        let turns = [Turn {
+            index: 1,
+            speaker: "Alice".into(),
+            text: "I'll send it.".into(),
+        }];
+        let answer = json!({ "candidates": [{
+            "turn": 1, "responsible": "Alice", "promise": "send it", "quote": "I'll send it."
+        }] });
+        let (kept, excluded) = host::task::check(&legacy, &judgment_turns, &answer).unwrap();
+        assert_eq!(excluded, 0);
+        let people = People {
+            owner: "Alice".into(),
+            mapped: BTreeMap::new(),
+            bots: BTreeSet::new(),
+        };
+        let validated = map_candidates(kept, excluded, &turns, &people);
+        assert_eq!(validated.hypotheses.len(), 1);
+        assert_eq!(validated.hypotheses[0].kind, Kind::Promise);
+        // The current bundled template would refuse the same kind-less recording.
+        assert!(host::task::check(&bundled_template(), &judgment_turns, &answer).is_err());
     }
 
     /// A line starts a turn only as `Label: text`; other lines continue the turn before them, and

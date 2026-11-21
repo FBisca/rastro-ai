@@ -1579,18 +1579,63 @@ fn replay_uses_the_saved_contract_after_the_original_template_changed() {
     assert_eq!(replayed["extraction"]["excluded"], 3, "{replayed}");
 }
 
-/// S8: a run recorded before template contracts were saved has none; replay falls back to the
-/// bundled legacy rules and re-derives the same hypotheses without calling a model.
+/// S8: a run recorded before template contracts were saved replays under the frozen legacy
+/// contract, ignoring the template currently selected. The recording here predates candidate kinds
+/// too: the current bundled selection requires a kind and refuses a kind-less answer, yet replay
+/// restores the kind-less candidates as promises under the legacy rules, with no model call.
 // spec: Replay needs no model call and forgetting removes what was retained
 #[test]
-fn replay_of_a_run_without_a_saved_contract_uses_the_bundled_legacy_rules() {
+fn replay_of_a_pre_contract_recording_ignores_the_selected_template() {
     let env = Env::new();
+    let mut kinds = good();
+    kinds[0]["kind"] = json!("ask");
+    kinds[1]["kind"] = json!("waiting_on");
+    env.extractor(&kinds);
     let imported = env.import_ok(&["--owner-speaker", "Alice"]);
-    // A pre-contract recording keeps no saved contract.
+    let kind_of = |read: &Value| -> Vec<String> {
+        read["hypotheses"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|h| h["kind"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(kind_of(&imported), ["ask", "waiting_on", "promise"]);
+
+    // The template currently selected (the bundled default) requires a kind: a kind-less answer
+    // fails it. This is the selection a pre-contract replay must ignore.
+    let mut kindless = good();
+    for candidate in &mut kindless {
+        candidate.as_object_mut().unwrap().remove("kind");
+    }
+    env.extractor(&kindless);
+    let (ok, refused) = env.import(&["--owner-speaker", "Alice"]);
+    assert!(!ok, "{refused}");
+    assert_eq!(
+        refused["extraction"]["cause"], "extractor_output_invalid",
+        "{refused}"
+    );
+
+    // The first run's recording now predates contracts and kinds: no saved contract, no kind field.
     database(&env)
         .execute("DELETE FROM meeting_contract", [])
         .unwrap();
+    let recorded: String = database(&env)
+        .query_row("SELECT candidates FROM meeting_output", [], |r| r.get(0))
+        .unwrap();
+    let mut candidates: Vec<Value> = serde_json::from_str(&recorded).unwrap();
+    for candidate in &mut candidates {
+        candidate.as_object_mut().unwrap().remove("kind");
+    }
+    database(&env)
+        .execute(
+            "UPDATE meeting_output SET candidates = ?1",
+            [serde_json::to_string(&candidates).unwrap()],
+        )
+        .unwrap();
 
+    // The adapter is gone; replay restores the kind-less recording as promises under the legacy
+    // contract, not the kind-requiring template currently selected.
     fs::remove_file(env.script_path()).unwrap();
     fs::remove_file(env.path("request.json")).unwrap();
     let replayed = env.ok(&["meeting", "replay", "weekly-1"]);
@@ -1603,7 +1648,11 @@ fn replay_of_a_run_without_a_saved_contract_uses_the_bundled_legacy_rules() {
         replayed["extraction"]["replay_of"],
         imported["extraction"]["run"]
     );
-    assert_eq!(replayed["hypotheses"], imported["hypotheses"], "{replayed}");
+    assert_eq!(
+        kind_of(&replayed),
+        ["promise", "promise", "promise"],
+        "the legacy contract must restore the kind-less recording as promises: {replayed}"
+    );
 }
 
 /// S9: forgetting a meeting removes the contract saved for replay along with its spans and
