@@ -511,8 +511,9 @@ fn a_slack_source_with_a_channel_id_is_saved() {
     let list = env.rastro(&[], &["source", "list"]);
     let shown_list = shown(&list);
     assert!(list.status.success(), "{shown_list}");
+    assert!(shown_list.lines().any(|l| l == "team"), "{shown_list}");
     assert!(
-        shown_list.contains("team | Connector: slack") && shown_list.contains("C0123ABCDE"),
+        shown_list.contains("Connector: slack") && shown_list.contains("C0123ABCDE"),
         "{shown_list}"
     );
 }
