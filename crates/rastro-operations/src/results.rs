@@ -70,6 +70,10 @@ pub type FocusResult = rastro_core::focus::Report;
 pub type OutcomesResult = rastro_core::queue::Outcomes;
 /// What `trust` returns: every visible cell's trust.
 pub type TrustResult = rastro_core::trust::Trust;
+/// What `trust journal` returns: every level change, newest first.
+pub type TrustJournalResult = rastro_core::trust::TrustJournal;
+/// What `trust pin` and `trust reset` return: the cell as it then reads.
+pub type TrustCellResult = rastro_core::trust::TrustCell;
 /// The runs `actions` lists, oldest first.
 pub type ActionsResult = rastro_core::actions::Runs;
 /// The action proposal `actions propose` recorded, as it now waits in the queue, with the Act
@@ -556,6 +560,37 @@ mod tests {
                 fix: None,
             }),
             Response::Trust(TrustResult::empty()),
+            Response::TrustJournal(TrustJournalResult::empty()),
+            Response::TrustPin(TrustCellResult {
+                action: "linear.create_issue".into(),
+                team: "ENG".into(),
+                level: rastro_core::trust::Level::Propose,
+                clean: 0,
+                undos: 0,
+                changes: vec![],
+                last_change: None,
+                promotion: rastro_core::trust::Promotion {
+                    eligible: false,
+                    needs: "n".into(),
+                    rule_text: None,
+                    reset_command: None,
+                },
+            }),
+            Response::TrustReset(TrustCellResult {
+                action: "linear.create_issue".into(),
+                team: "ENG".into(),
+                level: rastro_core::trust::Level::Act,
+                clean: 0,
+                undos: 0,
+                changes: vec![],
+                last_change: None,
+                promotion: rastro_core::trust::Promotion {
+                    eligible: false,
+                    needs: "n".into(),
+                    rule_text: None,
+                    reset_command: None,
+                },
+            }),
         ];
         let arguments = |name: &str| match name {
             "source.add" => {
@@ -589,6 +624,12 @@ mod tests {
                 serde_json::json!({"action": "linear.create_issue", "why": "w"})
             }
             "actions.show" | "actions.undo" | "actions.stop" => serde_json::json!({"run": "r_1"}),
+            "trust.pin" => {
+                serde_json::json!({"action": "linear.create_issue", "team": "ENG", "level": "propose"})
+            }
+            "trust.reset" => {
+                serde_json::json!({"action": "linear.create_issue", "team": "ENG"})
+            }
             "queue.accept" => serde_json::json!({"item": "q_1"}),
             "queue.edit" => serde_json::json!({"item": "q_1", "promise": "send it"}),
             "queue.reject" => serde_json::json!({"item": "q_1", "reason": "not a promise"}),

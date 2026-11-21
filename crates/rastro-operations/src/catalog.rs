@@ -400,8 +400,18 @@ operations! {
             slot: 40, name: "actions.stop", surfaces: [Cli], read_only: false
         },
     }
-    Trust(TrustRequest => TrustResult) {
+    Trust(TrustRequest => TrustResult) as Trust {
         slot: 42, name: "trust", surfaces: [Cli, Mcp], read_only: true, reader: run_read, cli_read_path: true, deferred: true
+    } with TrustControl {
+        Journal(TrustJournalRequest => TrustJournalResult) as TrustJournal {
+            slot: 43, name: "trust.journal", surfaces: [Cli, Mcp], read_only: true, reader: run_read, cli_read_path: true, deferred: true
+        },
+        Pin(TrustPinRequest => TrustCellResult) as TrustPin {
+            slot: 44, name: "trust.pin", surfaces: [Cli], read_only: false
+        },
+        Reset(TrustResetRequest => TrustCellResult) as TrustReset {
+            slot: 45, name: "trust.reset", surfaces: [Cli], read_only: false
+        },
     }
     /// Check the owner's rules.
     Rules / RulesRequest {
@@ -661,11 +671,20 @@ mod tests {
             let names: Vec<_> = found.matches.iter().map(|m| m.name.as_str()).collect();
             assert_eq!(names, ["actions.show"], "{query}");
         }
-        // The trust read is deferred too: discoverable by name and by description.
-        for query in ["trust", "TRUST", "each cell's trust"] {
+        // The trust reads are deferred too: discoverable by name and by description.
+        for query in ["trust", "TRUST"] {
             let found = search_deferred(query);
             let names: Vec<_> = found.matches.iter().map(|m| m.name.as_str()).collect();
-            assert_eq!(names, ["trust"], "{query}");
+            assert_eq!(names, ["trust", "trust.journal"], "{query}");
+        }
+        for (query, expected) in [
+            ("each cell's trust", vec!["trust"]),
+            ("trust.journal", vec!["trust.journal"]),
+            ("every level change", vec!["trust.journal"]),
+        ] {
+            let found = search_deferred(query);
+            let names: Vec<_> = found.matches.iter().map(|m| m.name.as_str()).collect();
+            assert_eq!(names, expected, "{query}");
         }
     }
 }

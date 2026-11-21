@@ -1,10 +1,10 @@
 # Learning: trust per cell
 
-Paths: crates/rastro-core/src/trust/, crates/rastro-core/src/actions/, crates/rastro-core/src/queue/, crates/rastro-core/src/tick.rs, crates/rastro-core/src/read_only.rs, crates/rastro-core/src/lib.rs, crates/rastro-operations/, crates/rastro-cli/src/, crates/rastro-cli/tests/trust.rs, crates/rastro-cli/tests/trust_demotion.rs, crates/rastro-cli/tests/trust_ask.rs, crates/rastro-cli/tests/trust_usefulness.rs, crates/rastro-cli/tests/queue.rs, crates/rastro-storage-sqlite/migrations/, crates/rastro-storage-sqlite/src/, crates/rastro-cli/tests/mcp_read_log.rs, crates/rastro-cli/tests/mcp.rs, schema/
+Paths: crates/rastro-core/src/trust/, crates/rastro-core/src/actions/, crates/rastro-core/src/queue/, crates/rastro-core/src/tick.rs, crates/rastro-core/src/read_only.rs, crates/rastro-core/src/lib.rs, crates/rastro-operations/, crates/rastro-cli/src/, crates/rastro-cli/tests/trust.rs, crates/rastro-cli/tests/trust_demotion.rs, crates/rastro-cli/tests/trust_ask.rs, crates/rastro-cli/tests/trust_usefulness.rs, crates/rastro-cli/tests/trust_controls.rs, crates/rastro-cli/tests/trust_journal.rs, crates/rastro-cli/tests/queue.rs, crates/rastro-storage-sqlite/migrations/, crates/rastro-storage-sqlite/src/, crates/rastro-cli/tests/mcp_read_log.rs, crates/rastro-cli/tests/mcp.rs, schema/
 
 Trust answers "should it act alone?" per cell — one action × team pair — and is derived from outcomes, never stored (`../decisions/learning.md` §1, §5; `../decisions/levels.md`). A cell's level and the evidence behind it are computed at read from the runs and owner intents the visible scopes hold, under the configurable thresholds of `[learning]`; promotion is always proposed to the owner, never self-applied, and demotion is automatic and visible (`../decisions/learning.md` §6–7, §14). The trust view is a core read like the queue, defined once in the operation catalog (`../adr/0007-typed-operation-catalog.md`) and offered on the CLI and, deferred, through the MCP catalog gateway. A machine read is audited, never mistaken for the owner having seen an item.
 
-This file holds the trust-view, demotion, decay, Ask-answer, usefulness and cost, and read-logging requirements of the learned-trust slice; the slice's remaining requirements (pin and reset, the journal read) land with their tickets.
+This file holds the trust-view, demotion, decay, Ask-answer, usefulness and cost, read-logging, journal and owner-control requirements of the learned-trust slice.
 
 ## Requirements
 
@@ -129,3 +129,21 @@ The MCP server SHALL log each read call with its tool, arguments and time, and t
 #### Scenario: a terminal read is not an MCP read
 - WHEN the same queue read runs on the terminal
 - THEN a shown report is written and no read log row is
+
+### Requirement: The learning journal records every level change
+rastro trust journal SHALL list every level change with its cause and time, newest first, derived from the same evidence as the trust view.
+
+#### Scenario: changes carry their causes
+- WHEN a cell was demoted by an undo and later decayed
+- THEN the journal lists both changes newest first, each naming its cause and time
+
+### Requirement: Pin and reset are owner intents
+rastro trust pin and rastro trust reset SHALL record owner intents that a rebuild replays, a pin SHALL hold the level against learning in both directions, and a reset SHALL clear the cell's learned history back to its baseline.
+
+#### Scenario: a pin holds against demotion
+- WHEN a cell pinned at Propose has a run undone
+- THEN its level stays Propose and the journal names the pin holding it
+
+#### Scenario: a reset restores the baseline
+- WHEN a demoted cell with a rule is reset
+- THEN its level returns to Act, a cell without a rule returns to Propose, and the journal names the reset
