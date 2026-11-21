@@ -18,6 +18,12 @@
 //! carry a person's words — bot messages, broadcast replies, file shares, /me messages — are
 //! kept as evidence. An author profile the API won't give is a coverage gap, and the messages
 //! stay; a rate limit, a rejected token or a missing scope stops the run typed.
+//!
+//! Thread replies are read through a 30-day lookback (`docs/decisions/plugins.md` §50): the
+//! history read spans the window plus the lookback, and the replies posted inside the window
+//! are read for the threads started in that span. A thread with no reply in the window gets no
+//! replies call. The window is half-open, so a message posted at its start belongs to it alone
+//! and is stored exactly once across consecutive syncs.
 mod api;
 
 use anyhow::{Context, Result, bail};
@@ -35,6 +41,10 @@ use std::{
 };
 
 const DEFAULT_API: &str = "https://slack.com/api";
+
+/// How far before the window a thread may have started and still have its replies read
+/// (`docs/decisions/plugins.md` §50).
+const LOOKBACK_DAYS: i64 = 30;
 
 const STRUCTURED: &str = "structured";
 const UNTRUSTED: &str = "untrusted content";
@@ -199,7 +209,11 @@ struct Run<'a, R, W> {
     channel: String,
     window_from: DateTime<Utc>,
     window_to: DateTime<Utc>,
+    /// The window's start minus the lookback: thread starts from here on are read.
+    lookback_from: DateTime<Utc>,
     seen: HashSet<String>,
+    /// The threads started in the lookback whose replies may fall in the window.
+    thread_starts: BTreeSet<String>,
     authors: BTreeSet<String>,
     submitted: u64,
     /// The host said the source keeps originals: attach the raw record.
@@ -242,13 +256,16 @@ fn sync<R: BufRead, W: Write>(
         .map(|(_, token)| token)
         .ok_or(Failure::new("auth"))?;
     let time = |t: &str| t.parse().map_err(|_| Failure::new("protocol"));
+    let window_from: DateTime<Utc> = time(&binding.window.from)?;
     let mut run = Run {
         transport,
         client: Client::new(&base, token),
         channel,
-        window_from: time(&binding.window.from)?,
+        window_from,
         window_to: time(&binding.window.to)?,
+        lookback_from: window_from - chrono::Duration::days(LOOKBACK_DAYS),
         seen: HashSet::new(),
+        thread_starts: BTreeSet::new(),
         authors: BTreeSet::new(),
         submitted: 0,
         keep_original: binding.keep_original,
@@ -287,6 +304,7 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
         };
         self.submit(&record, "/id", Some(&viewer_id), STRUCTURED)?;
         self.history_pages()?;
+        self.read_threads()?;
         self.read_authors()
     }
 
@@ -339,11 +357,12 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
         }
     }
 
-    /// Every page of the window's history, following the API's cursor until it says there is
-    /// no more.
+    /// Every page of the window's history plus the lookback, following the API's cursor until
+    /// it says there is no more. The messages in the window go out as they are read; the thread
+    /// starts in the lookback are collected for their replies.
     fn history_pages(&mut self) -> Result<(), Failure> {
         let channel = self.channel.clone();
-        let oldest = slack_ts(self.window_from);
+        let oldest = slack_ts(self.lookback_from);
         let latest = slack_ts(self.window_to);
         let mut cursor = String::new();
         let mut cursors = HashSet::new();
@@ -352,12 +371,92 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
                 ("channel", channel.as_str()),
                 ("oldest", oldest.as_str()),
                 ("latest", latest.as_str()),
+                // Slack's bounds are exclusive by default: inclusive returns [oldest, latest],
+                // so a thread started exactly at the lookback's edge is still found, and the
+                // half-open filter below drops the latest edge.
+                ("inclusive", "true"),
                 ("limit", "200"),
             ];
             if !cursor.is_empty() {
                 params.push(("cursor", cursor.as_str()));
             }
             let page = self.client.conversations_history(&params)?;
+            let messages = page["messages"]
+                .as_array()
+                .ok_or(Failure::new("protocol"))?;
+            for message in messages {
+                self.collect_thread_start(message);
+                self.read_message(message)?;
+            }
+            if page["has_more"] != true {
+                return Ok(());
+            }
+            // A cursor seen before would page forever.
+            let next = text(&page, "/response_metadata/next_cursor")
+                .filter(|c| !c.is_empty() && cursors.insert(c.to_string()))
+                .ok_or(Failure::new("protocol"))?;
+            cursor = next.to_string();
+        }
+    }
+
+    /// A thread started in the lookback whose replies may fall in the window: its start, kept
+    /// once. A thread started before the lookback or at/after the window's end is not read, and
+    /// a thread whose latest reply predates the window has no reply in it: no replies call.
+    fn collect_thread_start(&mut self, message: &Value) {
+        let Some(ts) = text(message, "/ts") else {
+            return;
+        };
+        let Some(at) = slack_time(ts) else {
+            return;
+        };
+        if at < self.lookback_from || at >= self.window_to {
+            return;
+        }
+        if message["reply_count"].as_u64().unwrap_or(0) == 0 {
+            return;
+        }
+        if let Some(latest) = text(message, "/latest_reply").and_then(slack_time)
+            && latest < self.window_from
+        {
+            return;
+        }
+        self.thread_starts.insert(ts.to_string());
+    }
+
+    /// The replies posted in the window to each thread started in the lookback. Every message
+    /// goes through the same window filter and seen set as the history read, so a message at
+    /// the window's start is stored exactly once across consecutive syncs.
+    fn read_threads(&mut self) -> Result<(), Failure> {
+        for ts in std::mem::take(&mut self.thread_starts) {
+            self.replies_pages(&ts)?;
+        }
+        Ok(())
+    }
+
+    /// Every page of one thread's replies in the window, following the API's cursor until it
+    /// says there is no more. `inclusive` asks Slack for `[oldest, latest]`: its bounds are
+    /// exclusive by default, which would leave out a reply posted exactly at the window's
+    /// start — the previous sync left it out too, so it would never be stored. The half-open
+    /// filter in `read_message` drops the latest edge instead.
+    fn replies_pages(&mut self, thread_ts: &str) -> Result<(), Failure> {
+        let channel = self.channel.clone();
+        let oldest = slack_ts(self.window_from);
+        let latest = slack_ts(self.window_to);
+        let mut cursor = String::new();
+        let mut cursors = HashSet::new();
+        loop {
+            let mut params = vec![
+                ("channel", channel.as_str()),
+                ("ts", thread_ts),
+                ("oldest", oldest.as_str()),
+                ("latest", latest.as_str()),
+                ("inclusive", "true"),
+                ("limit", "200"),
+            ];
+            if !cursor.is_empty() {
+                params.push(("cursor", cursor.as_str()));
+            }
+            let page = self.client.conversations_replies(&params)?;
             let messages = page["messages"]
                 .as_array()
                 .ok_or(Failure::new("protocol"))?;

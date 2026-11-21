@@ -1,6 +1,8 @@
 //! A scripted Slack Web API on loopback: it answers the connector's fixed calls from a [`World`]
-//! and records every request. It applies no window filter: the messages it holds are the ones
-//! the call is assumed to select, so the connector's own filtering is what a test observes.
+//! and records every request. `conversations.history` applies no window filter: the messages it
+//! holds are the ones the call is assumed to select, so the connector's own filtering is what a
+//! test observes. `conversations.replies` selects by the call's `oldest`/`latest` as Slack
+//! documents (exclusive unless `inclusive=true`), so a boundary read is the API's behaviour too.
 #![allow(dead_code)]
 use chrono::{DateTime, Utc};
 use serde_json::{Value, json};
@@ -58,12 +60,20 @@ impl Reply {
 }
 
 /// What the API holds. Messages are kept oldest first and served newest first, as Slack does;
-/// pages are `page_size` long and a cursor is the offset of the next page.
+/// pages are `page_size` long and a cursor is the offset of the next page. Thread replies live
+/// in `replies`, served only by `conversations.replies` (oldest first, the parent leading, as
+/// Slack does); `conversations.history` serves the messages, thread parents included.
+///
+/// `conversations.replies` selects replies by the call's `oldest`/`latest`, exclusive unless
+/// `inclusive=true`, as Slack documents; the parent always leads, it is the anchor the call
+/// names. `conversations.history` applies no window filter: the messages it holds are the ones
+/// the call is assumed to select, so the connector's own filtering is what a test observes.
 #[derive(Clone)]
 pub struct World {
     pub viewer: String,
     pub channel: Value,
     pub messages: Vec<Value>,
+    pub replies: Vec<Value>,
     pub users: Vec<Value>,
     pub page_size: usize,
 }
@@ -73,6 +83,7 @@ impl Default for World {
             viewer: VIEWER.into(),
             channel: channel(),
             messages: vec![],
+            replies: vec![],
             users: vec![
                 user(VIEWER, "Owner Person", false),
                 user(ANA, "Ana Silva", false),
@@ -109,6 +120,41 @@ impl World {
                     },
                 }))
             }
+            "conversations.replies" => {
+                let thread_ts = req.params.get("ts").map(String::as_str).unwrap_or("");
+                let Some(parent) = self
+                    .messages
+                    .iter()
+                    .find(|m| m["ts"].as_str() == Some(thread_ts))
+                else {
+                    return Reply::error("thread_not_found");
+                };
+                let mut messages = vec![parent.clone()];
+                messages.extend(
+                    self.replies
+                        .iter()
+                        .filter(|r| {
+                            r["thread_ts"].as_str() == Some(thread_ts)
+                                && r["ts"].as_str().is_some_and(|ts| selects(req, ts))
+                        })
+                        .cloned(),
+                );
+                let from: usize = req
+                    .params
+                    .get("cursor")
+                    .and_then(|c| c.parse().ok())
+                    .unwrap_or(0);
+                let to = (from + self.page_size).min(messages.len());
+                let has_more = to < messages.len();
+                Reply::ok(json!({
+                    "ok": true,
+                    "messages": messages[from.min(to)..to],
+                    "has_more": has_more,
+                    "response_metadata": {
+                        "next_cursor": if has_more { to.to_string() } else { String::new() },
+                    },
+                }))
+            }
             "users.info" => {
                 let id = req.params.get("user").map(String::as_str).unwrap_or("");
                 match self.users.iter().find(|u| u["id"] == id) {
@@ -132,6 +178,38 @@ pub fn in_window(hours: i64) -> DateTime<Utc> {
 /// Slack's message time: epoch seconds with a microsecond fraction.
 pub fn ts(at: DateTime<Utc>) -> String {
     format!("{}.{:06}", at.timestamp(), at.timestamp_subsec_micros())
+}
+/// The instant a Slack ts names: the inverse of [`ts`].
+pub fn from_ts(ts: &str) -> DateTime<Utc> {
+    let (secs, frac) = ts.split_once('.').unwrap_or((ts, "0"));
+    let secs: i64 = secs.parse().unwrap();
+    let mut frac = frac.to_string();
+    while frac.len() < 6 {
+        frac.push('0');
+    }
+    let micros: u32 = frac[..6].parse().unwrap();
+    DateTime::from_timestamp(secs, micros * 1000).unwrap()
+}
+/// Whether the call's `oldest`/`latest` select a message: Slack excludes the bounds unless
+/// `inclusive=true`. An absent bound selects everything on its side. Slack's ts is fixed-width
+/// epoch seconds, so string order is time order.
+pub fn selects(req: &Req, ts: &str) -> bool {
+    let inclusive = req.params.get("inclusive").is_some_and(|v| v == "true");
+    let after = |bound: &String| {
+        if inclusive {
+            ts >= bound.as_str()
+        } else {
+            ts > bound.as_str()
+        }
+    };
+    let before = |bound: &String| {
+        if inclusive {
+            ts <= bound.as_str()
+        } else {
+            ts < bound.as_str()
+        }
+    };
+    req.params.get("oldest").is_none_or(after) && req.params.get("latest").is_none_or(before)
 }
 /// A plain public channel the token owner can read.
 pub fn channel() -> Value {
@@ -161,6 +239,24 @@ pub fn bot_message(text: &str, at: DateTime<Utc>) -> Value {
 pub fn join_message(at: DateTime<Utc>) -> Value {
     let mut msg = message(ANA, "<@U0ANA> has joined the channel", at);
     msg["subtype"] = json!("channel_join");
+    msg
+}
+/// A reply in a thread: the author's words, with the thread it answers.
+pub fn reply_message(author: &str, text: &str, at: DateTime<Utc>, thread_ts: &str) -> Value {
+    let mut msg = message(author, text, at);
+    msg["thread_ts"] = json!(thread_ts);
+    msg
+}
+/// A thread parent as history serves it: its own ts as `thread_ts`, with the `reply_count` and
+/// `latest_reply` Slack reports, computed from the replies the world holds. Slack's ts is
+/// fixed-width epoch seconds, so the greatest ts string is the latest reply.
+pub fn thread_parent(author: &str, text: &str, at: DateTime<Utc>, replies: &[Value]) -> Value {
+    let mut msg = message(author, text, at);
+    msg["thread_ts"] = json!(ts(at));
+    msg["reply_count"] = json!(replies.len());
+    if let Some(latest) = replies.iter().filter_map(|r| r["ts"].as_str()).max() {
+        msg["latest_reply"] = json!(latest);
+    }
     msg
 }
 /// A reply broadcast to the whole channel: the author's words, with the thread it answers.
