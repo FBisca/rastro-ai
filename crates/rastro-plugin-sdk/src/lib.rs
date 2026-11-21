@@ -10,6 +10,8 @@ use std::{
     io::{BufRead, Write},
 };
 
+pub mod schema;
+
 /// Protocol version this SDK speaks. Majors must match; minors may differ.
 pub const PROTOCOL_VERSION: &str = "1.0";
 pub const INITIALIZE: &str = "initialize";
@@ -138,7 +140,7 @@ pub struct Window {
     pub to: String,
 }
 /// What the core binds a run to. Evidence and coverage inherit all of it.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
 pub struct RunBinding {
     pub run_id: i64,
     pub source: String,
@@ -150,13 +152,13 @@ pub struct RunBinding {
     #[serde(default)]
     pub keep_original: bool,
 }
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
 pub struct InitializeParams {
     pub protocol: String,
     pub manifest_id: String,
     pub run: RunBinding,
 }
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
 pub struct InitializeResult {
     pub protocol: String,
     pub manifest_id: String,
@@ -263,7 +265,7 @@ pub struct ActionResult {
 }
 /// One action an action provider declares: its name and what it risks (decisions/levels.md §4).
 /// `reach` and `reversibility` are read as text so a missing or unknown one is refused naming it.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
 pub struct ActionDeclaration {
     pub name: String,
     #[serde(default)]
@@ -603,10 +605,11 @@ impl TaskTemplate {
 
 /// What an agent tool adapter needs from an agent tool, in capabilities. It never names a tool
 /// (decisions/plugins.md §4): fields this declaration doesn't define are kept only to refuse it.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
 pub struct AgentToolNeeds {
     pub capabilities: Vec<String>,
     #[serde(flatten, skip_serializing)]
+    #[schemars(skip)]
     unknown: std::collections::BTreeMap<String, toml::Value>,
 }
 /// One (source, scope) pair whose evidence an extractor run may read.
@@ -705,7 +708,7 @@ fn present<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<V
 
 /// `evidence.submit`. Every field is optional on the wire so the core, not the parser,
 /// decides what to reject. The core sets the capture time.
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, JsonSchema, Serialize)]
 pub struct EvidenceSubmit {
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub kind: Option<String>,
@@ -741,7 +744,7 @@ pub struct EvidenceSubmit {
     pub original: Option<Value>,
 }
 
-#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum CoverageStatus {
     Complete,
@@ -755,7 +758,7 @@ pub struct CoverageGap {
 }
 
 /// `coverage.report`. Whether it was found or empty is the core's call.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
 pub struct CoverageReport {
     pub status: CoverageStatus,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -776,7 +779,7 @@ pub struct CoverageReport {
 }
 
 /// `run.finish` request: the plugin's own view (items, or claims for an extractor). The core's counts are the authority.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
 pub struct RunFinish {
     pub status: String,
     pub submitted: u64,
@@ -791,7 +794,7 @@ pub struct Counts {
     pub unchanged: u64,
 }
 
-#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[derive(Clone, Debug, Default, Deserialize, JsonSchema, Serialize)]
 pub struct Permissions {
     /// Evidence kinds the plugin may submit.
     pub submit: Vec<String>,
@@ -805,13 +808,13 @@ pub struct Permissions {
     pub env: Vec<String>,
 }
 /// An extraction rule an extractor declares; only deterministic ones may yield observed claims.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, JsonSchema)]
 pub struct ExtractionRule {
     pub id: String,
     pub deterministic: bool,
 }
 /// `rastro-plugin.toml`. A request: the source's grant can only narrow it.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
 pub struct Manifest {
     pub id: String,
     pub name: String,
@@ -859,7 +862,7 @@ pub struct Manifest {
     pub actions: Vec<ActionDeclaration>,
 }
 /// One option a connector's sources take.
-#[derive(Clone, Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, JsonSchema, Serialize)]
 pub struct SourceOption {
     pub name: String,
     #[serde(default)]
