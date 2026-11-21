@@ -1,5 +1,4 @@
 use anyhow::Result;
-use chrono::{DateTime, SecondsFormat, Utc};
 use clap::Parser;
 use rastro_core::{
     Coverage, CoverageWindow, Locations, MAX_SEARCH_LIMIT, Rastro, display_escaped, display_safe,
@@ -65,9 +64,6 @@ enum PluginCommand {
         #[arg(long = "option", value_name = "KEY=VALUE")]
         options: Vec<String>,
     },
-}
-fn stamp(time: DateTime<Utc>) -> String {
-    time.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
 /// One source's coverage as a block: its state and times, then each window as a field.
 fn coverage_block(c: &Coverage) -> render::Block {
@@ -532,62 +528,61 @@ fn search_text(text: &str, found: &SearchResponse) -> String {
     }
     text
 }
-fn intent_line(intent: &rastro_core::identity::IntentView) -> String {
-    let mut line = format!(
-        "{} | {} | Intent: {} | Issued: {} | Status: {}",
-        intent.append_seq,
-        intent.kind.as_str(),
-        display_safe(&intent.id),
-        stamp(intent.issued_at),
-        serde_json::to_value(intent.status)
-            .ok()
-            .and_then(|v| v.as_str().map(String::from))
-            .unwrap_or_default()
-    );
-    if let Some(by) = &intent.status_by {
-        line += &format!(" by {}", display_safe(by));
-    }
-    if let Some(undone) = &intent.undo_of {
-        line += &format!(" | Undoes: {}", display_safe(undone));
-    }
-    line += &format!(
-        " | Domain: {} | Issuer: {} via {} | Scopes: {}",
-        display_safe(&intent.domain_key),
-        display_safe(&intent.issuer.principal),
-        display_safe(&intent.issuer.surface),
-        scopes_shown(&intent.issuer.scopes)
-    );
-    line
+/// One owner intent as a block: its id on the header line, then its acceptance order, kind,
+/// when it was issued and where it stands, what it undoes, and who issued it over which scopes.
+fn intent_block(intent: &rastro_core::identity::IntentView) -> render::Block {
+    let status = serde_json::to_value(intent.status)
+        .ok()
+        .and_then(|v| v.as_str().map(String::from))
+        .unwrap_or_default();
+    render::Block::new(format!("Intent {}", display_safe(&intent.id)))
+        .field("Seq", intent.append_seq)
+        .field("Kind", intent.kind.as_str())
+        .field("Issued", render::time(intent.issued_at))
+        .field("Status", status)
+        .maybe("Status by", intent.status_by.as_deref().map(display_safe))
+        .maybe("Undoes", intent.undo_of.as_deref().map(display_safe))
+        .field("Domain", display_safe(&intent.domain_key))
+        .field(
+            "Issuer",
+            format!(
+                "{} via {}",
+                display_safe(&intent.issuer.principal),
+                display_safe(&intent.issuer.surface)
+            ),
+        )
+        .field("Scopes", scopes_shown(&intent.issuer.scopes))
 }
 fn intents_text(intents: &[rastro_core::identity::IntentView], none: &str) -> String {
     if intents.is_empty() {
         return none.into();
     }
-    intents
-        .iter()
-        .map(intent_line)
-        .collect::<Vec<_>>()
-        .join("\n")
+    render::records(intents.iter().map(intent_block))
 }
 fn person_text(result: &rastro_operations::results::IdentityPersonResult) -> String {
-    let mut text = format!(
-        "Person: {} | Id: {}",
-        display_safe(&result.person.identifier),
-        result.person.id
-    );
-    if !result.created {
-        text += " | Already existed; nothing recorded";
+    let mut text = render::Block::new(format!(
+        "Person: {}",
+        display_safe(&result.person.identifier)
+    ))
+    .field("Id", &result.person.id)
+    .to_string();
+    if !result.intents.is_empty() {
+        text += &format!(
+            "\n\n{}",
+            render::records(result.intents.iter().map(intent_block))
+        );
     }
-    for intent in &result.intents {
-        text += &format!("\n{}", intent_line(intent));
+    if !result.created {
+        text += &format!("\n\n{}", render::nothing_recorded("Already existed"));
     }
     text
 }
-/// One line per candidate pair: both accounts (with the Persons holding them), each reason with
-/// the value each account gave, and the name a yes would give a new Person.
+/// One block per candidate pair: both accounts (with the Persons holding them) on the header
+/// line, then each reason with the value each account gave, and the name a yes would give a new
+/// Person.
 fn candidates_text(result: &rastro_operations::results::IdentityCandidatesResult) -> String {
     if result.candidates.is_empty() {
-        return "No candidates".into();
+        return render::empty("candidates");
     }
     let account = |a: &rastro_core::identity::CandidateAccount| {
         let mut text = display_safe(&a.identifier);
@@ -606,19 +601,17 @@ fn candidates_text(result: &rastro_operations::results::IdentityCandidatesResult
             display_safe(&r.values[1])
         )
     };
-    let lines: Vec<String> = (result.candidates.iter())
-        .map(|c| {
-            let reasons: Vec<String> = c.reasons.iter().map(reason).collect();
-            format!(
-                "{} ~ {} | {} | Name: {}",
-                account(&c.accounts[0]),
-                account(&c.accounts[1]),
-                reasons.join(" | "),
-                display_safe(&c.name)
-            )
-        })
-        .collect();
-    lines.join("\n")
+    render::records(result.candidates.iter().map(|c| {
+        let mut block = render::Block::new(format!(
+            "{} ~ {}",
+            account(&c.accounts[0]),
+            account(&c.accounts[1])
+        ));
+        for r in &c.reasons {
+            block = block.field("Reason", reason(r));
+        }
+        block.field("Name", display_safe(&c.name))
+    }))
 }
 fn party_text(party: &rastro_core::meeting::Party) -> String {
     let label = party.label.as_deref().map(display_safe);
@@ -631,83 +624,76 @@ fn party_text(party: &rastro_core::meeting::Party) -> String {
         (None, None) => "unknown".into(),
     }
 }
+/// The meeting read: the notice as preamble, then the meeting as one block — its scope and
+/// captured time, how the latest extraction and coverage stand, and whether the transcript is
+/// kept — then each hypothesis as a block with the quote it rests on. A look that found nothing
+/// ends with the one empty voice.
 fn meeting_text(m: &rastro_core::meeting::MeetingCommitments) -> String {
-    let mut lines = vec![
-        format!(
-            "Meeting: {} | Scope: {} | Captured: {}",
-            display_safe(&m.meeting.id),
-            display_safe(&m.meeting.scope),
-            stamp(m.meeting.captured_at)
-        ),
-        m.notice.clone(),
-    ];
     let e = &m.extraction;
-    let mut line = format!(
-        "Extraction: {} | Run: {} | Finished: {}",
-        e.state.as_str(),
-        e.run,
-        stamp(e.finished_at)
-    );
-    if let Some(extractor) = &e.extractor {
-        line += &format!(" | Extractor: {}", display_safe(extractor));
-    }
-    if let Some(source) = e.replay_of {
-        line += &format!(" | Replay of run {source}, no model call");
-    }
-    line += &format!(" | Excluded: {}", e.excluded);
-    if let Some(cause) = e.cause {
-        line += &format!(" | Cause: {}", cause.as_str());
-    }
-    if let Some(reason) = &e.reason {
-        line += &format!(" | Reason: {}", display_safe(reason));
-    }
-    lines.push(line);
-    lines.push(format!(
-        "Coverage: {} | Turns read: {} of {}",
-        m.coverage.state.as_str(),
-        m.coverage.turns_read,
-        m.coverage.turns_total
-    ));
-    if let Some(from) = &m.results_from {
-        lines.push(format!(
-            "STALE: the hypotheses below come from the last good run {} ({}), not the latest",
-            from.run,
-            stamp(from.finished_at)
-        ));
-    }
-    lines.push(format!(
-        "Transcript: {}",
-        if m.transcript_retained {
-            "retained (opt-in)"
-        } else {
-            "not retained"
-        }
-    ));
+    let block = render::Block::new(format!("Meeting: {}", display_safe(&m.meeting.id)))
+        .field("Scope", display_safe(&m.meeting.scope))
+        .field("Captured", render::time(m.meeting.captured_at))
+        .field("Extraction", e.state.as_str())
+        .field("Run", e.run)
+        .field("Finished", render::time(e.finished_at))
+        .maybe("Extractor", e.extractor.as_deref().map(display_safe))
+        .maybe(
+            "Replay",
+            e.replay_of.map(|run| format!("run {run}, no model call")),
+        )
+        .field("Excluded", e.excluded)
+        .maybe("Cause", e.cause.map(|c| c.as_str()))
+        .maybe("Reason", e.reason.as_deref().map(display_safe))
+        .field("Coverage", m.coverage.state.as_str())
+        .field(
+            "Turns read",
+            format!("{} of {}", m.coverage.turns_read, m.coverage.turns_total),
+        )
+        .maybe(
+            "Stale",
+            m.results_from.as_ref().map(|from| {
+                format!(
+                    "the hypotheses below come from the last good run {} ({}), not the latest",
+                    from.run,
+                    render::time(from.finished_at)
+                )
+            }),
+        )
+        .field(
+            "Transcript",
+            if m.transcript_retained {
+                "retained (opt-in)"
+            } else {
+                "not retained"
+            },
+        );
+    let mut text = format!("{}\n\n{}", m.notice, block);
     if m.hypotheses.is_empty() {
-        lines.push("No hypotheses".into());
+        text += &format!("\n\n{}", render::empty("hypotheses"));
+    } else {
+        text += &format!(
+            "\n\n{}",
+            render::records(m.hypotheses.iter().map(meeting_hypothesis_block))
+        );
     }
-    for h in &m.hypotheses {
-        let date = match &h.stated_date.text {
-            Some(text) => display_safe(text),
-            None => "unknown".into(),
-        };
-        lines.push(format!(
-            "Hypothesis: {} -> {} | Promise: {} | Date: {}",
-            party_text(&h.responsible),
-            party_text(&h.recipient),
-            display_safe(&h.promise),
-            date
-        ));
-        lines.push(format!(
-            "  \"{}\" | Turn: {} | Speaker: {} | Span: [{}, {})",
-            display_escaped(&h.quote.text),
-            h.quote.turn,
-            display_safe(&h.quote.speaker),
-            h.quote.start,
-            h.quote.end
-        ));
-    }
-    lines.join("\n")
+    text
+}
+/// One meeting hypothesis as a block: its parties, promise and date, then the quote it rests on
+/// with its turn, speaker and span.
+fn meeting_hypothesis_block(h: &rastro_core::meeting::Hypothesis) -> render::Block {
+    let date = match &h.stated_date.text {
+        Some(text) => display_safe(text),
+        None => "unknown".into(),
+    };
+    render::Block::new("Hypothesis")
+        .field("From", party_text(&h.responsible))
+        .field("To", party_text(&h.recipient))
+        .field("Promise", display_safe(&h.promise))
+        .field("Date", date)
+        .field("Quote", format!("\"{}\"", display_escaped(&h.quote.text)))
+        .field("Turn", h.quote.turn)
+        .field("Speaker", display_safe(&h.quote.speaker))
+        .field("Span", format!("[{}, {})", h.quote.start, h.quote.end))
 }
 fn commitment_party_text(party: &rastro_core::commitments::Party) -> String {
     let label = party.label.as_deref().map(display_safe);
@@ -720,95 +706,88 @@ fn commitment_party_text(party: &rastro_core::commitments::Party) -> String {
         (None, None) => "unknown".into(),
     }
 }
-/// The commitments list: every source with how its extraction and coverage stand, then its
-/// hypotheses, or what it found instead.
+/// The commitments list: the notice as preamble, then every source as a block — how its
+/// extraction and coverage stand, and what it found or why it could not look — then its
+/// hypotheses as blocks.
 fn commitments_text(list: &rastro_core::commitments::Commitments) -> String {
     use rastro_core::meeting::RunState;
-    let mut lines = vec![list.notice.clone()];
     if list.sources.is_empty() {
-        lines.push("No sources".into());
+        return format!("{}\n\n{}", list.notice, render::empty("sources"));
     }
+    let mut blocks = Vec::new();
     for source in &list.sources {
-        lines.push(format!(
-            "Source: {} | Kind: {} | Scope: {}",
-            display_safe(&source.name),
-            serde_json::to_value(source.kind)
-                .ok()
-                .and_then(|v| v.as_str().map(String::from))
-                .unwrap_or_default(),
-            display_safe(&source.scope)
-        ));
         let e = &source.extraction;
-        let mut line = format!(
-            "  Extraction: {} | Run: {} | Finished: {}",
-            e.state.as_str(),
-            e.run,
-            stamp(e.finished_at)
-        );
-        if let Some(adapter) = &e.adapter {
-            line += &format!(" | Adapter: {}", display_safe(adapter));
-        }
-        if let Some(run) = &e.replay_of {
-            line += &format!(" | Replay of run {run}, no model call");
-        }
-        line += &format!(" | Excluded: {}", e.excluded);
-        if let Some(cause) = e.cause {
-            line += &format!(" | Cause: {}", cause.as_str());
-        }
-        if let Some(reason) = &e.reason {
-            line += &format!(" | Reason: {}", display_safe(reason));
-        }
-        lines.push(line);
         let c = &source.coverage;
-        let mut line = format!(
-            "  Coverage: {} | Turns read: {} of {}",
-            c.state.as_str(),
-            c.turns_read,
-            c.turns_total
-        );
-        if let Some(reason) = &c.reason {
-            line += &format!(" | Reason: {}", display_safe(reason));
-        }
-        lines.push(line);
+        let kind = serde_json::to_value(source.kind)
+            .ok()
+            .and_then(|v| v.as_str().map(String::from))
+            .unwrap_or_default();
+        let mut block = render::Block::new(display_safe(&source.name))
+            .field("Kind", kind)
+            .field("Scope", display_safe(&source.scope))
+            .field("Extraction", e.state.as_str())
+            .field("Run", &e.run)
+            .field("Finished", render::time(e.finished_at))
+            .maybe("Adapter", e.adapter.as_deref().map(display_safe))
+            .maybe(
+                "Replay",
+                e.replay_of
+                    .as_ref()
+                    .map(|run| format!("run {run}, no model call")),
+            )
+            .field("Excluded", e.excluded)
+            .maybe("Cause", e.cause.map(|c| c.as_str()))
+            .maybe("Reason", e.reason.as_deref().map(display_safe))
+            .field("Coverage", c.state.as_str())
+            .field(
+                "Turns read",
+                format!("{} of {}", c.turns_read, c.turns_total),
+            )
+            .maybe("Coverage reason", c.reason.as_deref().map(display_safe));
         if source.stale
             && let Some(from) = &source.results_from
         {
-            lines.push(format!(
-                "  STALE: the hypotheses below come from run {} (imported {}), not the latest",
-                from.run,
-                stamp(from.imported_at)
-            ));
+            block = block.field(
+                "Stale",
+                format!(
+                    "the hypotheses below come from run {} (imported {}), not the latest",
+                    from.run,
+                    render::time(from.imported_at)
+                ),
+            );
         }
-        match (source.hypotheses.is_empty(), e.state) {
-            (true, RunState::Succeeded) => lines.push("  Found nothing".into()),
-            (true, RunState::Failed) => lines.push("  Couldn't look: no hypotheses".into()),
-            (false, _) => {}
+        if source.hypotheses.is_empty() {
+            block = block.field(
+                "Hypotheses",
+                match e.state {
+                    RunState::Succeeded => "found nothing",
+                    RunState::Failed => "couldn't look",
+                },
+            );
         }
-        for h in &source.hypotheses {
-            let date = match &h.stated_date.text {
-                Some(text) => display_safe(text),
-                None => "unknown".into(),
-            };
-            lines.push(format!(
-                "  Hypothesis: {} | {} -> {} | Promise: {} | Date: {} | Terms: {}",
-                h.kind.as_str(),
-                commitment_party_text(&h.responsible),
-                commitment_party_text(&h.recipient),
-                display_safe(&h.promise),
-                date,
-                h.terms.join(", ")
-            ));
-            lines.push(format!(
-                "    \"{}\" | Turn: {} | Speaker: {} | Span: [{}, {})",
-                display_escaped(&h.quote.text),
-                h.quote.turn,
-                display_safe(&h.quote.speaker),
-                h.quote.start,
-                h.quote.end
-            ));
-        }
+        blocks.push(block);
+        blocks.extend(source.hypotheses.iter().map(commitment_hypothesis_block));
     }
-    lines.join("\n")
+    format!("{}\n\n{}", list.notice, render::records(blocks))
+}
+/// One commitments hypothesis as a block: its kind, parties, promise, date and terms, then the
+/// quote it rests on with its turn, speaker and span.
+fn commitment_hypothesis_block(h: &rastro_core::commitments::Hypothesis) -> render::Block {
+    let date = match &h.stated_date.text {
+        Some(text) => display_safe(text),
+        None => "unknown".into(),
+    };
+    render::Block::new("Hypothesis")
+        .field("Kind", h.kind.as_str())
+        .field("From", commitment_party_text(&h.responsible))
+        .field("To", commitment_party_text(&h.recipient))
+        .field("Promise", display_safe(&h.promise))
+        .field("Date", date)
+        .field("Terms", h.terms.join(", "))
+        .field("Quote", format!("\"{}\"", display_escaped(&h.quote.text)))
+        .field("Turn", h.quote.turn)
+        .field("Speaker", display_safe(&h.quote.speaker))
+        .field("Span", format!("[{}, {})", h.quote.start, h.quote.end))
 }
 /// The focus report for a terminal: the recommended focus and the needs-you items as blocks with
 /// their citations, the queue count, each gap as a block, and the as-of time.
@@ -1173,7 +1152,10 @@ fn queue_answer_text(result: &rastro_operations::results::QueueAnswerResult) -> 
     if let Some(item) = &result.item {
         lines.push(format!("Item: {item}"));
     }
-    lines.push(intents_text(&result.intents, "Nothing recorded"));
+    lines.push(intents_text(
+        &result.intents,
+        &render::empty("intents recorded"),
+    ));
     let mut text = lines.join("\n");
     if let Some(run) = &result.run {
         text += &format!("\n\n{}", action_run_block(run));
@@ -1326,41 +1308,43 @@ fn standing_text(standing: &rastro_core::queue::Standing) -> String {
 /// The result of an operation, its human form, and whether it succeeded.
 type Outcome = (Response, String);
 
-/// What a claim correction says: what it did, or that the claim already was so.
+/// What a claim correction says: the correction as a block — what it did on the header line,
+/// then the intent it recorded and its issued time — or that the claim already was so.
 fn correction_text(r: &rastro_operations::results::ClaimWriteResult, did: &str) -> String {
     match r.intents.first() {
-        Some(intent) => format!(
-            "{did} {} (intent {}, {})",
-            r.claim,
-            intent.id,
-            intent.issued_at.format("%Y-%m-%d %H:%M")
-        ),
-        None => format!("{} is already {did}; nothing recorded", r.claim),
+        Some(intent) => render::Block::new(format!("{did} {}", r.claim))
+            .field("Intent", &intent.id)
+            .field("Issued", render::time(intent.issued_at))
+            .to_string(),
+        None => render::nothing_recorded(&format!("{} is already {}", r.claim, did.to_lowercase())),
     }
 }
-/// What an undo of a claim correction says.
+/// What an undo of a claim correction says: the intent it undid as a block, or that there was
+/// nothing to undo.
 fn undo_text(r: &rastro_operations::results::ClaimWriteResult) -> String {
     match r.intents.first() {
-        Some(intent) => format!(
-            "undid intent {} on {} (intent {}, {})",
+        Some(intent) => render::Block::new(format!(
+            "Undid intent {} on {}",
             intent.undo_of.as_deref().unwrap_or_default(),
-            r.claim,
-            intent.id,
-            intent.issued_at.format("%Y-%m-%d %H:%M")
-        ),
-        None => format!("{} has nothing to undo; nothing recorded", r.claim),
+            r.claim
+        ))
+        .field("Intent", &intent.id)
+        .field("Issued", render::time(intent.issued_at))
+        .to_string(),
+        None => render::nothing_recorded(&format!("{} has nothing to undo", r.claim)),
     }
 }
-/// What a fix of a claim says: the claim it retracted and the one it asserted.
+/// What a fix of a claim says: the claim it retracted and the one it asserted, as a block with
+/// the intent it recorded, or that the claim already says that.
 fn edit_text(r: &rastro_operations::results::ClaimWriteResult) -> String {
     match (&r.asserted, r.intents.first()) {
-        (Some(asserted), Some(intent)) => format!(
-            "retracted {}, asserted {asserted} (intent {}, {})",
-            r.claim,
-            intent.id,
-            intent.issued_at.format("%Y-%m-%d %H:%M")
-        ),
-        _ => format!("{} already says that; nothing recorded", r.claim),
+        (Some(asserted), Some(intent)) => {
+            render::Block::new(format!("Retracted {}, asserted {asserted}", r.claim))
+                .field("Intent", &intent.id)
+                .field("Issued", render::time(intent.issued_at))
+                .to_string()
+        }
+        _ => render::nothing_recorded(&format!("{} already says that", r.claim)),
     }
 }
 /// A grace window in the owner's words: whole minutes, else seconds.
@@ -1614,20 +1598,20 @@ fn human(response: &Response) -> String {
         | Response::IdentityMerge(r)
         | Response::IdentityUndo(r)
         | Response::IdentityAnswer(r) => {
-            intents_text(&r.intents, "Already in force; nothing recorded")
+            intents_text(&r.intents, &render::nothing_recorded("Already in force"))
         }
-        Response::ClaimConfirm(r) => correction_text(r, "confirmed"),
-        Response::ClaimReject(r) => correction_text(r, "retracted"),
+        Response::ClaimConfirm(r) => correction_text(r, "Confirmed"),
+        Response::ClaimReject(r) => correction_text(r, "Retracted"),
         Response::ClaimUndo(r) => undo_text(r),
         Response::ClaimEdit(r) => edit_text(r),
         Response::IdentityCandidates(r) => candidates_text(r),
         Response::IdentityHistory(r) => match &r.entity {
             Some(entity) => format!(
-                "{}\n{}",
+                "{}\n\n{}",
                 display_safe(&entity.identifier),
-                intents_text(&r.intents, "No intents name it")
+                intents_text(&r.intents, &render::empty("intents name it"))
             ),
-            None => "No entity matches".into(),
+            None => render::empty("entity matches"),
         },
     }
 }

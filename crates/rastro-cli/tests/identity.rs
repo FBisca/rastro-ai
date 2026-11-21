@@ -885,6 +885,8 @@ fn kinds(history: &Value) -> Vec<(String, String)> {
 }
 
 /// spec: The owner's Person exists and resolves from me
+/// spec: Empty and no-op results speak with one voice
+/// spec: Human records render as blocks
 /// `identity me` mints the owner's Person, `about me` resolves to it, and a second run
 /// returns the same Person and records nothing
 #[test]
@@ -912,6 +914,21 @@ fn identity_me_mints_one_person_that_about_me_resolves() {
     assert_eq!(second["person"], first["person"]);
     assert_eq!(second["created"], false);
     assert_eq!(second["intents"], json!([]));
+    assert_eq!(env.intents(), 1);
+    // The no-op write reads as a block — the Person on the header line, its id as a field —
+    // and ends in the one voice, recording nothing.
+    let text = env.human(&["identity", "me"]);
+    assert!(text.lines().any(|l| l == format!("Person: {me}")), "{text}");
+    assert!(
+        text.lines()
+            .any(|l| l == format!("  Id: {}", first["person"]["id"].as_str().unwrap())),
+        "{text}"
+    );
+    assert!(
+        text.trim_end().ends_with("; nothing recorded"),
+        "the no-op write does not end with '; nothing recorded': {text}"
+    );
+    assert!(!text.contains(" | "), "pipe-packed line: {text}");
     assert_eq!(env.intents(), 1);
     // Before any `me`, `about me` is the answer for an unknown entity.
     let fresh = Env::new();
@@ -1695,6 +1712,8 @@ fn an_undone_link_or_merge_stays_as_a_superseded_claim() {
 }
 
 /// spec: An intent records its issuer's scopes
+/// spec: Human records render as blocks
+/// spec: Human timestamps share one format
 /// An intent records the CLI's configured scopes as its issuer's, and `identity history`
 /// shows them
 #[test]
@@ -1726,6 +1745,24 @@ fn an_intent_records_the_configured_scopes_of_its_issuer() {
     }
     let human = env.human(&["identity", "history", person]);
     assert!(human.contains("Scopes: personal, work"), "{human}");
+    // Each intent is a block: its id on the header line, its fields one per line, its issued
+    // time at minute precision naming the instant the JSON read carries.
+    for intent in history["intents"].as_array().unwrap() {
+        let id = intent["id"].as_str().unwrap();
+        assert!(
+            human.lines().any(|l| l == format!("Intent {id}")),
+            "no intent block for {id}: {human}"
+        );
+        let issued = intent["issued_at"].as_str().unwrap();
+        let minute = format!("{} UTC", issued[..16].replace('T', " "));
+        assert!(
+            human.lines().any(|l| l == format!("  Issued: {minute}")),
+            "{human}"
+        );
+    }
+    assert!(human.contains("  Kind: create_person"), "{human}");
+    assert!(human.contains("  Issuer: owner via cli"), "{human}");
+    assert!(!human.contains(" | "), "pipe-packed line: {human}");
     let why = env.human(&["why", &claim_id(&env.about(person), "rastro:alias")]);
     assert!(why.contains("Scopes: personal, work"), "{why}");
 }
@@ -1760,6 +1797,8 @@ fn candidates(env: &Env) -> Vec<(String, String, Vec<String>)> {
 }
 
 /// spec: One folded name makes a candidate
+/// spec: Human records render as blocks
+/// spec: Empty and no-op results speak with one voice
 /// A GitHub account and a Linear account whose full names are equal after case and accent
 /// folding are listed with reason `same name`, until one Person holds both
 #[test]
@@ -1794,6 +1833,25 @@ fn accounts_with_one_folded_name_are_listed_as_same_name() {
         "{text}"
     );
     assert!(text.contains("same name: Ana Silva = ANA SÍLVA"), "{text}");
+    // The pair is a block: its two accounts on the header line, each reason and the name a
+    // yes would give as labelled fields.
+    assert!(
+        text.lines()
+            .any(|l| l == "github:account/41 ~ linear:user/u-41"),
+        "{text}"
+    );
+    assert!(
+        text.lines()
+            .any(|l| l == "  Reason: same name: Ana Silva = ANA SÍLVA"),
+        "{text}"
+    );
+    let listed = env.ok(&["identity", "candidates"]);
+    let name = listed["candidates"][0]["name"].as_str().unwrap();
+    assert!(
+        text.lines().any(|l| l == format!("  Name: {name}")),
+        "{text}"
+    );
+    assert!(!text.contains(" | "), "pipe-packed line: {text}");
     let person = env.person("Ana Silva");
     env.ok(&["identity", "link", github, &person]);
     assert_eq!(
