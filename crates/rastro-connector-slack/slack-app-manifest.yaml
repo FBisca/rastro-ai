@@ -1,0 +1,31 @@
+# The Slack app Rastro reads through: your own internal app, read-only.
+#
+# Setup:
+# 1. At https://api.slack.com/apps create an app "From an app manifest", paste this file,
+#    and choose your own display name below.
+# 2. Install the app to your workspace. A personal app with history scopes may need your
+#    workspace admin's approval; ask before installing.
+# 3. Copy the app's User OAuth Token (xoxp-…) into the macOS keychain item `rastro-slack`:
+#      security add-generic-password -s rastro-slack -a "$USER" -w '<the token>'
+#    or set SLACK_USER_TOKEN in the environment rastro runs with. The token is never stored
+#    by Rastro.
+# 4. Add one source per approved channel, by channel id:
+#      rastro source add eng --connector slack --scope work --option channel=C0123ABCDE
+#    and check it: `rastro check eng`.
+#
+# The five user scopes below are exactly what Rastro reads; there are no bot scopes, and
+# token rotation stays off so the copied token keeps working.
+display_information:
+  name: <choose a display name>
+oauth_config:
+  scopes:
+    user:
+      - channels:read
+      - channels:history
+      - groups:read
+      - groups:history
+      - users:read
+settings:
+  org_deploy_enabled: false
+  socket_mode_enabled: false
+  token_rotation_enabled: false
