@@ -8,7 +8,8 @@
 //! baseline. Demotion is automatic: undos drop the level, and the row names the last change with
 //! its cause. A cell no visible run touches is absent, and an empty store lists no cells.
 use crate::actions::{Run, RunStatus};
-use crate::identity::IntentKind;
+use crate::identity::{Intent, IntentKind};
+use crate::queue::ShownReport;
 use crate::read_only::Snapshot;
 use crate::{Config, Rastro, ReadStorage, Reader, Scope, Storage};
 use anyhow::{Context, Result};
@@ -143,17 +144,93 @@ pub struct TrustCell {
     pub promotion: Promotion,
 }
 
-/// What `trust` returns: every visible cell, by action and team.
+/// What `trust` returns: every visible cell, by action and team, and every visible plugin's
+/// usefulness and cost.
 #[derive(Debug, JsonSchema, Serialize)]
 #[schemars(rename = "Trust")]
 pub struct Trust {
     pub cells: Vec<TrustCell>,
+    pub plugins: Vec<TrustPlugin>,
 }
 
 impl Trust {
     pub fn empty() -> Self {
-        Self { cells: Vec::new() }
+        Self {
+            cells: Vec::new(),
+            plugins: Vec::new(),
+        }
     }
+}
+
+/// What storage reads for one plugin's cost: the wall time of its finished runs in
+/// milliseconds, the adapter turns they used, and the ids of the runs whose content a shown
+/// report names for the plugin's items.
+#[derive(Clone, Debug)]
+pub struct PluginRuns {
+    pub plugin: String,
+    pub wall_ms: i64,
+    pub turns: usize,
+    pub runs: Vec<String>,
+}
+
+/// A plugin's engagement: acted on over seen, each item counted once, from the terminal's
+/// shown reports; `unmeasured` where no shown report names the plugin's runs — unseen is not
+/// ignored, and never reads 0.
+#[derive(Clone, Copy, Debug, JsonSchema, Serialize)]
+#[serde(untagged)]
+pub enum Engagement {
+    Measured { acted: usize, seen: usize },
+    Unmeasured(Unmeasured),
+}
+
+/// The word an unmeasured engagement reads, in the JSON as on the terminal.
+#[derive(Clone, Copy, Debug, JsonSchema, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Unmeasured {
+    Unmeasured,
+}
+
+/// What a plugin's runs cost: their wall time in milliseconds plus the adapter turns they
+/// used.
+#[derive(Clone, Copy, Debug, JsonSchema, Serialize)]
+#[schemars(rename = "TrustCost")]
+pub struct Cost {
+    pub wall_ms: i64,
+    pub turns: usize,
+}
+
+/// One plugin's usefulness and cost: its engagement, the time to action, what its runs cost
+/// and what that cost reads per accepted item.
+#[derive(Clone, Debug, JsonSchema, Serialize)]
+#[schemars(rename = "TrustPlugin")]
+pub struct TrustPlugin {
+    pub plugin: String,
+    pub engagement: Engagement,
+    /// The mean seconds from an item's first shown report to the intent that answered it,
+    /// over the plugin's acted-on items; absent when nothing was acted on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_to_action_seconds: Option<f64>,
+    pub cost: Cost,
+    /// The cost over the plugin's accepted items — an accept unchanged or with edits — in
+    /// whole milliseconds and turns, divided down; a dash when nothing was accepted.
+    pub cost_per_accepted: CostPerAccepted,
+}
+
+/// The cost per accepted item: the cost divided by the accepts, or a dash when nothing was
+/// accepted — never a division by zero.
+#[derive(Clone, Copy, Debug, JsonSchema, Serialize)]
+#[serde(untagged)]
+pub enum CostPerAccepted {
+    Measured(Cost),
+    Dash(Dash),
+}
+
+/// The dash a cost per accepted reads when nothing was accepted, in the JSON as on the
+/// terminal.
+#[derive(Clone, Copy, Debug, JsonSchema, Serialize)]
+pub enum Dash {
+    #[serde(rename = "—")]
+    Dash,
 }
 
 /// Derives the trust view from one snapshot: the runs the scopes see, grouped by cell.
@@ -167,6 +244,8 @@ pub(crate) fn trust_view(
     };
     let runs = view.action_runs(scopes)?;
     let intents = view.intents()?;
+    let plugin_runs = view.plugin_runs(scopes)?;
+    let shown = view.shown_reports()?;
     let kinds: BTreeMap<&str, IntentKind> = intents
         .iter()
         .map(|intent| (intent.id.as_str(), intent.kind))
@@ -183,7 +262,106 @@ pub(crate) fn trust_view(
             .into_iter()
             .map(|((action, team), runs)| derive_cell(config, &action, &team, &runs, &kinds))
             .collect::<Result<Vec<_>>>()?,
+        plugins: derive_plugins(&plugin_runs, &shown, &intents),
     })
+}
+
+/// The plugins' usefulness from the shown reports and the intents that answered them: each
+/// item counts once, attributed to the plugin whose run carried its content. An item no
+/// terminal read showed attributes to no plugin, and a question, which has no source run, to
+/// none. The time to action is the mean wait of the acted-on items, from the first report that
+/// showed each to the intent that answered it. Cost is the wall time of the plugin's runs plus
+/// their adapter turns; per accepted item it divides by the accepts, an accept unchanged or
+/// with edits, and reads a dash when nothing was accepted.
+fn derive_plugins(
+    plugin_runs: &[PluginRuns],
+    shown: &[ShownReport],
+    intents: &[Intent],
+) -> Vec<TrustPlugin> {
+    let mut run_plugin: BTreeMap<&str, &str> = BTreeMap::new();
+    for facts in plugin_runs {
+        for run in &facts.runs {
+            run_plugin.insert(run.as_str(), facts.plugin.as_str());
+        }
+    }
+    // Each shown item's plugin and the first moment a terminal read printed it.
+    let mut first_shown: BTreeMap<&str, (&str, DateTime<Utc>)> = BTreeMap::new();
+    for report in shown {
+        let Some(&plugin) = run_plugin.get(report.run.as_str()) else {
+            continue;
+        };
+        first_shown
+            .entry(report.item.as_str())
+            .and_modify(|(_, at)| *at = (*at).min(report.at))
+            .or_insert((plugin, report.at));
+    }
+    // The latest intent that answered each item, in acceptance order: an accept, an edit, a
+    // reject or an answer, the same kinds the queue's outcomes read.
+    let mut answers: BTreeMap<&str, &Intent> = BTreeMap::new();
+    for intent in intents {
+        if matches!(
+            intent.kind,
+            IntentKind::Accept | IntentKind::Edit | IntentKind::Reject | IntentKind::Answer
+        ) && let Some(item) = intent.queue_item()
+        {
+            answers.insert(item, intent);
+        }
+    }
+    #[derive(Clone, Copy, Default)]
+    struct EngagementCounts {
+        seen: usize,
+        acted: usize,
+        waited_ms: i64,
+        accepted: usize,
+    }
+    let mut by_plugin: BTreeMap<&str, EngagementCounts> = BTreeMap::new();
+    for (item, (plugin, first)) in first_shown {
+        let counts = by_plugin.entry(plugin).or_default();
+        counts.seen += 1;
+        if let Some(intent) = answers.get(item) {
+            counts.acted += 1;
+            counts.waited_ms += (intent.issued_at - first).num_milliseconds();
+            if matches!(intent.kind, IntentKind::Accept | IntentKind::Edit) {
+                counts.accepted += 1;
+            }
+        }
+    }
+    plugin_runs
+        .iter()
+        .map(|facts| {
+            let counts = by_plugin
+                .get(facts.plugin.as_str())
+                .copied()
+                .unwrap_or_default();
+            // A plugin no terminal read showed is unmeasured, never 0: unseen is not ignored.
+            let engagement = if counts.seen == 0 {
+                Engagement::Unmeasured(Unmeasured::Unmeasured)
+            } else {
+                Engagement::Measured {
+                    acted: counts.acted,
+                    seen: counts.seen,
+                }
+            };
+            TrustPlugin {
+                plugin: facts.plugin.clone(),
+                engagement,
+                time_to_action_seconds: (counts.acted > 0)
+                    .then(|| counts.waited_ms as f64 / 1000.0 / counts.acted as f64),
+                cost: Cost {
+                    wall_ms: facts.wall_ms,
+                    turns: facts.turns,
+                },
+                cost_per_accepted: if counts.accepted > 0 {
+                    CostPerAccepted::Measured(Cost {
+                        wall_ms: facts.wall_ms / counts.accepted as i64,
+                        turns: facts.turns / counts.accepted,
+                    })
+                } else {
+                    CostPerAccepted::Dash(Dash::Dash)
+                },
+            }
+        })
+        .collect()
 }
 
 /// What happened to one run, terminally: a kept run is a clean outcome unless the owner accepted
