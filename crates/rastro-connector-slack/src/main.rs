@@ -455,14 +455,27 @@ fn text<'a>(node: &'a Value, pointer: &str) -> Option<&'a str> {
 }
 
 /// Whether a message is a system event — a join or leave, a rename, a topic or purpose
-/// change, an archive, a pin, an edit or delete notice — rather than someone's words.
-/// Subtypes that carry a person's text (a bot message, a broadcast thread reply, a file
-/// share, a /me message) are kept as evidence.
+/// change, an archive, a pin or unpin, a bot added or removed, a reminder, an edit or delete
+/// notice, a legacy reply notice, an EKM denial or a Slack Connect room — rather than
+/// someone's words. Subtypes that carry a person's text (a bot message, a broadcast thread
+/// reply, a file share, a /me message) are kept as evidence.
 fn system_message(subtype: Option<&str>) -> bool {
     subtype.is_some_and(|s| {
         s.starts_with("channel_")
             || s.starts_with("group_")
-            || matches!(s, "message_changed" | "message_deleted" | "pinned_item")
+            || matches!(
+                s,
+                "message_changed"
+                    | "message_deleted"
+                    | "message_replied"
+                    | "pinned_item"
+                    | "unpinned_item"
+                    | "bot_add"
+                    | "bot_remove"
+                    | "reminder_add"
+                    | "ekm_access_denied"
+                    | "sh_room_created"
+            )
     })
 }
 
@@ -516,6 +529,13 @@ mod tests {
             "message_changed",
             "message_deleted",
             "pinned_item",
+            "unpinned_item",
+            "bot_add",
+            "bot_remove",
+            "reminder_add",
+            "ekm_access_denied",
+            "message_replied",
+            "sh_room_created",
         ] {
             assert!(system_message(Some(skipped)), "{skipped} is a system event");
         }
