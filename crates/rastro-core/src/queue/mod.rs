@@ -190,7 +190,9 @@ pub struct Item {
     /// confirmation that went stale. A yes records the earlier correction again.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub correction: Option<CorrectionQuestion>,
-    /// The proposed action; present exactly when `kind` is `action_proposal`.
+    /// The proposed action; present on an `action_proposal`, and on the `question` a matching
+    /// rule's proposal becomes when its cell sits at Ask — an Ask question that names the action
+    /// and title and is answered yes or no.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub action: Option<crate::actions::Proposal>,
     /// The pending Act run this action proposal started, while its grace runs: it executes at

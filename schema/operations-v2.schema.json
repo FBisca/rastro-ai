@@ -2607,7 +2607,7 @@
               "type": "null"
             }
           ],
-          "description": "The proposed action; present exactly when `kind` is `action_proposal`."
+          "description": "The proposed action; present on an `action_proposal`, and on the `question` a matching\nrule's proposal becomes when its cell sits at Ask — an Ask question that names the action\nand title and is answered yes or no."
         },
         "context": {
           "description": "What Rastro already knows about the parties the owner mapped: their visible claims, each\nonce. Context only — an item with claims beside it stays in the queue.",
