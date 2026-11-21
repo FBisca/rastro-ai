@@ -1,7 +1,7 @@
 # Commitments from Slack threads
 Lane: Plan, big and complex: it widens the commitments pipeline and its storage beyond meetings.
 
-Commitment hypotheses come only from imported meeting transcripts today, so promises made in Slack threads are invisible. This plan lets the owner opt a chat channel in; after each sync, the tick asks the source's extractor for the turns of each changed thread, checks them, and sends them to the bound adapter. The hypotheses appear in the same commitments list as meetings, with speakers identified by account rather than by name. A conversation is a contract: the core defines turns, a source plugin makes them, and the core keeps the gates, the queue and accept. Meetings move into a shared conversation store and behave exactly as before. Five tickets, after Slack identity and the in-flight promise-identity plan.
+Commitment hypotheses come only from imported meeting transcripts today, so promises made in Slack threads are invisible. This plan lets the owner opt a chat channel in; after each sync, the tick asks the source's extractor for the turns of each changed thread, checks them, and sends them to the bound adapter. The hypotheses appear in the same commitments list as meetings, with speakers identified by account rather than by name. A conversation is a contract: the core defines turns, a source plugin makes them, and the core keeps the gates, the queue and accept. Meetings move into a shared conversation store and behave exactly as before. Five tickets, after Slack identity.
 
 Re-planned 2026-11-22 from the owner note `owner-note-2026-11-21.md`: turn-making moved from the core to the Slack extractor (D10–D14).
 
@@ -54,7 +54,6 @@ What can go wrong:
 - **Text leaving the machine:** thread text goes to the bound adapter; only opted-in channels send anything (S3), mirroring meetings where supplying the file is the authorization.
 - **Trusting the extractor:** the extractor is deterministic code, but its turns decide who spoke. The core refuses turns outside the thread (S17) and decides involvement and bots itself (S12, S14, S15).
 - **Migration:** moving meetings into the conversation store could change existing results; S1 and S2 pin them on a pre-migration database.
-- **Conflict with promise-identity:** both touch the commitments code and meeting storage; this plan builds after it merges (D1).
 - **Re-extraction cost:** busy threads re-run the adapter on every change; only changed threads run (S7).
 
 ---
@@ -68,10 +67,10 @@ What can go wrong:
 - T4 the core's checks: refused turns, owner by held account, bots, skips (regular · complex; after T3).
 - T5 change detection and re-extraction (regular · complex; after T4).
 
-Across plans: after the `slack-identity` plan (it creates `crates/rastro-extractor-slack`) and the `promise-identity` plan.
+Across plans: after the `slack-identity` plan (it creates `crates/rastro-extractor-slack`).
 
 ## Decision log
-- **D1 Built after the Slack connector and after the promise-identity plan merges.** Rejected: building in parallel. Why: it needs Slack evidence, and promise-identity changes the same commitments code and meeting storage. Source: user, round 1 Q1; gather (`crates/rastro-core/src/commitments/mod.rs`, `crates/rastro-storage-sqlite/src/meeting.rs`).
+- **D1 Built after the Slack connector and Slack identity.** Rejected: building in parallel. Why: it needs Slack evidence and the Slack extractor. Was also after promise-identity; the owner deleted that plan on 2026-11-22, so the dependency is dropped. Source: user, round 1 Q1; owner, 2026-11-22.
 - **D2 One conversation is one thread.** The starting message plus its replies; a message with no replies is not extracted. Rejected: a channel window. Source: user, round 2 Q4.
 - **D3 Per-channel opt-in authorizes sending, and the tick extracts after sync.** `--extract-commitments` at source add. Rejected: extracting every synced channel; a manual command per thread. Why: mirrors meetings §6, where supplying the file is the authorization. Source: user, round 2 Q5; `docs/decisions/meetings.md` §6.
 - **D4 Speakers come from evidence, not from text (amended by D10).** One turn per message; display-name labels with the id appended on a shared name; other authors by account id. Rejected: serializing to `Label: text`, which splits multi-line messages into fake speakers (`crates/rastro-core/src/meeting.rs`); `--owner-speaker` per thread. Source: user, round 2 Q6.
