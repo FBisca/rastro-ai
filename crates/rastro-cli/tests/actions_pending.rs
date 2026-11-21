@@ -281,13 +281,13 @@ fn the_queue_shows_a_pending_act_first_with_the_time_left_and_its_stop_command()
     );
     let stop = format!("rastro actions stop {run}");
 
-    // The first item line names the pending Act: its title, the time left and the stop command,
+    // The first item block names the pending Act: its title, the time left and the stop command,
     // before the action proposal that waits for the owner.
     let text = stdout(&env.rastro(&["queue"], READ_AT));
     let first = text
-        .lines()
-        .nth(1)
-        .unwrap_or_else(|| panic!("no item line in: {text}"));
+        .split("\n\n")
+        .find(|block| block.starts_with("Pending Act"))
+        .unwrap_or_else(|| panic!("no pending Act block in: {text}"));
     for part in ["Retry the stale sync", "runs in 6 min", stop.as_str()] {
         assert!(first.contains(part), "{part} missing from: {first}");
     }
