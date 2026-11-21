@@ -1,10 +1,10 @@
 # Learning: trust per cell
 
-Paths: crates/rastro-core/src/trust/, crates/rastro-core/src/read_only.rs, crates/rastro-core/src/lib.rs, crates/rastro-operations/, crates/rastro-cli/src/, crates/rastro-cli/tests/trust.rs, schema/
+Paths: crates/rastro-core/src/trust/, crates/rastro-core/src/read_only.rs, crates/rastro-core/src/lib.rs, crates/rastro-operations/, crates/rastro-cli/src/, crates/rastro-cli/tests/trust.rs, crates/rastro-storage-sqlite/migrations/, crates/rastro-storage-sqlite/src/, crates/rastro-cli/tests/mcp_read_log.rs, crates/rastro-cli/tests/mcp.rs, schema/
 
-Trust answers "should it act alone?" per cell — one action × team pair — and is derived from outcomes, never stored (`../decisions/learning.md` §1, §5; `../decisions/levels.md`). A cell's level and the evidence behind it are computed at read from the runs and owner intents the visible scopes hold, under the configurable thresholds of `[learning]`; promotion is always proposed to the owner, never self-applied, and demotion is automatic and visible (`../decisions/learning.md` §6–7, §14). The trust view is a core read like the queue, defined once in the operation catalog (`../adr/0007-typed-operation-catalog.md`) and offered on the CLI and, deferred, through the MCP catalog gateway.
+Trust answers "should it act alone?" per cell — one action × team pair — and is derived from outcomes, never stored (`../decisions/learning.md` §1, §5; `../decisions/levels.md`). A cell's level and the evidence behind it are computed at read from the runs and owner intents the visible scopes hold, under the configurable thresholds of `[learning]`; promotion is always proposed to the owner, never self-applied, and demotion is automatic and visible (`../decisions/learning.md` §6–7, §14). The trust view is a core read like the queue, defined once in the operation catalog (`../adr/0007-typed-operation-catalog.md`) and offered on the CLI and, deferred, through the MCP catalog gateway. A machine read is audited, never mistaken for the owner having seen an item.
 
-This file holds the trust-view requirements of the learned-trust slice; the slice's remaining requirements (demotion and decay, the Ask answer, pin and reset, the journal, usefulness and cost, read logging) land with their tickets.
+This file holds the trust-view and read-logging requirements of the learned-trust slice; the slice's remaining requirements (demotion and decay, the Ask answer, pin and reset, the journal, usefulness and cost) land with their tickets.
 
 ## Requirements
 
@@ -52,3 +52,14 @@ rastro trust SHALL show each visible cell's level, evidence counts, last change 
 #### Scenario: an empty store lists no cells
 - WHEN no runs exist
 - THEN rastro trust lists no cells and says the store holds no trust history
+
+### Requirement: MCP reads are logged, never seen
+The MCP server SHALL log each read call with its tool, arguments and time, and the log SHALL never write a shown report.
+
+#### Scenario: an MCP read is logged
+- WHEN an MCP client calls the queue tool
+- THEN a read log row names the tool, arguments and time, and no shown report is written
+
+#### Scenario: a terminal read is not an MCP read
+- WHEN the same queue read runs on the terminal
+- THEN a shown report is written and no read log row is
