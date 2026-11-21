@@ -616,3 +616,51 @@ When a config already holds a second source for a single-source connector, that 
 #### Scenario: a hand-edited second source
 - WHEN a config already holds a second source for a single-source connector
 - THEN that source's sync fails as `protocol` naming the other source, before the connector runs, and the first source still syncs
+
+### Requirement: The Slack check accepts only the read scopes
+The Slack connector's check SHALL answer authenticated only for a token that holds every required read scope (`channels:read`, `channels:history`, `groups:read`, `groups:history`, `users:read`) and no other scope, and SHALL answer rejected naming the extra or missing scopes otherwise.
+
+#### Scenario: a token with exactly the read scopes
+- WHEN `rastro check` runs a Slack source whose token the scripted API reports with exactly the five read scopes
+- THEN the check reports authenticated and names the credential source
+
+#### Scenario: a token with a write scope
+- WHEN the scripted API reports the token's scopes as the five read scopes plus `chat:write`
+- THEN the check reports rejected naming `chat:write` and exits unsuccessfully
+
+#### Scenario: a token missing a read scope
+- WHEN the scripted API reports the token's scopes without `groups:history`
+- THEN the check reports rejected naming `groups:history` and exits unsuccessfully
+
+### Requirement: A Slack token comes from the environment or the keychain and is never stored
+The Slack connector SHALL take its token from `SLACK_USER_TOKEN`, else from the keychain item `rastro-slack`, and the token SHALL never appear in the database, the config or any output.
+
+#### Scenario: the keychain item is used when the variable is unset
+- WHEN `SLACK_USER_TOKEN` is unset and the keychain item `rastro-slack` holds a valid token
+- THEN the check reports authenticated naming the keychain item `rastro-slack`
+
+#### Scenario: no token anywhere
+- WHEN a Slack source syncs with no `SLACK_USER_TOKEN` and no keychain item
+- THEN coverage records "couldn't look: auth"
+
+#### Scenario: the token leaves no trace
+- WHEN a check and a sync have run with a token
+- THEN the token's bytes appear in none of the database file, the config, stdout or stderr
+
+### Requirement: A Slack source names one channel by its id
+`rastro source add --connector slack` SHALL require a `channel` option holding a Slack channel id, and SHALL refuse a channel name with an error naming the declared option, saving nothing.
+
+#### Scenario: a channel id is saved
+- WHEN `rastro source add --connector slack --option channel=C0123ABCDE` runs
+- THEN the source is saved with that channel
+
+#### Scenario: a channel name is refused
+- WHEN `rastro source add --connector slack --option channel=general` runs
+- THEN it is refused with an error naming the declared `channel` option, and nothing is saved
+
+### Requirement: The Slack app template asks only for the read scopes
+The Slack connector SHALL ship a Slack app manifest template whose user scopes are exactly the five read scopes, with no bot scopes, token rotation off and a display name the owner chooses.
+
+#### Scenario: the template's scopes
+- WHEN the shipped template is parsed
+- THEN its user scopes equal the five read scopes, it declares no bot scopes, and token rotation is off
