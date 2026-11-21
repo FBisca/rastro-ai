@@ -428,8 +428,79 @@ pub enum RuleDisposition {
     /// The candidate is left out and counted as excluded; never a retry.
     Exclude,
 }
-/// One declared rule over the candidates, built from generic primitives: a text span or a
-/// field comparison. The core executes it; the adapter never validates its own trust boundary.
+/// A source of text for a candidate predicate. Absent fields and turns yield no text.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "source", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TaskText {
+    Field {
+        name: String,
+    },
+    InputLabel,
+    TurnLabel {
+        turn_field: String,
+        at: RelativeTurn,
+    },
+}
+
+/// The named turn or one of its immediate neighbors. Replay needs only their labels.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum RelativeTurn {
+    Previous,
+    Current,
+    Next,
+}
+
+/// A deterministic predicate over candidate fields and task input. Missing text never
+/// satisfies a comparison. Label matching ignores case and respects whole-word boundaries.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(tag = "test", rename_all = "snake_case", deny_unknown_fields)]
+pub enum TaskPredicate {
+    All { of: Vec<Self> },
+    Any { of: Vec<Self> },
+    Not { of: Box<Self> },
+    Equal { left: TaskText, right: TaskText },
+    ContainsLabel { field: String, label: TaskText },
+    ContainsWord { field: String, words: Vec<String> },
+    InInputLabels { field: String },
+}
+impl TaskPredicate {
+    fn check(&self, template: &TaskTemplate) -> Result<()> {
+        let check_text = |text: &TaskText| match text {
+            TaskText::Field { name } => {
+                template.rule_field(name, TaskFieldType::String).map(|_| ())
+            }
+            TaskText::TurnLabel { turn_field, .. } => template
+                .rule_field(turn_field, TaskFieldType::Integer)
+                .map(|_| ()),
+            TaskText::InputLabel => Ok(()),
+        };
+        match self {
+            Self::All { of } | Self::Any { of } => {
+                anyhow::ensure!(!of.is_empty(), "a predicate group cannot be empty");
+                for predicate in of {
+                    predicate.check(template)?;
+                }
+            }
+            Self::Not { of } => of.check(template)?,
+            Self::Equal { left, right } => {
+                check_text(left)?;
+                check_text(right)?;
+            }
+            Self::ContainsLabel { field, label } => {
+                template.rule_field(field, TaskFieldType::String)?;
+                check_text(label)?;
+            }
+            Self::ContainsWord { field, .. } | Self::InInputLabels { field } => {
+                template.rule_field(field, TaskFieldType::String)?;
+            }
+        }
+        Ok(())
+    }
+}
+
+/// One declared rule over the candidates. The core executes it; the adapter never validates
+/// its own trust boundary.
 #[derive(Clone, Debug, Deserialize, Serialize)]
 #[serde(tag = "kind", rename_all = "snake_case", deny_unknown_fields)]
 pub enum TaskRule {
@@ -448,14 +519,11 @@ pub enum TaskRule {
         #[serde(default)]
         disposition: RuleDisposition,
     },
-}
-impl TaskRule {
-    /// What the rule does with a candidate that triggers it.
-    pub fn disposition(&self) -> RuleDisposition {
-        match self {
-            Self::Span { disposition, .. } | Self::Equals { disposition, .. } => *disposition,
-        }
-    }
+    /// Exclude a candidate unless its fields and task input satisfy the predicate.
+    Require { predicate: TaskPredicate },
+    /// Clear a text field unless it is a non-blank literal substring of another
+    /// field. This changes the validated result, not the recorded candidate.
+    Ground { field: String, in_field: String },
 }
 /// A task template: the declarative package a generic runner executes (ADR-0016 §1–2, §6;
 /// decisions/plugins.md §40). The instructions and field names go to the adapter as the
@@ -543,6 +611,11 @@ impl TaskTemplate {
                         "the equals rule's field {field} is not a string"
                     );
                 }
+                TaskRule::Require { predicate } => predicate.check(self)?,
+                TaskRule::Ground { field, in_field } => {
+                    self.rule_field(field, TaskFieldType::String)?;
+                    self.rule_field(in_field, TaskFieldType::String)?;
+                }
             }
         }
         for control in &self.boundary {
@@ -552,6 +625,16 @@ impl TaskTemplate {
             );
         }
         Ok(())
+    }
+    fn rule_field(&self, name: &str, kind: TaskFieldType) -> Result<&TaskField> {
+        let field = self
+            .field(name)
+            .with_context(|| format!("a rule names the undeclared field {name}"))?;
+        anyhow::ensure!(
+            field.field_type == kind,
+            "a rule needs field {name} to have type {kind:?}"
+        );
+        Ok(field)
     }
     /// The declared field named `name`, if the template declares one.
     pub fn field(&self, name: &str) -> Option<&TaskField> {
