@@ -52,40 +52,9 @@ enum Command {
 fn stamp(time: DateTime<Utc>) -> String {
     time.to_rfc3339_opts(SecondsFormat::Millis, true)
 }
-fn coverage_line(c: &Coverage) -> String {
-    let mut line = format!(
-        "{} | Scope: {} | Coverage: {}",
-        c.source,
-        c.scope.0,
-        c.state.as_str()
-    );
-    if !c.registered {
-        line += " | Not in config";
-    }
-    if let Some(at) = c.last_checked {
-        line += &format!(" | Last checked: {}", stamp(at));
-    }
-    if let Some(until) = c.fresh_until {
-        line += &format!(" | Fresh until: {}", stamp(until));
-    }
-    if let Some(reason) = &c.reason {
-        line += &format!(" | Reason: {}", display_safe(reason));
-    }
-    line
-}
 /// One source's coverage as a block: its state and times, then each window as a field.
 fn coverage_block(c: &Coverage) -> render::Block {
-    let header = if c.registered {
-        display_safe(&c.source)
-    } else {
-        format!("{} (Not in config)", display_safe(&c.source))
-    };
-    let mut block = render::Block::new(header)
-        .field("Scope", display_safe(&c.scope.0))
-        .field("Coverage", c.state.as_str())
-        .maybe("Last checked", c.last_checked.map(render::time))
-        .maybe("Fresh until", c.fresh_until.map(render::time))
-        .maybe("Reason", c.reason.as_deref().map(display_safe));
+    let mut block = coverage_state_block(c);
     if c.windows.len() < c.windows_total {
         block = block.field(
             "Windows",
@@ -100,6 +69,21 @@ fn coverage_block(c: &Coverage) -> render::Block {
         block = block.field("Window", window_value(window));
     }
     block
+}
+/// One source's coverage as a search answer shows it: its state and times under its name, with
+/// no window list — a search answer carries no windows.
+fn coverage_state_block(c: &Coverage) -> render::Block {
+    let header = if c.registered {
+        display_safe(&c.source)
+    } else {
+        format!("{} (Not in config)", display_safe(&c.source))
+    };
+    render::Block::new(header)
+        .field("Scope", display_safe(&c.scope.0))
+        .field("Coverage", c.state.as_str())
+        .maybe("Last checked", c.last_checked.map(render::time))
+        .maybe("Fresh until", c.fresh_until.map(render::time))
+        .maybe("Reason", c.reason.as_deref().map(display_safe))
 }
 /// One coverage window as its source block's field: the half-open interval, what it found,
 /// its selection, and what a failed or partial look adds.
@@ -176,17 +160,23 @@ fn tally(counts: &rastro_core::Counts) -> String {
         counts.submitted, counts.accepted, counts.rejected, counts.unchanged
     )
 }
-fn extraction_line(pair: &rastro_core::runs::ExtractionPair) -> String {
-    format!(
-        "{} | Scope: {} | Extraction: {} | Extractor: {} {}",
-        display_safe(&pair.source),
-        display_safe(&pair.scope),
-        pair.state.as_str(),
-        display_safe(&pair.extractor),
-        display_safe(pair.extractor_version.as_deref().unwrap_or("unknown"))
-    )
+/// One source-and-scope's extraction state as a block: its name, then the state and extractor.
+fn extraction_block(pair: &rastro_core::runs::ExtractionPair) -> render::Block {
+    render::Block::new(display_safe(&pair.source))
+        .field("Scope", display_safe(&pair.scope))
+        .field("Extraction", pair.state.as_str())
+        .field(
+            "Extractor",
+            format!(
+                "{} {}",
+                display_safe(&pair.extractor),
+                display_safe(pair.extractor_version.as_deref().unwrap_or("unknown"))
+            ),
+        )
 }
-fn claim_line(summary: &rastro_core::knowledge::ClaimSummary) -> String {
+/// One claim as a block: its subject, predicate and object — each entity with its aliases and
+/// cited label — as the header, then its status, id, revision and support count as fields.
+fn claim_block(summary: &rastro_core::knowledge::ClaimSummary) -> render::Block {
     let c = &summary.claim;
     // An entity as its identifier, its aliases, then its label: the cited title or name, and its
     // state. All of it is source text, so every part is escaped.
@@ -223,20 +213,21 @@ fn claim_line(summary: &rastro_core::knowledge::ClaimSummary) -> String {
             format!("\"{}\"", display_safe(value))
         }
     };
-    format!(
-        "{} {} {} | Status: {} | Claim: {} | Revision: {} | Supports: {}",
+    let header = format!(
+        "{} {} {}",
         entity(
             &c.subject.identifier,
             &summary.subject_aliases,
             &summary.subject_label
         ),
         display_safe(&c.predicate),
-        object,
-        c.status,
-        c.id,
-        c.revision,
-        summary.support_count
-    )
+        object
+    );
+    render::Block::new(header)
+        .field("Status", &c.status)
+        .field("Claim", &c.id)
+        .field("Revision", &c.revision)
+        .field("Supports", summary.support_count)
 }
 fn scopes_shown(scopes: &[rastro_core::Scope]) -> String {
     if scopes.is_empty() {
@@ -267,33 +258,35 @@ fn reconstruction_lines(
     lines
 }
 fn about_text(about: &rastro_operations::results::AboutResult) -> String {
-    let mut lines = reconstruction_lines(about.reconstruction.as_ref());
+    let mut pieces: Vec<String> = Vec::new();
+    let reconstruction = reconstruction_lines(about.reconstruction.as_ref());
+    if !reconstruction.is_empty() {
+        pieces.push(reconstruction.join("\n"));
+    }
     if !about.resolved {
-        lines.push("No entity matches".into());
+        pieces.push("No entity matches".into());
     }
     let mut accounts = std::collections::BTreeMap::new();
     if let Some(person) = &about.person {
-        lines.push(format!(
-            "Person: {} | Id: {}",
-            display_safe(&person.identifier),
-            person.id
-        ));
+        pieces.push(
+            render::Block::new(format!("Person: {}", display_safe(&person.identifier)))
+                .field("Id", &person.id)
+                .to_string(),
+        );
         for account in &person.accounts {
             accounts.insert(account.id.as_str(), account.identifier.as_str());
-            let mut line = format!(
-                "  Account: {} | Type: {}",
-                display_safe(&account.identifier),
-                display_safe(&account.entity_type)
-            );
+            let mut block =
+                render::Block::new(format!("Account: {}", display_safe(&account.identifier)))
+                    .field("Type", display_safe(&account.entity_type));
             if !account.aliases.is_empty() {
-                line += &format!(
-                    " | Aliases: {}",
+                block = block.field(
+                    "Aliases",
                     account
                         .aliases
                         .iter()
                         .map(|a| display_safe(a))
                         .collect::<Vec<_>>()
-                        .join(", ")
+                        .join(", "),
                 );
             }
             for reason in &account.reasons {
@@ -301,60 +294,78 @@ fn about_text(about: &rastro_operations::results::AboutResult) -> String {
                     .ok()
                     .and_then(|v| v.as_str().map(String::from))
                     .unwrap_or_default();
-                line += &format!(" | Linked by: {kind}");
+                let mut value = kind;
                 if let Some(intent) = &reason.intent {
-                    line += &format!(" {}", display_safe(intent));
+                    value += &format!(" {}", display_safe(intent));
                 }
-                line += &format!(" (claim {})", reason.claim);
+                value += &format!(" (claim {})", reason.claim);
+                block = block.field("Linked by", value);
             }
-            lines.push(line);
+            pieces.push(block.to_string());
         }
     }
     for claim in &about.claims {
-        let mut line = claim_line(&claim.summary);
+        let mut block = claim_block(&claim.summary);
         if let Some(account) = &claim.account {
-            line += &format!(
-                " | Account: {}",
-                display_safe(accounts.get(account.as_str()).copied().unwrap_or(account))
+            block = block.field(
+                "Account",
+                display_safe(accounts.get(account.as_str()).copied().unwrap_or(account)),
             );
         }
-        lines.push(line);
+        pieces.push(block.to_string());
     }
     if about.resolved && about.claims.is_empty() {
-        lines.push("No claims found".into());
+        pieces.push("No claims found".into());
     }
     for group in &about.groups {
-        lines.push(format!(
-            "Group of {} equivalent claims: {} | Status: {} | Revision: {}",
-            group.members.len(),
-            group
-                .members
-                .iter()
-                .map(|m| m.claim.as_str())
-                .collect::<Vec<_>>()
-                .join(", "),
-            group.status,
-            group.revision
-        ));
+        pieces.push(
+            render::Block::new(format!(
+                "Group of {} equivalent claims: {}",
+                group.members.len(),
+                group
+                    .members
+                    .iter()
+                    .map(|m| m.claim.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            ))
+            .field("Status", &group.status)
+            .field("Revision", &group.revision)
+            .to_string(),
+        );
     }
     if about.truncated {
-        lines.push("More claims exist; raise --limit (at most 50)".into());
+        pieces.push("More claims exist; raise --limit (at most 50)".into());
     }
-    lines.extend(about.coverage.iter().map(coverage_line));
-    lines.extend(about.extraction.iter().map(extraction_line));
-    lines.join("\n")
+    pieces.extend(about.coverage.iter().map(|c| coverage_block(c).to_string()));
+    pieces.extend(
+        about
+            .extraction
+            .iter()
+            .map(|e| extraction_block(e).to_string()),
+    );
+    pieces.join("\n\n")
 }
 fn why_text(why: &WhyResult) -> String {
     let c = &why.claim.claim;
-    let mut lines = reconstruction_lines(why.reconstruction.as_ref());
-    lines.push(claim_line(&why.claim));
-    lines.push("  Valid time: unknown".into());
+    let mut pieces: Vec<String> = Vec::new();
+    let reconstruction = reconstruction_lines(why.reconstruction.as_ref());
+    if !reconstruction.is_empty() {
+        pieces.push(reconstruction.join("\n"));
+    }
+    let mut claim = claim_block(&why.claim).field("Valid time", "unknown");
     for interval in &c.known_intervals {
-        lines.push(format!(
-            "  Known: [{}, {})",
-            stamp(interval.start),
-            interval.end.map(stamp).unwrap_or_else(|| "current".into())
-        ));
+        claim = claim.field(
+            "Known",
+            format!(
+                "[{}, {})",
+                render::time(interval.start),
+                interval
+                    .end
+                    .map(render::time)
+                    .unwrap_or_else(|| "current".into())
+            ),
+        );
     }
     for (kind, links) in [
         ("Conflicts with", &c.conflicts_with),
@@ -362,53 +373,101 @@ fn why_text(why: &WhyResult) -> String {
         ("Superseded by", &c.superseded_by),
     ] {
         if !links.is_empty() {
-            lines.push(format!("  {kind}: {}", links.join(", ")));
+            claim = claim.field(kind, links.join(", "));
         }
     }
+    pieces.push(claim.to_string());
     for support in &why.supports {
-        if let Some(intent) = &support.intent {
-            lines.push(format!(
-                "  Justification: {} | Kind: {} | Intent: {} {} | Issued: {} | Issuer: {} via {} | Scopes: {} | Current: {}",
-                support.justification_id,
-                display_safe(&support.justification_kind),
-                display_safe(&support.extraction_rule),
-                display_safe(&intent.id),
-                stamp(intent.issued_at),
-                display_safe(&intent.issuer.principal),
-                display_safe(&intent.issuer.surface),
-                scopes_shown(&intent.issuer.scopes),
-                support.current
-            ));
-            continue;
-        }
-        lines.push(format!(
-            "  Justification: {} | Kind: {} | Extractor: {} {} | Rule: {} | Vocabulary: {} | Current: {}",
-            support.justification_id,
-            display_safe(&support.justification_kind),
-            display_safe(&support.extractor),
-            display_safe(&support.extractor_version),
-            display_safe(&support.extraction_rule),
-            display_safe(&support.vocabulary_version),
-            support.current
-        ));
-        for s in &support.spans {
-            let shown = s.quote.as_deref().unwrap_or(&s.excerpt.text);
-            lines.push(format!("  \"{}{}{}\" | Link: {} | Field: {} | Span: [{}, {}) | Captured: {} | Source updated: {} | Trust class: {} | Scope: {} | Source: {}",
-                if s.quote.is_none() && s.excerpt.clipped_before { "…" } else { "" }, display_safe(shown), if s.quote.is_none() && s.excerpt.clipped_after { "…" } else { "" },
-                display_safe(&s.location), display_safe(&s.field), s.start, s.end, stamp(s.captured_at), s.source_updated_at.map(stamp).unwrap_or_else(|| "unknown".into()), s.trust_class.as_str(), display_safe(&s.scope.0), display_safe(&s.source)));
+        pieces.push(justification_block(support).to_string());
+        // An owner-intent justification names its intent; the spans of a provenance justification
+        // follow it as their own blocks.
+        if support.intent.is_none() {
+            pieces.extend(support.spans.iter().map(|s| citation_block(s).to_string()));
         }
     }
     if why.truncated {
-        lines.push("More justifications exist; raise --limit (at most 50)".into());
+        pieces.push("More justifications exist; raise --limit (at most 50)".into());
     }
-    lines.extend(why.coverage.iter().map(coverage_line));
-    lines.extend(why.extraction.iter().map(extraction_line));
-    lines.join("\n")
+    pieces.extend(why.coverage.iter().map(|c| coverage_block(c).to_string()));
+    pieces.extend(
+        why.extraction
+            .iter()
+            .map(|e| extraction_block(e).to_string()),
+    );
+    pieces.join("\n\n")
+}
+/// One justification as a block: its id and kind, then its provenance — an owner intent names the
+/// intent and its issuer; an extraction names its extractor, rule and vocabulary.
+fn justification_block(support: &rastro_core::knowledge::JustificationView) -> render::Block {
+    let block = render::Block::new(format!("Justification: {}", support.justification_id))
+        .field("Kind", display_safe(&support.justification_kind));
+    if let Some(intent) = &support.intent {
+        return block
+            .field("Rule", display_safe(&support.extraction_rule))
+            .field("Intent", display_safe(&intent.id))
+            .field("Issued", render::time(intent.issued_at))
+            .field(
+                "Issuer",
+                format!(
+                    "{} via {}",
+                    display_safe(&intent.issuer.principal),
+                    display_safe(&intent.issuer.surface)
+                ),
+            )
+            .field("Scopes", scopes_shown(&intent.issuer.scopes))
+            .field("Current", support.current);
+    }
+    block
+        .field(
+            "Extractor",
+            format!(
+                "{} {}",
+                display_safe(&support.extractor),
+                display_safe(&support.extractor_version)
+            ),
+        )
+        .field("Rule", display_safe(&support.extraction_rule))
+        .field("Vocabulary", display_safe(&support.vocabulary_version))
+        .field("Current", support.current)
+}
+/// One cited span as a block: its quote verbatim and escaped with the trust class beside it, then
+/// every citation field on its own indented line.
+fn citation_block(s: &rastro_core::knowledge::Citation) -> render::Block {
+    // The whole quote when `--full` asked for it; else the excerpt, with … where cut.
+    let shown = match &s.quote {
+        Some(quote) => display_escaped(quote),
+        None => format!(
+            "{}{}{}",
+            if s.excerpt.clipped_before { "…" } else { "" },
+            display_safe(&s.excerpt.text),
+            if s.excerpt.clipped_after { "…" } else { "" }
+        ),
+    };
+    render::Block::new(format!("\"{shown}\""))
+        .field("Trust class", s.trust_class.as_str())
+        .field("Link", display_safe(&s.location))
+        .field("Field", display_safe(&s.field))
+        .field("Span", format!("[{}, {})", s.start, s.end))
+        .field("Captured", render::time(s.captured_at))
+        .field(
+            "Source updated",
+            s.source_updated_at
+                .map(render::time)
+                .unwrap_or_else(|| "unknown".into()),
+        )
+        .field("Scope", display_safe(&s.scope.0))
+        .field("Source", display_safe(&s.source))
 }
 fn search_text(text: &str, found: &SearchResponse) -> String {
     if found.results.is_empty() {
-        let lines: Vec<_> = found.coverage.iter().map(coverage_line).collect();
-        return format!("no evidence found for \"{text}\"\n{}", lines.join("\n"));
+        let mut text = format!("no evidence found for \"{text}\"");
+        if !found.coverage.is_empty() {
+            text += &format!(
+                "\n\n{}",
+                render::records(found.coverage.iter().map(coverage_state_block))
+            );
+        }
+        return text;
     }
     let blocks: Vec<_> = found
         .results
@@ -424,21 +483,33 @@ fn search_text(text: &str, found: &SearchResponse) -> String {
                     if r.matched.clipped_after { "…" } else { "" }
                 ),
             };
-            let mut block = format!(
-                "\"{shown}\"\n  Link: {} | Field: {} | Span: [{}, {}) | Captured: {} | Trust class: {} | Scope: {} | Source: {}",
-                display_safe(&r.location), display_safe(&r.field), r.start, r.end, stamp(r.captured_at),
-                r.trust_class.as_str(), r.scope.0, r.source
-            );
+            let mut block = render::Block::new(format!("\"{shown}\""))
+                .field("Trust class", r.trust_class.as_str())
+                .field("Link", display_safe(&r.location))
+                .field("Field", display_safe(&r.field))
+                .field("Span", format!("[{}, {})", r.start, r.end))
+                .field("Captured", render::time(r.captured_at))
+                .field("Scope", display_safe(&r.scope.0))
+                .field("Source", display_safe(&r.source));
             if let Some(c) = &r.coverage {
-                block += &format!("\n  Coverage: {}", coverage_line(c));
+                let state = if c.registered {
+                    c.state.as_str().to_string()
+                } else {
+                    format!("{} (Not in config)", c.state.as_str())
+                };
+                block = block
+                    .field("Coverage", state)
+                    .maybe("Last checked", c.last_checked.map(render::time))
+                    .maybe("Fresh until", c.fresh_until.map(render::time))
+                    .maybe("Reason", c.reason.as_deref().map(display_safe));
             }
             block
         })
         .collect();
-    let mut text = blocks.join("\n");
+    let mut text = render::records(blocks);
     if found.truncated {
         text += &format!(
-            "\nMore evidence matches than the {} shown; raise --limit (at most {MAX_SEARCH_LIMIT}) or narrow the query",
+            "\n\nMore evidence matches than the {} shown; raise --limit (at most {MAX_SEARCH_LIMIT}) or narrow the query",
             found.results.len()
         );
     }
@@ -1386,6 +1457,33 @@ fn trust_journal_text(journal: &rastro_core::trust::TrustJournal) -> String {
         .collect::<Vec<_>>()
         .join("\n")
 }
+/// A rebuild's summary: the claim count, then one line per carried-over pair — a pair that is not
+/// current never started, its stored output was carried over.
+fn claims_rebuild_text(r: &rastro_operations::results::ClaimsRebuildResult) -> String {
+    let mut text = format!("Claims rebuilt: {} claims", r.claims);
+    for pair in r
+        .pairs
+        .iter()
+        .filter(|p| p.state != ExtractionState::Current)
+    {
+        let extractor = format!(
+            "{} {}",
+            display_safe(&pair.extractor),
+            pair.extractor_version
+        );
+        text += &format!(
+            "\n  Carried over: {} ({}), Extractor: {}, {}",
+            display_safe(&pair.source),
+            display_safe(&pair.scope),
+            extractor.trim(),
+            pair.state.as_str(),
+        );
+        if let Some(reason) = pair.reason.as_deref().filter(|r| *r != pair.state.as_str()) {
+            text += &format!(", Reason: {}", display_safe(reason));
+        }
+    }
+    text
+}
 fn human(response: &Response) -> String {
     let or_none = |blocks: Vec<render::Block>| {
         if blocks.is_empty() {
@@ -1400,28 +1498,7 @@ fn human(response: &Response) -> String {
         Response::SourceList(r) => or_none(r.sources.iter().map(source_block).collect()),
         Response::Coverage(r) => or_none(r.coverage.iter().map(coverage_block).collect()),
         Response::Sync(r) => or_none(r.runs.iter().map(sync_block).collect()),
-        Response::ClaimsRebuild(r) => {
-            let mut text = format!("Claims rebuilt: {} claims", r.claims);
-            // A pair that is not current never started; its stored output was carried over.
-            for pair in r
-                .pairs
-                .iter()
-                .filter(|p| p.state != ExtractionState::Current)
-            {
-                text += &format!(
-                    "\n  Carried over: {} | {} | Extractor: {} {} | {}",
-                    pair.source,
-                    pair.scope,
-                    display_safe(&pair.extractor),
-                    pair.extractor_version,
-                    pair.state.as_str(),
-                );
-                if let Some(reason) = pair.reason.as_deref().filter(|r| *r != pair.state.as_str()) {
-                    text += &format!(" | Reason: {}", display_safe(reason));
-                }
-            }
-            text
-        }
+        Response::ClaimsRebuild(r) => claims_rebuild_text(r),
         Response::IndexRebuild(r) => format!("Index rebuilt: {} observations", r.indexed),
         Response::Search(r) => search_text(&r.query, r),
         Response::Why(r) => why_text(r),

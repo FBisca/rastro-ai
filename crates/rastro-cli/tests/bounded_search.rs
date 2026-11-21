@@ -338,6 +338,53 @@ fn the_human_form_notes_a_truncated_answer() {
     assert!(!human.contains("More evidence matches"), "{human}");
 }
 
+/// spec: Human records render as blocks
+/// spec: Human timestamps share one format
+/// Each match prints its quote on one line, then every citation field on its own indented
+/// line with the trust class beside the quote; a blank line separates matches.
+#[test]
+fn search_matches_render_as_blocks_with_one_citation_field_per_line() {
+    let env = Env::new();
+    env.sync(&many(2));
+    let human = env.ok(&["search", "shared"]);
+    let blocks: Vec<&str> = human.trim_end().split("\n\n").collect();
+    assert_eq!(blocks.len(), 2, "{human}");
+    for (i, block) in blocks.iter().enumerate() {
+        let mut lines = block.lines();
+        assert_eq!(
+            lines.next().unwrap(),
+            format!("\"shared word {i}\""),
+            "{human}"
+        );
+        let fields: Vec<&str> = lines.collect();
+        assert!(
+            fields[0].starts_with("  Trust class: "),
+            "trust class is not beside the quote: {human}"
+        );
+        for label in ["Link", "Field", "Span", "Captured", "Scope", "Source"] {
+            let line = fields
+                .iter()
+                .find(|l| l.starts_with(&format!("  {label}: ")))
+                .unwrap_or_else(|| panic!("no {label} field: {human}"));
+            assert!(!line.contains(" | "), "packed field: {line}");
+        }
+        for line in &fields {
+            assert!(line.starts_with("  "), "field not indented: {human}");
+            assert!(line[2..].contains(": "), "field not labelled: {human}");
+        }
+        let captured = fields
+            .iter()
+            .find(|l| l.starts_with("  Captured: "))
+            .unwrap()
+            .trim_start()
+            .strip_prefix("Captured: ")
+            .unwrap();
+        chrono::NaiveDateTime::parse_from_str(captured, "%Y-%m-%d %H:%M UTC")
+            .unwrap_or_else(|e| panic!("Captured: {captured:?} is not YYYY-MM-DD HH:MM UTC: {e}"));
+    }
+    assert!(!human.contains(" | "), "pipe-packed line: {human}");
+}
+
 /// spec: A search hit is cited with a bounded excerpt
 /// BM25 decides the order before the id does.
 #[test]
