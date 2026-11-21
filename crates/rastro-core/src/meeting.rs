@@ -20,7 +20,9 @@ use crate::{
 };
 use anyhow::{Context, Result, bail, ensure};
 use chrono::{DateTime, Utc};
-use rastro_plugin_sdk::{CandidateKind, GateFeedback, JudgmentTurn, TaskTemplate};
+use rastro_plugin_sdk::{
+    CandidateKind, GateFeedback, JudgmentTurn, TaskFieldType, TaskRule, TaskTemplate,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -60,6 +62,88 @@ fn bundled_template() -> TaskTemplate {
     TaskTemplate::parse(BUNDLED_TEMPLATE).expect("the bundled meeting template is valid")
 }
 
+/// Checks a selected local replacement against the meeting input and result contract: the
+/// candidate shape the core's mapping needs and the exact-quote span rule. The runner stays
+/// domain-blind; this meeting preparation lives here (decisions/plugins.md §40, §48).
+///
+/// The contract is what the core's mapping reads, not the bundled text: exactly the seven
+/// candidate fields, `turn` an integer and the rest strings, `turn`, `promise` and `quote`
+/// required, `kind` enumerating only kinds the core knows, and a span rule over `quote` and
+/// `turn` so every kept candidate's quote is an exact piece of its turn. Instructions, extra
+/// rules, a narrower or optional kind and a stronger boundary are the owner's to change.
+fn check_meeting_contract(template: &TaskTemplate) -> Result<()> {
+    const FIELDS: [&str; 7] = [
+        "turn",
+        "kind",
+        "responsible",
+        "recipient",
+        "promise",
+        "stated_date",
+        "quote",
+    ];
+    for name in FIELDS {
+        ensure!(
+            template.field(name).is_some(),
+            "the meeting contract needs the candidate field {name}"
+        );
+    }
+    for field in &template.fields {
+        ensure!(
+            FIELDS.contains(&field.name.as_str()),
+            "the meeting contract does not declare the candidate field {}",
+            field.name
+        );
+    }
+    let field = |name: &str| template.field(name).expect("the field was just checked");
+    ensure!(
+        field("turn").field_type == TaskFieldType::Integer,
+        "the candidate field turn must be an integer"
+    );
+    for name in [
+        "kind",
+        "responsible",
+        "recipient",
+        "promise",
+        "stated_date",
+        "quote",
+    ] {
+        ensure!(
+            field(name).field_type == TaskFieldType::String,
+            "the candidate field {name} must be a string"
+        );
+    }
+    for name in ["turn", "promise", "quote"] {
+        ensure!(
+            field(name).required,
+            "the candidate field {name} must be required"
+        );
+    }
+    // The core restores the kind as a typed value: a replacement may narrow the kinds or make
+    // the field optional, never widen them beyond what the core knows or leave them unrestricted.
+    let kind = field("kind");
+    ensure!(
+        !kind.values.is_empty(),
+        "the candidate field kind must enumerate the kinds it allows"
+    );
+    for value in &kind.values {
+        ensure!(
+            matches!(value.as_str(), "ask" | "promise" | "waiting_on"),
+            "the candidate field kind allows the unknown value {value}"
+        );
+    }
+    // The core maps only candidates whose quote is an exact piece of its turn: the span rule
+    // over quote and turn is what guarantees that, whatever its disposition.
+    ensure!(
+        template.rules.iter().any(|rule| matches!(
+            rule,
+            TaskRule::Span { quote_field, turn_field, .. }
+                if quote_field == "quote" && turn_field == "turn"
+        )),
+        "the meeting contract needs the span rule over quote and turn"
+    );
+    Ok(())
+}
+
 /// The configured agent tool adapter: the id of a plugin of kind `agent-tool-adapter` that
 /// `meeting import` sends transcripts to. Configuring it is the owner's authorization to send
 /// transcripts to it; it holds no action permission (ADR 0012). The session it runs is capped:
@@ -95,6 +179,24 @@ impl CommitmentAdapter {
     }
 }
 
+/// `[meeting]`: the owner's meeting import options. Empty keeps the bundled defaults.
+#[derive(Clone, Debug, Default, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct MeetingConfig {
+    /// A local task template file that replaces the bundled meeting template for imports, while
+    /// the adapter binding stays as configured. A relative path resolves against the config
+    /// directory. The replacement must meet the meeting input and result contract; one that
+    /// cannot be loaded or does not meet it fails the import naming the file, and the bundled
+    /// template is never substituted for it. Unset: the bundled template runs.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<PathBuf>,
+}
+impl MeetingConfig {
+    pub fn is_empty(&self) -> bool {
+        self.template.is_none()
+    }
+}
+
 /// Why a run did not succeed.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -109,6 +211,8 @@ pub enum Cause {
     OwnerNotInTranscript,
     /// A speaker mapping names a label not in the transcript or an entity that does not exist.
     MappingInvalid,
+    /// The selected local meeting template cannot be loaded or does not meet the meeting contract.
+    TemplateInvalid,
     /// No extractor is configured.
     ExtractorUnconfigured,
     /// The extractor could not start, failed, timed out or printed too much.
@@ -128,6 +232,7 @@ impl Cause {
             Self::OwnerUnmapped => "owner_unmapped",
             Self::OwnerNotInTranscript => "owner_not_in_transcript",
             Self::MappingInvalid => "mapping_invalid",
+            Self::TemplateInvalid => "template_invalid",
             Self::ExtractorUnconfigured => "extractor_unconfigured",
             Self::ExtractorFailed => "extractor_failed",
             Self::ExtractorOutputInvalid => "extractor_output_invalid",
@@ -142,6 +247,7 @@ impl Cause {
             Self::OwnerUnmapped,
             Self::OwnerNotInTranscript,
             Self::MappingInvalid,
+            Self::TemplateInvalid,
             Self::ExtractorUnconfigured,
             Self::ExtractorFailed,
             Self::ExtractorOutputInvalid,
@@ -923,6 +1029,37 @@ fn resolve_people(
 }
 
 impl<S: Storage> Rastro<S> {
+    /// The template this import runs under and the contract text to save with its output: the
+    /// owner's selected local replacement, or the bundled template. A selection that cannot be
+    /// loaded fails the run naming the file; the bundled template is never substituted for it
+    /// (decisions/plugins.md §48).
+    fn selected_template(&self) -> Result<(TaskTemplate, String), Failure> {
+        let Some(path) = &self.config.meeting.template else {
+            return Ok((bundled_template(), BUNDLED_TEMPLATE.to_string()));
+        };
+        let path = if path.is_absolute() {
+            path.clone()
+        } else {
+            self.locations.config.join(path)
+        };
+        let shown = crate::display_safe(&path.display().to_string());
+        let text = std::fs::read_to_string(&path).map_err(|error| Failure {
+            cause: Cause::TemplateInvalid,
+            reason: format!("can't load the selected meeting template {shown}: {error}"),
+        })?;
+        let template = TaskTemplate::parse(&text).map_err(|error| Failure {
+            cause: Cause::TemplateInvalid,
+            reason: format!("the selected meeting template {shown} can't be read: {error:#}"),
+        })?;
+        check_meeting_contract(&template).map_err(|error| Failure {
+            cause: Cause::TemplateInvalid,
+            reason: format!(
+                "the selected meeting template {shown} does not meet the meeting contract: {error:#}"
+            ),
+        })?;
+        Ok((template, text))
+    }
+
     /// Imports one meeting: reads the transcript, runs the configured extractor and records the
     /// run. A run that fails is recorded with its cause and leaves the last good results as they
     /// were. Only a request that can't name a meeting (an empty identifier or scope, a
@@ -986,7 +1123,7 @@ impl<S: Storage> Rastro<S> {
                 );
             };
             extractor = Some(config.plugin.clone());
-            let template = bundled_template();
+            let (template, contract) = self.selected_template()?;
             let judgment_turns: Vec<JudgmentTurn> = turns
                 .iter()
                 .map(|turn| JudgmentTurn {
@@ -1013,7 +1150,7 @@ impl<S: Storage> Rastro<S> {
             };
             let output = judged.map_err(task_failure)?;
             let validated = map_candidates(output.candidates, output.excluded, &turns, &people);
-            let recorded = record_of(&validated, &turns, &people, BUNDLED_TEMPLATE);
+            let recorded = record_of(&validated, &turns, &people, &contract);
             Ok((validated, recorded))
         })();
         let finished_at = crate::coverage::now()?;
@@ -1373,6 +1510,105 @@ mod tests {
         assert_eq!(validated.hypotheses[0].kind, Kind::Promise);
         // The current bundled template would refuse the same kind-less recording.
         assert!(host::task::check(&bundled_template(), &judgment_turns, &answer).is_err());
+    }
+
+    /// A local replacement must keep the meeting result contract: the seven candidate fields with
+    /// the types and requiredness the core's mapping needs, only kinds the core knows, and the
+    /// exact-quote span rule. Each violation is refused naming what broke, before any adapter call.
+    // spec: Meeting imports select the bundled or owner-configured task template
+    #[test]
+    fn an_incompatible_replacement_is_refused_naming_why() {
+        let quote_field = "[[fields]]\nname = \"quote\"\ntype = \"string\"\n";
+        let span_rule =
+            "[[rules]]\nkind = \"span\"\nquote_field = \"quote\"\nturn_field = \"turn\"\n";
+        let cases: [(&str, String, &str); 8] = [
+            (
+                "missing quote field",
+                BUNDLED_TEMPLATE
+                    .replace(quote_field, "")
+                    .replace(span_rule, ""),
+                "quote",
+            ),
+            (
+                "extra field",
+                format!("{BUNDLED_TEMPLATE}\n[[fields]]\nname = \"extra\"\ntype = \"string\"\n"),
+                "extra",
+            ),
+            (
+                "turn not an integer",
+                BUNDLED_TEMPLATE
+                    .replace(
+                        "name = \"turn\"\ntype = \"integer\"",
+                        "name = \"turn\"\ntype = \"string\"",
+                    )
+                    .replace(span_rule, ""),
+                "turn",
+            ),
+            (
+                "quote optional",
+                BUNDLED_TEMPLATE.replace(
+                    quote_field,
+                    "[[fields]]\nname = \"quote\"\ntype = \"string\"\nrequired = false\n",
+                ),
+                "quote",
+            ),
+            (
+                "unknown kind value",
+                BUNDLED_TEMPLATE.replace(
+                    "values = [\"ask\", \"promise\", \"waiting_on\"]",
+                    "values = [\"ask\", \"promise\", \"waiting_on\", \"decision\"]",
+                ),
+                "decision",
+            ),
+            (
+                "kind unrestricted",
+                BUNDLED_TEMPLATE.replace("values = [\"ask\", \"promise\", \"waiting_on\"]\n", ""),
+                "kind",
+            ),
+            (
+                "no span rule",
+                BUNDLED_TEMPLATE.replace(span_rule, ""),
+                "span",
+            ),
+            (
+                "span over other fields",
+                BUNDLED_TEMPLATE.replace("quote_field = \"quote\"", "quote_field = \"promise\""),
+                "quote",
+            ),
+        ];
+        for (name, text, expected) in cases {
+            let template =
+                TaskTemplate::parse(&text).unwrap_or_else(|error| panic!("{name}: {error:#}"));
+            let error = check_meeting_contract(&template).unwrap_err().to_string();
+            assert!(error.contains(expected), "{name}: {error}");
+        }
+    }
+
+    /// A compatible replacement keeps the contract while changing what the owner may change: its
+    /// own instructions, a narrower kind set, an optional kind, an exclusion of its own and a
+    /// stronger boundary. The check accepts it; the runner still enforces the boundary before any
+    /// text is sent.
+    // spec: Meeting imports select the bundled or owner-configured task template
+    #[test]
+    fn a_compatible_replacement_may_change_instructions_rules_and_boundary() {
+        let modified = BUNDLED_TEMPLATE
+            .replace(
+                "Find commitments in `turns`",
+                "Local replacement: find commitments in `turns`",
+            )
+            .replace(
+                "values = [\"ask\", \"promise\", \"waiting_on\"]",
+                "values = [\"promise\"]",
+            )
+            .replace(
+                "name = \"kind\"\ntype = \"string\"",
+                "name = \"kind\"\ntype = \"string\"\nrequired = false",
+            );
+        let text = format!(
+            "boundary = [\"no_network\"]\n{modified}\n[[rules]]\nkind = \"equals\"\nfield = \"promise\"\nvalue = \"skip\"\ndisposition = \"exclude\"\n"
+        );
+        let template = TaskTemplate::parse(&text).unwrap();
+        check_meeting_contract(&template).unwrap();
     }
 
     /// A line starts a turn only as `Label: text`; other lines continue the turn before them, and

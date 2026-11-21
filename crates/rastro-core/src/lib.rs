@@ -186,6 +186,9 @@ pub struct Config {
     /// configures one.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub commitment_adapter: Option<meeting::CommitmentAdapter>,
+    /// `[meeting]`: the owner's meeting import options; empty keeps the bundled defaults.
+    #[serde(default, skip_serializing_if = "meeting::MeetingConfig::is_empty")]
+    pub meeting: meeting::MeetingConfig,
     /// `[actions]`: what a proposal takes when it names nothing.
     #[serde(default, skip_serializing_if = "actions::ActionsConfig::is_empty")]
     pub actions: actions::ActionsConfig,
