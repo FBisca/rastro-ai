@@ -496,6 +496,229 @@ fn a_missing_scope_during_history_reads_as_forbidden() {
     assert_eq!(coverage(&env), [["couldn't look", "forbidden"]]);
 }
 
+/// spec: Thread replies are read through a 30-day lookback
+#[test]
+fn a_reply_to_a_thread_started_before_the_window_is_stored_with_its_thread_start() {
+    let started = window_start() - chrono::Duration::days(3);
+    let replied = in_window(2);
+    let reply = reply_message(ANA, "the answer", replied, &ts(started));
+    let parent = thread_parent(ANA, "the question", started, std::slice::from_ref(&reply));
+    // page_size 1: the replies read pages (the parent leads, then the reply).
+    let fixture = Fixture::start(World {
+        messages: vec![parent],
+        replies: vec![reply],
+        page_size: 1,
+        ..World::default()
+    });
+    let env = env(&fixture.base);
+    let run = env.sync(&[]);
+    assert_eq!(run["status"], "ok", "{run}");
+    let location = format!("slack:message/{CHANNEL}/{}", ts(replied));
+    assert_eq!(
+        env.rows(&format!(
+            "SELECT quote, trust_class FROM evidence WHERE location = '{location}' AND field = '/text'"
+        )),
+        [["the answer".to_string(), "untrusted content".to_string()]]
+    );
+    assert_eq!(
+        env.column(&format!(
+            "SELECT quote FROM evidence WHERE location = '{location}' AND field = '/thread_ts'"
+        )),
+        [ts(started)]
+    );
+    // The thread's start is outside the window: only the reply is stored.
+    assert_eq!(
+        env.column(&format!(
+            "SELECT count(*) FROM evidence WHERE location = 'slack:message/{CHANNEL}/{}'",
+            ts(started)
+        )),
+        ["0"]
+    );
+    // The history read spans the window plus the 30-day lookback; each replies read names the
+    // thread and the window.
+    let to: chrono::DateTime<chrono::Utc> = run["window"]["to"].as_str().unwrap().parse().unwrap();
+    let from: chrono::DateTime<chrono::Utc> =
+        run["window"]["from"].as_str().unwrap().parse().unwrap();
+    let requests = fixture.requests();
+    let history = requests
+        .iter()
+        .find(|r| r.method == "conversations.history")
+        .expect("a history read");
+    assert_eq!(
+        history.params.get("oldest").map(String::as_str),
+        Some(ts(window_start() - chrono::Duration::days(30)).as_str())
+    );
+    assert_eq!(
+        history.params.get("latest").map(String::as_str),
+        Some(ts(to).as_str())
+    );
+    let replies: Vec<_> = requests
+        .iter()
+        .filter(|r| r.method == "conversations.replies")
+        .collect();
+    assert!(!replies.is_empty(), "the active thread's replies were read");
+    for req in replies {
+        assert_eq!(
+            req.params.get("ts").map(String::as_str),
+            Some(ts(started).as_str())
+        );
+        assert_eq!(
+            req.params.get("oldest").map(String::as_str),
+            Some(ts(from).as_str())
+        );
+        assert_eq!(
+            req.params.get("latest").map(String::as_str),
+            Some(ts(to).as_str())
+        );
+    }
+}
+
+/// spec: Thread replies are read through a 30-day lookback
+#[test]
+fn a_lookback_thread_with_no_reply_in_the_window_gets_no_replies_call() {
+    // The control: a thread started in the lookback with a reply in the window is read.
+    let active_start = window_start() - chrono::Duration::days(3);
+    let fresh = reply_message(ANA, "fresh answer", in_window(2), &ts(active_start));
+    let active = thread_parent(
+        ANA,
+        "active thread",
+        active_start,
+        std::slice::from_ref(&fresh),
+    );
+    // Quiet threads: one whose latest reply predates the window, one with no replies at all.
+    let quiet_start = window_start() - chrono::Duration::days(5);
+    let old = reply_message(
+        ANA,
+        "old answer",
+        window_start() - chrono::Duration::hours(1),
+        &ts(quiet_start),
+    );
+    let quiet = thread_parent(ANA, "quiet thread", quiet_start, std::slice::from_ref(&old));
+    let silent_start = window_start() - chrono::Duration::days(7);
+    let silent = thread_parent(ANA, "silent thread", silent_start, &[]);
+    // One past the lookback: an active thread started 31 days before the window is not read.
+    let old_start = window_start() - chrono::Duration::days(31);
+    let too_old_reply = reply_message(ANA, "too old to reach", in_window(3), &ts(old_start));
+    let too_old = thread_parent(
+        ANA,
+        "too old thread",
+        old_start,
+        std::slice::from_ref(&too_old_reply),
+    );
+    let fixture = Fixture::start(World {
+        messages: vec![active, quiet, silent, too_old],
+        replies: vec![fresh, old, too_old_reply],
+        ..World::default()
+    });
+    let env = env(&fixture.base);
+    assert_eq!(env.sync(&[])["status"], "ok");
+    let called: Vec<String> = fixture
+        .requests()
+        .iter()
+        .filter(|r| r.method == "conversations.replies")
+        .filter_map(|r| r.params.get("ts").cloned())
+        .collect();
+    assert_eq!(
+        called,
+        [ts(active_start)],
+        "only the active thread's replies are read"
+    );
+    // Only the fresh reply is stored: every thread start is outside the window.
+    assert_eq!(
+        env.column("SELECT DISTINCT location FROM evidence WHERE location LIKE 'slack:message/%'"),
+        [format!("slack:message/{CHANNEL}/{}", ts(in_window(2)))]
+    );
+}
+
+/// spec: Thread replies are read through a 30-day lookback
+#[test]
+fn a_reply_at_the_second_windows_start_is_stored_exactly_once() {
+    // The thread is pinned to the first run's window end: the parent three days before it,
+    // the reply exactly at it — the second window's start. The reply exists during both syncs.
+    let pinned: Arc<Mutex<Option<(serde_json::Value, serde_json::Value)>>> =
+        Arc::new(Mutex::new(None));
+    let pin = pinned.clone();
+    let fixture = Fixture::with_route(World::default(), move |req, _| {
+        let mut pin = pin.lock().unwrap();
+        match req.method.as_str() {
+            "conversations.history" => {
+                if pin.is_none() {
+                    let latest = from_ts(req.params.get("latest").expect("a latest bound"));
+                    let started = latest - chrono::Duration::days(3);
+                    let reply = reply_message(ANA, "the boundary answer", latest, &ts(started));
+                    let parent = thread_parent(
+                        ANA,
+                        "the boundary question",
+                        started,
+                        std::slice::from_ref(&reply),
+                    );
+                    *pin = Some((parent, reply));
+                }
+                let (parent, _) = pin.as_ref().unwrap();
+                Some(Reply::ok(json!({
+                    "ok": true, "messages": [parent], "has_more": false,
+                    "response_metadata": {"next_cursor": ""},
+                })))
+            }
+            "conversations.replies" => {
+                let (parent, reply) = pin.as_ref().expect("history comes first");
+                (req.params.get("ts").map(String::as_str) == parent["ts"].as_str()).then(|| {
+                    Reply::ok(json!({
+                        "ok": true, "messages": [parent, reply], "has_more": false,
+                        "response_metadata": {"next_cursor": ""},
+                    }))
+                })
+            }
+            _ => None,
+        }
+    });
+    let env = env(&fixture.base);
+    let first = env.sync(&[]);
+    assert_eq!(first["status"], "ok", "{first}");
+    // The reply sits at the first window's end: it belongs to the next window, not this one.
+    assert_eq!(
+        env.column("SELECT count(*) FROM evidence WHERE quote = 'the boundary answer'"),
+        ["0"]
+    );
+    let second = env.sync(&[]);
+    assert_eq!(second["status"], "ok", "{second}");
+    assert_eq!(second["window"]["from"], first["window"]["to"]);
+    // Stored exactly once: one observation, and only the second run stored it.
+    assert_eq!(
+        env.column("SELECT count(*) FROM evidence WHERE quote = 'the boundary answer'"),
+        ["1"]
+    );
+    assert_eq!(
+        env.column(
+            "SELECT count(*) FROM run_evidence WHERE evidence_id IN \
+             (SELECT id FROM evidence WHERE quote = 'the boundary answer')"
+        ),
+        ["1"]
+    );
+    // The parent, stored by the first run, is not stored again by the lookback.
+    assert_eq!(
+        env.column("SELECT count(*) FROM evidence WHERE quote = 'the boundary question'"),
+        ["1"]
+    );
+    assert_eq!(
+        env.column(
+            "SELECT count(*) FROM run_evidence WHERE evidence_id IN \
+             (SELECT id FROM evidence WHERE quote = 'the boundary question')"
+        ),
+        ["1"]
+    );
+    // The reply names the thread's start, three days before the second window.
+    let latest: chrono::DateTime<chrono::Utc> =
+        first["window"]["to"].as_str().unwrap().parse().unwrap();
+    let location = format!("slack:message/{CHANNEL}/{}", ts(latest));
+    assert_eq!(
+        env.column(&format!(
+            "SELECT quote FROM evidence WHERE location = '{location}' AND field = '/thread_ts'"
+        )),
+        [ts(latest - chrono::Duration::days(3))]
+    );
+}
+
 /// spec: A Slack token comes from the environment or the keychain and is never stored
 #[test]
 fn a_check_and_a_sync_leave_no_trace_of_the_token() {
