@@ -101,26 +101,58 @@ fn an_edited_message_carries_its_edit_time_as_the_update_time() {
 fn a_system_message_is_skipped_and_a_bot_message_is_kept() {
     let join_at = in_window(1);
     let bot_at = in_window(2);
+    let broadcast_at = in_window(3);
+    let share_at = in_window(4);
+    let me_at = in_window(5);
+    let thread_ts = ts(in_window(0));
     let fixture = Fixture::start(World {
         messages: vec![
             join_message(join_at),
             bot_message("deploy finished", bot_at),
+            // Subtypes that carry a person's words are kept, not skipped as system noise.
+            broadcast_message("also send to the channel", broadcast_at, &thread_ts),
+            file_share_message("the report, attached", share_at),
+            me_message("waves", me_at),
         ],
         ..World::default()
     });
     let env = env(&fixture.base);
     assert_eq!(env.sync(&[])["status"], "ok");
+    let at = |h: i64| format!("slack:message/{CHANNEL}/{}", ts(in_window(h)));
     assert_eq!(
-        env.column("SELECT DISTINCT location FROM evidence WHERE location LIKE 'slack:message/%'"),
-        [format!("slack:message/{CHANNEL}/{}", ts(bot_at))]
+        env.column(
+            "SELECT DISTINCT location FROM evidence WHERE location LIKE 'slack:message/%' \
+             ORDER BY location"
+        ),
+        [at(2), at(3), at(4), at(5)]
     );
     assert_eq!(
         env.column(&format!(
-            "SELECT quote FROM evidence WHERE location = 'slack:message/{CHANNEL}/{}' \
-             AND field = '/subtype'",
-            ts(bot_at)
+            "SELECT quote FROM evidence WHERE location = '{}' AND field = '/subtype'",
+            at(2)
         )),
         ["bot_message"]
+    );
+    assert_eq!(
+        env.column(&format!(
+            "SELECT quote FROM evidence WHERE location = '{}' AND field = '/thread_ts'",
+            at(3)
+        )),
+        [thread_ts]
+    );
+    assert_eq!(
+        env.column(&format!(
+            "SELECT quote FROM evidence WHERE location = '{}' AND field = '/text'",
+            at(4)
+        )),
+        ["the report, attached"]
+    );
+    assert_eq!(
+        env.column(&format!(
+            "SELECT quote FROM evidence WHERE location = '{}' AND field = '/text'",
+            at(5)
+        )),
+        ["waves"]
     );
 }
 
@@ -198,7 +230,9 @@ fn an_unreadable_author_profile_is_a_gap_and_the_messages_stay() {
         [BOT]
     );
     assert_eq!(
-        env.column("SELECT count(*) FROM evidence WHERE location = 'slack:user/{ANA}'"),
+        env.column(&format!(
+            "SELECT count(*) FROM evidence WHERE location = 'slack:user/{ANA}'"
+        )),
         ["0"]
     );
 }
@@ -333,6 +367,108 @@ fn a_rate_limit_mid_run_keeps_the_finished_page_and_reports_when_to_retry() {
     assert!(
         retry <= at + chrono::Duration::seconds(35),
         "{retry} is too far after {at}"
+    );
+}
+
+/// spec: A Slack failure stops the run with a typed reason
+#[test]
+fn a_rate_limit_during_author_reads_stops_the_run_with_a_retry_time() {
+    let served: Arc<Mutex<Option<chrono::DateTime<chrono::Utc>>>> = Arc::new(Mutex::new(None));
+    let route_served = served.clone();
+    let fixture = Fixture::with_route(
+        World {
+            messages: vec![
+                message(ANA, "kept", in_window(1)),
+                bot_message("also kept", in_window(2)),
+            ],
+            ..World::default()
+        },
+        move |req, _| {
+            if req.method == "users.info" {
+                *route_served.lock().unwrap() = Some(chrono::Utc::now());
+                Some(
+                    Reply::status(429, json!({"ok": false, "error": "ratelimited"}))
+                        .header("Retry-After", "30"),
+                )
+            } else {
+                None
+            }
+        },
+    );
+    let env = env(&fixture.base);
+    let run = env.sync(&[]);
+    assert_eq!(run["status"], "failed", "{run}");
+    assert_eq!(coverage(&env), [["couldn't look", "rate_limited"]]);
+    // The messages already read stay, and the run stops instead of calling into more 429s.
+    assert_eq!(
+        env.column(
+            "SELECT count(*) FROM evidence WHERE location LIKE 'slack:message/%' AND field = '/text'"
+        ),
+        ["2"]
+    );
+    assert_eq!(
+        fixture
+            .requests()
+            .iter()
+            .filter(|r| r.method == "users.info")
+            .count(),
+        1
+    );
+    let retry: chrono::DateTime<chrono::Utc> = env.column("SELECT retry_at FROM coverage")[0]
+        .parse()
+        .unwrap();
+    let at = served.lock().unwrap().expect("the 429 was served");
+    assert!(
+        retry >= at + chrono::Duration::seconds(30) - chrono::Duration::milliseconds(1),
+        "{retry} is not 30s after {at}"
+    );
+    assert!(
+        retry <= at + chrono::Duration::seconds(35),
+        "{retry} is too far after {at}"
+    );
+}
+
+/// spec: A Slack failure stops the run with a typed reason
+#[test]
+fn a_revoked_token_during_author_reads_stops_as_auth() {
+    let fixture = Fixture::with_route(
+        World {
+            messages: vec![message(ANA, "kept", in_window(1))],
+            ..World::default()
+        },
+        |req, _| (req.method == "users.info").then(|| Reply::error("token_revoked")),
+    );
+    let env = env(&fixture.base);
+    let run = env.sync(&[]);
+    assert_eq!(run["status"], "failed", "{run}");
+    assert_eq!(coverage(&env), [["couldn't look", "auth"]]);
+    assert_eq!(
+        env.column(
+            "SELECT count(*) FROM evidence WHERE location LIKE 'slack:message/%' AND field = '/text'"
+        ),
+        ["1"]
+    );
+}
+
+/// spec: A Slack failure stops the run with a typed reason
+#[test]
+fn a_missing_scope_during_author_reads_stops_as_forbidden() {
+    let fixture = Fixture::with_route(
+        World {
+            messages: vec![message(ANA, "kept", in_window(1))],
+            ..World::default()
+        },
+        |req, _| (req.method == "users.info").then(|| Reply::error("missing_scope")),
+    );
+    let env = env(&fixture.base);
+    let run = env.sync(&[]);
+    assert_eq!(run["status"], "failed", "{run}");
+    assert_eq!(coverage(&env), [["couldn't look", "forbidden"]]);
+    assert_eq!(
+        env.column(
+            "SELECT count(*) FROM evidence WHERE location LIKE 'slack:message/%' AND field = '/text'"
+        ),
+        ["1"]
     );
 }
 

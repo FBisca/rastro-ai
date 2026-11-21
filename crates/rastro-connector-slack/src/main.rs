@@ -13,9 +13,11 @@
 //! - whose token it is, at `slack:viewer`: `/id`. One slot, so another token's owner replaces it.
 //!
 //! The conversation is looked up before any history read: a channel shared outside the
-//! workspace, a direct or a group message is never read. System messages (joins, topic changes)
-//! are skipped; bot messages are kept as evidence. An author profile the API won't give is a
-//! coverage gap, and the messages stay.
+//! workspace, a direct or a group message is never read. System events (joins, renames, topic
+//! and purpose changes, archives, pins, edit and delete notices) are skipped; messages that
+//! carry a person's words — bot messages, broadcast replies, file shares, /me messages — are
+//! kept as evidence. An author profile the API won't give is a coverage gap, and the messages
+//! stay; a rate limit, a rejected token or a missing scope stops the run typed.
 mod api;
 
 use anyhow::{Context, Result, bail};
@@ -289,11 +291,15 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
     }
 
     /// Each message author's profile, read once per author. The messages are already stored;
-    /// a profile the API won't give is a coverage gap, not a lost run.
+    /// a profile the API won't give is a coverage gap, not a lost run — but a rate limit, a
+    /// rejected token or a missing scope stops the run typed, like any other read.
     fn read_authors(&mut self) -> Result<(), Failure> {
         for id in std::mem::take(&mut self.authors) {
             let body = match self.client.users_info(&id) {
                 Ok(body) => body,
+                Err(failure) if matches!(failure.reason, "rate_limited" | "auth" | "forbidden") => {
+                    return Err(failure);
+                }
                 Err(failure) => {
                     self.profile_gap(failure.reason);
                     continue;
@@ -448,10 +454,16 @@ fn text<'a>(node: &'a Value, pointer: &str) -> Option<&'a str> {
     node.pointer(pointer).and_then(Value::as_str)
 }
 
-/// Whether a message is a system message (a join, a topic change, ...) rather than someone's
-/// words. Bot messages carry the `bot_message` subtype and are kept as evidence.
+/// Whether a message is a system event — a join or leave, a rename, a topic or purpose
+/// change, an archive, a pin, an edit or delete notice — rather than someone's words.
+/// Subtypes that carry a person's text (a bot message, a broadcast thread reply, a file
+/// share, a /me message) are kept as evidence.
 fn system_message(subtype: Option<&str>) -> bool {
-    subtype.is_some_and(|s| s != "bot_message")
+    subtype.is_some_and(|s| {
+        s.starts_with("channel_")
+            || s.starts_with("group_")
+            || matches!(s, "message_changed" | "message_deleted" | "pinned_item")
+    })
 }
 
 /// Slack's time: epoch seconds with a fractional part, e.g. `1785542400.000100`.
@@ -477,18 +489,35 @@ mod tests {
 
     /// spec: A Slack sync stores each message's fields as evidence
     #[test]
-    fn every_subtype_but_bot_message_is_a_system_message() {
+    fn only_system_event_subtypes_are_skipped_and_word_carrying_ones_kept() {
         assert!(!system_message(None));
-        assert!(!system_message(Some("bot_message")));
-        for subtype in [
+        for kept in [
+            "bot_message",
+            "thread_broadcast",
+            "file_share",
+            "me_message",
+        ] {
+            assert!(
+                !system_message(Some(kept)),
+                "{kept} carries a person's words"
+            );
+        }
+        for skipped in [
             "channel_join",
             "channel_leave",
             "channel_topic",
             "channel_purpose",
             "channel_name",
+            "channel_archive",
+            "channel_unarchive",
             "group_join",
+            "group_topic",
+            "group_name",
+            "message_changed",
+            "message_deleted",
+            "pinned_item",
         ] {
-            assert!(system_message(Some(subtype)), "{subtype}");
+            assert!(system_message(Some(skipped)), "{skipped} is a system event");
         }
     }
 

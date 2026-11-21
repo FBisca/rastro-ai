@@ -163,6 +163,26 @@ pub fn join_message(at: DateTime<Utc>) -> Value {
     msg["subtype"] = json!("channel_join");
     msg
 }
+/// A reply broadcast to the whole channel: the author's words, with the thread it answers.
+pub fn broadcast_message(text: &str, at: DateTime<Utc>, thread_ts: &str) -> Value {
+    let mut msg = message(ANA, text, at);
+    msg["subtype"] = json!("thread_broadcast");
+    msg["thread_ts"] = json!(thread_ts);
+    msg
+}
+/// A file shared with the author's message text; the file itself is never read.
+pub fn file_share_message(text: &str, at: DateTime<Utc>) -> Value {
+    let mut msg = message(ANA, text, at);
+    msg["subtype"] = json!("file_share");
+    msg["files"] = json!([{"id": "F0FILE", "name": "report.pdf"}]);
+    msg
+}
+/// A /me message: the author's words in the third person.
+pub fn me_message(text: &str, at: DateTime<Utc>) -> Value {
+    let mut msg = message(ANA, text, at);
+    msg["subtype"] = json!("me_message");
+    msg
+}
 
 type Route = dyn Fn(&Req, &World) -> Option<Reply> + Send + Sync;
 
