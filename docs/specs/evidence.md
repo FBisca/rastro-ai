@@ -616,3 +616,122 @@ When a config already holds a second source for a single-source connector, that 
 #### Scenario: a hand-edited second source
 - WHEN a config already holds a second source for a single-source connector
 - THEN that source's sync fails as `protocol` naming the other source, before the connector runs, and the first source still syncs
+
+### Requirement: The Slack check accepts only the read scopes
+The Slack connector's check SHALL answer authenticated only for a token that holds every required read scope (`channels:read`, `channels:history`, `groups:read`, `groups:history`, `users:read`) and no other scope, and SHALL answer rejected naming the extra or missing scopes otherwise.
+
+#### Scenario: a token with exactly the read scopes
+- WHEN `rastro check` runs a Slack source whose token the scripted API reports with exactly the five read scopes
+- THEN the check reports authenticated and names the credential source
+
+#### Scenario: a token with a write scope
+- WHEN the scripted API reports the token's scopes as the five read scopes plus `chat:write`
+- THEN the check reports rejected naming `chat:write` and exits unsuccessfully
+
+#### Scenario: a token missing a read scope
+- WHEN the scripted API reports the token's scopes without `groups:history`
+- THEN the check reports rejected naming `groups:history` and exits unsuccessfully
+
+### Requirement: A Slack token comes from the environment or the keychain and is never stored
+The Slack connector SHALL take its token from `SLACK_USER_TOKEN`, else from the keychain item `rastro-slack`, and the token SHALL never appear in the database, the config or any output.
+
+#### Scenario: the keychain item is used when the variable is unset
+- WHEN `SLACK_USER_TOKEN` is unset and the keychain item `rastro-slack` holds a valid token
+- THEN the check reports authenticated naming the keychain item `rastro-slack`
+
+#### Scenario: no token anywhere
+- WHEN a Slack source syncs with no `SLACK_USER_TOKEN` and no keychain item
+- THEN coverage records "couldn't look: auth"
+
+#### Scenario: the token leaves no trace
+- WHEN a check and a sync have run with a token
+- THEN the token's bytes appear in none of the database file, the config, stdout or stderr
+
+### Requirement: A Slack source names one channel by its id
+`rastro source add --connector slack` SHALL require a `channel` option holding a Slack channel id, and SHALL refuse a channel name with an error naming the declared option, saving nothing.
+
+#### Scenario: a channel id is saved
+- WHEN `rastro source add --connector slack --option channel=C0123ABCDE` runs
+- THEN the source is saved with that channel
+
+#### Scenario: a channel name is refused
+- WHEN `rastro source add --connector slack --option channel=general` runs
+- THEN it is refused with an error naming the declared `channel` option, and nothing is saved
+
+### Requirement: A shared, direct or hidden Slack conversation is never read
+Before reading any history, the Slack connector SHALL look up the channel, and SHALL record "couldn't look" without a history call when the channel is shared outside the workspace, is a direct or group message, or is not visible to the token owner.
+
+#### Scenario: a Slack Connect channel
+- WHEN the scripted channel lookup reports the channel as externally shared
+- THEN coverage records "couldn't look: forbidden" and the scripted API received no history call
+
+#### Scenario: a direct message
+- WHEN the scripted channel lookup reports the conversation as a direct message
+- THEN coverage records "couldn't look: forbidden" and the scripted API received no history call
+
+#### Scenario: a channel the owner can't see
+- WHEN the scripted channel lookup answers `channel_not_found`
+- THEN coverage records "couldn't look: not_found_or_hidden" and the scripted API received no history call
+
+### Requirement: A Slack sync stores each message's fields as evidence
+A Slack sync SHALL store each in-window message as observations at `slack:message/<channel>/<ts>`, with the raw `/text` as untrusted content and `/user`, `/thread_ts`, `/subtype` and `/edited/ts` as structured, using the edit time, else the post time, as its update time, and SHALL skip system messages.
+
+#### Scenario: messages are stored raw
+- WHEN a channel whose in-window message text holds a `<@U0OWNER>` mention syncs
+- THEN the stored `/text` quote equals the raw message text, mention included, as untrusted content, and coverage reads found
+
+#### Scenario: an edited message carries its edit time
+- WHEN an in-window message carries an edit time
+- THEN its observations' update time is the edit time
+
+#### Scenario: system messages are skipped and bot messages kept
+- WHEN the channel holds a `channel_join` message and a bot message in the window
+- THEN the bot message is stored and the `channel_join` message is not
+
+### Requirement: A Slack sync records the token owner and each author
+A Slack sync SHALL record the token owner at `slack:viewer` and each message author at `slack:user/<id>` as structured observations, and an author profile it cannot read SHALL be a coverage gap that keeps the messages.
+
+#### Scenario: viewer and authors are recorded
+- WHEN a channel with messages from two authors syncs
+- THEN `slack:viewer` holds the token owner's id and each author has observations at `slack:user/<id>`, including whether it is a bot
+
+#### Scenario: an unreadable author profile
+- WHEN the scripted user lookup fails for one author
+- THEN that author's messages are stored and coverage carries a gap naming user profiles
+
+### Requirement: Thread replies are read through a 30-day lookback
+A Slack sync SHALL read the replies posted inside its window to threads started up to 30 days before the window, and SHALL store each message posted at the window's start exactly once across consecutive syncs.
+
+#### Scenario: a reply to an older thread
+- WHEN a reply posted inside the window belongs to a thread started three days before the window
+- THEN the reply is stored at its location with `/thread_ts` naming the thread's start
+
+#### Scenario: a lookback thread with no new replies
+- WHEN a thread started inside the lookback has no reply posted inside the window
+- THEN the scripted API received no replies call for that thread
+
+#### Scenario: a message at the window's start
+- WHEN two consecutive syncs run and a message's post time equals the second window's start
+- THEN the message's text is stored exactly once
+
+### Requirement: A Slack failure stops the run with a typed reason
+The Slack connector SHALL keep the evidence of finished pages and record "couldn't look" with a typed reason when Slack answers a rate limit, a rejected token or a missing scope, reporting a rate limit's retry time without waiting.
+
+#### Scenario: a rate limit mid-run
+- WHEN the second history page answers HTTP 429 with `Retry-After` 30
+- THEN the first page's evidence is kept and coverage records "couldn't look: rate_limited" with a retry time 30 seconds after the response
+
+#### Scenario: a revoked token
+- WHEN the history call answers `token_revoked`
+- THEN coverage records "couldn't look: auth"
+
+#### Scenario: a missing scope
+- WHEN the history call answers `missing_scope`
+- THEN coverage records "couldn't look: forbidden"
+
+### Requirement: The Slack app template asks only for the read scopes
+The Slack connector SHALL ship a Slack app manifest template whose user scopes are exactly the five read scopes, with no bot scopes, token rotation off and a display name the owner chooses.
+
+#### Scenario: the template's scopes
+- WHEN the shipped template is parsed
+- THEN its user scopes equal the five read scopes, it declares no bot scopes, and token rotation is off
