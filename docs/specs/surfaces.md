@@ -1,5 +1,5 @@
 # Surfaces
-Paths: crates/rastro-cli/src/mcp.rs, crates/rastro-cli/src/main.rs, crates/rastro-cli/tests/mcp.rs, crates/rastro-cli/tests/catalog.rs, crates/rastro-cli/tests/actions_read.rs, crates/rastro-cli/tests/read_only.rs, crates/rastro-cli/tests/bounded_search_reader.rs, crates/rastro-cli/tests/about_why.rs, crates/rastro-operations/, crates/rastro-core/src/read_only.rs, crates/rastro-core/src/coverage/, crates/rastro-storage-sqlite/, schema/
+Paths: crates/rastro-cli/src/mcp.rs, crates/rastro-cli/src/main.rs, crates/rastro-cli/tests/mcp.rs, crates/rastro-cli/tests/catalog.rs, crates/rastro-cli/tests/actions_read.rs, crates/rastro-cli/tests/read_only.rs, crates/rastro-cli/tests/bounded_search_reader.rs, crates/rastro-cli/tests/about_why.rs, crates/rastro-cli/tests/plugin_check.rs, crates/rastro-core/src/host/plugin_check.rs, crates/rastro-operations/, crates/rastro-core/src/read_only.rs, crates/rastro-core/src/coverage/, crates/rastro-storage-sqlite/, schema/
 
 ## Requirements
 
@@ -460,3 +460,43 @@ Source setup SHALL run the credential check and report its result without rollin
 #### Scenario: setup with bad credentials
 - WHEN the owner adds a source whose credentials fail
 - THEN the source remains configured and the output explains the failure and fix
+
+### Requirement: Plugin check runs one synthetic connector run and stores nothing
+`rastro plugin check <id>` SHALL run one synthetic run of the installed connector with its declared environment and the given options, apply the validation a sync applies, store nothing, and exit zero with the accepted counts when nothing is violated.
+
+#### Scenario: a conforming connector
+- WHEN `rastro plugin check` runs a scripted test connector that submits valid evidence, a coverage report and a finish
+- THEN it exits zero and prints the accepted counts
+
+#### Scenario: nothing is stored
+- WHEN `rastro plugin check` has run against a fresh home
+- THEN no evidence, coverage or run is stored
+
+### Requirement: Plugin check names each protocol violation
+`rastro plugin check <id>` SHALL print each protocol violation with its reason and exit unsuccessfully when any occurred.
+
+#### Scenario: a log line on stdout
+- WHEN the checked connector writes a plain log line to stdout
+- THEN the check names an invalid protocol line and exits unsuccessfully
+
+#### Scenario: evidence outside the grant
+- WHEN the checked connector submits evidence of a kind its manifest does not permit
+- THEN the check names that kind and exits unsuccessfully
+
+#### Scenario: no finish
+- WHEN the checked connector exits without a finish
+- THEN the check names the run as interrupted and exits unsuccessfully
+
+### Requirement: Plugin check warns on an unknown manifest kind
+`rastro plugin check <id>` SHALL warn about each manifest kind the core does not know, without failing a run that has no violation.
+
+#### Scenario: an unknown kind
+- WHEN the checked connector's manifest also declares a kind the core does not know and its run has no violation
+- THEN the check warns naming that kind and exits zero
+
+### Requirement: Plugin check stays on the CLI
+The plugin check SHALL be a CLI command and SHALL NOT be exposed as an MCP tool.
+
+#### Scenario: the MCP tool list
+- WHEN an agent lists MCP tools
+- THEN no plugin check tool is listed
