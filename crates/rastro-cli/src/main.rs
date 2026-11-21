@@ -477,7 +477,7 @@ fn citation_block(s: &rastro_core::knowledge::Citation) -> render::Block {
 }
 fn search_text(text: &str, found: &SearchResponse) -> String {
     if found.results.is_empty() {
-        let mut text = format!("no evidence found for \"{text}\"");
+        let mut text = render::empty(&format!("evidence found for \"{text}\""));
         if !found.coverage.is_empty() {
             text += &format!(
                 "\n\n{}",
@@ -810,55 +810,59 @@ fn commitments_text(list: &rastro_core::commitments::Commitments) -> String {
     }
     lines.join("\n")
 }
-/// The focus report for a terminal: the recommended focus, the needs-you items with their
-/// citations, the queue count, the gaps and the as-of time.
+/// The focus report for a terminal: the recommended focus and the needs-you items as blocks with
+/// their citations, the queue count, each gap as a block, and the as-of time.
 fn focus_text(report: &rastro_core::focus::Report) -> String {
-    use rastro_core::focus::{GapReason, Item, SourceKind};
-    let cited = |item: &Item| {
-        format!(
-            "{} ({} {} | observed {})",
-            display_safe(&item.title),
-            match item.citation.source {
-                SourceKind::Linear => "linear",
-                SourceKind::Meeting => "meeting",
-            },
-            display_safe(&item.citation.location),
-            item.citation.observed_at.to_rfc3339()
-        )
-    };
-    let mut lines = Vec::new();
-    match &report.focus {
-        Some(item) => lines.push(format!("Focus: {}", cited(item))),
-        None => lines.push(display_safe(
+    use rastro_core::focus::GapReason;
+    let mut blocks = Vec::new();
+    if let Some(item) = &report.focus {
+        blocks.push(focus_item_block("Focus", item));
+    }
+    for item in &report.needs_you {
+        blocks.push(focus_item_block("Needs you", item));
+    }
+    let mut text = if blocks.is_empty() {
+        display_safe(
             report
                 .notice
                 .as_deref()
                 .unwrap_or(rastro_core::focus::NOTHING_NEEDS_YOU),
-        )),
-    }
-    lines.extend(
-        report
-            .needs_you
-            .iter()
-            .map(|item| format!("Needs you: {}", cited(item))),
-    );
-    lines.push(format!("Queue: {} waiting", report.queue_count));
+        )
+    } else {
+        render::records(blocks)
+    };
+    text += &format!("\n\nQueue: {} waiting", report.queue_count);
     for gap in &report.gaps {
         let why = match gap.reason {
-            GapReason::SyncFailed => "its last sync failed".to_string(),
-            GapReason::ExtractionFailed { .. } => "its extraction failed".to_string(),
+            GapReason::SyncFailed => "its last sync failed",
+            GapReason::ExtractionFailed { .. } => "its extraction failed",
         };
-        let as_of = gap.as_of.map_or_else(
-            || "never read".to_string(),
-            |t| format!("as of {}", t.to_rfc3339()),
-        );
-        lines.push(format!(
-            "Gap: {} | {why} | {as_of}",
-            display_safe(&gap.name)
-        ));
+        let as_of = gap
+            .as_of
+            .map_or_else(|| "never read".to_string(), render::time);
+        let block = render::Block::new(format!("Gap: {}", display_safe(&gap.name)))
+            .field("Reason", why)
+            .field("As of", as_of);
+        text += &format!("\n\n{}", block);
     }
-    lines.push(format!("As of {}", report.as_of.to_rfc3339()));
-    lines.join("\n")
+    text += &format!("\n\nAs of: {}", render::time(report.as_of));
+    text
+}
+
+/// One focus item as a block: its rank and title as the header, then its citation fields.
+fn focus_item_block(rank: &str, item: &rastro_core::focus::Item) -> render::Block {
+    use rastro_core::focus::SourceKind;
+    let kind = match item.citation.source {
+        SourceKind::Linear => "linear",
+        SourceKind::Meeting => "meeting",
+    };
+    render::Block::new(format!("{rank}: {}", display_safe(&item.title)))
+        .field(
+            "Source",
+            format!("{kind} {}", display_safe(&item.citation.name)),
+        )
+        .field("Location", display_safe(&item.citation.location))
+        .field("Observed", render::time(item.citation.observed_at))
 }
 
 /// The name a queue source's kind goes by in the owner's reads.
@@ -926,220 +930,244 @@ fn actions_propose_text(proposed: &rastro_core::actions::Proposed) -> String {
     lines.join("\n")
 }
 
-/// The queue: each proposal or question with its id and source, then each source's gap.
+/// The queue: its explanatory preamble, then each proposal or question as a block — its id on its
+/// own line so the owner can copy it straight into an answer — then each source's gap as a block.
+fn queue_text(queue: &rastro_core::queue::Queue) -> String {
+    let mut text = queue.notice.clone();
+    if queue.items.is_empty() && queue.gaps.is_empty() {
+        text += &format!("\n{}", render::empty("proposals or questions waiting"));
+        return text;
+    }
+    let blocks = queue
+        .items
+        .iter()
+        .map(queue_item_block)
+        .chain(queue.gaps.iter().map(queue_gap_block));
+    text += &format!("\n\n{}", render::records(blocks));
+    text
+}
+
+/// One queue item as a block: its kind as the header, its content-addressed id on its own line,
+/// then its source and the fields its kind carries.
 #[expect(
     clippy::too_many_lines,
-    reason = "each item, its source and the gaps after them are written in one pass, so their order reads at a glance"
+    reason = "each kind's fields are written in one pass, so what a proposal, question or Act shows reads at a glance"
 )]
-fn queue_text(queue: &rastro_core::queue::Queue) -> String {
+fn queue_item_block(item: &rastro_core::queue::Item) -> render::Block {
     use rastro_core::queue::ItemKind;
-    let mut lines = vec![queue.notice.clone()];
-    if queue.items.is_empty() && queue.gaps.is_empty() {
-        lines.push("Nothing is waiting".into());
-    }
-    for item in &queue.items {
-        let source = format!(
-            "{} {}",
-            queue_source_kind(item.source.kind),
-            display_safe(&item.source.name)
-        );
-        match item.kind {
-            ItemKind::ActionProposal => {
-                let action = item.action.as_ref().expect("an action item carries one");
-                match &item.act {
-                    Some(run) => {
-                        let left = match item.runs_in_seconds {
-                            Some(seconds) if seconds > 0 => {
-                                format!("runs in {}", grace_text(seconds.unsigned_abs()))
-                            }
-                            _ => "due now".into(),
-                        };
-                        lines.push(format!(
-                            "Pending Act | {} | {left} | {}",
-                            display_safe(&action.fields.title),
-                            run.stop_command
-                                .clone()
-                                .unwrap_or_else(|| rastro_core::actions::stop_command(&run.id)),
-                        ));
-                        lines.push(format!(
-                            "  Id: {} | Source: {source} | Scope: {}",
-                            item.id,
-                            display_safe(&item.source.scope)
-                        ));
+    let header = match item.kind {
+        ItemKind::ActionProposal => {
+            if item.act.is_some() {
+                "Pending Act"
+            } else {
+                "Action proposal"
+            }
+        }
+        ItemKind::Proposal => "Proposal",
+        ItemKind::Question => "Question",
+    };
+    let source = format!(
+        "{} {}",
+        queue_source_kind(item.source.kind),
+        display_safe(&item.source.name)
+    );
+    let mut block = render::Block::new(header)
+        .field("Id", &item.id)
+        .field("Source", source);
+    match item.kind {
+        ItemKind::ActionProposal => {
+            let action = item.action.as_ref().expect("an action item carries one");
+            block = block.field("Scope", display_safe(&item.source.scope));
+            if let Some(run) = &item.act {
+                let when = match item.runs_in_seconds {
+                    Some(seconds) if seconds > 0 => {
+                        format!("runs in {}", grace_text(seconds.unsigned_abs()))
                     }
-                    None => lines.push(format!(
-                        "Action proposal | Id: {} | Source: {source} | Scope: {}",
-                        item.id,
-                        display_safe(&item.source.scope)
-                    )),
-                }
-                lines.extend(action_proposal_lines(action));
-                if !item.possible_duplicates.is_empty() {
-                    lines.push(format!(
-                        "  Warning: possible duplicate of {}",
-                        (item.possible_duplicates.iter())
+                    _ => "due now".into(),
+                };
+                block = block.field("When", when).field(
+                    "Stop",
+                    run.stop_command
+                        .clone()
+                        .unwrap_or_else(|| rastro_core::actions::stop_command(&run.id)),
+                );
+            }
+            block = action_fields(block, action);
+            if !item.possible_duplicates.is_empty() {
+                block = block.field(
+                    "Warning",
+                    format!(
+                        "possible duplicate of {}",
+                        item.possible_duplicates
+                            .iter()
                             .map(|id| display_safe(id))
                             .collect::<Vec<_>>()
                             .join(", ")
-                    ));
+                    ),
+                );
+            }
+        }
+        ItemKind::Proposal => {
+            let h = item.proposal.as_ref().expect("a proposal item carries one");
+            let date = match &h.stated_date.text {
+                Some(text) => display_safe(text),
+                None => "unknown".into(),
+            };
+            block = block
+                .field("Scope", display_safe(&item.source.scope))
+                .field("Kind", h.kind.as_str())
+                .field("From", commitment_party_text(&h.responsible))
+                .field("To", commitment_party_text(&h.recipient))
+                .field("Promise", display_safe(&h.promise))
+                .field("Date", date)
+                .field("Terms", h.terms.join(", "))
+                .field("Quote", format!("\"{}\"", display_escaped(&h.quote.text)))
+                .field("Turn", h.quote.turn)
+                .field("Speaker", display_safe(&h.quote.speaker))
+                .field("Span", format!("[{}, {})", h.quote.start, h.quote.end));
+        }
+        ItemKind::Question if item.correction.is_some() => {
+            let c = item.correction.as_ref().expect("checked by the arm");
+            let claim = &c.claim.claim;
+            let (kind, mark) = match c.kind {
+                rastro_core::queue::CorrectionKind::LapsedRetraction => {
+                    ("retraction lapsed", "earlier retracted")
                 }
+                rastro_core::queue::CorrectionKind::StaleConfirmation => {
+                    ("confirmation stale", "stale")
+                }
+            };
+            block = block
+                .field("Kind", kind)
+                .field("Claim", &claim.id)
+                .field("Status", format!("{} ({mark})", claim.status))
+                .field("Intent", &c.intent)
+                .field("Answer", "yes to hold it again");
+        }
+        ItemKind::Question if item.action.is_some() => {
+            let action = item.action.as_ref().expect("an Ask question carries one");
+            block = block
+                .field("Scope", display_safe(&item.source.scope))
+                .field("Ask", "yes to run it once, no to reject it")
+                .field("Action", display_safe(&action.action))
+                .field("Title", display_safe(&action.fields.title))
+                .field("Team", display_safe(&action.fields.team));
+        }
+        ItemKind::Question => {
+            let q = item.question.as_ref().expect("a question item carries one");
+            let account = |a: &rastro_core::queue::Account| {
+                let mut text = display_safe(&a.identifier);
+                if !a.names.is_empty() {
+                    text += &format!(
+                        " ({})",
+                        a.names
+                            .iter()
+                            .map(|n| display_safe(n))
+                            .collect::<Vec<_>>()
+                            .join(", ")
+                    );
+                }
+                text
+            };
+            let reason = |r: &rastro_core::identity::CandidateReason| {
+                let name = serde_json::to_value(r.reason)
+                    .ok()
+                    .and_then(|v| v.as_str().map(String::from))
+                    .unwrap_or_default();
+                format!(
+                    "{name}: {} = {}",
+                    display_safe(&r.values[0]),
+                    display_safe(&r.values[1])
+                )
+            };
+            block = block.field(
+                "Accounts",
+                format!("{} ~ {}", account(&q.accounts[0]), account(&q.accounts[1])),
+            );
+            for r in &q.reasons {
+                block = block.field("Reason", reason(r));
             }
-            ItemKind::Proposal => {
-                let h = item.proposal.as_ref().expect("a proposal item carries one");
-                lines.push(format!(
-                    "Proposal | Id: {} | Source: {source} | Scope: {}",
-                    item.id,
-                    display_safe(&item.source.scope)
-                ));
-                let date = match &h.stated_date.text {
-                    Some(text) => display_safe(text),
-                    None => "unknown".into(),
-                };
-                lines.push(format!(
-                    "  {} | {} -> {} | Promise: {} | Date: {} | Terms: {}",
-                    h.kind.as_str(),
-                    commitment_party_text(&h.responsible),
-                    commitment_party_text(&h.recipient),
-                    display_safe(&h.promise),
-                    date,
-                    h.terms.join(", ")
-                ));
-                lines.push(format!(
-                    "  \"{}\" | Turn: {} | Speaker: {} | Span: [{}, {})",
-                    display_escaped(&h.quote.text),
-                    h.quote.turn,
-                    display_safe(&h.quote.speaker),
-                    h.quote.start,
-                    h.quote.end
-                ));
-            }
-            ItemKind::Question if item.correction.is_some() => {
-                let c = item.correction.as_ref().expect("checked by the arm");
-                let claim = &c.claim.claim;
-                let (kind, mark) = match c.kind {
-                    rastro_core::queue::CorrectionKind::LapsedRetraction => {
-                        ("retraction lapsed", "earlier retracted")
-                    }
-                    rastro_core::queue::CorrectionKind::StaleConfirmation => {
-                        ("confirmation stale", "stale")
-                    }
-                };
-                lines.push(format!("Question | Id: {} | Source: {source}", item.id));
-                lines.push(format!(
-                    "  {kind} | Claim: {} | Status: {} ({mark}) | Intent: {} | Answer yes to hold it again",
-                    claim.id, claim.status, c.intent
-                ));
-            }
-            ItemKind::Question if item.action.is_some() => {
-                let action = item.action.as_ref().expect("an Ask question carries one");
-                lines.push(format!(
-                    "Question | Id: {} | Source: {source} | Scope: {}",
-                    item.id,
-                    display_safe(&item.source.scope)
-                ));
-                lines.push(format!(
-                    "  Ask | Action: {} | Title: {} | Team: {} | Answer yes to run it once, no to reject it",
-                    display_safe(&action.action),
-                    display_safe(&action.fields.title),
-                    display_safe(&action.fields.team),
-                ));
-            }
-            ItemKind::Question => {
-                let q = item.question.as_ref().expect("a question item carries one");
-                lines.push(format!("Question | Id: {} | Source: {source}", item.id));
-                let account = |a: &rastro_core::queue::Account| {
-                    let mut text = display_safe(&a.identifier);
-                    if !a.names.is_empty() {
-                        text += &format!(
-                            " ({})",
-                            a.names
-                                .iter()
-                                .map(|n| display_safe(n))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        );
-                    }
-                    text
-                };
-                let reason = |r: &rastro_core::identity::CandidateReason| {
-                    let name = serde_json::to_value(r.reason)
-                        .ok()
-                        .and_then(|v| v.as_str().map(String::from))
-                        .unwrap_or_default();
-                    format!(
-                        "{name}: {} = {}",
-                        display_safe(&r.values[0]),
-                        display_safe(&r.values[1])
-                    )
-                };
-                let reasons: Vec<String> = q.reasons.iter().map(reason).collect();
-                lines.push(format!(
-                    "  {} ~ {} | {} | Name: {}",
-                    account(&q.accounts[0]),
-                    account(&q.accounts[1]),
-                    reasons.join(" | "),
-                    display_safe(&q.name)
-                ));
-            }
+            block = block.field("Name", display_safe(&q.name));
         }
     }
-    for gap in &queue.gaps {
-        let mut line = format!(
-            "Gap: {} | Kind: {} | Scope: {} | Run: {}",
-            display_safe(&gap.source.name),
-            queue_source_kind(gap.source.kind),
-            display_safe(&gap.source.scope),
-            gap.run
-        );
-        line += match gap.state {
-            rastro_core::queue::GapState::FoundNothing => " | Found nothing",
-            rastro_core::queue::GapState::Failed => " | Failed",
-            rastro_core::queue::GapState::CouldNotLook => " | Couldn't look",
-        };
-        if let Some(cause) = gap.cause {
-            line += &format!(" | Cause: {}", cause.as_str());
-        }
-        if let Some(reason) = &gap.reason {
-            line += &format!(" | Reason: {}", display_safe(reason));
-        }
-        lines.push(line);
-    }
-    lines.join("\n")
+    block
 }
 
-/// The outcomes: each item with what happened to it and when, then what was shown and acted on.
-fn outcomes_text(outcomes: &rastro_core::queue::Outcomes) -> String {
-    let mut lines = vec![outcomes.notice.clone()];
-    if outcomes.outcomes.is_empty() {
-        lines.push("Nothing has happened yet".into());
+/// An action proposal's fields on a block: what it would do, the assignee and why, and what it
+/// cites.
+fn action_fields(
+    mut block: render::Block,
+    action: &rastro_core::actions::Proposal,
+) -> render::Block {
+    let fields = &action.fields;
+    block = block
+        .field("Action", display_safe(&action.action))
+        .field("Title", display_safe(&fields.title))
+        .field("Team", display_safe(&fields.team))
+        .field("Assignee", display_safe(&fields.assignee))
+        .field("Why", display_safe(&action.why));
+    if let Some(description) = &fields.description {
+        block = block.field("Description", display_safe(description));
     }
-    for outcome in &outcomes.outcomes {
-        let kind = match outcome.kind {
-            rastro_core::queue::OutcomeKind::Accepted => "accepted",
-            rastro_core::queue::OutcomeKind::AcceptedWithEdits => "accepted with edits",
-            rastro_core::queue::OutcomeKind::Rejected => "rejected",
-            rastro_core::queue::OutcomeKind::Answered => "answered",
-            rastro_core::queue::OutcomeKind::BecameMoot => "became moot",
-            rastro_core::queue::OutcomeKind::Ignored => "ignored",
-        };
-        let mut line = format!(
-            "Item: {} | Kind: {kind} | At: {}",
-            outcome.item,
-            stamp(outcome.at)
+    if !action.cites.is_empty() {
+        block = block.field(
+            "Cites",
+            action
+                .cites
+                .iter()
+                .map(|c| display_safe(c))
+                .collect::<Vec<_>>()
+                .join(", "),
         );
-        if let Some(claim) = &outcome.claim {
-            line += &format!(" | Claim: {claim}");
-        }
-        if let Some(waited) = outcome.waited_seconds {
-            line += &format!(" | Waited: {waited}s");
-        }
-        lines.push(line);
     }
-    lines.push(format!(
-        "Shown: {} | Acted on: {}",
-        outcomes.totals.shown, outcomes.totals.acted_on
-    ));
-    lines.join("\n")
+    block
+}
+
+/// One source's gap as a block: its name, then what the run found and why.
+fn queue_gap_block(gap: &rastro_core::queue::Gap) -> render::Block {
+    let state = match gap.state {
+        rastro_core::queue::GapState::FoundNothing => "Found nothing",
+        rastro_core::queue::GapState::Failed => "Failed",
+        rastro_core::queue::GapState::CouldNotLook => "Couldn't look",
+    };
+    render::Block::new(format!("Gap: {}", display_safe(&gap.source.name)))
+        .field("Kind", queue_source_kind(gap.source.kind))
+        .field("Scope", display_safe(&gap.source.scope))
+        .field("Run", &gap.run)
+        .field("State", state)
+        .maybe("Cause", gap.cause.map(|c| c.as_str()))
+        .maybe("Reason", gap.reason.as_deref().map(display_safe))
+}
+
+/// The outcomes: what happened to each item as a block — its id first, then what and when — then
+/// the totals as their own block.
+fn outcomes_text(outcomes: &rastro_core::queue::Outcomes) -> String {
+    let body = if outcomes.outcomes.is_empty() {
+        render::empty("outcomes yet")
+    } else {
+        render::records(outcomes.outcomes.iter().map(outcome_block))
+    };
+    let totals = render::Block::new("Totals")
+        .field("Shown", outcomes.totals.shown)
+        .field("Acted on", outcomes.totals.acted_on);
+    format!("{}\n\n{}\n\n{}", outcomes.notice, body, totals)
+}
+
+/// One outcome as a block: the item it happened to, then what happened and when.
+fn outcome_block(outcome: &rastro_core::queue::Outcome) -> render::Block {
+    let kind = match outcome.kind {
+        rastro_core::queue::OutcomeKind::Accepted => "accepted",
+        rastro_core::queue::OutcomeKind::AcceptedWithEdits => "accepted with edits",
+        rastro_core::queue::OutcomeKind::Rejected => "rejected",
+        rastro_core::queue::OutcomeKind::Answered => "answered",
+        rastro_core::queue::OutcomeKind::BecameMoot => "became moot",
+        rastro_core::queue::OutcomeKind::Ignored => "ignored",
+    };
+    render::Block::new(outcome.item.as_str())
+        .field("Kind", kind)
+        .field("At", render::time(outcome.at))
+        .maybe("Claim", outcome.claim.as_deref())
+        .maybe("Waited", outcome.waited_seconds.map(|s| format!("{s}s")))
 }
 
 /// What a queue answer recorded: the item it named, then each owner intent.

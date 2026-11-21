@@ -207,6 +207,17 @@ impl Env {
         self.ok_at(&["queue", "outcomes"], Some(at))
     }
 
+    /// The human read of `args` with the core's clock at `at`: what the owner sees, not JSON.
+    fn human_at(&self, args: &[&str], at: &str) -> String {
+        let out = self.command(args).env("RASTRO_NOW", at).output().unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8_lossy(&out.stdout).to_string()
+    }
+
     /// Imports `meeting` from `file`, with the usual arguments plus `extra`.
     fn import_from(
         &self,
@@ -2401,6 +2412,114 @@ fn S15_a_rebuild_reproduces_the_accepted_claim_and_every_outcome_with_no_adapter
 
 /// The morning the owner works: two meetings' proposals — the second proposing another promise,
 /// so no item of the first already holds it — and one identity question.
+/// spec: Human records render as blocks
+/// S3: every pending item's content-addressed id stands on its own line, byte-for-byte the id a
+/// queue answer names, so the owner can copy it straight into an answer.
+#[test]
+fn each_queue_item_id_stands_on_its_own_line_and_the_answer_names_it() {
+    let env = the_morning();
+    let queue = env.queue();
+    let expected = ids(&queue);
+    assert!(expected.len() >= 2, "{queue}");
+
+    let printed = env.print_queue_at("2026-11-10T10:30:00Z");
+    // Each id stands on its own labelled line, byte-for-byte, packed with no other field.
+    for id in &expected {
+        let line = printed
+            .lines()
+            .find(|l| l.contains(id.as_str()))
+            .unwrap_or_else(|| panic!("no line names {id}: {printed}"));
+        assert_eq!(
+            line.trim(),
+            format!("Id: {id}"),
+            "the id does not stand on its own line: {printed}"
+        );
+    }
+    assert!(!printed.contains(" | "), "pipe-packed line: {printed}");
+
+    // An accept and an answer each name the same id byte-for-byte.
+    let budget = promised(&queue, "weekly-1");
+    let accept = env.human_at(&["queue", "accept", &budget], "2026-11-10T11:00:00Z");
+    assert!(
+        accept
+            .lines()
+            .any(|l| l.trim() == format!("Item: {budget}")),
+        "the accept does not name {budget}: {accept}"
+    );
+    let question = question(&queue, "github:account/1")["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let answer = env.human_at(
+        &["queue", "answer", &question, "yes"],
+        "2026-11-10T11:45:00Z",
+    );
+    assert!(
+        answer
+            .lines()
+            .any(|l| l.trim() == format!("Item: {question}")),
+        "the answer does not name {question}: {answer}"
+    );
+}
+
+/// spec: Empty and no-op results speak with one voice
+/// S6: on a store with nothing to show, queue, coverage and search each print one sentence
+/// starting `No ` that names what is absent.
+#[test]
+fn empty_queue_coverage_and_search_each_print_one_no_sentence() {
+    let env = Env::new();
+    for (args, absent) in [
+        (&["queue"][..], "No proposals or questions waiting"),
+        (&["coverage"][..], "No sources registered"),
+        (
+            &["search", "budget"][..],
+            "No evidence found for \"budget\"",
+        ),
+    ] {
+        let out = env.command(args).output().unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let text = String::from_utf8_lossy(&out.stdout);
+        assert!(
+            text.lines().any(|l| l == absent),
+            "{args:?} does not print {absent:?}: {text}"
+        );
+    }
+}
+
+/// spec: Human records render as blocks
+/// spec: Human timestamps share one format
+/// The outcomes read renders each outcome as a block — its item id first, then labelled fields
+/// with a minute-precision time — and the totals as their own block.
+#[test]
+fn outcomes_render_as_blocks_with_minute_precision_times_and_a_totals_block() {
+    let env = Env::new();
+    env.candidates(&good());
+    env.import_ok(
+        "weekly-1",
+        "work",
+        "2026-11-10T10:00:00Z",
+        &["--owner-speaker", "Alice"],
+    );
+    env.print_queue_at("2026-11-10T10:30:00Z");
+    let budget = promised(&env.queue(), "weekly-1");
+    env.ok_at(&["queue", "accept", &budget], Some("2026-11-10T11:00:00Z"));
+
+    let text = env.human_at(&["queue", "outcomes"], "2026-11-10T12:00:00Z");
+    // The accepted outcome is a block: its item id on the header line, then labelled fields.
+    assert!(
+        text.lines().any(|l| l == budget),
+        "no outcome block for {budget}: {text}"
+    );
+    assert!(text.contains("  Kind: accepted"), "{text}");
+    assert!(text.contains("  At: 2026-11-10 11:00 UTC"), "{text}");
+    assert!(text.contains("Totals\n  Shown: 2\n  Acted on: 1"), "{text}");
+    assert!(!text.contains(" | "), "pipe-packed line: {text}");
+}
+
 fn the_morning() -> Env {
     let env = Env::new();
     env.candidates(&good());
@@ -2685,19 +2804,13 @@ mod ask {
             String::from_utf8_lossy(&printed.stdout)
         );
         let text = String::from_utf8_lossy(&printed.stdout);
-        let line = text
-            .lines()
-            .find(|line| line.contains(&item))
+        let block = text
+            .split("\n\n")
+            .find(|block| block.lines().any(|l| l.trim() == format!("Id: {item}")))
             .unwrap_or_else(|| panic!("{text}"));
-        assert!(line.contains("Question"), "{line}");
-        let body = text
-            .lines()
-            .skip_while(|line| !line.contains(&item))
-            .take(3)
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(body.contains("linear.create_issue"), "{body}");
-        assert!(body.contains("Ask issue"), "{body}");
+        assert!(block.starts_with("Question"), "{block}");
+        assert!(block.contains("linear.create_issue"), "{block}");
+        assert!(block.contains("Ask issue"), "{block}");
 
         // No run started for the Ask match.
         let runs = env.ok_json_at(NOW, &["actions"])["runs"]
