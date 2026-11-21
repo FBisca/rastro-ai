@@ -290,7 +290,8 @@ impl<S: Storage> Rastro<S> {
     /// leaves the run untouched and returns `None`.
     ///
     /// Under the lock it reads the run again, and a run already done, undone, returned or stopped
-    /// is returned as it is. A pending Act is checked again (its rule still present and matching); a failed check
+    /// is returned as it is. A pending Act is checked again (its rule still present and matching,
+    /// its cell still at Act); a failed check
     /// records the run as `returned` and returns `None`, sending nothing. Then it asks the provider
     /// whether the issue under the run's id exists, and only when it does not
     /// asks it to create it, so a run cut off before it sent anything is created, and one whose
@@ -350,10 +351,10 @@ impl<S: Storage> Rastro<S> {
     }
 
     /// The re-check a pending Act passes before it executes: the rule it started under still exists
-    /// and matches the proposal, no claim the proposal cites was retracted or left the scope of the
-    /// source it writes to, and no open observed issue holds its title. `None` when every check
-    /// passes; otherwise the reason it fails, which stays in Rastro and is never sent to the outside
-    /// system.
+    /// and matches the proposal, its cell still sits at Act, no claim the proposal cites was retracted
+    /// or left the scope of the source it writes to, and no open observed issue holds its title. `None`
+    /// when every check passes; otherwise the reason it fails, which stays in Rastro and is never sent
+    /// to the outside system.
     fn recheck_act(&self, run: &Run) -> Result<Option<String>> {
         let rule = run
             .rule
@@ -380,6 +381,18 @@ impl<S: Storage> Rastro<S> {
         }
         let scope = Scope(run.source.scope.clone());
         self.storage.snapshot(|view| {
+            // A demotion during grace returns the Act: the cell must still sit at Act when the
+            // grace ends, exactly as when the rule matched.
+            let level =
+                crate::trust::cell_level(&self.config, view, &[], &run.action, &run.fields.team)?;
+            if level != crate::trust::Level::Act {
+                return Ok(Some(format!(
+                    "the cell {} on team {} sits at {}, below Act",
+                    run.action,
+                    run.fields.team,
+                    level.as_str()
+                )));
+            }
             let proposal = (view.action_proposals(&[])?)
                 .into_iter()
                 .find(|filed| filed.id == run.proposal)

@@ -905,6 +905,20 @@ fn queue_text(queue: &rastro_core::queue::Queue) -> String {
                     claim.id, claim.status, c.intent
                 ));
             }
+            ItemKind::Question if item.action.is_some() => {
+                let action = item.action.as_ref().expect("an Ask question carries one");
+                lines.push(format!(
+                    "Question | Id: {} | Source: {source} | Scope: {}",
+                    item.id,
+                    display_safe(&item.source.scope)
+                ));
+                lines.push(format!(
+                    "  Ask | Action: {} | Title: {} | Team: {} | Answer yes to run it once, no to reject it",
+                    display_safe(&action.action),
+                    display_safe(&action.fields.title),
+                    display_safe(&action.fields.team),
+                ));
+            }
             ItemKind::Question => {
                 let q = item.question.as_ref().expect("a question item carries one");
                 lines.push(format!("Question | Id: {} | Source: {source}", item.id));

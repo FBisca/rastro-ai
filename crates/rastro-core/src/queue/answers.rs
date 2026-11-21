@@ -10,7 +10,7 @@
 //! commitment, its standard terms justified by that intent alone. A yes to a question about a
 //! lapsed retraction or a stale confirmation records the earlier correction again, bound to the
 //! lifecycle state the claim has now.
-use super::{CorrectionKind, CorrectionQuestion, Item, read};
+use super::{CorrectionKind, CorrectionQuestion, Item, ItemKind, read, read_with_trust};
 use crate::actions::{self, NewRun, Run, RunStatus};
 use crate::identity::{
     self, AnswerPerson, ClaimStatement, ClaimTarget, EntityTarget, Intent, IntentKind,
@@ -513,7 +513,9 @@ impl<S: Storage> Rastro<S> {
         })
     }
 
-    /// Answers a question yes or no, naming the item. A question about a corrected claim takes
+    /// Answers a question yes or no, naming the item. An Ask question about an action — a matching
+    /// rule's proposal whose cell sits at Ask — runs the action exactly once as an accepted proposal
+    /// would on yes, and rejects it, running nothing, on no. A question about a corrected claim takes
     /// only a yes, which records the earlier correction again. One intent records the whole answer: the
     /// verdict, and for a yes the Person that holds the accounts and, when this answer creates
     /// it, the name it gives. The identity graph's own planner decides who holds whom, so a yes
@@ -521,6 +523,23 @@ impl<S: Storage> Rastro<S> {
     pub fn queue_answer(&mut self, item: &str, yes: bool, name: Option<&str>) -> Result<Answered> {
         let id = item.to_string();
         let name = name.map(String::from);
+        // An Ask question is answered in one step, outside the intent planner: yes runs the action
+        // as an accept would, no rejects it. Both record one intent naming the item, so it leaves
+        // the queue and its outcome reads accepted or rejected.
+        let ask = self.storage.snapshot(|view| {
+            Ok(read_with_trust(&self.config, view, &[])?
+                .items
+                .iter()
+                .any(|item| {
+                    item.id == id && item.kind == ItemKind::Question && item.action.is_some()
+                }))
+        })?;
+        if ask {
+            if yes {
+                return self.accept_action(&id, None);
+            }
+            return self.queue_reject(&id, "the owner answered no to the Ask question");
+        }
         let issued = self.issue(|view, resolution| {
             let pending = still_queued(view, &id)?;
             if let Some(correction) = &pending.correction {

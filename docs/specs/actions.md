@@ -258,7 +258,7 @@ A rule's grace window SHALL be its own `grace` when set, else its action's sensi
 - THEN `rastro rules check` shows its grace as 1 minute
 
 ### Requirement: A matching rule starts an Act
-When an agent's action proposal matches a rule on action, team and assignee `me`, and is not flagged as a possible duplicate, `rastro actions propose` SHALL record a pending Act run under that rule, due when its grace ends, SHALL answer with the run, the time it runs and its stop command, and SHALL send nothing.
+When an agent's action proposal matches a rule on action, team and assignee `me`, its cell sits at Act, and it is not flagged as a possible duplicate, `rastro actions propose` SHALL record a pending Act run under that rule, due when its grace ends, SHALL answer with the run, the time it runs and its stop command, and SHALL send nothing; a match whose cell sits below Act SHALL start no run and SHALL leave the proposal waiting in the queue.
 
 #### Scenario: a matching proposal starts a pending Act
 - WHEN with rule `my-issues` (team `H`, grace 10 minutes) an agent runs `rastro actions propose linear.create_issue --title T --team H --why W` at 10:00
@@ -271,6 +271,13 @@ When an agent's action proposal matches a rule on action, team and assignee `me`
 #### Scenario: a possible duplicate waits in the queue
 - WHEN with rule `my-issues` matching, an agent proposes a title equal to an open observed Linear issue's title
 - THEN `rastro queue` lists the proposal with its "possible duplicate of" mark, and `rastro actions` lists no run
+
+### Requirement: A rule cannot raise a demoted cell
+When a rule matches a proposal whose cell sits below Act, `rastro actions propose` SHALL start no run and SHALL leave the proposal waiting in the queue.
+
+#### Scenario: a demoted cell's match waits
+- WHEN a cell demoted to Propose has a matching rule and an agent proposes under it
+- THEN `rastro queue` lists the action proposal, `rastro actions` lists no run, and the fake Linear server receives nothing
 
 ### Requirement: An Act runs when its grace ends
 `rastro tick` SHALL execute each pending Act run whose grace has ended, creating the issue exactly once without an owner accept, and SHALL leave every pending Act whose grace has not ended untouched.
@@ -288,7 +295,7 @@ When an agent's action proposal matches a rule on action, team and assignee `me`
 - THEN the fake Linear server has still received one create
 
 ### Requirement: An Act is checked again before it runs
-Before executing a pending Act, Rastro SHALL check that its rule still exists and matches, that no claim it cites was retracted, and that no open observed issue holds its title; when any check fails the run SHALL read `returned`, nothing SHALL be sent, and its proposal SHALL wait in the queue.
+Before executing a pending Act, Rastro SHALL check that its rule still exists and matches, that its cell still sits at Act, that no claim it cites was retracted, and that no open observed issue holds its title; when any check fails the run SHALL read `returned`, nothing SHALL be sent, and its proposal SHALL wait in the queue.
 
 #### Scenario: the rule was removed
 - WHEN the rule a pending Act started under is removed from `config.toml` and `rastro tick` runs after its grace
@@ -301,6 +308,13 @@ Before executing a pending Act, Rastro SHALL check that its rule still exists an
 #### Scenario: an issue with the same title appeared
 - WHEN a sync observes an open Linear issue whose title equals a pending Act's title, and `rastro tick` runs after its grace
 - THEN the fake Linear server has received no create, and the run reads `returned`
+
+### Requirement: A demotion during grace returns the Act
+When a cell drops below Act while its Act is pending, `rastro tick` SHALL read the run returned at grace end and SHALL send nothing.
+
+#### Scenario: demotion during grace returns the run
+- WHEN a cell's level drops below Act while its Act is pending and `rastro tick` runs after its grace
+- THEN the run reads `returned`, the fake Linear server receives no create, and the proposal waits in the queue
 
 ### Requirement: A proposal a rule acted on leaves the queue
 Once the Act run a rule started on a proposal is no longer pending, the proposal SHALL leave `rastro queue` and the matches `rastro rules check` lists, and an answer to it SHALL be refused, unless the run reads `returned`.

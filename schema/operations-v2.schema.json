@@ -2653,7 +2653,7 @@
               "type": "null"
             }
           ],
-          "description": "The proposed action; present exactly when `kind` is `action_proposal`."
+          "description": "The proposed action; present on an `action_proposal`, and on the `question` a matching\nrule's proposal becomes when its cell sits at Ask — an Ask question that names the action\nand title and is answered yes or no."
         },
         "context": {
           "description": "What Rastro already knows about the parties the owner mapped: their visible claims, each\nonce. Context only — an item with claims beside it stays in the queue.",
@@ -3602,6 +3602,13 @@
         "action": {
           "type": "string"
         },
+        "changes": {
+          "description": "The cell's journal: every level change it derived, oldest first, each with the levels it\nmoved between, its cause and its time. Empty while the level never changed.",
+          "items": {
+            "$ref": "#/$defs/TrustLevelChange"
+          },
+          "type": "array"
+        },
         "clean": {
           "description": "How many clean outcomes the cell holds: kept runs the owner accepted unchanged, or a\nrule started.",
           "format": "uint",
@@ -3641,6 +3648,7 @@
         "level",
         "clean",
         "undos",
+        "changes",
         "promotion"
       ],
       "type": "object"
@@ -3675,7 +3683,7 @@
     },
     "TrustLevelChange": {
       "additionalProperties": false,
-      "description": "A level change: what caused it and when.",
+      "description": "A level change: the levels it moved between, what caused it and when. One entry of the\ncell's journal; the trust view names the last of them.",
       "properties": {
         "at": {
           "format": "date-time",
@@ -3683,9 +3691,17 @@
         },
         "cause": {
           "type": "string"
+        },
+        "from": {
+          "$ref": "#/$defs/Level"
+        },
+        "to": {
+          "$ref": "#/$defs/Level"
         }
       },
       "required": [
+        "from",
+        "to",
         "cause",
         "at"
       ],
