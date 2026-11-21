@@ -52,13 +52,14 @@ fn source_add_then_list_shows_the_source() {
     let age = before - start;
     assert!((age.num_seconds() - 90 * 86400).abs() < 5);
     let human = run(&mut command(home.path()), &["source", "list"]);
+    let window_start = start.format("%Y-%m-%d %H:%M UTC").to_string();
     for field in [
         "project",
         "github",
         "o/p",
         "personal",
         "1h",
-        source["window_start"].as_str().unwrap(),
+        window_start.as_str(),
     ] {
         assert!(human.contains(field), "missing {field}: {human}");
     }

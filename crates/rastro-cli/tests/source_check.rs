@@ -401,12 +401,9 @@ fn adding_a_source_with_bad_credentials_keeps_it_and_explains_the_failure() {
         "{text}"
     );
     assert!(!text.contains(wrong), "{text}");
-    let list = env.rastro(&[], &["source", "list"]);
-    assert!(
-        shown(&list).contains("work | Connector: linear"),
-        "{}",
-        shown(&list)
-    );
+    let list = shown(&env.rastro(&[], &["source", "list"]));
+    assert!(list.lines().any(|l| l == "work"), "{list}");
+    assert!(list.contains("Connector: linear"), "{list}");
 }
 
 /// A Slack source whose token holds exactly the read scopes reports the credential source and
@@ -514,8 +511,9 @@ fn a_slack_source_with_a_channel_id_is_saved() {
     let list = env.rastro(&[], &["source", "list"]);
     let shown_list = shown(&list);
     assert!(list.status.success(), "{shown_list}");
+    assert!(shown_list.lines().any(|l| l == "team"), "{shown_list}");
     assert!(
-        shown_list.contains("team | Connector: slack") && shown_list.contains("C0123ABCDE"),
+        shown_list.contains("Connector: slack") && shown_list.contains("C0123ABCDE"),
         "{shown_list}"
     );
 }
