@@ -1,5 +1,5 @@
 # Surfaces
-Paths: crates/rastro-cli/src/mcp.rs, crates/rastro-cli/src/main.rs, crates/rastro-cli/tests/mcp.rs, crates/rastro-cli/tests/catalog.rs, crates/rastro-cli/tests/actions_read.rs, crates/rastro-cli/tests/read_only.rs, crates/rastro-cli/tests/bounded_search_reader.rs, crates/rastro-cli/tests/about_why.rs, crates/rastro-operations/, crates/rastro-core/src/read_only.rs, crates/rastro-core/src/coverage/, crates/rastro-storage-sqlite/, schema/
+Paths: crates/rastro-cli/src/mcp.rs, crates/rastro-cli/src/main.rs, crates/rastro-cli/tests/mcp.rs, crates/rastro-cli/tests/catalog.rs, crates/rastro-cli/tests/actions_read.rs, crates/rastro-cli/tests/read_only.rs, crates/rastro-cli/tests/bounded_search_reader.rs, crates/rastro-cli/tests/about_why.rs, crates/rastro-cli/tests/plugin_check.rs, crates/rastro-core/src/host/plugin_check.rs, crates/rastro-operations/, crates/rastro-core/src/read_only.rs, crates/rastro-core/src/coverage/, crates/rastro-storage-sqlite/, schema/
 
 ## Requirements
 
