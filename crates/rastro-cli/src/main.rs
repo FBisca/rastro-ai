@@ -48,6 +48,23 @@ enum Command {
         #[command(flatten)]
         check: SourceCheckRequest,
     },
+    /// Work with installed plugins.
+    Plugin {
+        #[command(subcommand)]
+        command: PluginCommand,
+    },
+}
+#[derive(clap::Subcommand)]
+enum PluginCommand {
+    /// Run an installed connector once through the host's validation, storing nothing, and
+    /// name every protocol violation. Exits zero when the connector conforms.
+    Check {
+        /// The plugin id its manifest declares.
+        id: String,
+        /// A source option as key=value; repeat for more than one.
+        #[arg(long = "option", value_name = "KEY=VALUE")]
+        options: Vec<String>,
+    },
 }
 fn stamp(time: DateTime<Utc>) -> String {
     time.to_rfc3339_opts(SecondsFormat::Millis, true)
@@ -1532,6 +1549,7 @@ fn parse() -> (Cli, &'static str) {
                 Command::Mcp { .. } => "mcp",
                 Command::Tick => "tick",
                 Command::Check { .. } => "source.check",
+                Command::Plugin { .. } => "plugin.check",
             };
             (cli, operation)
         }
@@ -1564,6 +1582,46 @@ fn stderr_line(text: &str) {
     use std::io::Write;
     let _ = writeln!(std::io::stderr(), "{text}");
 }
+/// `rastro plugin check <id>`: one synthetic connector run through the host's validation,
+/// storing nothing. The exit code says whether the connector conformed. The human output is
+/// one block through the shared render pattern; `--json` keeps the envelope.
+fn plugin_check(id: &str, options: &[String], json: bool) -> i32 {
+    let fail = |message: String| {
+        if json {
+            println!("{}", envelope::failure("plugin.check", message));
+        } else {
+            stderr_line(&format!("error: {message}"));
+        }
+        1
+    };
+    let mut selector = std::collections::BTreeMap::new();
+    for option in options {
+        let Some((key, value)) = option.split_once('=') else {
+            return fail(format!("option {option} is not key=value"));
+        };
+        selector.insert(key.to_string(), value.to_string());
+    }
+    let locations = match Locations::resolve() {
+        Ok(locations) => locations,
+        Err(error) => return fail(format!("{error:#}")),
+    };
+    let report = rastro_core::host::plugin_check::run(&locations, id, selector);
+    if json {
+        println!("{}", envelope::success("plugin.check", &report));
+    } else {
+        let mut block = render::Block::new(display_safe(&report.plugin_id))
+            .field("Counts", tally(&report.counts))
+            .field("Coverage", report.coverage_label());
+        for warning in &report.warnings {
+            block = block.field("Warning", warning);
+        }
+        for violation in &report.violations {
+            block = block.field("Violation", violation);
+        }
+        println!("{block}");
+    }
+    i32::from(!report.violations.is_empty())
+}
 fn main() {
     let (cli, operation) = parse();
     let request = match cli.command {
@@ -1575,6 +1633,9 @@ fn main() {
         Command::Operation(request) => request,
         Command::Tick => std::process::exit(tick::run()),
         Command::Check { check } => std::process::exit(check::run(&check.source, cli.json)),
+        Command::Plugin {
+            command: PluginCommand::Check { id, options },
+        } => std::process::exit(plugin_check(&id, &options, cli.json)),
         Command::Mcp { scopes } => match mcp::run(scopes) {
             Ok(()) => return,
             Err(error) => {
