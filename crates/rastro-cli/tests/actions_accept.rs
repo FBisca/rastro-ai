@@ -154,14 +154,16 @@ fn accepting_an_action_proposal_creates_the_issue_once_and_the_run_reads_done() 
 
     let printed = env.rastro(&["actions"]);
     let text = String::from_utf8_lossy(&printed.stdout).into_owned();
-    let line = text
-        .lines()
-        .find(|line| line.contains("ENG-1"))
+    let block = text
+        .split("\n\n")
+        .find(|block| block.starts_with("Run "))
         .unwrap_or_else(|| panic!("{text}"));
-    assert!(line.contains("done"), "{line}");
+    assert!(block.lines().any(|l| l == "  Status: done"), "{block}");
     assert!(
-        line.contains("https://linear.example/acme/issue/ENG-1"),
-        "{line}"
+        block
+            .lines()
+            .any(|l| l == "  Issue: ENG-1 https://linear.example/acme/issue/ENG-1"),
+        "{block}"
     );
 }
 

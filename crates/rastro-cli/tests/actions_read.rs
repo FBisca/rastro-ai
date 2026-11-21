@@ -160,6 +160,8 @@ impl Drop for Mcp {
 }
 
 // spec: The owner reads why an action ran
+// spec: Human records render as blocks
+// spec: Human timestamps share one format
 #[test]
 fn an_agent_asking_the_actions_tool_for_a_run_gets_why_it_ran() {
     let env = Env::new();
@@ -237,17 +239,130 @@ fn an_agent_asking_the_actions_tool_for_a_run_gets_why_it_ran() {
 
     // The owner reads the same in words.
     let text = String::from_utf8_lossy(&env.rastro(&["actions", "show", id]).stdout).into_owned();
-    for part in [
-        "Why: owner asked in session after the red build",
-        &format!("Cites: {}", claims[0]),
-        &format!(
-            "Accepted: intent {}",
-            run["accept_intent"].as_str().unwrap()
-        ),
-        "Level: propose | Cell: linear.create_issue x ENG | Reach: others see it | Reversibility: can be undone",
+    assert_the_owner_reads_the_run_and_why(&text, id, &run, &claims);
+}
+
+/// The human `actions show` read: the run as a block, its id on the header line and one labelled
+/// field per line, then the why as its own block with the accept's time at minute precision.
+fn assert_the_owner_reads_the_run_and_why(text: &str, id: &str, run: &Value, claims: &[String]) {
+    assert!(text.lines().any(|l| l == format!("Run {id}")), "{text}");
+    for field in [
+        "  Status: done",
+        "  Level: propose",
+        "  Action: linear.create_issue",
+        "  Source: linear linear-work",
+        "  Scope: work",
+        "  Title: Flaky sync test",
+        "  Team: ENG",
+        "  Assignee: me",
+        "  Issue: ENG-1 https://linear.example/acme/issue/ENG-1",
     ] {
-        assert!(text.contains(part), "{part} missing: {text}");
+        assert!(text.lines().any(|l| l == field), "{field} missing: {text}");
     }
+    assert!(
+        text.lines()
+            .any(|l| l == "Why: owner asked in session after the red build"),
+        "{text}"
+    );
+    assert!(text.contains(&format!("Cites: {}", claims[0])), "{text}");
+    let accepted_at = run["accepted_at"].as_str().unwrap();
+    let minute = format!("{} UTC", accepted_at[..16].replace('T', " "));
+    assert!(
+        text.lines().any(|l| l
+            == format!(
+                "  Accepted: intent {}, {minute}",
+                run["accept_intent"].as_str().unwrap()
+            )),
+        "{text}"
+    );
+    for field in [
+        "  Queue: out, the owner's accept (intent ",
+        "  Level: propose",
+        "  Cell: linear.create_issue x ENG",
+        "  Reach: others see it",
+        "  Reversibility: can be undone",
+    ] {
+        assert!(
+            text.lines().any(|l| l.starts_with(field)),
+            "{field} missing: {text}"
+        );
+    }
+    assert!(!text.contains(" | "), "pipe-packed line: {text}");
+}
+
+// spec: Empty and no-op results speak with one voice
+#[test]
+fn reproposing_a_proposal_that_already_has_a_run_records_nothing_and_says_so() {
+    let env = Env::new();
+    let config = env.home.path().join("config/config.toml");
+    let text = fs::read_to_string(&config).unwrap();
+    fs::write(
+        &config,
+        format!(
+            "{text}\n[[rules]]\nname = \"my-issues\"\naction = \"linear.create_issue\"\n\
+             team = \"H\"\nassignee = \"me\"\n"
+        ),
+    )
+    .unwrap();
+    let args = [
+        "actions",
+        "propose",
+        "linear.create_issue",
+        "--title",
+        "Flaky sync test",
+        "--team",
+        "H",
+        "--why",
+        "owner asked",
+    ];
+    // The rule starts a pending Act at 10:00; a tick after its grace runs it to done.
+    let out = env
+        .command(&[args.to_vec(), vec!["--json"]].concat())
+        .env("RASTRO_NOW", "2026-11-19T10:00:00Z")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let first: Value = serde_json::from_slice::<Value>(&out.stdout).unwrap()["result"].clone();
+    assert_eq!(first["run"]["status"], "pending", "{first}");
+    support::seed::checked_now(env.home.path(), "linear-work", "work");
+    let tick = env
+        .command(&["tick"])
+        .env("RASTRO_NOW", "2026-11-19T10:11:00Z")
+        .output()
+        .unwrap();
+    assert!(
+        tick.status.success(),
+        "{}",
+        String::from_utf8_lossy(&tick.stderr)
+    );
+    assert_eq!(env.ok_json(&["actions"])["runs"][0]["status"], "done");
+
+    // The same proposal again: its run already exists, so the write records nothing new.
+    let out = env
+        .command(&args)
+        .env("RASTRO_NOW", "2026-11-19T10:12:00Z")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(text.contains("Already has a run"), "{text}");
+    assert!(
+        text.trim_end().ends_with("; nothing recorded"),
+        "the no-op write does not end with '; nothing recorded': {text}"
+    );
+
+    // Still the one run, the same one.
+    let runs = env.ok_json(&["actions"])["runs"].clone();
+    assert_eq!(runs.as_array().unwrap().len(), 1, "{runs}");
+    assert_eq!(runs[0]["id"], first["run"]["id"], "{runs}");
 }
 
 // spec: The owner reads why an action ran

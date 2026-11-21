@@ -140,13 +140,35 @@ impl Env {
 }
 
 // spec: The owner undoes an action
+// spec: Human records render as blocks
+// spec: Human timestamps share one format
 #[test]
 fn undoing_a_done_run_deletes_its_issue_and_the_run_reads_undone_with_the_undo_intent() {
     let env = Env::new();
     let run = env.done_run();
     let issue_id = env.linear.issues()[0]["id"].clone();
 
-    let undone = env.ok_json(&["actions", "undo", &run]);
+    // The undo reads as a block: the run's id on the header line, its fields one per line, and
+    // the undo's time at minute precision.
+    let out = env.rastro_at(&["actions", "undo", &run], "2026-11-19T12:00:00Z");
+    assert!(
+        out.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.lines().any(|l| l == format!("Undone: Run {run}")),
+        "{text}"
+    );
+    assert!(text.lines().any(|l| l == "  Status: undone"), "{text}");
+    assert!(
+        text.lines()
+            .any(|l| l.starts_with("  Undone: intent ") && l.ends_with(", 2026-11-19 12:00 UTC")),
+        "{text}"
+    );
+    let undone = env.run();
 
     let deletes = env.linear.deletes();
     assert_eq!(deletes.len(), 1, "one delete for the issue");

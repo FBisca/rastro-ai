@@ -274,12 +274,34 @@ impl Drop for Mcp {
 }
 
 // spec: The owner stops a pending Act
+// spec: Human records render as blocks
+// spec: Human timestamps share one format
 #[test]
 fn a_stopped_act_never_runs_and_its_proposal_leaves_the_queue() {
     let env = Env::new();
     let (run, proposal) = env.propose();
 
-    let stopped = env.ok_json(&["actions", "stop", &run], STOP_AT);
+    // The stop reads as a block: the run's id on the header line, its status and its grace end
+    // at minute precision on their own lines.
+    let out = env.rastro(&["actions", "stop", &run], STOP_AT);
+    assert!(
+        out.status.success(),
+        "{}{}",
+        String::from_utf8_lossy(&out.stderr),
+        String::from_utf8_lossy(&out.stdout)
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        text.lines().any(|l| l == format!("Stopped: Run {run}")),
+        "{text}"
+    );
+    assert!(text.lines().any(|l| l == "  Status: stopped"), "{text}");
+    assert!(
+        text.lines()
+            .any(|l| l == "  Grace ended: 2026-11-19 10:10 UTC"),
+        "{text}"
+    );
+    let stopped = env.run(STOP_AT);
     assert_eq!(stopped["status"], "stopped", "{stopped}");
 
     // The grace ends and a tick runs: nothing reaches Linear, and the run reads stopped.

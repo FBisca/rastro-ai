@@ -386,6 +386,8 @@ fn the_owners_rule_raises_the_cell() {
 }
 
 // spec: The trust view tells the whole story
+// spec: Human records render as blocks
+// spec: Human timestamps share one format
 #[test]
 fn a_row_tells_the_whole_story() {
     let env = Env::new();
@@ -421,19 +423,22 @@ fn a_row_tells_the_whole_story() {
         "{cell}"
     );
 
-    // The terminal row tells the same story: level, counts, last change with its cause, and
-    // what the next promotion needs.
+    // The terminal row tells the same story as a block: the cell's action on the header line,
+    // then level, counts, last change with its cause at minute precision, and what the next
+    // promotion needs.
     let text = env.ok_text(&["trust"]);
+    assert!(text.lines().any(|l| l == "linear.create_issue"), "{text}");
     for part in [
-        "Level: propose",
-        "Clean: 3",
-        "Undos: 1",
-        "Last change: undo",
-        "2026-11-04T12:00:00",
-        "Next promotion:",
+        "  Team: H",
+        "  Level: propose",
+        "  Clean: 3",
+        "  Undos: 1",
+        "  Last change: undo at 2026-11-04 12:00 UTC",
+        "  Next promotion:",
     ] {
         assert!(text.contains(part), "{part} missing from: {text}");
     }
+    assert!(!text.contains(" | "), "pipe-packed line: {text}");
 }
 
 // spec: The trust view tells the whole story
@@ -486,6 +491,7 @@ fn hidden_scopes_count_nowhere() {
 }
 
 // spec: The trust view tells the whole story
+// spec: Empty and no-op results speak with one voice
 #[test]
 fn an_empty_store_lists_no_cells() {
     let env = Env::new();
@@ -494,8 +500,9 @@ fn an_empty_store_lists_no_cells() {
     assert_eq!(answer["cells"], json!([]), "{answer}");
     let text = env.ok_text(&["trust"]);
     assert!(
-        text.to_lowercase().contains("no trust history"),
-        "the empty read says the store holds no trust history: {text}"
+        text.lines()
+            .any(|l| l == "No trust history: no action has run"),
+        "the empty read says the store holds no trust history, in one voice: {text}"
     );
     // A database with sources but no runs: still no cells.
     env.ok_json(&["coverage"]);
