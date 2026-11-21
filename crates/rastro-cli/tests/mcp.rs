@@ -323,6 +323,43 @@ fn catalog_search_returns_the_deferred_read_entry() {
     assert_eq!(matches[0]["input_schema"]["required"], json!(["run"]));
 }
 
+/// spec: Trust operations ride the catalog
+/// a catalog search for trust names trust and trust.journal, each with the catalog entry's
+/// description and the input schema a client calls it with
+#[test]
+fn catalog_search_finds_the_trust_reads_with_their_schemas() {
+    let env = seeded();
+    let mut session = env.start();
+    session.initialize();
+    let call = session.call("catalog", json!({"mode": "search", "query": "trust"}));
+    let envelope = ok_result(&call["result"]);
+    assert_eq!(envelope["operation"], "catalog");
+    schema_validator()
+        .validate(envelope)
+        .unwrap_or_else(|e| panic!("{e}: {envelope}"));
+    let matches = envelope["result"]["matches"].as_array().unwrap();
+    let names: Vec<_> = matches
+        .iter()
+        .map(|m| m["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["trust", "trust.journal"], "{envelope}");
+    for (name, entry) in names.iter().zip(matches) {
+        let spec = catalog::find(name).unwrap();
+        assert_eq!(entry["description"], spec.description(), "{name}");
+        assert!(
+            !entry["description"].as_str().unwrap().is_empty(),
+            "{name}: no description"
+        );
+        assert_eq!(entry["input_schema"], spec.input_schema(), "{name}");
+        // The schema a client calls with: an object root, as the pinned Tool schema requires.
+        assert_eq!(entry["input_schema"]["type"], "object", "{name}");
+        assert_eq!(
+            entry["input_schema"]["additionalProperties"], false,
+            "{name}"
+        );
+    }
+}
+
 /// spec: Catalog calls use the scoped read-only path
 /// a non-deferred name, invalid arguments or a scope override is a JSON-RPC error before anything runs
 #[test]
@@ -372,6 +409,7 @@ fn catalog_refuses_invalid_calls_before_running_anything() {
 }
 
 /// spec: Only the read-only operations are tools
+/// spec: Trust operations ride the catalog
 /// exactly search, coverage, about, why, commitments, queue, focus, actions, rules_check and
 /// catalog, read-only, before and after a plugin install; a write, a CLI-only name, an unlisted
 /// deferred name or the former meeting_commitments tool is a JSON-RPC error and runs nothing
@@ -426,12 +464,16 @@ fn exactly_ten_read_only_tools_and_unlisted_calls_are_protocol_errors() {
         "index.rebuild",
         "claims.rebuild",
         "actions.propose",
+        "trust.pin",
+        "trust.reset",
         // CLI-only reads.
         "source.list",
         "queue.outcomes",
         "identity.me",
-        // The unlisted deferred read and the former meeting tool.
+        // The unlisted deferred reads and the former meeting tool.
         "actions.show",
+        "trust",
+        "trust.journal",
         "meeting.commitments",
     ] {
         let spec = catalog::find(name).unwrap_or_else(|| panic!("no catalog entry {name}"));
@@ -3722,4 +3764,149 @@ fn S17_an_mcp_client_cannot_answer_a_queue_item() {
         queue_before["structuredContent"], queue_after["structuredContent"],
         "the queue reads the same"
     );
+}
+
+/// A store with trust history in two scopes: a work cell — the owner's rule, two clean runs,
+/// one undone — and a personal cell with no rule, one clean run, undone. The source config
+/// ends back in scope `work`.
+fn trust_history_env() -> Env {
+    let env = Env::new();
+    support::provider::install(&env.home.path().join("config"), |_| {});
+    let config = env.home.path().join("config/config.toml");
+    let source = |scope: &str| {
+        format!(
+            "[[sources]]\nname = \"linear-work\"\nconnector = \"linear\"\nselector = {{}}\n\
+             scope = \"{scope}\"\nfreshness_rule = \"1h\"\nwindow_start = \"2026-08-01T00:00:00Z\"\n\
+             keep_original = false\n"
+        )
+    };
+    fs::write(&config, source("work")).unwrap();
+    let at = |day: u32| format!("2026-11-{day:02}T10:00:00Z");
+    let cli = |args: &[&str], now: &str| -> Value {
+        let out = env
+            .command(&[args, &["--json"]].concat())
+            .env("RASTRO_NOW", now)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?}: {}{}",
+            String::from_utf8_lossy(&out.stderr),
+            String::from_utf8_lossy(&out.stdout)
+        );
+        serde_json::from_slice::<Value>(&out.stdout).unwrap()
+    };
+    let clean_run = |title: &str, team: &str, now: &str| -> String {
+        let item = cli(
+            &[
+                "actions",
+                "propose",
+                "linear.create_issue",
+                "--title",
+                title,
+                "--team",
+                team,
+                "--why",
+                "owner asked",
+            ],
+            now,
+        )["result"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string();
+        let answered = cli(&["queue", "accept", &item], now);
+        assert_eq!(answered["result"]["run"]["status"], "done", "{answered}");
+        answered["result"]["run"]["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    // Two clean work runs, then the owner's rule and an undo: the work cell demotes and the
+    // journal names the undo.
+    clean_run("Work 1", "H", &at(1));
+    let undone = clean_run("Work 2", "H", &at(2));
+    fs::write(
+        &config,
+        format!(
+            "{}\n[[rules]]\nname = \"my-issues\"\naction = \"linear.create_issue\"\n\
+             team = \"H\"\nassignee = \"me\"\n",
+            source("work")
+        ),
+    )
+    .unwrap();
+    cli(&["actions", "undo", &undone], &at(3));
+    // A personal cell: one clean run and its undo, no rule.
+    fs::write(&config, source("personal")).unwrap();
+    let hidden = clean_run("Personal 1", "G", &at(4));
+    cli(&["actions", "undo", &hidden], &at(5));
+    fs::write(&config, source("work")).unwrap();
+    env
+}
+
+/// spec: Trust operations ride the catalog
+/// the gateway's trust and trust.journal calls under a set of launch scopes answer exactly the
+/// CLI's `trust --json` and `trust journal --json`; a narrower set hides the other scope's
+/// journal changes
+#[test]
+fn a_gateway_trust_call_answers_the_cli_read_under_the_same_scopes() {
+    let env = trust_history_env();
+    let read_at = "2026-11-06T10:00:00Z";
+    let cli = |args: &[&str]| -> Value {
+        let out = env
+            .command(&[args, &["--json"]].concat())
+            .env("RASTRO_NOW", read_at)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?}: {}{}",
+            String::from_utf8_lossy(&out.stderr),
+            String::from_utf8_lossy(&out.stdout)
+        );
+        serde_json::from_slice::<Value>(&out.stdout).unwrap()
+    };
+    let trust = cli(&["trust"]);
+    let journal = cli(&["trust", "journal"]);
+    // Non-vacuous: two cells in two scopes, and one journal change in each.
+    let teams: Vec<_> = trust["result"]["cells"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["team"].as_str().unwrap())
+        .collect();
+    assert_eq!(teams, ["G", "H"], "{trust}");
+    let changes = journal["result"]["changes"].as_array().unwrap();
+    assert_eq!(changes.len(), 2, "{journal}");
+    assert_eq!(changes[0]["cell"]["team"], "G", "{journal}");
+    assert_eq!(changes[1]["cell"]["team"], "H", "{journal}");
+
+    // The launch scopes cover the store: the gateway answers exactly the CLI's envelopes.
+    let mut serve = env.command(&["mcp", "--scope", "work", "--scope", "personal"]);
+    serve.env("RASTRO_NOW", read_at);
+    let mut session = Session::start(serve);
+    session.initialize();
+    for (operation, cli_envelope) in [("trust", &trust), ("trust.journal", &journal)] {
+        let call = session.call(
+            "catalog",
+            json!({"mode": "call", "operation": operation, "arguments": {}}),
+        );
+        let envelope = ok_result(&call["result"]);
+        schema_validator()
+            .validate(envelope)
+            .unwrap_or_else(|e| panic!("{e}: {envelope}"));
+        assert_eq!(envelope, cli_envelope, "{operation}");
+    }
+    // A narrower launch set reads only its scopes: the personal cell's change is absent.
+    let mut serve = env.command(&["mcp", "--scope", "work"]);
+    serve.env("RASTRO_NOW", read_at);
+    let mut narrow = Session::start(serve);
+    narrow.initialize();
+    let call = narrow.call(
+        "catalog",
+        json!({"mode": "call", "operation": "trust.journal", "arguments": {}}),
+    );
+    let envelope = ok_result(&call["result"]);
+    let changes = envelope["result"]["changes"].as_array().unwrap();
+    assert_eq!(changes.len(), 1, "{envelope}");
+    assert_eq!(changes[0]["cell"]["team"], "H", "{envelope}");
 }
