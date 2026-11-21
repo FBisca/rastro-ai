@@ -1,8 +1,11 @@
 //! The plugin host: finds a connector, spawns it, and ingests what it submits (ADR 0003).
 //! Sequential and happy-path first; hardening against crashes and silence builds on `drive`.
-use crate::evidence::{Grant, validate};
+use crate::evidence::{Evidence, Grant, validate};
 use crate::runs::{Observer, RunReport, Stage};
-use crate::{Appended, Counts, CoverageRecord, CoverageState, Locations, RunEnd, Source, Storage};
+use crate::{
+    Appended, Counts, CoverageRecord, CoverageState, Locations, RunEnd, Source, Storage,
+    display_safe,
+};
 use anyhow::{Result, bail};
 use chrono::{DateTime, SecondsFormat, Utc};
 use rastro_plugin_sdk::{
@@ -26,6 +29,7 @@ pub(crate) mod check;
 mod extract;
 mod io;
 mod judge;
+pub mod plugin_check;
 pub mod task;
 pub use extract::extract;
 pub(crate) use extract::vocabulary;
@@ -207,6 +211,9 @@ struct Session<'a> {
     coverage: Option<CoverageReport>,
     /// Told how the read goes; it can't change it.
     observer: &'a mut dyn Observer,
+    /// Each protocol violation as the host saw it, for a check to print; a sync records the
+    /// run's one reason instead.
+    violations: Vec<String>,
 }
 
 /// Runs one connector over `[from, to)` and records the run and its coverage.
@@ -249,6 +256,7 @@ pub fn run<S: Storage>(
         counts: Counts::default(),
         coverage: None,
         observer,
+        violations: Vec::new(),
     };
     session.observer.stage(&source.name, &Stage::Read);
     let outcome = match plugin {
@@ -259,7 +267,10 @@ pub fn run<S: Storage>(
             &window,
             source.keep_original,
         ) {
-            Some(grant) => drive(storage, plugin, &binding, &grant, &mut session),
+            Some(grant) => {
+                let mut append = |evidence: &Evidence| storage.append_evidence(run_id, evidence);
+                drive(&mut append, plugin, &binding, &grant, &mut session)
+            }
             None => Ok(Err("forbidden")),
         },
         Err(reason) => Ok(Err(reason)),
@@ -450,10 +461,11 @@ fn resolve(dir: &Path, command: &str) -> PathBuf {
     dir.join(command)
 }
 
-/// Spawns the connector and talks to it until `run.finish`. `Ok(Err(reason))` is a failed run;
-/// `Err` is a storage error.
-fn drive<S: Storage>(
-    storage: &mut S,
+/// Spawns the connector and talks to it until `run.finish`, appending through `append`: the
+/// one place a run touches storage, so a check can run the same conversation with nothing
+/// stored. `Ok(Err(reason))` is a failed run; `Err` is a storage error.
+fn drive(
+    append: &mut dyn FnMut(&Evidence) -> Result<Appended>,
     plugin: &Plugin,
     binding: &RunBinding,
     grant: &Grant,
@@ -469,7 +481,7 @@ fn drive<S: Storage>(
         return Ok(Err("not_installed"));
     };
     let outcome = match converse(
-        storage,
+        append,
         &mut connector.wire,
         &connector.relay,
         plugin,
@@ -522,6 +534,7 @@ impl Connector {
             jobs: io::write_lines(stdin, &tally),
             events: io::read_lines(stdout, limits.max_line, &tally),
             deadline: limits.silence,
+            invalid_line: None,
         };
         Ok(Self {
             child,
@@ -630,6 +643,8 @@ struct Wire {
     events: Receiver<io::Event>,
     /// How long a write may take, and how long the connector may stay silent.
     deadline: Duration,
+    /// The last line that failed to parse as a protocol message, for a check to name it.
+    invalid_line: Option<String>,
 }
 impl Wire {
     fn send(&mut self, message: &Envelope) -> std::result::Result<(), &'static str> {
@@ -683,7 +698,10 @@ impl Wire {
         match self.events.recv_timeout(wait) {
             Ok(io::Event::Line(line)) => match serde_json::from_str::<Envelope>(&line) {
                 Ok(envelope) if envelope.is_well_formed() => Ok(envelope),
-                _ => Err("protocol"),
+                _ => {
+                    self.invalid_line = Some(line.trim_end().to_string());
+                    Err("protocol")
+                }
             },
             Ok(io::Event::TooLong | io::Event::Invalid) => Err("protocol"),
             Ok(io::Event::Eof) | Err(RecvTimeoutError::Disconnected) => Err("interrupted"),
@@ -713,8 +731,8 @@ fn handshake(
     Ok(if agreed { Ok(()) } else { Err("protocol") })
 }
 
-fn converse<S: Storage>(
-    storage: &mut S,
+fn converse(
+    append: &mut dyn FnMut(&Evidence) -> Result<Appended>,
     wire: &mut Wire,
     relay: &io::Relay,
     plugin: &Plugin,
@@ -727,22 +745,29 @@ fn converse<S: Storage>(
         manifest_id: plugin.manifest.id.clone(),
         run: binding.clone(),
     };
-    macro_rules! step {
-        ($e:expr) => {
-            match $e {
-                Ok(value) => value,
-                Err(reason) => return Ok(Err(reason)),
-            }
-        };
+    if let Err(reason) = handshake(wire, plugin, init)? {
+        session.violations.push(match wire.invalid_line.take() {
+            Some(line) => format!("invalid protocol line: {}", display_safe(&line)),
+            None => format!("handshake: {reason}"),
+        });
+        return Ok(Err(reason));
     }
-    step!(handshake(wire, plugin, init)?);
     loop {
-        let message = step!(wire.recv_ticking(|| {
+        let message = match wire.recv_ticking(|| {
             // Nothing arrived for a while: the count may still be due.
             session
                 .observer
                 .read_items(&binding.source, session.counts.submitted)
-        }));
+        }) {
+            Ok(message) => message,
+            Err(reason) => {
+                session.violations.push(match wire.invalid_line.take() {
+                    Some(line) => format!("invalid protocol line: {}", display_safe(&line)),
+                    None => reason.to_string(),
+                });
+                return Ok(Err(reason));
+            }
+        };
         match message.method.as_deref() {
             Some(EVIDENCE_SUBMIT) => {
                 session.counts.submitted += 1;
@@ -754,18 +779,20 @@ fn converse<S: Storage>(
                     .map_err(|error| format!("{error:#}"))
                     .and_then(|submit| validate(submit, grant, Utc::now()));
                 match checked {
-                    Ok(evidence) => match storage.append_evidence(binding.run_id, &evidence)? {
+                    Ok(evidence) => match append(&evidence)? {
                         Appended::New(_) => session.counts.accepted += 1,
                         Appended::Unchanged(_) => session.counts.unchanged += 1,
                     },
                     Err(why) => {
                         relay.line(&format!("rejected evidence: {why}"));
+                        session.violations.push(format!("rejected evidence: {why}"));
                         session.counts.rejected += 1;
                     }
                 }
             }
             Some(COVERAGE_REPORT) => {
                 let Ok(report) = message.params::<CoverageReport>() else {
+                    session.violations.push("invalid coverage report".into());
                     return Ok(Err("protocol"));
                 };
                 let bound = report.source.as_ref().is_none_or(|s| *s == binding.source)
@@ -775,20 +802,36 @@ fn converse<S: Storage>(
                     session.coverage = Some(report);
                 } else {
                     relay.line("rejected coverage report: not the bound source, scope or window");
+                    session.violations.push(
+                        "rejected coverage report: not the bound source, scope or window".into(),
+                    );
                 }
             }
             Some(RUN_FINISH) => {
                 if message.id.is_none() {
+                    session
+                        .violations
+                        .push("run.finish without a request id".into());
                     return Ok(Err("protocol"));
                 }
                 let Ok(finish) = message.params::<RunFinish>() else {
+                    session.violations.push("invalid run.finish".into());
                     return Ok(Err("protocol"));
                 };
                 let reply = Envelope::response(message.id, session.counts)?;
-                step!(wire.send(&reply));
+                if let Err(reason) = wire.send(&reply) {
+                    session.violations.push(reason.to_string());
+                    return Ok(Err(reason));
+                }
                 return Ok(Ok(finish));
             }
-            _ => return Ok(Err("protocol")),
+            _ => {
+                session.violations.push(format!(
+                    "unexpected message: {}",
+                    message.method.as_deref().unwrap_or("a response")
+                ));
+                return Ok(Err("protocol"));
+            }
         }
     }
 }
