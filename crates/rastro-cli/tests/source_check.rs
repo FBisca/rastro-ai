@@ -16,18 +16,26 @@ use tempfile::TempDir;
 
 const LINEAR_KEY: &str = "lin_api_check_fixture_secret";
 const GITHUB_TOKEN: &str = "ghp_check_fixture_secret";
+const SLACK_TOKEN: &str = "xoxp_check_fixture_secret";
+/// The five read scopes a Slack token must hold, and no others.
+const SLACK_READ_SCOPES: &str =
+    "channels:read,channels:history,groups:read,groups:history,users:read";
 
-/// A loopback API that accepts one Linear key and one GitHub token and records each request.
+/// A loopback API that accepts one Linear key, one GitHub token and one Slack user token, and
+/// records each request. The Slack answer reports the token's scopes in `X-OAuth-Scopes`.
 struct Api {
     base: String,
     requests: Arc<Mutex<Vec<String>>>,
+    slack_scopes: Arc<Mutex<String>>,
 }
 impl Api {
     fn start() -> Self {
         let server = tiny_http::Server::http("127.0.0.1:0").unwrap();
         let base = format!("http://{}", server.server_addr().to_ip().unwrap());
         let requests = Arc::new(Mutex::new(Vec::new()));
+        let slack_scopes = Arc::new(Mutex::new(SLACK_READ_SCOPES.to_string()));
         let log = requests.clone();
+        let scopes = slack_scopes.clone();
         std::thread::spawn(move || {
             for mut request in server.incoming_requests() {
                 let auth = request
@@ -52,6 +60,12 @@ impl Api {
                     "/user" if auth == format!("Bearer {GITHUB_TOKEN}") => {
                         (200, json!({"login": "owner", "id": 1}))
                     }
+                    "/auth.test" if auth == format!("Bearer {SLACK_TOKEN}") => (
+                        200,
+                        json!({"ok": true, "url": "https://acme.slack.com/", "team": "Acme",
+                               "user": "owner", "team_id": "T0TEAM", "user_id": "U0OWNER"}),
+                    ),
+                    "/auth.test" => (200, json!({"ok": false, "error": "invalid_auth"})),
                     _ => (401, json!({"message": "Bad credentials"})),
                 };
                 let mut response =
@@ -59,31 +73,70 @@ impl Api {
                 response.add_header(
                     tiny_http::Header::from_bytes("Content-Type", "application/json").unwrap(),
                 );
+                if request.url() == "/auth.test" {
+                    let scopes = scopes.lock().unwrap().clone();
+                    response.add_header(
+                        tiny_http::Header::from_bytes("X-OAuth-Scopes", scopes.as_bytes()).unwrap(),
+                    );
+                }
                 let _ = request.respond(response);
             }
         });
-        Self { base, requests }
+        Self {
+            base,
+            requests,
+            slack_scopes,
+        }
     }
     fn requests(&self) -> Vec<String> {
         self.requests.lock().unwrap().clone()
+    }
+    /// What the scripted API reports as the Slack token's scopes from now on.
+    fn set_slack_scopes(&self, scopes: &str) {
+        *self.slack_scopes.lock().unwrap() = scopes.to_string();
     }
 }
 
 /// A home with a real connector installed and a fake API to talk to.
 struct Env {
     home: TempDir,
+    tools: TempDir,
     api: Api,
 }
 impl Env {
     fn new() -> Self {
-        static LINEAR: OnceLock<std::path::PathBuf> = OnceLock::new();
-        static GITHUB: OnceLock<std::path::PathBuf> = OnceLock::new();
+        // One cargo call builds the three connectors: nextest gives each test its own process,
+        // and a call per connector would queue every test on the same build lock three times.
+        static CONNECTORS: OnceLock<(std::path::PathBuf, std::path::PathBuf, std::path::PathBuf)> =
+            OnceLock::new();
         let env = Self {
             home: TempDir::new().unwrap(),
+            tools: TempDir::new().unwrap(),
             api: Api::start(),
         };
-        let linear = LINEAR.get_or_init(|| support::connector("rastro-connector-linear"));
-        let github = GITHUB.get_or_init(|| support::connector("rastro-connector-github"));
+        let (linear, github, slack) = CONNECTORS.get_or_init(|| {
+            let cargo = std::env::var("CARGO").unwrap_or_else(|_| "cargo".into());
+            let status = Command::new(cargo)
+                .args([
+                    "build",
+                    "--quiet",
+                    "-p",
+                    "rastro-connector-linear",
+                    "-p",
+                    "rastro-connector-github",
+                    "-p",
+                    "rastro-connector-slack",
+                ])
+                .status()
+                .unwrap();
+            assert!(status.success(), "building the connectors failed");
+            let dir = Path::new(env!("CARGO_BIN_EXE_rastro")).parent().unwrap();
+            (
+                support::binaries::private_copy(&dir.join("rastro-connector-linear")),
+                support::binaries::private_copy(&dir.join("rastro-connector-github")),
+                support::binaries::private_copy(&dir.join("rastro-connector-slack")),
+            )
+        });
         env.install(
             "rastro-connector-linear",
             include_str!("../../rastro-connector-linear/rastro-plugin.toml"),
@@ -94,6 +147,12 @@ impl Env {
             include_str!("../../rastro-connector-github/rastro-plugin.toml"),
             github,
         );
+        env.install(
+            "rastro-connector-slack",
+            include_str!("../../rastro-connector-slack/rastro-plugin.toml"),
+            slack,
+        );
+        env.keychain(None);
         env
     }
     fn install(&self, name: &str, manifest: &str, binary: &Path) {
@@ -104,7 +163,21 @@ impl Env {
         fs::copy(binary, &command).unwrap();
         fs::set_permissions(&command, fs::Permissions::from_mode(0o755)).unwrap();
     }
-    /// `rastro` with no credential of its own: an empty `PATH` hides the keychain and `gh`.
+    /// The `security` command the connector finds on `PATH`: it answers `token` for the item
+    /// `rastro-slack`, or fails as a keychain without it does. No test reads the real keychain.
+    fn keychain(&self, token: Option<&str>) {
+        let script = match token {
+            Some(token) => format!(
+                "#!/bin/sh\nfor a in \"$@\"; do [ \"$a\" = rastro-slack ] && echo '{token}' && exit 0; done\nexit 44\n"
+            ),
+            None => "#!/bin/sh\necho 'security: The specified item could not be found in the keychain.' >&2\nexit 44\n".into(),
+        };
+        let security = self.tools.path().join("security");
+        fs::write(&security, script).unwrap();
+        fs::set_permissions(&security, fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    /// `rastro` with no credential of its own: `PATH` holds only a keychain that finds nothing,
+    /// and no `gh`.
     fn rastro(&self, credentials: &[(&str, &str)], args: &[&str]) -> Output {
         let nowhere = self.home.path().join("nowhere");
         let mut command = Command::new(support::rastro());
@@ -112,9 +185,13 @@ impl Env {
             .env_clear()
             .env("RASTRO_HOME", self.home.path())
             .env("HOME", self.home.path())
-            .env("PATH", nowhere)
+            .env(
+                "PATH",
+                format!("{}:{}", self.tools.path().display(), nowhere.display()),
+            )
             .env("RASTRO_LINEAR_API_URL", &self.api.base)
             .env("RASTRO_GITHUB_API_URL", &self.api.base)
+            .env("RASTRO_SLACK_API_URL", &self.api.base)
             .envs(credentials.iter().copied())
             .args(args)
             .stdin(Stdio::null());
@@ -134,6 +211,13 @@ impl Env {
             "[[sources]]\nname = \"project\"\nconnector = \"github\"\nselector = {repo = \"o/p\"}\n\
              scope = \"work\"\nfreshness_rule = \"1h\"\nwindow_start = \"2026-08-01T00:00:00Z\"\n\
              keep_original = false\n",
+        );
+    }
+    fn slack_source(&self) {
+        self.configure(
+            "[[sources]]\nname = \"team\"\nconnector = \"slack\"\n\
+             selector = {channel = \"C0123ABCDE\"}\nscope = \"work\"\nfreshness_rule = \"1h\"\n\
+             window_start = \"2026-08-01T00:00:00Z\"\nkeep_original = false\n",
         );
     }
     /// Every file under the home but the installed plugins, by path.
@@ -323,4 +407,145 @@ fn adding_a_source_with_bad_credentials_keeps_it_and_explains_the_failure() {
         "{}",
         shown(&list)
     );
+}
+
+/// A Slack source whose token holds exactly the read scopes reports the credential source and
+/// success, and writes nothing.
+/// spec: The Slack check accepts only the read scopes
+/// spec: Source credentials can be checked without writing
+#[test]
+fn a_slack_source_with_exact_read_scopes_reports_the_credential_and_authenticates() {
+    let env = Env::new();
+    env.slack_source();
+    let before = env.state();
+    let output = env.rastro(&[("SLACK_USER_TOKEN", SLACK_TOKEN)], &["check", "team"]);
+    let text = shown(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("SLACK_USER_TOKEN"), "{text}");
+    assert!(text.contains("authenticated"), "{text}");
+    assert!(!text.contains(SLACK_TOKEN), "{text}");
+    assert_eq!(env.api.requests(), ["GET /auth.test"]);
+    assert_eq!(env.state(), before, "a check wrote");
+}
+
+/// A Slack token that also holds a write scope is rejected naming it, and exits unsuccessfully.
+/// spec: The Slack check accepts only the read scopes
+#[test]
+fn a_slack_token_with_a_write_scope_is_rejected_naming_it() {
+    let env = Env::new();
+    env.slack_source();
+    env.api
+        .set_slack_scopes(&format!("{SLACK_READ_SCOPES},chat:write"));
+    let before = env.state();
+    let output = env.rastro(&[("SLACK_USER_TOKEN", SLACK_TOKEN)], &["check", "team"]);
+    let text = shown(&output);
+    assert_eq!(output.status.code(), Some(1), "{text}");
+    assert!(text.contains("rejected"), "{text}");
+    assert!(text.contains("chat:write"), "{text}");
+    assert!(!text.contains(SLACK_TOKEN), "{text}");
+    assert_eq!(env.state(), before, "a check wrote");
+}
+
+/// A Slack token missing one read scope is rejected naming it, and exits unsuccessfully.
+/// spec: The Slack check accepts only the read scopes
+#[test]
+fn a_slack_token_missing_a_read_scope_is_rejected_naming_it() {
+    let env = Env::new();
+    env.slack_source();
+    env.api
+        .set_slack_scopes("channels:read,channels:history,groups:read,users:read");
+    let before = env.state();
+    let output = env.rastro(&[("SLACK_USER_TOKEN", SLACK_TOKEN)], &["check", "team"]);
+    let text = shown(&output);
+    assert_eq!(output.status.code(), Some(1), "{text}");
+    assert!(text.contains("rejected"), "{text}");
+    assert!(text.contains("groups:history"), "{text}");
+    assert!(!text.contains(SLACK_TOKEN), "{text}");
+    assert_eq!(env.state(), before, "a check wrote");
+}
+
+/// With `SLACK_USER_TOKEN` unset, the keychain item `rastro-slack` supplies the token and the
+/// check names it; the environment comes first when both hold a token.
+/// spec: A Slack token comes from the environment or the keychain and is never stored
+#[test]
+fn the_keychain_item_is_used_when_the_variable_is_unset() {
+    let env = Env::new();
+    env.slack_source();
+    env.keychain(Some(SLACK_TOKEN));
+    let before = env.state();
+    let output = env.rastro(&[], &["check", "team"]);
+    let text = shown(&output);
+    assert!(output.status.success(), "{text}");
+    assert!(text.contains("authenticated"), "{text}");
+    assert!(text.contains("keychain item rastro-slack"), "{text}");
+    assert!(!text.contains(SLACK_TOKEN), "{text}");
+    assert_eq!(env.api.requests(), ["GET /auth.test"]);
+    assert_eq!(env.state(), before, "a check wrote");
+    // The environment comes first when both hold a token.
+    let from_env = env.rastro(&[("SLACK_USER_TOKEN", SLACK_TOKEN)], &["check", "team"]);
+    let text = shown(&from_env);
+    assert!(from_env.status.success(), "{text}");
+    assert!(text.contains("SLACK_USER_TOKEN"), "{text}");
+    assert!(!text.contains("keychain"), "{text}");
+}
+
+/// A Slack source added with a channel id is saved with that channel.
+/// spec: A Slack source names one channel by its id
+#[test]
+fn a_slack_source_with_a_channel_id_is_saved() {
+    let env = Env::new();
+    let add = env.rastro(
+        &[],
+        &[
+            "source",
+            "add",
+            "team",
+            "--connector",
+            "slack",
+            "--scope",
+            "work",
+            "--option",
+            "channel=C0123ABCDE",
+        ],
+    );
+    let text = shown(&add);
+    assert!(add.status.success(), "{text}");
+    assert!(text.contains("Source registered: team"), "{text}");
+    let list = env.rastro(&[], &["source", "list"]);
+    let shown_list = shown(&list);
+    assert!(list.status.success(), "{shown_list}");
+    assert!(
+        shown_list.contains("team | Connector: slack") && shown_list.contains("C0123ABCDE"),
+        "{shown_list}"
+    );
+}
+
+/// A channel name instead of an id is refused with an error naming the declared `channel`
+/// option, and nothing is saved.
+/// spec: A Slack source names one channel by its id
+#[test]
+fn a_slack_channel_name_is_refused_naming_the_channel_option() {
+    let env = Env::new();
+    let config = env.home.path().join("config/config.toml");
+    let before = fs::read_to_string(&config).unwrap_or_default();
+    let add = env.rastro(
+        &[],
+        &[
+            "source",
+            "add",
+            "team",
+            "--connector",
+            "slack",
+            "--scope",
+            "work",
+            "--option",
+            "channel=general",
+        ],
+    );
+    let text = shown(&add);
+    assert!(!add.status.success(), "{text}");
+    assert!(text.contains("channel"), "{text}");
+    assert_eq!(fs::read_to_string(&config).unwrap_or_default(), before);
+    let list = env.rastro(&[], &["source", "list"]);
+    assert!(!shown(&list).contains("team"), "{}", shown(&list));
 }
