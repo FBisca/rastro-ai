@@ -59,11 +59,11 @@ requirements:
           when: a reply's text changes after its thread was extracted and the tick runs
           then: the thread is extracted again
 
-    - title: Chat turns come from message evidence
+    - title: A chat thread's turns come from its source's extractor
       shall: >-
-        The core SHALL build one turn per message of a thread in post order, labelled by its author's display
-        name with the author's id appended when two authors share a name, and SHALL resolve mentions to labels
-        in the turn text.
+        The core SHALL take a chat thread's turns from its source's extractor through `conversation.turns`, one
+        turn per message in post order with the speaker's account or label, its kind, the text with mentions
+        resolved and the evidence it cites.
       scenarios:
         - id: S9
           name: a multi-line message
@@ -78,10 +78,24 @@ requirements:
           when: a message mentions the token owner by id
           then: the turn text the adapter receives carries the owner's label in place of the mention
 
+    - title: The core refuses turns it cannot trace to the thread
+      shall: >-
+        An opted-in source's extractor SHALL declare `conversation.turns`, and the core SHALL refuse a turn that
+        cites evidence outside its thread.
+      scenarios:
+        - id: S17
+          name: a turn cites another thread
+          when: the extractor returns a turn citing a message outside the thread
+          then: the adapter receives no request for that thread and coverage counts it skipped because a turn was refused
+        - id: S18
+          name: an extractor without turns
+          when: the owner adds a source with `--extract-commitments` whose extractor does not declare `conversation.turns`
+          then: the command fails naming the extractor and the missing capability, and nothing is recorded
+
     - title: Chat parties are identified by account
       shall: >-
-        The token owner's turns SHALL be the owner's, and every other author SHALL resolve to its account by id,
-        never by name, so a candidate whose party is a bot account is excluded.
+        A turn whose speaker account the owner's Person holds SHALL be the owner's, every other speaker SHALL be
+        its account by id, never by name, and a candidate whose party is a turn of kind `bot` SHALL be excluded.
       scenarios:
         - id: S12
           name: the owner promises
@@ -98,8 +112,9 @@ requirements:
 
     - title: A thread that cannot be extracted is skipped and counted
       shall: >-
-        A thread the owner is not in, or one larger than the transcript cap, SHALL be skipped without a failed
-        run and counted in its source's coverage with the reason.
+        A thread in which no turn's speaker or mentioned account is held by the owner's Person, or one larger
+        than the transcript cap, SHALL be skipped without a failed run and counted in its source's coverage with
+        the reason.
       scenarios:
         - id: S15
           name: the owner is not in the thread
@@ -113,11 +128,13 @@ requirements:
 tickets:
   - id: T1
     delivers: >-
-      Meetings move into a conversation store with a kind column, with the ADR 0011 amendment, the glossary's
-      Conversation term and the chat amendment to `docs/decisions/meetings.md` §3, and every existing meeting
-      behaving as before.
+      The conversation contract: the SDK's `conversation.turns` request and turn type, meetings moved into a
+      conversation store with a kind column and their turns built into the contract in the core, with the ADR
+      0011 amendment, the glossary's Conversation term and the chat amendment to `docs/decisions/meetings.md`
+      §3, and every existing meeting behaving as before.
     satisfies: [S1, S2]
     paths:
+      - crates/rastro-plugin-sdk/src/
       - crates/rastro-storage-sqlite/src/meeting.rs
       - crates/rastro-storage-sqlite/src/commitments.rs
       - crates/rastro-storage-sqlite/migrations/
@@ -132,12 +149,27 @@ tickets:
     risk: [migration, state]
   - id: T2
     delivers: >-
-      The `--extract-commitments` opt-in on a source, the tick extracting new threads of opted-in chat sources
-      through the bundled template, and `chat` sources in the commitments list and schema on the CLI and over
-      MCP, recorded in `docs/decisions/surfaces.md`.
-    satisfies: [S3, S4, S5]
+      The Slack extractor answers `conversation.turns` for a thread from its own evidence: one turn per message,
+      display-name labels with ids on shared names, resolved mentions, speaker accounts and kind `bot` for
+      `slack:Bot` authors, and the cited message of each turn.
+    satisfies: [S9, S10, S11]
+    paths:
+      - crates/rastro-extractor-slack/
+      - crates/rastro-extractor-slack/tests/
+      - crates/rastro-extractor-slack/rastro-plugin.toml
+    size: regular
+    difficulty: complex
+    blocked_by: [T1]
+  - id: T3
+    delivers: >-
+      The `--extract-commitments` opt-in on a source whose extractor declares `conversation.turns`, the tick
+      asking that extractor for new threads' turns after a sync and sending them through the bundled template,
+      and `chat` sources in the commitments list and schema on the CLI and over MCP, recorded in
+      `docs/decisions/surfaces.md`.
+    satisfies: [S3, S4, S5, S18]
     paths:
       - crates/rastro-core/src/commitments/
+      - crates/rastro-core/src/host/extract.rs
       - crates/rastro-core/src/tick.rs
       - crates/rastro-operations/
       - crates/rastro-cli/src/main.rs
@@ -148,21 +180,20 @@ tickets:
     size: regular
     difficulty: complex
     risk: [state, external]
-    blocked_by: [T1]
-  - id: T3
+    blocked_by: [T2]
+  - id: T4
     delivers: >-
-      Turns built from message evidence with display-name labels, id suffixes on shared names and resolved
-      mentions; the owner and other authors resolved by account; bot parties excluded; threads without the
-      owner or over the cap skipped and counted.
-    satisfies: [S9, S10, S11, S12, S13, S14, S15, S16]
+      The core's checks over the contract: refused turns that cite outside the thread, the owner by held account,
+      other speakers by account, bot parties excluded, and owner-absent and oversize threads skipped and counted.
+    satisfies: [S12, S13, S14, S15, S16, S17]
     paths:
       - crates/rastro-core/src/commitments/
       - crates/rastro-cli/tests/chat_commitments.rs
     size: regular
     difficulty: complex
-    risk: [state]
-    blocked_by: [T2]
-  - id: T4
+    risk: [state, security]
+    blocked_by: [T3]
+  - id: T5
     delivers: >-
       Change detection: the tick re-extracts only threads whose messages changed since their last extraction,
       replacing their hypotheses on success.
@@ -175,9 +206,10 @@ tickets:
     size: regular
     difficulty: complex
     risk: [state, retry-idempotency]
-    blocked_by: [T3]
+    blocked_by: [T4]
 approval:
   by: felippe.bisca@gmail.com
-  at: '2026-11-21T14:27:17.552853+00:00'
-  base: 8a122308cb38fed9e26ff1edb1e3bee6d764972d
-  digest: 73a35c5751637ece9af06b4d58a4fbe0199d55ac845341eaa485bc4682ad2f17
+  at: '2026-11-21T23:36:40.475031+00:00'
+  base: bdd4a5e84a5f798bb589124b6e47fed345da9106
+  digest: fa806567b426eac084455789758500eefd831e96c50799c761aa24e0c4eed5d5
+  reason: 'owner note 2026-11-21: conversation contract; turns from the Slack extractor'

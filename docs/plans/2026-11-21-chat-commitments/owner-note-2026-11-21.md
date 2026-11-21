@@ -2,6 +2,8 @@
 
 Status: owner direction, given after this plan's approval. It changes T1's scope, so the plan needs re-planning and re-approval before T1 starts. The approved `plan.yaml` and `brief.md` are unchanged.
 
+Resolved 2026-11-22: re-planned and re-approved. Turns come from the Slack extractor through `conversation.turns`, and the core checks them (brief D10–D14).
+
 ## Direction
 T1 moves meetings into a shared conversation store. Make that store a **conversation contract**, not a second meeting-shaped kind in the core:
 
