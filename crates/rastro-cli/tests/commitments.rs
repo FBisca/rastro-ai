@@ -164,6 +164,21 @@ impl Env {
         assert!(ok, "{args:?}: {value}");
         value["result"].clone()
     }
+    /// The human read of `args`: what the owner sees, not JSON.
+    fn human(&self, args: &[&str]) -> String {
+        let out = Command::new(support::rastro())
+            .env("RASTRO_HOME", self.home.path())
+            .env("RASTRO_PLUGIN_PATH", self.path("no-plugins"))
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap()
+    }
     fn import_ok(&self, extra: &[&str]) -> Value {
         let transcript = self.path("transcript.txt");
         let mut args = vec![
@@ -354,4 +369,138 @@ fn the_owner_reads_a_conversations_hypotheses_over_mcp_without_opening_the_trans
         ],
         "the list alone says whose words each hypothesis rests on"
     );
+}
+
+// spec: Human records render as blocks
+// spec: Human timestamps share one format
+/// The commitments list renders each source and each hypothesis as a block, with the finished
+/// time at minute precision naming the instant the JSON read carries.
+#[test]
+fn the_commitments_list_renders_sources_and_hypotheses_as_blocks() {
+    let env = Env::new();
+    env.import_ok(&["--owner-speaker", "Alice"]);
+    let text = env.human(&["commitments"]);
+    // The notice stays the preamble; the source is one block, its fields one per line.
+    assert!(text.starts_with(rastro_core::commitments::NOTICE), "{text}");
+    assert!(text.lines().any(|l| l == "weekly-1"), "{text}");
+    assert!(text.contains("  Kind: meeting"), "{text}");
+    assert!(text.contains("  Scope: work"), "{text}");
+    assert!(text.contains("  Extraction: succeeded"), "{text}");
+    assert!(text.contains("  Adapter: test-adapter"), "{text}");
+    assert!(text.contains("  Excluded: 0"), "{text}");
+    assert!(text.contains("  Coverage: found"), "{text}");
+    assert!(text.contains("  Turns read: 6 of 6"), "{text}");
+    let listed = env.ok(&["commitments"]);
+    let finished = listed["sources"][0]["extraction"]["finished_at"]
+        .as_str()
+        .unwrap();
+    let minute = format!("{} UTC", finished[..16].replace('T', " "));
+    assert!(
+        text.lines().any(|l| l == format!("  Finished: {minute}")),
+        "{text}"
+    );
+    // Each hypothesis is a block: its kind, parties, promise, date and terms, then its quote.
+    // The owner's label is mapped to the owner's Person; Bob was never mapped.
+    let me = env.ok(&["identity", "me"])["person"]["identifier"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        text.lines().filter(|l| *l == "Hypothesis").count(),
+        3,
+        "{text}"
+    );
+    assert!(text.contains("  Kind: promise"), "{text}");
+    assert!(
+        text.lines().any(|l| l == format!("  From: {me} (Alice)")),
+        "{text}"
+    );
+    assert!(text.lines().any(|l| l == "  To: unknown (Bob)"), "{text}");
+    assert!(text.contains("  Promise: send Bob the budget"), "{text}");
+    assert!(text.contains("  Date: by Friday"), "{text}");
+    assert!(
+        text.contains("  Terms: std:owes, std:owed_to, std:due"),
+        "{text}"
+    );
+    assert!(
+        text.contains("  Quote: \"I'll send Bob the budget by Friday\""),
+        "{text}"
+    );
+    assert!(!text.contains(" | "), "pipe-packed line: {text}");
+}
+
+// spec: Empty and no-op results speak with one voice
+/// An empty commitments list prints the notice, then one sentence starting `No ` naming what is
+/// absent.
+#[test]
+fn an_empty_commitments_list_prints_one_no_sentence() {
+    let env = Env::new();
+    let text = env.human(&["commitments"]);
+    assert_eq!(
+        text,
+        format!("{}\n\nNo sources\n", rastro_core::commitments::NOTICE)
+    );
+}
+
+// spec: Human records render as blocks
+/// A source with no hypotheses says so in its block: found nothing when its run looked,
+/// couldn't look when it failed, with the cause and the stale results it keeps.
+#[test]
+fn a_source_with_no_hypotheses_says_found_nothing_or_couldnt_look_in_its_block() {
+    let env = Env::new();
+    // A run that looked and found nothing.
+    fs::write(
+        env.path("response.json"),
+        json!({"candidates": []}).to_string(),
+    )
+    .unwrap();
+    env.import_ok(&["--owner-speaker", "Alice"]);
+    let text = env.human(&["commitments"]);
+    assert!(
+        text.lines().any(|l| l == "  Hypotheses: found nothing"),
+        "{text}"
+    );
+    assert!(!text.contains(" | "), "pipe-packed line: {text}");
+    // A failed run: the block names the cause, that it could not look, and the run the kept
+    // results come from.
+    fs::write(env.path("response.json"), "not json").unwrap();
+    let transcript = env.path("transcript.txt");
+    let (ok, failed) = env.run(&[
+        "meeting",
+        "import",
+        transcript.to_str().unwrap(),
+        "--meeting",
+        "weekly-1",
+        "--scope",
+        "work",
+        "--captured-at",
+        "2026-11-10T10:00:00Z",
+        "--owner-speaker",
+        "Alice",
+    ]);
+    assert!(!ok, "{failed}");
+    let text = env.human(&["commitments"]);
+    assert!(text.contains("  Extraction: failed"), "{text}");
+    let listed = env.ok(&["commitments"]);
+    let source = &listed["sources"][0];
+    let cause = source["extraction"]["cause"].as_str().unwrap();
+    assert!(
+        text.lines().any(|l| l == format!("  Cause: {cause}")),
+        "{text}"
+    );
+    assert!(
+        text.lines().any(|l| l == "  Hypotheses: couldn't look"),
+        "{text}"
+    );
+    let from = &source["results_from"];
+    let imported = from["imported_at"].as_str().unwrap();
+    let minute = format!("{} UTC", imported[..16].replace('T', " "));
+    assert!(
+        text.lines().any(|l| l == format!(
+            "  Stale: the hypotheses below come from run {} (imported {minute}), not the latest",
+            from["run"].as_str().unwrap()
+        )),
+        "{text}"
+    );
+    assert!(!text.contains(" | "), "pipe-packed line: {text}");
 }

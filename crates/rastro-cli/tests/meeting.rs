@@ -252,6 +252,16 @@ impl Env {
         assert!(ok, "{args:?}: {value}");
         value["result"].clone()
     }
+    /// The human read of `args`: what the owner sees, not JSON.
+    fn human(&self, args: &[&str]) -> String {
+        let out = self.command(args).output().unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap()
+    }
     /// An import with the usual arguments plus `extra`, whatever its outcome.
     fn import_with(&self, file: &str, extra: &[&str]) -> (bool, Value) {
         let mut args = vec![
@@ -1043,9 +1053,98 @@ fn holds(bytes: &[u8], text: &str) -> bool {
         .any(|window| window == text.as_bytes())
 }
 
+// spec: Human records render as blocks
+// spec: Human timestamps share one format
+// spec: Empty and no-op results speak with one voice
+/// The human meeting read renders the meeting and each hypothesis as blocks with minute-precision
+/// times; a look that found nothing ends with the one `No …` sentence.
+#[test]
+fn the_human_meeting_read_renders_blocks_and_an_empty_look_says_no_hypotheses() {
+    let env = Env::new();
+    let out = env
+        .command(&[
+            "meeting",
+            "import",
+            env.path("transcript.txt").to_str().unwrap(),
+            "--meeting",
+            "weekly-1",
+            "--scope",
+            "work",
+            "--captured-at",
+            "2026-11-10T10:00:00Z",
+            "--owner-speaker",
+            "Alice",
+        ])
+        .env("RASTRO_NOW", "2026-11-10T10:05:00Z")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8(out.stdout).unwrap();
+    // The notice stays the preamble; the meeting is one block, its fields one per line.
+    assert!(text.starts_with(rastro_core::meeting::NOTICE), "{text}");
+    assert!(text.lines().any(|l| l == "Meeting: weekly-1"), "{text}");
+    assert!(text.contains("  Scope: work"), "{text}");
+    assert!(text.contains("  Captured: 2026-11-10 10:00 UTC"), "{text}");
+    assert!(text.contains("  Extraction: succeeded"), "{text}");
+    assert!(text.contains("  Finished: 2026-11-10 10:05 UTC"), "{text}");
+    assert!(text.contains("  Excluded: 0"), "{text}");
+    assert!(text.contains("  Coverage: found"), "{text}");
+    assert!(text.contains("  Turns read: 6 of 6"), "{text}");
+    assert!(text.contains("  Transcript: not retained"), "{text}");
+    // Each hypothesis is a block: its parties, promise and date, then the quote it rests on.
+    // The owner's label is mapped to the owner's Person; Bob was never mapped.
+    let me = env.ok(&["identity", "me"])["person"]["identifier"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let read = env.read();
+    let h = &read["hypotheses"][0];
+    assert_eq!(
+        text.lines().filter(|l| *l == "Hypothesis").count(),
+        3,
+        "{text}"
+    );
+    assert!(
+        text.lines().any(|l| l == format!("  From: {me} (Alice)")),
+        "{text}"
+    );
+    assert!(text.lines().any(|l| l == "  To: unknown (Bob)"), "{text}");
+    assert!(text.contains("  Promise: send Bob the budget"), "{text}");
+    assert!(text.contains("  Date: by Friday"), "{text}");
+    let quote = h["quote"]["text"].as_str().unwrap();
+    assert!(text.contains(&format!("  Quote: \"{quote}\"")), "{text}");
+    assert!(
+        text.contains(&format!("  Turn: {}", h["quote"]["turn"])),
+        "{text}"
+    );
+    assert!(text.contains("  Speaker: Alice"), "{text}");
+    assert!(
+        text.contains(&format!(
+            "  Span: [{}, {})",
+            h["quote"]["start"], h["quote"]["end"]
+        )),
+        "{text}"
+    );
+    assert!(!text.contains(" | "), "pipe-packed line: {text}");
+
+    // A look that found nothing says so in the one voice, after the meeting block.
+    env.extractor(&[]);
+    env.import_ok(&["--owner-speaker", "Alice"]);
+    let empty = env.human(&["meeting", "commitments", "weekly-1"]);
+    assert!(empty.lines().any(|l| l == "No hypotheses"), "{empty}");
+    assert!(empty.trim_end().ends_with("No hypotheses"), "{empty}");
+    assert!(!empty.contains(" | "), "pipe-packed line: {empty}");
+}
+
 /// S5: a changed transcript that fails to extract keeps the last good results, marked stale; one
 /// that succeeds replaces them; the meeting is never duplicated.
 // spec: A re-import marks last-good results stale or replaces them, without duplicating the meeting
+// spec: Human records render as blocks
+// spec: Human timestamps share one format
 #[test]
 fn S5_reimport_with_changed_text_marks_last_good_stale_on_failure_and_replaces_on_success() {
     let env = Env::new();
@@ -1071,6 +1170,20 @@ fn S5_reimport_with_changed_text_marks_last_good_stale_on_failure_and_replaces_o
     assert_eq!(read["stale"], true);
     assert_eq!(read["hypotheses"], first["hypotheses"]);
     assert_eq!(rows(&env, "meeting"), 1);
+    // The human read carries the stale warning as a field of the meeting block, naming the run
+    // and its finished time at minute precision.
+    let human = env.human(&["meeting", "commitments", "weekly-1"]);
+    let from = &read["results_from"];
+    let finished = from["finished_at"].as_str().unwrap();
+    let minute = format!("{} UTC", finished[..16].replace('T', " "));
+    assert!(
+        human.lines().any(|l| l == format!(
+            "  Stale: the hypotheses below come from the last good run {} ({minute}), not the latest",
+            from["run"]
+        )),
+        "{human}"
+    );
+    assert!(!human.contains(" | "), "pipe-packed line: {human}");
 
     // The changed text extracts: the new execution replaces the stale results.
     let mut changed = good();
@@ -1603,6 +1716,8 @@ fn a_default_import_runs_the_bundled_meeting_template() {
 /// not the current bundled default, and never calls a model. The saved contract here also excludes
 /// promises, so replay keeps none of them — proof the saved rules ran, not the bundled ones.
 // spec: Replay needs no model call and forgetting removes what was retained
+// spec: Human records render as blocks
+// spec: Empty and no-op results speak with one voice
 #[test]
 fn replay_uses_the_saved_contract_after_the_original_template_changed() {
     let env = Env::new();
@@ -1637,6 +1752,18 @@ fn replay_uses_the_saved_contract_after_the_original_template_changed() {
     // The saved contract's exclusion ran on replay: all three promises are left out and counted.
     assert_eq!(replayed["hypotheses"], json!([]), "{replayed}");
     assert_eq!(replayed["extraction"]["excluded"], 3, "{replayed}");
+    // The human read names the replay as a field of the meeting block, and the empty look says
+    // so in the one voice.
+    let human = env.human(&["meeting", "commitments", "weekly-1"]);
+    let run = imported["extraction"]["run"].as_i64().unwrap();
+    assert!(
+        human
+            .lines()
+            .any(|l| l == format!("  Replay: run {run}, no model call")),
+        "{human}"
+    );
+    assert!(human.lines().any(|l| l == "No hypotheses"), "{human}");
+    assert!(!human.contains(" | "), "pipe-packed line: {human}");
 }
 
 /// S8: a run recorded before template contracts were saved replays under the frozen legacy

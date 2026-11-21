@@ -86,6 +86,22 @@ impl Env {
         assert!(!ok, "{args:?} should be refused: {value}");
         value["error"].as_str().unwrap().to_string()
     }
+    /// The human read of `args` with the core's clock at `at`: what the owner sees, not JSON.
+    fn human_at(&self, args: &[&str], at: &str) -> String {
+        let out = Command::new(support::rastro())
+            .env("RASTRO_HOME", self.home.path())
+            .env("RASTRO_PLUGIN_PATH", &self.plugins)
+            .env("RASTRO_NOW", at)
+            .args(args)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{args:?}: {}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        String::from_utf8(out.stdout).unwrap()
+    }
     fn path(&self) -> std::path::PathBuf {
         self.home.path().join("data/rastro.sqlite3")
     }
@@ -306,6 +322,49 @@ fn a_confirmed_claim_reads_confirmed_and_why_cites_the_confirmation() {
             .any(|s| s["justification_kind"] == "provenance"),
         "{why}"
     );
+}
+
+// spec: Human records render as blocks
+// spec: Human timestamps share one format
+/// A confirmation reads as a block: what it did on the header line, then the intent it recorded
+/// and its issued time at minute precision.
+#[test]
+fn a_confirmation_reads_as_a_block_naming_its_intent_and_minute_precision_time() {
+    let env = Env::new();
+    env.account(7, "octocat");
+    let seen = env.claim("github:account/7", "rastro:alias", "octocat");
+    let id = seen["id"].as_str().unwrap();
+    let text = env.human_at(
+        &[
+            "claim",
+            "confirm",
+            id,
+            "--seen",
+            seen["revision"].as_str().unwrap(),
+        ],
+        "2026-11-01T09:30:00Z",
+    );
+    assert!(
+        text.lines().any(|l| l == format!("Confirmed {id}")),
+        "{text}"
+    );
+    let why = env.ok(&["why", id]);
+    let confirmation = why["supports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["justification_kind"] == "confirmation")
+        .unwrap_or_else(|| panic!("no confirmation justification: {why}"));
+    let intent = confirmation["intent"]["id"].as_str().unwrap();
+    assert!(
+        text.lines().any(|l| l == format!("  Intent: {intent}")),
+        "{text}"
+    );
+    assert!(
+        text.lines().any(|l| l == "  Issued: 2026-11-01 09:30 UTC"),
+        "{text}"
+    );
+    assert!(!text.contains(" | "), "pipe-packed line: {text}");
 }
 
 // spec: The owner confirms a claim
