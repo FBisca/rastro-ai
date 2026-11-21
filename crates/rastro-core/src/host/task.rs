@@ -7,17 +7,19 @@
 use super::{JudgmentFailure, JudgmentSession};
 use crate::{Locations, display_safe};
 use rastro_plugin_sdk::{
-    GateFeedback, JudgmentRequest, JudgmentSession as WireSession, JudgmentTurn, RuleDisposition,
-    TaskFieldType, TaskRule, TaskTemplate,
+    GateFeedback, JudgmentRequest, JudgmentSession as WireSession, JudgmentTurn, RelativeTurn,
+    RuleDisposition, TaskFieldType, TaskPredicate, TaskRule, TaskTemplate, TaskText,
 };
-use serde_json::Value;
-use std::time::Duration;
+use serde_json::{Map, Value};
+use std::{collections::BTreeSet, time::Duration};
 
-/// What one task run judges: the turns of untrusted text and the label the wire's
-/// `owner_speaker` carries (empty when the task has no owner). The runner never interprets it.
+/// What one task run judges: the turns of untrusted text and the main label (empty when the
+/// task has no main label). The optional label set is trusted context for validation only;
+/// it is never sent to the adapter.
 pub struct TaskInput<'a> {
     pub owner_speaker: &'a str,
     pub turns: &'a [JudgmentTurn],
+    pub labels: Option<&'a BTreeSet<String>>,
 }
 
 /// One turn of a task session: the request the core sent, the answer it got and the gate
@@ -34,9 +36,17 @@ pub struct TaskTurn {
 /// count a declared exclusion matched, and every turn's history.
 #[derive(Debug)]
 pub struct TaskOutput {
-    pub candidates: Vec<Value>,
+    pub candidates: Vec<CheckedCandidate>,
     pub excluded: usize,
     pub history: Vec<TaskTurn>,
+}
+
+/// A candidate that passed the rules. Keep the original proposal for replay: grounding only
+/// changes which fields a consumer may use.
+#[derive(Debug)]
+pub struct CheckedCandidate {
+    pub proposed: Value,
+    pub cleared_fields: Vec<String>,
 }
 
 /// Why a run produced no validated output: a refused or broken adapter, or a cap exhausted
@@ -148,7 +158,7 @@ fn run_turns(
                 .map(str::to_string);
         }
         let answer = value.to_string();
-        match evaluate(template, input.turns, &value) {
+        match evaluate(template, input, &value) {
             Evaluation::Pass {
                 candidates,
                 excluded,
@@ -196,10 +206,10 @@ fn run_turns(
 /// the record no longer passes.
 pub fn check(
     template: &TaskTemplate,
-    turns: &[JudgmentTurn],
+    input: &TaskInput<'_>,
     answer: &Value,
-) -> Result<(Vec<Value>, usize), Vec<GateFeedback>> {
-    match evaluate(template, turns, answer) {
+) -> Result<(Vec<CheckedCandidate>, usize), Vec<GateFeedback>> {
+    match evaluate(template, input, answer) {
         Evaluation::Pass {
             candidates,
             excluded,
@@ -225,7 +235,7 @@ fn prior_answer_of(value: &Value, session_id: Option<&str>) -> Value {
 /// or the gate failures a retry turn must fix (ADR-0016 §8).
 enum Evaluation {
     Pass {
-        candidates: Vec<Value>,
+        candidates: Vec<CheckedCandidate>,
         excluded: usize,
     },
     Retry(Vec<GateFeedback>),
@@ -233,7 +243,7 @@ enum Evaluation {
 
 /// Executes the template's declarations on one answer: the shape its fields declare, then its
 /// rules over each candidate. Pure: no process, no storage, the same gates a replay re-runs.
-fn evaluate(template: &TaskTemplate, turns: &[JudgmentTurn], result: &Value) -> Evaluation {
+fn evaluate(template: &TaskTemplate, input: &TaskInput<'_>, result: &Value) -> Evaluation {
     let mut feedback = Vec::new();
     let candidates = envelope_shape(result, &mut feedback);
     for (n, candidate) in candidates.iter().enumerate() {
@@ -248,40 +258,63 @@ fn evaluate(template: &TaskTemplate, turns: &[JudgmentTurn], result: &Value) -> 
         let Some(object) = candidate.as_object() else {
             continue; // the shape gate already refused a non-object
         };
+        let rules = CandidateRules { input, object };
         let mut out = false;
+        let mut cleared_fields = Vec::new();
         for rule in &template.rules {
-            let triggered = match rule {
+            let (disposition, triggered) = match rule {
                 TaskRule::Span {
                     quote_field,
                     turn_field,
-                    ..
-                } => span_failure(turns, object, quote_field, turn_field, n),
-                TaskRule::Equals { field, value, .. } => {
-                    (object.get(field).and_then(Value::as_str) == Some(value.as_str())).then(|| {
-                        GateFeedback {
-                            gate: "equals".into(),
-                            field: format!("candidates[{n}].{field}"),
-                            expected: format!("a value other than {value:?}"),
-                            actual: display_safe(
-                                &object
-                                    .get(field)
-                                    .map(|held| held.to_string())
-                                    .unwrap_or_else(|| "missing".into()),
-                            ),
-                        }
-                    })
+                    disposition,
+                } => (
+                    *disposition,
+                    span_failure(input.turns, object, quote_field, turn_field, n),
+                ),
+                TaskRule::Equals {
+                    field,
+                    value,
+                    disposition,
+                } => (
+                    *disposition,
+                    (rules.field(field) == Some(value.as_str())).then(|| GateFeedback {
+                        gate: "equals".into(),
+                        field: format!("candidates[{n}].{field}"),
+                        expected: format!("a value other than {value:?}"),
+                        actual: display_safe(&object[field].to_string()),
+                    }),
+                ),
+                TaskRule::Require { predicate } => {
+                    out |= !rules.matches(predicate);
+                    continue;
+                }
+                TaskRule::Ground { field, in_field } => {
+                    if let Some(value) = rules.field(field)
+                        && (value.trim().is_empty()
+                            || !rules
+                                .field(in_field)
+                                .is_some_and(|text| text.contains(value)))
+                    {
+                        cleared_fields.push(field.clone());
+                    }
+                    continue;
                 }
             };
-            let Some(failure) = triggered else { continue };
-            match rule.disposition() {
-                RuleDisposition::Fail => feedback.push(failure),
-                RuleDisposition::Exclude => out = true,
+            // Exclusion cannot mask a gate failure. All rules read the original answer.
+            if let Some(failure) = triggered {
+                match disposition {
+                    RuleDisposition::Fail => feedback.push(failure),
+                    RuleDisposition::Exclude => out = true,
+                }
             }
         }
         if out {
             excluded += 1;
         } else {
-            kept.push((*candidate).clone());
+            kept.push(CheckedCandidate {
+                proposed: (*candidate).clone(),
+                cleared_fields,
+            });
         }
     }
     if feedback.is_empty() {
@@ -292,6 +325,79 @@ fn evaluate(template: &TaskTemplate, turns: &[JudgmentTurn], result: &Value) -> 
     } else {
         Evaluation::Retry(feedback)
     }
+}
+
+struct CandidateRules<'a> {
+    input: &'a TaskInput<'a>,
+    object: &'a Map<String, Value>,
+}
+impl CandidateRules<'_> {
+    fn field(&self, name: &str) -> Option<&str> {
+        self.object.get(name).and_then(Value::as_str)
+    }
+
+    fn text(&self, source: &TaskText) -> Option<&str> {
+        match source {
+            TaskText::Field { name } => self.field(name).filter(|s| !s.trim().is_empty()),
+            TaskText::InputLabel => Some(self.input.owner_speaker).filter(|s| !s.trim().is_empty()),
+            TaskText::TurnLabel { turn_field, at } => {
+                let index = self.object.get(turn_field)?.as_u64()?.checked_sub(1)?;
+                let index = match at {
+                    RelativeTurn::Previous => index.checked_sub(1)?,
+                    RelativeTurn::Current => index,
+                    RelativeTurn::Next => index.checked_add(1)?,
+                };
+                Some(
+                    self.input
+                        .turns
+                        .get(usize::try_from(index).ok()?)?
+                        .speaker
+                        .as_str(),
+                )
+                .filter(|label| !label.is_empty())
+            }
+        }
+    }
+
+    fn matches(&self, predicate: &TaskPredicate) -> bool {
+        match predicate {
+            TaskPredicate::All { of } => of.iter().all(|item| self.matches(item)),
+            TaskPredicate::Any { of } => of.iter().any(|item| self.matches(item)),
+            TaskPredicate::Not { of } => !self.matches(of),
+            TaskPredicate::Equal { left, right } => self
+                .text(left)
+                .is_some_and(|left| Some(left) == self.text(right)),
+            TaskPredicate::ContainsLabel { field, label } => self
+                .field(field)
+                .zip(self.text(label))
+                .is_some_and(|(text, label)| contains_label(text, label)),
+            TaskPredicate::ContainsWord { field, words } => self
+                .field(field)
+                .is_some_and(|text| contains_word(text, words)),
+            TaskPredicate::InInputLabels { field } => self
+                .field(field)
+                .zip(self.input.labels)
+                .is_some_and(|(value, labels)| labels.contains(value)),
+        }
+    }
+}
+
+fn contains_label(text: &str, label: &str) -> bool {
+    let (text, label) = (text.to_lowercase(), label.trim().to_lowercase());
+    if label.is_empty() {
+        return false;
+    }
+    let word = |c: char| c.is_alphanumeric() || c == '_';
+    text.match_indices(&label).any(|(start, found)| {
+        !text[..start].chars().next_back().is_some_and(word)
+            && !text[start + found.len()..].chars().next().is_some_and(word)
+    })
+}
+
+fn contains_word(text: &str, words: &[String]) -> bool {
+    text.to_lowercase()
+        .split(|c: char| !c.is_alphanumeric() && c != '\'' && c != '\u{2019}')
+        .any(|word| words.contains(&word.replace('\u{2019}', "'")))
 }
 
 /// The protocol's own envelope: an object holding the candidates, the harness session id and
@@ -538,6 +644,22 @@ disposition = "exclude"
         TaskTemplate::parse(BLOG).unwrap()
     }
 
+    fn check_blog(template: &TaskTemplate, answer: &Value) -> Evaluation {
+        let input = TaskInput {
+            owner_speaker: "",
+            turns: &sections(),
+            labels: None,
+        };
+        evaluate(template, &input, answer)
+    }
+
+    fn proposed(candidates: Vec<CheckedCandidate>) -> Vec<Value> {
+        candidates
+            .into_iter()
+            .map(|candidate| candidate.proposed)
+            .collect()
+    }
+
     fn sections() -> Vec<JudgmentTurn> {
         vec![
             JudgmentTurn {
@@ -578,11 +700,11 @@ disposition = "exclude"
         let Evaluation::Pass {
             candidates,
             excluded,
-        } = evaluate(&blog(), &sections(), &answer)
+        } = check_blog(&blog(), &answer)
         else {
             panic!("the blog answer failed its own declarations: {answer}");
         };
-        assert_eq!(candidates, vec![published(), second]);
+        assert_eq!(proposed(candidates), vec![published(), second]);
         assert_eq!(excluded, 0);
     }
 
@@ -600,7 +722,7 @@ disposition = "exclude"
         let Evaluation::Pass {
             candidates,
             excluded,
-        } = evaluate(&template, &sections(), &answer)
+        } = check_blog(&template, &answer)
         else {
             panic!("an optional field was refused: {answer}");
         };
@@ -619,12 +741,12 @@ disposition = "exclude"
         let Evaluation::Pass {
             candidates,
             excluded,
-        } = evaluate(&blog(), &sections(), &answer)
+        } = check_blog(&blog(), &answer)
         else {
             panic!("the exclusion caused a retry: {answer}");
         };
         assert_eq!(excluded, 1);
-        assert_eq!(candidates, vec![published()]);
+        assert_eq!(proposed(candidates), vec![published()]);
     }
 
     /// spec: Task templates run without domain logic in the core runner
@@ -640,7 +762,7 @@ disposition = "exclude"
         let mut draft = published();
         draft["status"] = json!("draft");
         let answer = json!({ "candidates": [draft] });
-        let Evaluation::Retry(feedback) = evaluate(&template, &sections(), &answer) else {
+        let Evaluation::Retry(feedback) = check_blog(&template, &answer) else {
             panic!("the equals rule did not fail the candidate: {answer}");
         };
         assert!(
@@ -697,7 +819,7 @@ disposition = "exclude"
                 "candidates",
             ),
         ] {
-            let Evaluation::Retry(feedback) = evaluate(&blog(), &sections(), &answer) else {
+            let Evaluation::Retry(feedback) = check_blog(&blog(), &answer) else {
                 panic!("{name} passed the shape gate: {answer}");
             };
             assert!(!feedback.is_empty(), "{name}: no feedback");
@@ -746,7 +868,7 @@ disposition = "exclude"
                 "candidates[0].excerpt",
             ),
         ] {
-            let Evaluation::Retry(feedback) = evaluate(&blog(), &sections(), &answer) else {
+            let Evaluation::Retry(feedback) = check_blog(&blog(), &answer) else {
                 panic!("{name} passed the span rule: {answer}");
             };
             assert!(

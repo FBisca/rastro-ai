@@ -21,7 +21,8 @@ use crate::{
 use anyhow::{Context, Result, bail, ensure};
 use chrono::{DateTime, Utc};
 use rastro_plugin_sdk::{
-    CandidateKind, GateFeedback, JudgmentTurn, TaskFieldType, TaskRule, TaskTemplate,
+    CandidateKind, GateFeedback, JudgmentTurn, RuleDisposition, TaskFieldType, TaskRule,
+    TaskTemplate,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -57,9 +58,43 @@ const BUNDLED_TEMPLATE: &str = include_str!("meeting_template.toml");
 /// replay restores them as promises.
 const LEGACY_CONTRACT: &str = include_str!("meeting_legacy.toml");
 
-/// Parses the bundled meeting template. The bundled declarations are a fixed, checked invariant.
-fn bundled_template() -> TaskTemplate {
-    TaskTemplate::parse(BUNDLED_TEMPLATE).expect("the bundled meeting template is valid")
+/// Frozen declarations for the meeting checks that used to run while mapping hypotheses.
+/// Keep v1 for replays of contracts saved before these declarations were included.
+const MEETING_RULES_V1: &str = include_str!("meeting_rules_v1.toml");
+
+fn complete_contract(mut template: TaskTemplate) -> Result<(TaskTemplate, String)> {
+    #[derive(Deserialize)]
+    struct MeetingRules {
+        rules: Vec<TaskRule>,
+    }
+    let required: MeetingRules =
+        toml::from_str(MEETING_RULES_V1).expect("the bundled meeting rules parse");
+    template.rules.extend(required.rules);
+    template.check()?;
+    let contract =
+        toml::to_string(&template).context("could not serialize the meeting contract")?;
+    Ok((template, contract))
+}
+
+fn bundled_contract() -> (TaskTemplate, String) {
+    let template =
+        TaskTemplate::parse(BUNDLED_TEMPLATE).expect("the bundled meeting template parses");
+    complete_contract(template).expect("the bundled meeting contract is valid")
+}
+
+fn replay_contract(text: &str) -> Result<(TaskTemplate, String)> {
+    let template = TaskTemplate::parse(text)?;
+    // Older saved contracts supported only span and equals. The new format already includes
+    // contextual requirements and grounding; replay must not append today's rules to it.
+    if template
+        .rules
+        .iter()
+        .any(|rule| matches!(rule, TaskRule::Require { .. } | TaskRule::Ground { .. }))
+    {
+        Ok((template, text.to_owned()))
+    } else {
+        complete_contract(template)
+    }
 }
 
 /// Checks a selected local replacement against the meeting input and result contract: the
@@ -69,8 +104,8 @@ fn bundled_template() -> TaskTemplate {
 /// The contract is what the core's mapping reads, not the bundled text: exactly the seven
 /// candidate fields, `turn` an integer and the rest strings, `turn`, `promise` and `quote`
 /// required, `kind` enumerating only kinds the core knows, and a span rule over `quote` and
-/// `turn` so every kept candidate's quote is an exact piece of its turn. Instructions, extra
-/// rules, a narrower or optional kind and a stronger boundary are the owner's to change.
+/// `turn` that fails on an invalid quote. A replacement can add gates and further ground the
+/// date, but cannot redact fields used to construct the hypothesis.
 fn check_meeting_contract(template: &TaskTemplate) -> Result<()> {
     const FIELDS: [&str; 7] = [
         "turn",
@@ -131,15 +166,21 @@ fn check_meeting_contract(template: &TaskTemplate) -> Result<()> {
             "the candidate field kind allows the unknown value {value}"
         );
     }
-    // The core maps only candidates whose quote is an exact piece of its turn: the span rule
-    // over quote and turn is what guarantees that, whatever its disposition.
+    // A bad quote must earn a retry, not silently disappear from a successful run.
     ensure!(
         template.rules.iter().any(|rule| matches!(
             rule,
-            TaskRule::Span { quote_field, turn_field, .. }
+            TaskRule::Span { quote_field, turn_field, disposition: RuleDisposition::Fail }
                 if quote_field == "quote" && turn_field == "turn"
         )),
-        "the meeting contract needs the span rule over quote and turn"
+        "the meeting span rule over quote and turn must fail on an invalid quote"
+    );
+    ensure!(
+        !template
+            .rules
+            .iter()
+            .any(|rule| matches!(rule, TaskRule::Ground { field, .. } if field != "stated_date")),
+        "the meeting contract only allows grounding rules for stated_date"
     );
     Ok(())
 }
@@ -676,10 +717,6 @@ fn bot_labels(
     Ok(bots)
 }
 impl People {
-    /// Whether a party is a label mapped to a bot.
-    fn bot(&self, label: Option<&str>) -> bool {
-        label.is_some_and(|label| self.bots.contains(label))
-    }
     fn party(&self, label: Option<&str>) -> Party {
         let Some(label) = label else {
             return Party {
@@ -703,32 +740,6 @@ impl People {
     }
 }
 
-/// Whether `text` names `label`: a whole-word, case-insensitive match.
-fn names(text: &str, label: &str) -> bool {
-    let (text, label) = (text.to_lowercase(), label.trim().to_lowercase());
-    if label.is_empty() {
-        return false;
-    }
-    let word = |c: char| c.is_alphanumeric() || c == '_';
-    text.match_indices(&label).any(|(start, found)| {
-        !text[..start].chars().next_back().is_some_and(word)
-            && !text[start + found.len()..].chars().next().is_some_and(word)
-    })
-}
-
-/// Whether `text` speaks to its listener in the second person.
-fn addresses_listener(text: &str) -> bool {
-    text.to_lowercase()
-        .split(|c: char| !c.is_alphanumeric() && c != '\'' && c != '\u{2019}')
-        .any(|word| {
-            let word = word.replace('\u{2019}', "'");
-            matches!(
-                word.as_str(),
-                "you" | "your" | "yours" | "yourself" | "you'll" | "you're" | "you've" | "you'd"
-            )
-        })
-}
-
 /// What passed the core's checks.
 struct Validated {
     hypotheses: Vec<Hypothesis>,
@@ -737,21 +748,18 @@ struct Validated {
     excluded: usize,
 }
 
-/// Maps the candidates the runner's gates passed to meeting hypotheses. The core's own trust
-/// checks the runner cannot declare — the owner's involvement supported by the transcript, and a
-/// party mapped to a bot — exclude and count a candidate; the rest become cited hypotheses. This
-/// meeting preparation stays outside the generic runner (decisions/plugins.md §40, §48). The
-/// runner already checked each quote is an exact, contiguous piece of the turn it names.
+/// Maps the runner's validated candidates to hypotheses with citations and mapped identities.
+/// Retain the original proposals so replay can run the same grounding rules again.
 fn map_candidates(
-    candidates: Vec<Value>,
-    mut excluded: usize,
+    candidates: Vec<host::task::CheckedCandidate>,
+    excluded: usize,
     turns: &[Turn],
     people: &People,
 ) -> Validated {
     let mut kept = Vec::new();
     let mut proposed = Vec::new();
-    for value in candidates {
-        let candidate: Candidate = serde_json::from_value(value)
+    for checked in candidates {
+        let candidate: Candidate = serde_json::from_value(checked.proposed)
             .expect("the runner kept only candidates in the template's declared shape");
         let turn = turns
             .get(candidate.turn.checked_sub(1).unwrap_or(usize::MAX))
@@ -764,36 +772,14 @@ fn map_candidates(
             label.as_deref().filter(|l| !l.trim().is_empty())
         }
         let (responsible, recipient) = (side(&candidate.responsible), side(&candidate.recipient));
-        let owner = people.owner.as_str();
-        // The transcript, not the extractor's labels, has to support the owner's side.
-        let position = candidate.turn - 1;
-        let owner_turn = |at: Option<usize>| {
-            at.and_then(|at| turns.get(at))
-                .is_some_and(|t| t.speaker == owner)
-        };
-        let in_owner_turn = turn.speaker == owner;
-        let names_owner = names(&candidate.quote, owner);
-        let supported = if responsible == Some(owner) {
-            in_owner_turn || names_owner
-        } else if recipient == Some(owner) {
-            in_owner_turn
-                || names_owner
-                || (addresses_listener(&candidate.quote)
-                    && (owner_turn(position.checked_sub(1)) || owner_turn(Some(position + 1))))
-        } else {
-            false
-        };
-        // A party mapped to a bot is not a person's commitment, whatever the transcript says.
-        if !supported || people.bot(responsible) || people.bot(recipient) {
-            excluded += 1;
-            continue;
-        }
         proposed.push(candidate.clone());
         let end = start + candidate.quote.len();
-        let stated_date = match candidate
-            .stated_date
-            .filter(|d| !d.trim().is_empty() && candidate.quote.contains(d.as_str()))
-        {
+        let stated_date = match candidate.stated_date.filter(|_| {
+            !checked
+                .cleared_fields
+                .iter()
+                .any(|field| field == "stated_date")
+        }) {
             Some(text) => StatedDate {
                 state: Known::Stated,
                 text: Some(text),
@@ -1029,13 +1015,12 @@ fn resolve_people(
 }
 
 impl<S: Storage> Rastro<S> {
-    /// The template this import runs under and the contract text to save with its output: the
-    /// owner's selected local replacement, or the bundled template. A selection that cannot be
-    /// loaded fails the run naming the file; the bundled template is never substituted for it
-    /// (decisions/plugins.md §48).
+    /// Select the local replacement or the bundle, and save the effective contract including
+    /// the meeting rules. A local selection that cannot be loaded or is incompatible fails the
+    /// run naming the file; it never falls back to the bundled template (plugins.md §48–49).
     fn selected_template(&self) -> Result<(TaskTemplate, String), Failure> {
         let Some(path) = &self.config.meeting.template else {
-            return Ok((bundled_template(), BUNDLED_TEMPLATE.to_string()));
+            return Ok(bundled_contract());
         };
         let path = if path.is_absolute() {
             path.clone()
@@ -1057,7 +1042,10 @@ impl<S: Storage> Rastro<S> {
                 "the selected meeting template {shown} does not meet the meeting contract: {error:#}"
             ),
         })?;
-        Ok((template, text))
+        complete_contract(template).map_err(|error| Failure {
+            cause: Cause::TemplateInvalid,
+            reason: format!("the selected meeting template {shown} cannot be used: {error:#}"),
+        })
     }
 
     /// Imports one meeting: reads the transcript, runs the configured extractor and records the
@@ -1135,6 +1123,7 @@ impl<S: Storage> Rastro<S> {
             let input = host::task::TaskInput {
                 owner_speaker: &people.owner,
                 turns: &judgment_turns,
+                labels: Some(&people.bots),
             };
             let judged = host::task::run(
                 &self.locations,
@@ -1229,12 +1218,9 @@ impl<S: Storage> Rastro<S> {
             // The contract saved with the run governs replay; a run recorded before contracts were
             // saved replays under the frozen legacy contract, never the current bundled template
             // (decisions/plugins.md §48).
-            let contract = recording
-                .contract
-                .clone()
-                .unwrap_or_else(|| LEGACY_CONTRACT.to_string());
-            let template = match TaskTemplate::parse(&contract) {
-                Ok(template) => template,
+            let saved = recording.contract.as_deref().unwrap_or(LEGACY_CONTRACT);
+            let (template, contract) = match replay_contract(saved) {
+                Ok(contract) => contract,
                 Err(error) => {
                     return fail(
                         Cause::ExtractorOutputInvalid,
@@ -1284,10 +1270,15 @@ impl<S: Storage> Rastro<S> {
             let people = People {
                 owner: recording.owner_speaker.clone(),
                 mapped,
-                bots: bots.clone(),
+                bots,
+            };
+            let input = host::task::TaskInput {
+                owner_speaker: &people.owner,
+                turns: &judgment_turns,
+                labels: Some(&people.bots),
             };
             let answer = json!({ "candidates": candidates });
-            let (kept, excluded) = match host::task::check(&template, &judgment_turns, &answer) {
+            let (kept, excluded) = match host::task::check(&template, &input, &answer) {
                 Ok(passed) => passed,
                 Err(feedback) => {
                     let gate = feedback.first().map(|f| f.gate.as_str()).unwrap_or("shape");
@@ -1432,7 +1423,7 @@ mod tests {
     // spec: Meeting imports select the bundled or owner-configured task template
     #[test]
     fn the_bundled_meeting_template_declares_the_meeting_contract() {
-        let template = bundled_template();
+        let (template, _) = bundled_contract();
         let fields: Vec<&str> = template.fields.iter().map(|f| f.name.as_str()).collect();
         assert_eq!(
             fields,
@@ -1451,7 +1442,6 @@ mod tests {
                 .instructions
                 .contains("Find commitments in `turns`")
         );
-        assert_eq!(template.rules.len(), 1);
         assert!(matches!(
             &template.rules[0],
             rastro_plugin_sdk::TaskRule::Span { quote_field, turn_field, .. }
@@ -1473,16 +1463,14 @@ mod tests {
             LEGACY_CONTRACT, BUNDLED_TEMPLATE,
             "the legacy contract must stay frozen"
         );
-        let legacy = TaskTemplate::parse(LEGACY_CONTRACT).unwrap();
+        let (legacy, _) = replay_contract(LEGACY_CONTRACT).unwrap();
+        let (bundled, _) = bundled_contract();
         let kind = |t: &TaskTemplate| t.field("kind").unwrap().required;
         assert!(
             !kind(&legacy),
             "the legacy contract must accept a missing kind"
         );
-        assert!(
-            kind(&bundled_template()),
-            "the bundled template requires a kind"
-        );
+        assert!(kind(&bundled), "the bundled template requires a kind");
 
         // A kind-less candidate the legacy contract passes and the core restores as a promise.
         let judgment_turns = [JudgmentTurn {
@@ -1498,7 +1486,12 @@ mod tests {
         let answer = json!({ "candidates": [{
             "turn": 1, "responsible": "Alice", "promise": "send it", "quote": "I'll send it."
         }] });
-        let (kept, excluded) = host::task::check(&legacy, &judgment_turns, &answer).unwrap();
+        let input = host::task::TaskInput {
+            owner_speaker: "Alice",
+            turns: &judgment_turns,
+            labels: None,
+        };
+        let (kept, excluded) = host::task::check(&legacy, &input, &answer).unwrap();
         assert_eq!(excluded, 0);
         let people = People {
             owner: "Alice".into(),
@@ -1509,7 +1502,7 @@ mod tests {
         assert_eq!(validated.hypotheses.len(), 1);
         assert_eq!(validated.hypotheses[0].kind, Kind::Promise);
         // The current bundled template would refuse the same kind-less recording.
-        assert!(host::task::check(&bundled_template(), &judgment_turns, &answer).is_err());
+        assert!(host::task::check(&bundled, &input, &answer).is_err());
     }
 
     /// A local replacement must keep the meeting result contract: the seven candidate fields with

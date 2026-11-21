@@ -56,13 +56,28 @@ flowchart LR
     s8a["8a · First action, proposed"]
     s8b["8b · First Act"]
     s9["9 · Learned trust and usefulness"]
+    s9b["9b · Plugin-declared action shapes"]
   end
-  subgraph M4["M4 · Where I already am"]
+  subgraph M4["M4 · Every conversation"]
+    s17["17 · Native Slack"]
+    s18["18 · Slack identity"]
+    s19["19 · Chat commitments"]
+  end
+  subgraph M5["M5 · Connected knowledge"]
+    s20["20 · Cross-source keys"]
+    s21["21 · Links from config"]
+    s22["22 · Topics and chains"]
+  end
+  subgraph M6["M6 · Where I already am"]
     s10["10 · Notes vault renderer"]
     s11["11 · Interruptions and Herdr"]
     s12["12 · Daily rituals"]
   end
-  subgraph M5["M5 · Open and portable"]
+  subgraph M7["M7 · Open judgment"]
+    s23["23 · Decision tasks"]
+    s24["24 · Links found by judgment"]
+  end
+  subgraph M8["M8 · Open and portable"]
     s13["13 · Export and rebuild"]
     s14["14 · Scopes and forgetting"]
     s15["15 · Plugin install and permissions"]
@@ -70,11 +85,19 @@ flowchart LR
   end
 
   s1 --> s2 --> s3 --> s4 --> s4b --> s5 --> s6 --> s7 --> s8a --> s8b --> s9
+  s8a --> s9b
+  s4b --> s17 --> s18 --> s19
+  s5 --> s19
+  s4b --> s20 --> s21 --> s22
   s6 --> s10
   s6 --> s11
   s9 --> s11
   s10 --> s12
   s11 --> s12
+  s22 --> s12
+  s5 --> s23
+  s22 --> s24
+  s23 --> s24
   s7 --> s13
   s7 --> s14
   s13 --> s16
@@ -89,5 +112,8 @@ flowchart LR
   class s4b done
   class s5,s6,s7 done
   class s8a,s8b done
-  class s9,s10,s11,s12,s13,s14,s15,s16 todo
+  class s9 planning
+  class s17 doing
+  class s18,s19 planning
+  class s9b,s10,s11,s12,s13,s14,s15,s16,s20,s21,s22,s23,s24 todo
 ```

@@ -17,6 +17,8 @@ Status: `todo` · `planning` · `doing` · `done`
 | 4 | **A second source, one identity** | Add a second source and see one person seen in both as one entity. Exact identifiers link on their own, fuzzy matches ask you, and you can undo a merge | 3 | knowledge §4; vocabulary §8 | done (`plans/2026-11-05-second-source-one-identity.plan.md`, spec `specs/identity.md`) |
 | 4b | **Answers I can read** | Get `about` and `why` results whose entities carry a cited label (title or name, with its URL, and state when observed), so an agent sees what is on your plate in one call. `rastro sync` shows progress and why it is reading, and warns before a renamed source is re-read in full. Switch day: the morning after it lands, you prep standup with `about me` over MCP instead of opening Linear and GitHub | 4 | knowledge §22, §69 | done (`plans/2026-11-11-answers-i-can-read.plan.md`, spec `specs/claims.md`; switch day 2026-11-12) |
 
+**Also shipped:** the MCP catalog gateway for deferred reads (#238); readable CLI output as labelled blocks (doing: #250, #254, #256, #259).
+
 ## M2: Commitments I can trust
 **Client use: a daily commitments review** that never shows you what's already done or tracked. It replaces the prototype's proposed tasks.
 
@@ -26,6 +28,8 @@ Status: `todo` · `planning` · `doing` · `done`
 | 6 | **The commitments queue** | Work a terminal queue of proposals and questions, checked against what's known first: accept, edit, reject, answer, `missed`. Outcomes are recorded, and the renderer reports what it showed | 5 | renderers §1–2, §6; learning §2–3, §11 | done (`plans/2026-11-15-the-commitments-queue/plan.yaml`, spec `specs/queue.md`; switch day 2026-11-18) |
 | 7 | **Correct anything** | Confirm, fix or retract any claim; a retraction carries through to derived claims and pending proposals; "as of" queries | 6 | knowledge §7, §10; renderers §5 | done (`plans/2026-11-18-correct-anything/plan.yaml`, spec `specs/corrections.md`; switch day 2026-11-18) |
 
+**Also shipped:** the meeting task template with saved replay contracts (#237, #239, #240); meeting checks as declarative template rules (`decisions/plugins.md` §49).
+
 ## M3: It does things, safely
 **Client use: Rastro acts for you** on what it has earned, with an undo, and tells you why.
 
@@ -33,18 +37,47 @@ Status: `todo` · `planning` · `doing` · `done`
 |---|---|---|---|---|---|
 | 8a | **First action, proposed** | Have an agent in any session propose a Linear issue through Rastro, accept it in one step, and get it created once, with its justification kept in Rastro (never in Linear), `actions show` to ask why, and an undo. One idempotent `rastro tick`, called by launchd, keeps sources fresh and retries failed runs. Switch day: the next Linear issue you have an agent create goes through Rastro | 7 | levels §1–6, §9; knowledge §43, §74; plugins §34–36 | done (`plans/2026-11-19-first-act/plan.yaml`, spec `specs/actions.md`; switch day 2026-11-20) |
 | 8b | **First Act** | Let that action run at Act through a rule you write, with a grace window you can stop, an optional daily budget, and `rules check` to see what a rule would do now | 8a | levels (all), §13–20; knowledge §75; surfaces §55 | done (`plans/2026-11-19-act-by-rule/plan.yaml`, spec `specs/actions.md`; switch day 2026-11-20) |
-| 9 | **Learned trust and usefulness** | See trust per cell grow from your outcomes: promotion is proposed to you, demotion is automatic. Includes a trust view, a learning journal, and usefulness and cost per plugin, so dead parts are visible | 8b | learning (all); plugins §9 | todo |
+| 9 | **Learned trust and usefulness** | See trust per cell grow from your outcomes: promotion is proposed to you, demotion is automatic. Includes a trust view, a learning journal, and usefulness and cost per plugin, so dead parts are visible | 8b | learning (all); plugins §9 | planning (`plans/2026-11-20-learned-trust/plan.yaml`) |
+| 9b | **Plugin-declared action shapes** | Add an action provider whose actions declare their own input and output as JSON Schema. The core checks a proposal before it records it and a result before it keeps it, and the CLI builds flags from the schema. The Linear fields leave the core | 8a | plugins §53; `adr/0017` | todo |
 
-## M4: Where I already am
+**Also shipped:** a created Linear issue carries Linear's own team and assignee ids (#204).
+
+## M4: Every conversation
+**Client use: commitments from every place you talk.** Chat threads sit next to meetings in the same commitments list and queue.
+
+| # | Slice | Outcome: from here on you can… | Builds on | Concept / decisions | Status |
+|---|---|---|---|---|---|
+| 17 | **Native Slack** | Register an approved Slack channel with a read-only token from your own Slack app, and sync its messages and thread replies as cited evidence with honest coverage. Shared, direct and hidden conversations are never read, and the token is never stored | 4b | plugins §50 | doing (`plans/2026-11-21-native-slack/plan.yaml`, spec `specs/evidence.md`) |
+| 18 | **Slack identity** | See who a synced channel's people are: the token owner is your Person, each author is a Slack account with its names, and bots never link to anyone | 17 | knowledge §4; plugins §50 | planning (`plans/2026-11-21-slack-identity/plan.yaml`, spec `specs/identity.md`) |
+| 19 | **Chat commitments** | See commitment hypotheses from the chat threads you opted in, next to meeting ones in the same commitments list, with speakers identified by account and threads re-read when they change. A conversation is a contract: source plugins make its turns | 5, 18 | plugins §40, §52 | planning: re-plan before T1 (`plans/2026-11-21-chat-commitments/owner-note-2026-11-21.md`) |
+
+## M5: Connected knowledge
+**Client use: follow one problem across sources.** An email, a Linear issue, a pull request and a chat thread about the same problem show as one topic, and every link cites its evidence.
+
+| # | Slice | Outcome: from here on you can… | Builds on | Concept / decisions | Status |
+|---|---|---|---|---|---|
+| 20 | **Cross-source keys** | Bind an add-on extractor beside a pre-made one, so your company's key conventions (branch names, issue keys in titles) become normalized keys without a fork | 4b | plugins §54; knowledge §77 (Tier 1); open questions #19, #20, #23 | todo |
+| 21 | **Links from config** | Write join rules in config that link items whose keys match, check them with a dry run, and get each link as a cited inference claim with a predicate from the link hierarchy | 20 | knowledge §77 (Tier 2), §78 | todo |
+| 22 | **Topics and chains** | Accept a topic an agent proposes, or create one, and read its members and the chain of links behind each one, walked at read time | 21 | knowledge §79, §80 | todo |
+
+## M6: Where I already am
 **Client use: daily rituals** in your vault and terminal, with interruptions you control.
 
 | # | Slice | Outcome: from here on you can… | Builds on | Concept / decisions | Status |
 |---|---|---|---|---|---|
 | 10 | **Notes vault renderer** | See generated views in your vault and tick to confirm or accept. Plus the opt-in "Owner notes" connector, enrolled note by note | 6 | renderers (vault) | todo |
 | 11 | **Interruptions and Herdr** | Get items at the right interruption level within a budget, with batching windows, notifications, a Herdr queue pane and a "needs you" status | 6, 9 | interruptions (all); renderers (Herdr) | todo |
-| 12 | **Daily rituals** | Run morning define, what changed, capture and weekly review as workflow plugins | 10, 11 | concept "Workflows" | todo |
+| 12 | **Daily rituals** | Run morning define, what changed, capture and weekly review as workflow plugins | 10, 11, 22 | concept "Workflows" | todo |
 
-## M5: Open and portable
+## M7: Open judgment
+**Client use: judgment you can audit.** Agent sessions and decision adapters sort, triage and link what rules cannot. The core checks every output, and nothing becomes knowledge without your yes.
+
+| # | Slice | Outcome: from here on you can… | Builds on | Concept / decisions | Status |
+|---|---|---|---|---|---|
+| 23 | **Decision tasks** | Run task-template plugins through an agent session adapter or a decision adapter, first for duplicate/stale triage and categorization, each output validated and replayed without a model | 5 | plugins §38–43; `adr/0016` | todo |
+| 24 | **Links found by judgment** | Get link hypotheses where keys and rules find nothing: deterministic narrowing to a few candidate cards, then a decision adapter, then an agent session, then you. A link becomes a claim only when you accept it | 22, 23 | knowledge §77 (Tier 3); open questions #25–#27 | todo |
+
+## M8: Open and portable
 **Client use: others can use it.** Friends install Rastro and its plugins, you own your data, and you can share what you choose.
 
 | # | Slice | Outcome: from here on you can… | Builds on | Concept / decisions | Status |
@@ -54,13 +87,17 @@ Status: `todo` · `planning` · `doing` · `done`
 | 15 | **Plugin install and permissions** | Install a plugin in one step, approve its permissions, see permission diffs on update, revoke them. Starter pack included | 2 | plugins §4–5, §11 | todo |
 | 16 | **Sharing** | Share scoped claims with another owner, who receives them as evidence from a person and accepts them explicitly | 13, 14 | sharing (all) | todo |
 
+**Also shipped:** the published connector protocol schema and `rastro plugin check`, a part of slice 15 (#249, #251).
+
 ## Parking lot
+- Kill rule and duplicate/stale rate: the usefulness proposal engine (narrow/slow/remove after W low weeks) and per-plugin quality counters, once slice 9's usefulness data accumulates (`decisions/learning.md`, deferred 2026-11-20).
+- Trust spreading to wider cells: propose widening a cell once actions carry person, project, source or channel contexts (`decisions/learning.md` §8, deferred 2026-11-20).
+- Usefulness for views and notification types: measured when their surfaces land in slices 10–11 (deferred from slice 9, 2026-11-20).
 - News radar, project updates in the owner's voice, "find agent work a plain rule could do": workflows after 12.
 - Windows support.
 - Optional agent-runtime adapter for owners already running the fleet; default agent adapters are thin CLI drivers over a shared SDK (`decisions/plugins.md` §36, amended 2026-11-20).
 - Commitments from GitHub and Linear comments: the slice-5 extractor bound to those sources, once their connectors read comments.
-- Slack and mail through the work companion, once commitments prove useful; Slack per approved channel, each with its own coverage. Meetings already shipped as slice 5's first source (`specs/meetings.md`, `adr/0011`): a local transcript import, not a work-companion integration.
+- Mail through the work companion, once chat commitments prove useful. Meetings already shipped as slice 5's first source (`specs/meetings.md`, `adr/0011`): a local transcript import, not a work-companion integration.
 - A versioned structured read contract from the work companion (asked of its maintainers), then a generic MCP bridge with private mapping packs.
 - Agentic connectors (an agent chooses what to read), first for online research. Amends plugins §13 and needs a read broker that constrains tools, scopes and arguments; evidence stays what the broker captured, and "empty" only comes from deterministic reads.
-- Open judgment (M6 candidate, end goal): task-template plugins, generic agent-adapters (thin CLI drivers + SDK), decision-adapters (System-1) and decision tasks; first candidates duplicate/stale triage and categorization (`decisions/plugins.md` §38–43, `adr/0016-judgment-sessions-capped-retry-turns.md`). First delivery unchanged.
 - Open questions in `open-questions.md` get decided inside the slice that first needs them.
