@@ -5,10 +5,14 @@
 //!
 //! Promotion is proposed, never self-applied: an eligible cell with no rule is shown the exact
 //! `[[rules]]` entry that raises it, and a demoted cell the reset command that restores its
-//! baseline. Demotion is automatic: undos drop the level, and the row names the last change with
-//! its cause. A cell no visible run touches is absent, and an empty store lists no cells.
-use crate::actions::{Run, RunStatus};
-use crate::identity::IntentKind;
+//! baseline. Demotion is automatic: an undo or a correction of a claim a done run cited drops
+//! the cell one level, repeated undos in its last outcomes drop it to Ask, and a cell idle past
+//! the decay window drops a level at its next use. Every level change is derived with its cause
+//! and time, so the cell carries its journal and the row names the last change. A cell no
+//! visible run touches is absent, and an empty store lists no cells.
+use crate::actions::{Filed, Run, RunStatus};
+use crate::identity::{Intent, IntentKind, IntentStatus, Resolution};
+use crate::queue::ShownReport;
 use crate::read_only::Snapshot;
 use crate::{Config, Rastro, ReadStorage, Reader, Scope, Storage};
 use anyhow::{Context, Result};
@@ -96,10 +100,13 @@ impl Level {
     }
 }
 
-/// A level change: what caused it and when.
+/// A level change: the levels it moved between, what caused it and when. One entry of the
+/// cell's journal; the trust view names the last of them.
 #[derive(Clone, Debug, JsonSchema, Serialize)]
 #[schemars(rename = "TrustLevelChange")]
 pub struct LevelChange {
+    pub from: Level,
+    pub to: Level,
     pub cause: String,
     pub at: DateTime<Utc>,
 }
@@ -137,26 +144,106 @@ pub struct TrustCell {
     pub clean: usize,
     /// How many of the cell's last outcomes are undos.
     pub undos: usize,
+    /// The cell's journal: every level change it derived, oldest first, each with the levels it
+    /// moved between, its cause and its time. Empty while the level never changed.
+    pub changes: Vec<LevelChange>,
     /// The last level change with its cause; absent when the level never changed.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub last_change: Option<LevelChange>,
     pub promotion: Promotion,
 }
 
-/// What `trust` returns: every visible cell, by action and team.
+/// What `trust` returns: every visible cell, by action and team, and every visible plugin's
+/// usefulness and cost.
 #[derive(Debug, JsonSchema, Serialize)]
 #[schemars(rename = "Trust")]
 pub struct Trust {
     pub cells: Vec<TrustCell>,
+    pub plugins: Vec<TrustPlugin>,
 }
 
 impl Trust {
     pub fn empty() -> Self {
-        Self { cells: Vec::new() }
+        Self {
+            cells: Vec::new(),
+            plugins: Vec::new(),
+        }
     }
 }
 
-/// Derives the trust view from one snapshot: the runs the scopes see, grouped by cell.
+/// What storage reads for one plugin's cost: the wall time of its finished runs in
+/// milliseconds, the adapter turns they used, and the ids of the runs whose content a shown
+/// report names for the plugin's items.
+#[derive(Clone, Debug)]
+pub struct PluginRuns {
+    pub plugin: String,
+    pub wall_ms: i64,
+    pub turns: usize,
+    pub runs: Vec<String>,
+}
+
+/// A plugin's engagement: acted on over seen, each item counted once, from the terminal's
+/// shown reports; `unmeasured` where no shown report names the plugin's runs — unseen is not
+/// ignored, and never reads 0.
+#[derive(Clone, Copy, Debug, JsonSchema, Serialize)]
+#[serde(untagged)]
+pub enum Engagement {
+    Measured { acted: usize, seen: usize },
+    Unmeasured(Unmeasured),
+}
+
+/// The word an unmeasured engagement reads, in the JSON as on the terminal.
+#[derive(Clone, Copy, Debug, JsonSchema, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Unmeasured {
+    Unmeasured,
+}
+
+/// What a plugin's runs cost: their wall time in milliseconds plus the adapter turns they
+/// used.
+#[derive(Clone, Copy, Debug, JsonSchema, Serialize)]
+#[schemars(rename = "TrustCost")]
+pub struct Cost {
+    pub wall_ms: i64,
+    pub turns: usize,
+}
+
+/// One plugin's usefulness and cost: its engagement, the time to action, what its runs cost
+/// and what that cost reads per accepted item.
+#[derive(Clone, Debug, JsonSchema, Serialize)]
+#[schemars(rename = "TrustPlugin")]
+pub struct TrustPlugin {
+    pub plugin: String,
+    pub engagement: Engagement,
+    /// The mean seconds from an item's first shown report to the intent that answered it,
+    /// over the plugin's acted-on items; absent when nothing was acted on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub time_to_action_seconds: Option<f64>,
+    pub cost: Cost,
+    /// The cost over the plugin's accepted items — an accept unchanged or with edits — in
+    /// whole milliseconds and turns, divided down; a dash when nothing was accepted.
+    pub cost_per_accepted: CostPerAccepted,
+}
+
+/// The cost per accepted item: the cost divided by the accepts, or a dash when nothing was
+/// accepted — never a division by zero.
+#[derive(Clone, Copy, Debug, JsonSchema, Serialize)]
+#[serde(untagged)]
+pub enum CostPerAccepted {
+    Measured(Cost),
+    Dash(Dash),
+}
+
+/// The dash a cost per accepted reads when nothing was accepted, in the JSON as on the
+/// terminal.
+#[derive(Clone, Copy, Debug, JsonSchema, Serialize)]
+pub enum Dash {
+    #[serde(rename = "—")]
+    Dash,
+}
+
+/// Derives the trust view from one snapshot: the runs and proposals the scopes see, grouped by
+/// cell.
 pub(crate) fn trust_view(
     config: &Config,
     view: Option<&dyn Snapshot>,
@@ -166,11 +253,15 @@ pub(crate) fn trust_view(
         return Ok(Trust::empty());
     };
     let runs = view.action_runs(scopes)?;
+    let proposals = view.action_proposals(scopes)?;
     let intents = view.intents()?;
+    let plugin_runs = view.plugin_runs(scopes)?;
+    let shown = view.shown_reports()?;
     let kinds: BTreeMap<&str, IntentKind> = intents
         .iter()
         .map(|intent| (intent.id.as_str(), intent.kind))
         .collect();
+    let corrections = corrections(&intents);
     let mut cells: BTreeMap<(String, String), Vec<&Run>> = BTreeMap::new();
     for run in &runs {
         cells
@@ -178,17 +269,177 @@ pub(crate) fn trust_view(
             .or_default()
             .push(run);
     }
+    let mut filed: BTreeMap<(String, String), Vec<&Filed>> = BTreeMap::new();
+    for proposal in &proposals {
+        filed
+            .entry((
+                proposal.proposal.action.clone(),
+                proposal.proposal.fields.team.clone(),
+            ))
+            .or_default()
+            .push(proposal);
+    }
     Ok(Trust {
         cells: cells
             .into_iter()
-            .map(|((action, team), runs)| derive_cell(config, &action, &team, &runs, &kinds))
+            .map(|((action, team), runs)| {
+                let proposals = filed
+                    .get(&(action.clone(), team.clone()))
+                    .map_or(Vec::new(), |filed| filed.clone());
+                derive_cell(
+                    config,
+                    &action,
+                    &team,
+                    &runs,
+                    &proposals,
+                    &kinds,
+                    &corrections,
+                )
+            })
             .collect::<Result<Vec<_>>>()?,
+        plugins: derive_plugins(&plugin_runs, &shown, &intents),
     })
 }
 
+/// The level one cell sits at now, derived from the same evidence as the trust view: the gate a
+/// matching rule and a pending Act's re-check read before anything runs.
+pub(crate) fn cell_level(
+    config: &Config,
+    view: &dyn Snapshot,
+    scopes: &[Scope],
+    action: &str,
+    team: &str,
+) -> Result<Level> {
+    let runs = view.action_runs(scopes)?;
+    let proposals = view.action_proposals(scopes)?;
+    let intents = view.intents()?;
+    let kinds: BTreeMap<&str, IntentKind> = intents
+        .iter()
+        .map(|intent| (intent.id.as_str(), intent.kind))
+        .collect();
+    let corrections = corrections(&intents);
+    let runs: Vec<&Run> = runs
+        .iter()
+        .filter(|run| run.action == action && run.fields.team == team)
+        .collect();
+    let proposals: Vec<&Filed> = proposals
+        .iter()
+        .filter(|filed| filed.proposal.action == action && filed.proposal.fields.team == team)
+        .collect();
+    Ok(derive_cell(
+        config,
+        action,
+        team,
+        &runs,
+        &proposals,
+        &kinds,
+        &corrections,
+    )?
+    .level)
+}
+
+/// The plugins' usefulness from the shown reports and the intents that answered them: each
+/// item counts once, attributed to the plugin whose run carried its content. An item no
+/// terminal read showed attributes to no plugin, and a question, which has no source run, to
+/// none. The time to action is the mean wait of the acted-on items, from the first report that
+/// showed each to the intent that answered it. Cost is the wall time of the plugin's runs plus
+/// their adapter turns; per accepted item it divides by the accepts, an accept unchanged or
+/// with edits, and reads a dash when nothing was accepted.
+fn derive_plugins(
+    plugin_runs: &[PluginRuns],
+    shown: &[ShownReport],
+    intents: &[Intent],
+) -> Vec<TrustPlugin> {
+    let mut run_plugin: BTreeMap<&str, &str> = BTreeMap::new();
+    for facts in plugin_runs {
+        for run in &facts.runs {
+            run_plugin.insert(run.as_str(), facts.plugin.as_str());
+        }
+    }
+    // Each shown item's plugin and the first moment a terminal read printed it.
+    let mut first_shown: BTreeMap<&str, (&str, DateTime<Utc>)> = BTreeMap::new();
+    for report in shown {
+        let Some(&plugin) = run_plugin.get(report.run.as_str()) else {
+            continue;
+        };
+        first_shown
+            .entry(report.item.as_str())
+            .and_modify(|(_, at)| *at = (*at).min(report.at))
+            .or_insert((plugin, report.at));
+    }
+    // The latest intent that answered each item, in acceptance order: an accept, an edit, a
+    // reject or an answer, the same kinds the queue's outcomes read.
+    let mut answers: BTreeMap<&str, &Intent> = BTreeMap::new();
+    for intent in intents {
+        if matches!(
+            intent.kind,
+            IntentKind::Accept | IntentKind::Edit | IntentKind::Reject | IntentKind::Answer
+        ) && let Some(item) = intent.queue_item()
+        {
+            answers.insert(item, intent);
+        }
+    }
+    #[derive(Clone, Copy, Default)]
+    struct EngagementCounts {
+        seen: usize,
+        acted: usize,
+        waited_ms: i64,
+        accepted: usize,
+    }
+    let mut by_plugin: BTreeMap<&str, EngagementCounts> = BTreeMap::new();
+    for (item, (plugin, first)) in first_shown {
+        let counts = by_plugin.entry(plugin).or_default();
+        counts.seen += 1;
+        if let Some(intent) = answers.get(item) {
+            counts.acted += 1;
+            counts.waited_ms += (intent.issued_at - first).num_milliseconds();
+            if matches!(intent.kind, IntentKind::Accept | IntentKind::Edit) {
+                counts.accepted += 1;
+            }
+        }
+    }
+    plugin_runs
+        .iter()
+        .map(|facts| {
+            let counts = by_plugin
+                .get(facts.plugin.as_str())
+                .copied()
+                .unwrap_or_default();
+            // A plugin no terminal read showed is unmeasured, never 0: unseen is not ignored.
+            let engagement = if counts.seen == 0 {
+                Engagement::Unmeasured(Unmeasured::Unmeasured)
+            } else {
+                Engagement::Measured {
+                    acted: counts.acted,
+                    seen: counts.seen,
+                }
+            };
+            TrustPlugin {
+                plugin: facts.plugin.clone(),
+                engagement,
+                time_to_action_seconds: (counts.acted > 0)
+                    .then(|| counts.waited_ms as f64 / 1000.0 / counts.acted as f64),
+                cost: Cost {
+                    wall_ms: facts.wall_ms,
+                    turns: facts.turns,
+                },
+                cost_per_accepted: if counts.accepted > 0 {
+                    CostPerAccepted::Measured(Cost {
+                        wall_ms: facts.wall_ms / counts.accepted as i64,
+                        turns: facts.turns / counts.accepted,
+                    })
+                } else {
+                    CostPerAccepted::Dash(Dash::Dash)
+                },
+            }
+        })
+        .collect()
+}
+
 /// What happened to one run, terminally: a kept run is a clean outcome unless the owner accepted
-/// it with edits, and an undone run is an undo. A run still accepted, pending, returned, stopped
-/// or failed is no outcome: nothing terminal happened to it.
+/// it with edits, and an undone run is an undo. A correction landing on a claim a done run cited
+/// counts as an undo too. A run still accepted, pending, returned, stopped or failed is no
+/// outcome: nothing terminal happened to it.
 #[derive(Clone, Copy)]
 enum OutcomeKind {
     Clean,
@@ -199,10 +450,57 @@ enum OutcomeKind {
 struct Outcome {
     kind: OutcomeKind,
     at: DateTime<Utc>,
+    /// What names the undo in the journal; absent for a clean or edited outcome.
+    cause: Option<String>,
 }
 
-/// The cell's outcomes, oldest first: one per run that reached a terminal state.
-fn outcomes(runs: &[&Run], kinds: &BTreeMap<&str, IntentKind>) -> Vec<Outcome> {
+/// A correction landing on a claim: a retraction or an edit, with its time and the word the
+/// journal names it by.
+struct Correction {
+    at: DateTime<Utc>,
+    word: &'static str,
+}
+
+/// The corrections that land on each claim, oldest first: a `reject` retracts it and an `edit`
+/// fixes its object, both ending what rests on it. An undone intent corrects nothing; a later
+/// correction supersedes an earlier one without erasing the change it caused.
+fn corrections(intents: &[Intent]) -> BTreeMap<&str, Vec<Correction>> {
+    let resolution = Resolution::of(intents);
+    let mut map: BTreeMap<&str, Vec<Correction>> = BTreeMap::new();
+    for intent in intents {
+        let word = match intent.kind {
+            IntentKind::Reject => "retraction",
+            IntentKind::Edit => "edit",
+            _ => continue,
+        };
+        let Some(claim) = intent.corrects() else {
+            continue;
+        };
+        if matches!(
+            resolution.status.get(&intent.id),
+            Some((IntentStatus::Undone, _))
+        ) {
+            continue;
+        }
+        map.entry(claim).or_default().push(Correction {
+            at: intent.issued_at,
+            word,
+        });
+    }
+    for corrections in map.values_mut() {
+        corrections.sort_by_key(|correction| correction.at);
+    }
+    map
+}
+
+/// The cell's outcomes, oldest first: one per run that reached a terminal state, plus one per
+/// correction that landed on a claim a done run cited after the run started.
+fn outcomes(
+    runs: &[&Run],
+    proposals: &[&Filed],
+    kinds: &BTreeMap<&str, IntentKind>,
+    corrections: &BTreeMap<&str, Vec<Correction>>,
+) -> Vec<Outcome> {
     let mut outcomes = Vec::new();
     for run in runs {
         match run.status {
@@ -218,7 +516,26 @@ fn outcomes(runs: &[&Run], kinds: &BTreeMap<&str, IntentKind>) -> Vec<Outcome> {
                         OutcomeKind::Clean
                     },
                     at: run.accepted_at,
+                    cause: None,
                 });
+                // A correction of a claim this done run cited counts as an undo: the owner
+                // ended what the run rested on. Only a done run cited it to any effect; a
+                // pending Act the re-check returns demotes nothing.
+                let cites = proposals
+                    .iter()
+                    .find(|filed| filed.id == run.proposal)
+                    .map(|filed| &filed.proposal.cites);
+                for claim in cites.into_iter().flatten() {
+                    for correction in corrections.get(claim.as_str()).into_iter().flatten() {
+                        if correction.at > run.accepted_at {
+                            outcomes.push(Outcome {
+                                kind: OutcomeKind::Undo,
+                                at: correction.at,
+                                cause: Some(format!("{} of claim {claim}", correction.word)),
+                            });
+                        }
+                    }
+                }
             }
             RunStatus::Undone => {
                 // An undone run holds its undo intent; storage derives the status from it.
@@ -226,6 +543,7 @@ fn outcomes(runs: &[&Run], kinds: &BTreeMap<&str, IntentKind>) -> Vec<Outcome> {
                     outcomes.push(Outcome {
                         kind: OutcomeKind::Undo,
                         at: undo.at,
+                        cause: Some("undo".into()),
                     });
                 }
             }
@@ -265,16 +583,91 @@ fn proposed_rule(action: &str, team: &str) -> Result<String> {
     ))
 }
 
-/// One cell's trust from its runs, oldest first.
+/// The level a cell sits at and its journal, folded from its outcomes and its uses in time
+/// order. Every undo or correction drops one level, and `repeat_undos` undos inside the last
+/// `undo_window` outcomes drop straight to Ask; a gap of `decay_days` or more between two uses
+/// decays the cell one level at the later use, naming the idle days and the window. The fold
+/// only ever moves down — promotion is never self-applied — and each move it makes is one entry
+/// of the journal, oldest first.
+fn fold_level(
+    baseline: Level,
+    learning: &LearningConfig,
+    outcomes: &[Outcome],
+    uses: &[DateTime<Utc>],
+) -> (Level, Vec<LevelChange>) {
+    enum FoldEvent<'a> {
+        Outcome(&'a Outcome),
+        Decay(String),
+    }
+    let decays = uses.windows(2).filter_map(|pair| {
+        let idle_days = (pair[1] - pair[0]).num_days();
+        (idle_days >= learning.decay_days).then(|| {
+            (
+                pair[1],
+                format!(
+                    "decay after {idle_days} idle days (window {} days)",
+                    learning.decay_days
+                ),
+            )
+        })
+    });
+    let mut events: Vec<(DateTime<Utc>, FoldEvent)> = outcomes
+        .iter()
+        .map(|outcome| (outcome.at, FoldEvent::Outcome(outcome)))
+        .chain(decays.map(|(at, cause)| (at, FoldEvent::Decay(cause))))
+        .collect();
+    events.sort_by_key(|(at, _)| *at);
+    let mut level = baseline;
+    let mut changes: Vec<LevelChange> = Vec::new();
+    let mut recent: Vec<&Outcome> = Vec::new();
+    for (at, event) in events {
+        let (to, cause) = match event {
+            FoldEvent::Outcome(outcome) => {
+                recent.push(outcome);
+                if recent.len() > learning.undo_window {
+                    recent.remove(0);
+                }
+                if !matches!(outcome.kind, OutcomeKind::Undo) {
+                    continue;
+                }
+                let window_undos = recent
+                    .iter()
+                    .filter(|outcome| matches!(outcome.kind, OutcomeKind::Undo))
+                    .count();
+                let to = if window_undos >= learning.repeat_undos {
+                    Level::Ask
+                } else {
+                    level.below()
+                };
+                (to, outcome.cause.clone().expect("an undo names its cause"))
+            }
+            FoldEvent::Decay(cause) => (level.below(), cause),
+        };
+        if to != level {
+            changes.push(LevelChange {
+                from: level,
+                to,
+                cause,
+                at,
+            });
+            level = to;
+        }
+    }
+    (level, changes)
+}
+
+/// One cell's trust from its runs and proposals, oldest first.
 fn derive_cell(
     config: &Config,
     action: &str,
     team: &str,
     runs: &[&Run],
+    proposals: &[&Filed],
     kinds: &BTreeMap<&str, IntentKind>,
+    corrections: &BTreeMap<&str, Vec<Correction>>,
 ) -> Result<TrustCell> {
     let learning = &config.learning;
-    let outcomes = outcomes(runs, kinds);
+    let outcomes = outcomes(runs, proposals, kinds, corrections);
     let clean: Vec<&Outcome> = outcomes
         .iter()
         .filter(|outcome| matches!(outcome.kind, OutcomeKind::Clean))
@@ -296,29 +689,18 @@ fn derive_cell(
     } else {
         Level::Propose
     };
-    // Demotion is automatic: repeated undos in the window drop the cell to Ask; any undo in its
-    // history drops it one level below its baseline, and it stays there until the owner resets
-    // it — promotion is never self-applied.
-    let total_undos = outcomes
+    // Demotion is automatic and fast: every undo, correction or decay drops the cell one level,
+    // and repeated undos in its last outcomes drop it straight to Ask. The level never rises
+    // from outcomes — promotion is the owner's rule or reset, never self-applied.
+    let mut uses: Vec<DateTime<Utc>> = runs
         .iter()
-        .filter(|outcome| matches!(outcome.kind, OutcomeKind::Undo))
-        .count();
-    let level = if undos >= learning.repeat_undos {
-        Level::Ask
-    } else if total_undos > 0 {
-        baseline.below()
-    } else {
-        baseline
-    };
+        .map(|run| run.accepted_at)
+        .chain(proposals.iter().map(|filed| filed.proposed_at))
+        .collect();
+    uses.sort();
+    let (level, changes) = fold_level(baseline, learning, &outcomes, &uses);
     let demoted = level != baseline;
-    let last_change = outcomes
-        .iter()
-        .rev()
-        .find(|outcome| matches!(outcome.kind, OutcomeKind::Undo))
-        .map(|undo| LevelChange {
-            cause: "undo".into(),
-            at: undo.at,
-        });
+    let last_change = changes.last().cloned();
     let rule_text = (eligible && !demoted && !has_rule(config, action, team))
         .then(|| proposed_rule(action, team))
         .transpose()?;
@@ -346,6 +728,7 @@ fn derive_cell(
         level,
         clean: clean.len(),
         undos,
+        changes,
         last_change,
         promotion: Promotion {
             eligible,

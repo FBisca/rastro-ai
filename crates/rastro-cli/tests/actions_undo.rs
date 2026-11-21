@@ -59,6 +59,41 @@ impl Env {
         serde_json::from_slice::<Value>(&out.stdout).unwrap()["result"].clone()
     }
 
+    /// `rastro args` with the clock at `now`, for the grace window a test drives.
+    fn rastro_at(&self, args: &[&str], now: &str) -> Output {
+        Command::new(support::rastro())
+            .env("RASTRO_HOME", self.home.path())
+            .env("RASTRO_NOW", now)
+            .env("LINEAR_API_KEY", linear_api::KEY)
+            .env("RASTRO_LINEAR_API_URL", &self.linear.base)
+            .args(args)
+            .output()
+            .unwrap()
+    }
+
+    /// A command that must succeed at `now`, read as the terminal reads it.
+    fn ok_at(&self, args: &[&str], now: &str) {
+        let out = self.rastro_at(args, now);
+        assert!(
+            out.status.success(),
+            "{args:?}: {}{}",
+            String::from_utf8_lossy(&out.stderr),
+            String::from_utf8_lossy(&out.stdout)
+        );
+    }
+
+    /// The `result` of a command that must succeed, read with `--json` at `now`.
+    fn ok_json_at(&self, args: &[&str], now: &str) -> Value {
+        let out = self.rastro_at(&[args, &["--json"]].concat(), now);
+        assert!(
+            out.status.success(),
+            "{args:?}: {}{}",
+            String::from_utf8_lossy(&out.stderr),
+            String::from_utf8_lossy(&out.stdout)
+        );
+        serde_json::from_slice::<Value>(&out.stdout).unwrap()["result"].clone()
+    }
+
     /// Proposes an issue and accepts it, so the run's issue exists and the run reads `done`.
     /// Returns the run's id.
     fn done_run(&self) -> String {
@@ -197,6 +232,97 @@ fn undoing_again_after_a_lost_delete_response_sends_no_second_delete_and_records
     assert_eq!(again["status"], "undone");
     assert_eq!(env.run()["status"], "undone");
     assert_eq!(env.undo_intents(), 1);
+}
+
+// spec: A demotion during grace returns the Act
+// spec: An Act is checked again before it runs
+#[test]
+fn a_demotion_during_grace_returns_the_pending_act_and_sends_nothing() {
+    let env = Env::new();
+    // A rule on team H, and a source checked just now so a tick only runs actions.
+    let config = env.home.path().join("config/config.toml");
+    let text = fs::read_to_string(&config).unwrap();
+    fs::write(
+        &config,
+        format!(
+            "{text}\n[[rules]]\nname = \"my-issues\"\naction = \"linear.create_issue\"\n\
+             team = \"H\"\nassignee = \"me\"\n"
+        ),
+    )
+    .unwrap();
+    support::seed::checked_now(env.home.path(), "linear-work", "work");
+
+    // One Act runs to done; a second is pending when the owner undoes the first.
+    let first = env.ok_json_at(
+        &[
+            "actions",
+            "propose",
+            "linear.create_issue",
+            "--title",
+            "First issue",
+            "--team",
+            "H",
+            "--why",
+            "owner asked",
+        ],
+        "2026-11-19T10:00:00Z",
+    );
+    let first_run = first["run"]["id"].as_str().unwrap().to_string();
+    env.ok_at(&["tick"], "2026-11-19T10:10:00Z");
+    assert_eq!(env.linear.creates().len(), 1);
+    let second = env.ok_json_at(
+        &[
+            "actions",
+            "propose",
+            "linear.create_issue",
+            "--title",
+            "Second issue",
+            "--team",
+            "H",
+            "--why",
+            "owner asked",
+        ],
+        "2026-11-19T10:11:00Z",
+    );
+    let second_run = second["run"]["id"].as_str().unwrap().to_string();
+    let second_proposal = second["id"].as_str().unwrap().to_string();
+    assert_eq!(second["run"]["status"], "pending", "{second}");
+
+    // The undo drops the cell below Act while the second Act is still in its grace.
+    let undone = env.ok_json_at(&["actions", "undo", &first_run], "2026-11-19T10:12:00Z");
+    assert_eq!(undone["status"], "undone", "{undone}");
+
+    // At its grace end the recheck returns the pending Act: nothing is sent.
+    env.ok_at(&["tick"], "2026-11-19T10:21:00Z");
+    assert_eq!(
+        env.linear.creates().len(),
+        1,
+        "the demoted cell's pending Act created an issue: {:?}",
+        env.linear.requests()
+    );
+    let runs = env.ok_json_at(&["actions"], "2026-11-19T10:21:00Z")["runs"].clone();
+    let returned = runs
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|run| run["id"] == second_run.as_str())
+        .unwrap_or_else(|| panic!("no second run: {runs}"));
+    assert_eq!(returned["status"], "returned", "{returned}");
+
+    // The proposal waits in the queue for the owner.
+    let items = env.ok_json_at(&["queue"], "2026-11-19T10:21:00Z")["items"].clone();
+    let item = items
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|item| item["id"] == second_proposal.as_str())
+        .unwrap_or_else(|| panic!("no queue item for {second_proposal}: {items:?}"));
+    assert_eq!(item["kind"], "action_proposal", "{item}");
+
+    // A returned run is final: a later tick sends nothing more.
+    let received = env.linear.requests().len();
+    env.ok_at(&["tick"], "2026-11-19T10:22:00Z");
+    assert_eq!(env.linear.requests().len(), received);
 }
 
 // spec: Undo is safe to repeat

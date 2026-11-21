@@ -25,6 +25,7 @@ mod knowledge;
 mod lifecycle;
 mod meeting;
 pub use meeting::SessionTurn;
+mod plugins;
 mod scoped;
 #[doc(hidden)]
 pub use scoped::{cache_len as scoped_cache_len, clear_cache as clear_scoped_cache};
@@ -1282,6 +1283,9 @@ impl Snapshot for View<'_> {
                 })
             })
             .collect()
+    }
+    fn plugin_runs(&self, scopes: &[Scope]) -> Result<Vec<rastro_core::trust::PluginRuns>> {
+        plugins::plugin_runs(self, scopes)
     }
     fn statement_history(
         &self,

@@ -2,12 +2,12 @@
 //!
 //! `rastro actions propose` records one pending proposal bound to the source it writes to and
 //! that source's scope. It carries the action, the fields written for the outside system, the
-//! proposer's why and the claims it cited. When an owner rule matches it, the proposal starts a
-//! pending Act run that waits out the rule's grace window; otherwise it runs nothing and waits
-//! in the queue as an item whose content-addressed id names all of that, so the same proposal is
-//! the same item. A rule with a `daily_cap` starts at most that many Act runs per local calendar
-//! day, counting every run it started; past the cap a matching proposal waits in the queue and
-//! the answer names the rule and its cap.
+//! proposer's why and the claims it cited. When an owner rule matches it and its cell sits at
+//! Act, the proposal starts a pending Act run that waits out the rule's grace window; otherwise
+//! it runs nothing and waits in the queue as an item whose content-addressed id names all of
+//! that, so the same proposal is the same item. A rule with a `daily_cap` starts at most that
+//! many Act runs per local calendar day, counting every run it started; past the cap a matching
+//! proposal waits in the queue and the answer names the rule and its cap.
 //!
 //! The action must be one an installed provider declares ([`crate::host::actions`]). The why, the
 //! cited claims and the id stay in Rastro: [`IssueFields`] is the only part written for the
@@ -311,12 +311,13 @@ fn source_of(source: &Source) -> QueueSource {
 
 impl<S: Storage> Rastro<S> {
     /// Records one pending action proposal. When an owner rule matches it on action, team and
-    /// assignee, no open observed issue holds its title and the rule has not started its daily
-    /// cap of Act runs this local calendar day, starts the pending Act run the rule authorizes,
-    /// due when its grace ends, and sends nothing; otherwise the proposal waits in the queue,
-    /// past the cap with the rule and its cap named in the answer. A proposal that already has
-    /// an Act run keeps it. Fails, recording nothing, when no installed provider offers the
-    /// action, or [`plan`]'s checks fail.
+    /// assignee, its cell sits at Act, no open observed issue holds its title and the rule has
+    /// not started its daily cap of Act runs this local calendar day, starts the pending Act run
+    /// the rule authorizes, due when its grace ends, and sends nothing; otherwise the proposal
+    /// waits in the queue, past the cap with the rule and its cap named in the answer. A cell
+    /// demoted below Act keeps its matching proposals waiting: a rule never raises a demoted
+    /// cell. A proposal that already has an Act run keeps it. Fails, recording nothing, when no
+    /// installed provider offers the action, or [`plan`]'s checks fail.
     pub fn propose_action(&mut self, request: &ProposeRequest) -> Result<Proposed> {
         let offer = host::actions::offer(&self.locations, &request.action)?;
         let now = crate::coverage::now()?;
@@ -325,17 +326,25 @@ impl<S: Storage> Rastro<S> {
             .snapshot(|view| check_citations(view, &filed.proposal.cites, &filed.source))?;
         self.storage.record_action_proposal(&filed)?;
         let matched = self.config.matching_rule(&filed.proposal);
-        let (dups, existing, used) = self.storage.snapshot(|view| {
+        let (dups, existing, used, level) = self.storage.snapshot(|view| {
             let runs = view.action_runs(&[])?;
             let existing = runs.iter().find(|run| run.proposal == filed.id).cloned();
             let used = match matched {
                 Some(rule) if rule.daily_cap.is_some() => rules::used_today(&runs, rule, now),
                 _ => 0,
             };
+            let level = crate::trust::cell_level(
+                &self.config,
+                view,
+                &[],
+                &filed.proposal.action,
+                &filed.proposal.fields.team,
+            )?;
             Ok((
                 duplicates(view, &filed.source, &filed.proposal)?,
                 existing,
                 used,
+                level,
             ))
         })?;
         // One proposal never has two runs: one that already has an Act run keeps it.
@@ -357,6 +366,15 @@ impl<S: Storage> Rastro<S> {
                 });
             }
         };
+        // A rule starts an Act only while the cell sits at Act. A demoted cell's match waits in
+        // the queue as a normal proposal; the trust view names the demotion and what restores it.
+        if level != crate::trust::Level::Act {
+            return Ok(Proposed {
+                filed,
+                run: None,
+                cap: None,
+            });
+        }
         // Past the cap the proposal waits in the queue as a normal proposal, and the answer
         // names the rule and the cap it reached.
         if let Some(cap) = rule.daily_cap
