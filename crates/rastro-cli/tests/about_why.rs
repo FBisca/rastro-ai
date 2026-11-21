@@ -334,6 +334,113 @@ fn about_filters_known_time_orders_limits_and_includes_history() {
     );
 }
 
+/// spec: Human records render as blocks
+/// about prints each claim as a block: its subject-predicate-object line first, then Status,
+/// Claim, Revision and Supports one per indented line, a blank line between claims.
+#[test]
+fn about_renders_each_claim_as_a_block() {
+    let env = Env::new();
+    let state = env.claim("code:state", literal("open"), time());
+    env.claim("code:a", literal("a"), time());
+    let text = env.text(&["about", URL]);
+    assert!(!text.contains(" | "), "pipe-packed line: {text}");
+    let blocks: Vec<&str> = text.trim_end().split("\n\n").collect();
+    let claim_blocks: Vec<&str> = blocks
+        .iter()
+        .copied()
+        .filter(|b| b.lines().next().unwrap().contains("code:"))
+        .collect();
+    assert_eq!(claim_blocks.len(), 2, "{text}");
+    for block in &claim_blocks {
+        let mut lines = block.lines();
+        let header = lines.next().unwrap();
+        assert!(header.contains(URL), "{header}");
+        let fields: Vec<&str> = lines.collect();
+        for label in ["Status", "Claim", "Revision", "Supports"] {
+            assert!(
+                fields
+                    .iter()
+                    .any(|l| l.starts_with(&format!("  {label}: "))),
+                "no {label} field: {block}"
+            );
+        }
+        for line in &fields {
+            assert!(line.starts_with("  "), "field not indented: {block}");
+        }
+    }
+    let state_block = blocks.iter().find(|b| b.contains(&state)).unwrap();
+    assert!(
+        state_block
+            .lines()
+            .any(|l| l == format!("  Claim: {state}")),
+        "{state_block}"
+    );
+}
+
+/// spec: Human records render as blocks
+/// why prints the claim, each justification and each cited span as blocks: the span's quote on
+/// one line with its trust class beside it, then every citation field on its own indented line.
+#[test]
+fn why_renders_the_claim_justifications_and_spans_as_blocks() {
+    let env = Env::new();
+    let id = env.claim("code:state", literal("open"), time());
+    let text = env.text(&["why", &id]);
+    assert!(!text.contains(" | "), "pipe-packed line: {text}");
+    let blocks: Vec<&str> = text.trim_end().split("\n\n").collect();
+    let claim = blocks[0];
+    assert!(
+        claim.lines().next().unwrap().contains("code:state"),
+        "{claim}"
+    );
+    for label in ["Status", "Claim", "Revision", "Supports", "Valid time"] {
+        assert!(
+            claim
+                .lines()
+                .any(|l| l.starts_with(&format!("  {label}: "))),
+            "no {label} field: {claim}"
+        );
+    }
+    let justification = blocks
+        .iter()
+        .find(|b| b.starts_with("Justification: "))
+        .unwrap_or_else(|| panic!("no justification block: {text}"));
+    for label in ["Kind", "Extractor", "Rule", "Vocabulary", "Current"] {
+        assert!(
+            justification
+                .lines()
+                .any(|l| l.starts_with(&format!("  {label}: "))),
+            "no {label} field: {justification}"
+        );
+    }
+    let span = blocks
+        .iter()
+        .find(|b| b.starts_with('"'))
+        .unwrap_or_else(|| panic!("no span block: {text}"));
+    let mut lines = span.lines();
+    assert_eq!(lines.next().unwrap(), "\"open\"", "{span}");
+    let fields: Vec<&str> = lines.collect();
+    assert!(
+        fields[0].starts_with("  Trust class: "),
+        "trust class is not beside the quote: {span}"
+    );
+    for label in [
+        "Link",
+        "Field",
+        "Span",
+        "Captured",
+        "Source updated",
+        "Scope",
+        "Source",
+    ] {
+        assert!(
+            fields
+                .iter()
+                .any(|l| l.starts_with(&format!("  {label}: "))),
+            "no {label} field: {span}"
+        );
+    }
+}
+
 /// claims/R35: why bounds complete justifications and clips utf8 quotes
 /// spec: Why explains a claim and bounds its supports
 #[test]
@@ -1362,8 +1469,8 @@ fn S10_cli_text_shows_the_escaped_label_after_the_id_for_about_and_why() {
         );
         let line = text
             .lines()
-            .find(|l| l.contains(&state))
-            .unwrap_or_else(|| panic!("no line for claim {state}: {text}"));
+            .find(|l| l.contains(PR) && l.contains("code:state"))
+            .unwrap_or_else(|| panic!("no claim header for {state}: {text}"));
         let id_at = line.find(PR).unwrap_or_else(|| panic!("no id: {line}"));
         let label_at = line
             .find("Login ")
@@ -1373,9 +1480,10 @@ fn S10_cli_text_shows_the_escaped_label_after_the_id_for_about_and_why() {
             assert!(line.contains(part), "missing {part:?} on the line: {line}");
         }
     }
-    // The alias list stays between the id and the label.
+    // The alias list stays between the id and the label, on the claim's header line.
     let text = env.text(&["about", PR]);
-    let line = text.lines().find(|l| l.contains(&alias)).unwrap();
+    let block = text.split("\n\n").find(|b| b.contains(&alias)).unwrap();
+    let line = block.lines().next().unwrap();
     assert!(
         line.find("o/p/1").unwrap() < line.find("Login ").unwrap(),
         "{line}"
