@@ -1,0 +1,21 @@
+[package]
+name = "rastro-connector-slack"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[package.metadata.rastro]
+role = "plugin"
+
+[dependencies]
+anyhow.workspace = true
+rastro-plugin-sdk = { path = "../rastro-plugin-sdk" }
+serde_json.workspace = true
+ureq = { version = "3", features = ["json"] }
+
+[dev-dependencies]
+# Parses the shipped YAML app manifest template in the tests; production code reads no YAML.
+serde_yaml_ng = "0.10"
+
+[lints]
+workspace = true
