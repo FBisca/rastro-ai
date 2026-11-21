@@ -223,20 +223,20 @@ fn a_proposal_waits_in_the_queue_and_nothing_reaches_the_provider() {
         })
     );
 
-    // The terminal line names the action, the title, the team, the assignee, the why and the
-    // source with its scope.
+    // The terminal block names the action, the title, the team, the assignee, the why and the
+    // source with its scope, with the id on its own line.
     let printed = env.rastro(&["queue"]);
     let text = String::from_utf8_lossy(&printed.stdout).into_owned();
-    let line = text
-        .lines()
-        .find(|line| line.starts_with("Action proposal"))
-        .unwrap_or_else(|| panic!("no action proposal line in: {text}"));
-    assert!(line.contains(&format!("Id: {id}")), "{line}");
+    let block = text
+        .split("\n\n")
+        .find(|block| block.starts_with("Action proposal"))
+        .unwrap_or_else(|| panic!("no action proposal block in: {text}"));
+    assert!(block.lines().any(|l| l == format!("  Id: {id}")), "{block}");
     assert!(
-        line.contains("Source: linear linear-work | Scope: work"),
-        "{line}"
+        block.lines().any(|l| l == "  Source: linear linear-work"),
+        "{block}"
     );
-    let detail = text.lines().skip_while(|l| *l != line).nth(1).unwrap();
+    assert!(block.lines().any(|l| l == "  Scope: work"), "{block}");
     for part in [
         "linear.create_issue",
         "Flaky sync test",
@@ -244,7 +244,7 @@ fn a_proposal_waits_in_the_queue_and_nothing_reaches_the_provider() {
         "Assignee: me",
         "Why: owner asked in session",
     ] {
-        assert!(detail.contains(part), "{part} missing from: {detail}");
+        assert!(block.contains(part), "{part} missing from: {block}");
     }
 
     // The id addresses the content: the same proposal is the same item, another title is another.

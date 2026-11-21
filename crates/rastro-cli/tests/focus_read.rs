@@ -4,6 +4,7 @@
 //! as the JSON a renderer reads. The agent tool adapter and the test connector are scripts, so no
 //! model and no network is touched.
 mod support;
+use chrono::{DateTime, NaiveDateTime, Timelike as _, Utc};
 use serde_json::{Value, json};
 use std::{fs, os::unix::fs::PermissionsExt, path::PathBuf, process::Command};
 use tempfile::TempDir;
@@ -313,4 +314,80 @@ fn without_the_owners_linear_id_no_issue_needs_the_owner() {
     let focus = env.ok(&["focus"]);
     assert!(focus["focus"].is_null(), "{focus}");
     assert_eq!(focus["gaps"], json!([]), "{focus}");
+}
+
+/// spec: Human records render as blocks
+/// spec: Human timestamps share one format
+/// The human focus read renders the recommended focus and each gap as blocks — a header line then
+/// labelled fields — with the observed and as-of times at minute precision, naming the same
+/// instants the JSON read carries.
+#[test]
+fn the_human_focus_read_renders_blocks_with_minute_precision_times() {
+    let env = Env::new();
+    env.candidates(
+        &json!([{"turn": 1, "kind": "promise", "responsible": "Alice", "recipient": "Bob",
+        "promise": "send Bob the budget", "stated_date": "by Friday",
+        "quote": "I'll send Bob the budget by Friday"}])
+        .to_string(),
+    );
+    assert!(env.import("weekly-1"));
+    env.candidates("not json");
+    assert!(!env.import("broken-1"));
+
+    let focus = env.ok(&["focus"]);
+    let out = env.command(&["focus"]).output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let text = String::from_utf8_lossy(&out.stdout);
+
+    // The recommended focus is a block: its title header, then labelled citation fields.
+    assert!(text.contains("Focus: send Bob the budget"), "{text}");
+    assert!(text.contains("  Source: meeting weekly-1"), "{text}");
+    assert!(text.contains("  Location: weekly-1#turn-1"), "{text}");
+    // The failed extraction is a gap block naming its reason.
+    assert!(text.contains("Gap: broken-1"), "{text}");
+    assert!(text.contains("  Reason: its extraction failed"), "{text}");
+    assert!(!text.contains(" | "), "pipe-packed line: {text}");
+
+    // The observed and as-of times read at minute precision and name the JSON instants.
+    let minute_of = |rfc3339: &str| {
+        let at: DateTime<Utc> = rfc3339.parse().unwrap();
+        at.naive_utc()
+            .with_second(0)
+            .unwrap()
+            .with_nanosecond(0)
+            .unwrap()
+    };
+    for (label, line, instant) in [
+        (
+            "Observed",
+            text.lines()
+                .find(|l| l.trim_start().starts_with("Observed: "))
+                .unwrap_or_else(|| panic!("no Observed field in {text}")),
+            focus["focus"]["citation"]["observed_at"].as_str().unwrap(),
+        ),
+        (
+            "As of",
+            // The report's as-of stands at the top level; a gap's is an indented field.
+            text.lines()
+                .find(|l| l.starts_with("As of: "))
+                .unwrap_or_else(|| panic!("no report As of line in {text}")),
+            focus["as_of"].as_str().unwrap(),
+        ),
+    ] {
+        let value = line
+            .trim_start()
+            .strip_prefix(&format!("{label}: "))
+            .unwrap();
+        let shown = NaiveDateTime::parse_from_str(value, "%Y-%m-%d %H:%M UTC")
+            .unwrap_or_else(|e| panic!("{label}: {value:?} is not YYYY-MM-DD HH:MM UTC: {e}"));
+        assert_eq!(
+            shown,
+            minute_of(instant),
+            "{label} names a different instant"
+        );
+    }
 }
