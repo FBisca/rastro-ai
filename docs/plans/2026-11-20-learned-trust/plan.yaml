@@ -1,0 +1,249 @@
+schema: plan/2
+slug: learned-trust
+goal: The owner sees trust per cell grow from real outcomes, promotion proposed and demotion automatic, with a trust view, a learning journal and per-plugin usefulness and cost.
+spec: docs/specs/learning.md
+
+requirements:
+  added:
+    - title: A cell's trust is derived from its outcomes
+      shall: A cell's level and evidence counts SHALL be derived at read from its runs, owner intents and shown reports, under the configurable thresholds of `[learning]`, and a rebuild SHALL reproduce the trust view and journal with no model call.
+      scenarios:
+        - id: S1
+          name: clean outcomes make a cell eligible
+          when: A cell has 10 clean accepted outcomes spanning 8 days with 0 undos in its last 20
+          then: rastro trust names the cell eligible and shows the counts behind it
+        - id: S1b
+          name: thresholds come from config
+          when: config.toml sets [learning] clean_min to 5 and a cell reaches 5 clean outcomes over 7 days with 0 undos
+          then: rastro trust names the cell eligible under the configured threshold
+        - id: S2
+          name: a rebuild reproduces trust
+          when: The store is rebuilt from the same evidence, intents and shown reports
+          then: rastro trust and rastro trust journal answer exactly as before the rebuild
+    - title: Demotion is automatic and fast
+      shall: One undo of a run SHALL drop its cell one level, two or more undos in its last 20 outcomes SHALL drop it to Ask, and a retract or edit landing on a claim a run cited SHALL count as an undo.
+      scenarios:
+        - id: S3
+          name: one undo drops a level
+          when: A cell at Act has one done run undone
+          then: rastro trust shows the cell at Propose and the journal names the undo as the cause
+        - id: S4
+          name: repeated undos drop to Ask
+          when: A cell's last 20 outcomes hold two undos
+          then: rastro trust shows the cell at Ask
+        - id: S5
+          name: a cited claim's correction demotes
+          when: A claim a done run cited is retracted
+          then: The run's cell drops one level exactly as for an undo, and the journal names the retraction
+    - title: Stopped and returned runs demote nothing
+      shall: A stopped or returned run SHALL leave its cell's level unchanged.
+      scenarios:
+        - id: S6
+          name: stop is not a demotion
+          when: A pending Act is stopped and another is returned by the pre-run recheck
+          then: rastro trust shows the cell's level unchanged and the journal records no demotion for either run
+    - title: Unused trust decays on next use
+      shall: A cell unused for the configured decay window, default 30 days, SHALL drop one level the next time it is used.
+      scenarios:
+        - id: S7
+          name: decay applies at next use
+          when: A cell at Act last ran 31 days ago and a new proposal uses it
+          then: The cell reads Propose and the journal names the decay with its window
+    - title: Promotion is proposed, never self-applied
+      shall: An eligible cell SHALL appear in rastro trust with the exact rule text or reset command that raises it, and no cell SHALL reach Act without the owner's rule or reset.
+      scenarios:
+        - id: S8
+          name: an eligible cell without a rule is proposed one
+          when: A cell with no rule reaches eligibility
+          then: rastro trust shows a [[rules]] entry naming the action and team, and the cell's level stays Propose
+        - id: S9
+          name: the owner's rule raises the cell
+          when: The owner adds the proposed rule to config.toml
+          then: rastro trust shows the cell at Act
+        - id: S10
+          name: a demoted cell is proposed a reset
+          when: A demoted cell with a rule reaches eligibility again
+          then: rastro trust shows rastro trust reset for the cell, and its level stays demoted until the owner resets it
+    - title: An Ask cell asks instead of proposing
+      shall: A match whose cell sits at Ask SHALL surface as a queue question naming the action, SHALL start no run, and SHALL run the action once when the owner answers yes or reject it when the owner answers no.
+      scenarios:
+        - id: S11
+          name: an Ask match becomes a question
+          when: A rule matches a proposal whose cell is at Ask
+          then: rastro queue lists a question naming the action and title, and rastro actions lists no run
+        - id: S12
+          name: answering yes runs once
+          when: The owner answers the Ask question yes
+          then: The action runs exactly once as an accepted proposal would, and the fake Linear server receives one create
+        - id: S13
+          name: answering no rejects
+          when: The owner answers the Ask question no
+          then: Nothing runs and the question's outcome reads rejected
+    - title: The trust view tells the whole story
+      shall: rastro trust SHALL show each visible cell's level, evidence counts, last change and what the next promotion needs, computed from visible scopes only.
+      scenarios:
+        - id: S14
+          name: a row tells the whole story
+          when: A cell has outcomes and a level change
+          then: Its row shows the level, the clean and undo counts, the last change with its cause, and what the next promotion needs
+        - id: S15
+          name: hidden scopes count nowhere
+          when: A cell's team lives in a scope the caller cannot see
+          then: rastro trust under the visible scopes omits the cell and counts none of its outcomes
+        - id: S16
+          name: an empty store lists no cells
+          when: No runs exist
+          then: rastro trust lists no cells and says the store holds no trust history
+    - title: The learning journal records every level change
+      shall: rastro trust journal SHALL list every level change with its cause and time, newest first, derived from the same evidence as the trust view.
+      scenarios:
+        - id: S17
+          name: changes carry their causes
+          when: A cell was demoted by an undo and later decayed
+          then: The journal lists both changes newest first, each naming its cause and time
+    - title: Pin and reset are owner intents
+      shall: rastro trust pin and rastro trust reset SHALL record owner intents that a rebuild replays, a pin SHALL hold the level against learning in both directions, and a reset SHALL clear the cell's learned history back to its baseline.
+      scenarios:
+        - id: S18
+          name: a pin holds against demotion
+          when: A cell pinned at Propose has a run undone
+          then: Its level stays Propose and the journal names the pin holding it
+        - id: S19
+          name: a reset restores the baseline
+          when: A demoted cell with a rule is reset
+          then: Its level returns to Act, a cell without a rule returns to Propose, and the journal names the reset
+    - title: Usefulness is visible per plugin
+      shall: rastro trust SHALL show per-plugin engagement as acted on over seen from terminal shown reports with the time to action, reading unmeasured where no shown reports exist.
+      scenarios:
+        - id: S20
+          name: engagement is measured
+          when: A plugin's items were shown 10 times by terminal reads and acted on 6
+          then: Its engagement reads 6 of 10 with the time to action from the outcomes' waits
+        - id: S21
+          name: unseen is unmeasured
+          when: A plugin has runs but no shown reports
+          then: Its engagement reads unmeasured, never 0
+    - title: Cost is wall time plus adapter turns
+      shall: A plugin's cost SHALL be the wall time of its runs plus the adapter turns they used, and cost per accepted item SHALL read a dash when nothing was accepted.
+      scenarios:
+        - id: S22
+          name: cost and cost per accepted
+          when: A plugin ran 120 seconds over 4 turns and 2 of its items were accepted
+          then: Its cost reads 120 seconds and 4 turns, and cost per accepted reads 60 seconds and 2 turns
+        - id: S23
+          name: zero accepts divides nothing
+          when: A plugin's runs accepted nothing
+          then: Its cost per accepted reads a dash, not a division by zero
+    - title: MCP reads are logged, never seen
+      shall: The MCP server SHALL log each read call with its tool, arguments and time, and the log SHALL never write a shown report.
+      scenarios:
+        - id: S24
+          name: an MCP read is logged
+          when: An MCP client calls the queue tool
+          then: A read log row names the tool, arguments and time, and no shown report is written
+        - id: S25
+          name: a terminal read is not an MCP read
+          when: The same queue read runs on the terminal
+          then: A shown report is written and no read log row is
+    - title: Trust operations ride the catalog
+      shall: trust, trust.journal, trust.pin and trust.reset SHALL be catalog operations, the reads CLI and deferred MCP reads through the catalog gateway and the writes CLI only, leaving the fixed MCP tool list unchanged.
+      scenarios:
+        - id: S26
+          name: catalog search finds the reads
+          when: An MCP client searches the catalog for trust
+          then: The result names trust and trust.journal with their descriptions and input schemas
+        - id: S27
+          name: the gateway answers as the CLI
+          when: An MCP client calls trust through catalog under a set of launch scopes
+          then: The result equals the CLI's rastro trust --json under the same scopes
+        - id: S28
+          name: the fixed tool list is unchanged
+          when: A client lists the MCP tools
+          then: The list is exactly search, coverage, about, why, commitments, queue, focus, actions, rules_check and catalog, all read-only
+    - title: A rule cannot raise a demoted cell
+      shall: When a rule matches a proposal whose cell sits below Act, rastro actions propose SHALL start no run and SHALL leave the proposal waiting in the queue.
+      scenarios:
+        - id: S29
+          name: a demoted cell's match waits
+          when: A cell demoted to Propose has a matching rule and an agent proposes under it
+          then: rastro queue lists the action proposal, rastro actions lists no run, and the fake Linear server receives nothing
+    - title: A demotion during grace returns the Act
+      shall: When a cell drops below Act while its Act is pending, rastro tick SHALL read the run returned at grace end and SHALL send nothing.
+      scenarios:
+        - id: S30
+          name: demotion during grace returns the run
+          when: A cell's level drops below Act while its Act is pending and rastro tick runs after its grace
+          then: The run reads returned, the fake Linear server receives no create, and the proposal waits in the queue
+    - title: Trust serves a real review
+      shall: The owner SHALL work a real week whose outcomes move at least one cell, with the trust view and journal showing the real history.
+      scenarios:
+        - id: S31
+          name: the switch day
+          when: The owner works a real week of proposals and runs after the slice lands
+          then: rastro trust shows the real cells' levels and rastro trust journal the real changes, with at least one promotion proposal or demotion from real outcomes, recorded in the plan's switch-day note
+
+tickets:
+  - id: T1
+    delivers: The trust view derives each cell's level, counts and eligibility from outcomes and shows what the next promotion needs, on the CLI and in the catalog.
+    satisfies: [S1, S1b, S8, S9, S14, S15, S16]
+    paths: [crates/rastro-core/src/trust/, crates/rastro-core/src/read_only.rs, crates/rastro-core/src/lib.rs, crates/rastro-storage-sqlite/src/, crates/rastro-operations/, crates/rastro-cli/src/main.rs, schema/operations-v2.schema.json, crates/rastro-cli/tests/trust.rs, crates/rastro-cli/tests/catalog.rs]
+    size: regular
+    difficulty: complex
+    risk: [state]
+  - id: T2
+    delivers: Demotion, decay and the level gate move runs and proposals automatically, and the two actions requirements are restated for the gate in the same change.
+    satisfies: [S3, S4, S5, S6, S7, S29, S30]
+    paths: [crates/rastro-core/src/trust/, crates/rastro-core/src/actions/, crates/rastro-core/src/tick.rs, crates/rastro-core/src/queue/outcomes.rs, docs/specs/actions.md, crates/rastro-cli/tests/trust_demotion.rs, crates/rastro-cli/tests/actions_undo.rs, crates/rastro-cli/tests/actions_rules.rs]
+    size: regular
+    difficulty: complex
+    blocked_by: [T1]
+    risk: [state]
+  - id: T3
+    delivers: An Ask cell's match becomes a queue question the owner answers in one step.
+    satisfies: [S11, S12, S13]
+    paths: [crates/rastro-core/src/actions/, crates/rastro-core/src/queue/, crates/rastro-cli/tests/trust_ask.rs, crates/rastro-cli/tests/queue.rs]
+    size: regular
+    difficulty: complex
+    blocked_by: [T2]
+    risk: [state]
+  - id: T4
+    delivers: Pin and reset as owner intents, the learning journal, and a rebuild that reproduces both; the glossary names the intents as they are.
+    satisfies: [S2, S10, S17, S18, S19]
+    paths: [crates/rastro-core/src/identity.rs, crates/rastro-core/src/trust/, crates/rastro-operations/, crates/rastro-cli/src/main.rs, schema/operations-v2.schema.json, docs/GLOSSARY.md, crates/rastro-cli/tests/trust_controls.rs, crates/rastro-cli/tests/trust_journal.rs]
+    size: regular
+    difficulty: complex
+    blocked_by: [T2]
+    risk: [state]
+  - id: T5
+    delivers: Per-plugin usefulness and cost in the trust view, measured from shown reports, runs and adapter turns.
+    satisfies: [S20, S21, S22, S23]
+    paths: [crates/rastro-core/src/trust/, crates/rastro-storage-sqlite/src/, crates/rastro-cli/tests/trust_usefulness.rs]
+    size: regular
+    difficulty: simple
+    blocked_by: [T1]
+  - id: T6
+    delivers: MCP read calls are logged with tool, arguments and time, and never mark an item seen.
+    satisfies: [S24, S25]
+    paths: [crates/rastro-storage-sqlite/migrations/, crates/rastro-storage-sqlite/src/, crates/rastro-cli/src/mcp.rs, crates/rastro-cli/tests/mcp_read_log.rs, crates/rastro-cli/tests/mcp.rs]
+    size: regular
+    difficulty: complex
+    risk: [security]
+  - id: T7
+    delivers: trust and trust.journal answer on MCP through the catalog gateway, scoped exactly as the CLI, with the fixed tool list unchanged.
+    satisfies: [S26, S27, S28]
+    paths: [crates/rastro-operations/src/catalog.rs, crates/rastro-cli/src/mcp.rs, crates/rastro-cli/tests/catalog.rs, crates/rastro-cli/tests/mcp.rs, schema/operations-v2.schema.json]
+    size: regular
+    difficulty: complex
+    blocked_by: [T1, T4, T6]
+    risk: [security]
+  - id: T8
+    delivers: The switch day — a real week whose outcomes move a cell, recorded in the plan's switch-day note.
+    satisfies: [S31]
+    paths: [docs/plans/2026-11-20-learned-trust/]
+    owner: owner
+    blocked_by: [T3, T4, T5, T6, T7]
+approval:
+  by: felippe.bisca@gmail.com
+  at: '2026-11-21T08:27:33.103147+00:00'
+  base: 9dd064c72bd83cb40169b7d94a1312f2149075a0
+  digest: fbf0ee003f0b96731229bb4e4e2e7194d316d90b5d452e26181c1cc4e052dd34
