@@ -516,7 +516,9 @@ fn ask_turns(
     let end = Instant::now() + extraction_time;
     let reply = match wire.recv_by(end) {
         Ok(reply) => reply,
-        Err(reason) => return Ok(Err(reason)),
+        // A turns answer over the line cap is too long to carry, not a broken protocol: the core
+        // skips the thread as too large rather than failing it (decisions D6).
+        Err(reason) => return Ok(Err(if wire.too_long { "too_long" } else { reason })),
     };
     if reply.id != Some(2.into()) {
         return Ok(Err("protocol"));

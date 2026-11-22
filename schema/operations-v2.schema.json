@@ -987,7 +987,7 @@
     },
     "CommitmentParty": {
       "additionalProperties": false,
-      "description": "A person in a hypothesis. `identity` is there only when the owner mapped the label explicitly,\nand is null otherwise: a party that is only named carries its label and no identity.",
+      "description": "A person in a hypothesis. `identity` is there when the label is identified to an existing\nentity — the owner's explicit mapping in a meeting, or the account a chat source's extractor\nresolved — and is null otherwise: a party that is only named carries its label and no identity.",
       "properties": {
         "identity": {
           "anyOf": [
@@ -1840,7 +1840,7 @@
     },
     "Identity": {
       "additionalProperties": false,
-      "description": "An entity a speaker was explicitly mapped to.",
+      "description": "An entity a speaker was identified to: the owner's explicit mapping in a meeting, or the\naccount a chat source's extractor resolved.",
       "properties": {
         "id": {
           "type": "string"
@@ -2468,12 +2468,12 @@
       "oneOf": [
         {
           "const": "mapped",
-          "description": "The owner explicitly mapped the label to an existing entity.",
+          "description": "The label is identified to an existing entity: the owner's explicit mapping in a meeting,\nor a chat speaker the source's extractor resolved to an account.",
           "type": "string"
         },
         {
           "const": "unknown",
-          "description": "No explicit mapping: who this is stays unknown.",
+          "description": "No identity: who this is stays unknown, and the label is all there is.",
           "type": "string"
         }
       ]

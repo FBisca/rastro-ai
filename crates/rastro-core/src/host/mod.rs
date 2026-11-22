@@ -535,6 +535,7 @@ impl Connector {
             events: io::read_lines(stdout, limits.max_line, &tally),
             deadline: limits.silence,
             invalid_line: None,
+            too_long: false,
         };
         Ok(Self {
             child,
@@ -645,6 +646,9 @@ struct Wire {
     deadline: Duration,
     /// The last line that failed to parse as a protocol message, for a check to name it.
     invalid_line: Option<String>,
+    /// Whether the last read failed because the line was over the cap, so a caller that reads a
+    /// whole conversation in one answer can tell too long from other protocol failures.
+    too_long: bool,
 }
 impl Wire {
     fn send(&mut self, message: &Envelope) -> std::result::Result<(), &'static str> {
@@ -695,6 +699,7 @@ impl Wire {
         }
     }
     fn recv_within(&mut self, wait: Duration) -> std::result::Result<Envelope, &'static str> {
+        self.too_long = false;
         match self.events.recv_timeout(wait) {
             Ok(io::Event::Line(line)) => match serde_json::from_str::<Envelope>(&line) {
                 Ok(envelope) if envelope.is_well_formed() => Ok(envelope),
@@ -703,7 +708,11 @@ impl Wire {
                     Err("protocol")
                 }
             },
-            Ok(io::Event::TooLong | io::Event::Invalid) => Err("protocol"),
+            Ok(io::Event::TooLong) => {
+                self.too_long = true;
+                Err("protocol")
+            }
+            Ok(io::Event::Invalid) => Err("protocol"),
             Ok(io::Event::Eof) | Err(RecvTimeoutError::Disconnected) => Err("interrupted"),
             Err(RecvTimeoutError::Timeout) => Err("timeout"),
         }
