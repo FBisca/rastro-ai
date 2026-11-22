@@ -157,8 +157,20 @@ struct Validated {
 /// Person (decisions D13); a thread with neither is skipped, not failed.
 const OWNER_ABSENT_REASON: &str =
     "owner absent: no speaker or mentioned account is held by the owner's Person";
-/// A thread whose turns are larger than the core reads is skipped, not failed (decisions D6).
-const TOO_LARGE_REASON: &str = "too large: the thread's turns exceed the transcript cap";
+/// A thread whose turns answer cannot be carried over the wire is skipped, not failed (decisions
+/// D6). For chat the cap that counts is the host's line cap, not the meeting transcript cap: the
+/// extractor answers `conversation.turns` in a single line.
+const TOO_LARGE_REASON: &str = "too large: the thread's turns exceed the wire line cap";
+/// The margin kept under the host's line cap for the turns answer's envelope — the JSON around the
+/// turn text (speakers, kinds, times, citations, mentions). An answer that still overruns the cap
+/// is refused as too long and skipped the same way, so the margin need not be exact.
+const ANSWER_ENVELOPE_MARGIN: u64 = 64 * 1024;
+
+/// The most stored message text a chat thread's turns answer can carry: the host's line cap less
+/// the envelope margin. A thread above this is skipped before the extractor is asked.
+fn turns_answer_cap() -> u64 {
+    crate::host::DEFAULT_MAX_LINE as u64 - ANSWER_ENVELOPE_MARGIN
+}
 /// A turn the core cannot trace to a message of the thread is refused, and the thread skipped.
 const TURN_REFUSED_REASON: &str = "a turn was refused: it does not cite a message of the thread";
 
@@ -428,11 +440,11 @@ impl<S: Storage> Rastro<S> {
         let mut owner_speaker = String::new();
         let mut history: Vec<SessionTurn> = Vec::new();
         let outcome = (|| -> Result<Outcome, Failure> {
-            // An oversize thread is skipped before the extractor is asked: its turns would exceed
-            // the transcript cap, and the answer carrying them is one line the host's line cap
-            // could not read. Measuring the stored transcript keeps the skip a counted success on
-            // a real install, not a failed run retried every tick.
-            if transcript_bytes(thread) > meeting::MAX_TRANSCRIPT_BYTES {
+            // An oversize thread is skipped before the extractor is asked: its turns answer is one
+            // wire line, and a thread whose stored text already exceeds the line cap (less the
+            // envelope margin) could not be carried. Measuring the stored transcript keeps the skip
+            // a counted success on a real install, not a failed run retried every tick.
+            if transcript_bytes(thread) > turns_answer_cap() {
                 turns_total = message_count(thread);
                 return Ok(Outcome::Skipped(TOO_LARGE_REASON.to_string()));
             }
@@ -445,6 +457,12 @@ impl<S: Storage> Rastro<S> {
                 &delivery,
             ) {
                 Ok(Ok(turns)) => turns,
+                // The answer overran the line cap after all (a larger envelope than the margin
+                // allows): the same counted too-large skip, never a failed run retried every tick.
+                Ok(Err(reason)) if reason == "too_long" => {
+                    turns_total = message_count(thread);
+                    return Ok(Outcome::Skipped(TOO_LARGE_REASON.to_string()));
+                }
                 Ok(Err(reason)) => return Err(fail(Cause::ExtractorFailed, reason)),
                 Err(error) => return Err(fail(Cause::StorageFailed, format!("{error:#}"))),
             };

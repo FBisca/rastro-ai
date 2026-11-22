@@ -70,6 +70,7 @@ done
 /// extractor first, then rebinds to this one for the tick.
 fn liar_script() -> String {
     r#"#!/bin/sh
+echo launch >> "$RASTRO_HOME/extractor-launches"
 while IFS= read -r line; do
   id=$(printf '%s' "$line" | sed -n 's/.*"id":\([0-9][0-9]*\).*/\1/p')
   case "$line" in
@@ -315,6 +316,16 @@ impl Env {
     /// Replaces the canned judgment answer the adapter gives.
     fn set_response(&self, response: Value) {
         fs::write(self.path("response.json"), response.to_string()).unwrap();
+    }
+    /// Replaces the turns the lying extractor answers `conversation.turns` with.
+    fn set_turns(&self, turns: Value) {
+        fs::write(self.path("turns.json"), turns.to_string()).unwrap();
+    }
+    /// How many times the lying extractor process was launched.
+    fn extractor_launches(&self) -> usize {
+        fs::read_to_string(self.path("extractor-launches"))
+            .map(|text| text.lines().count())
+            .unwrap_or(0)
     }
     /// Rebinds the connector's sources to another installed extractor.
     fn bind_extractor(&self, extractor: &str) {
@@ -785,7 +796,7 @@ fn a_thread_over_the_transcript_cap_is_skipped_and_counted() {
     assert_eq!(source["coverage"]["turns_total"], json!(6), "{source}");
     assert_eq!(
         source["coverage"]["reason"],
-        json!("too large: the thread's turns exceed the transcript cap"),
+        json!("too large: the thread's turns exceed the wire line cap"),
         "{source}"
     );
     assert_eq!(source["hypotheses"], json!([]), "{source}");
@@ -894,4 +905,135 @@ fn a_thread_that_mentions_the_owner_is_not_skipped_as_owner_absent() {
     );
     assert_eq!(source["coverage"]["reason"], json!(null), "{source}");
     assert_eq!(source["coverage"]["turns_read"], json!(2), "{source}");
+}
+
+/// A thread of about 2 MiB of stored text is over the wire line cap the turns answer can carry, so
+/// it is skipped and counted as too large before the extractor is asked: no failed run, no adapter
+/// request, and a second tick does not launch the extractor for it again. Runs under the default
+/// host line cap, so it proves the skip on a real install for the 1-4 MiB range.
+// spec: A thread that cannot be extracted is skipped and counted
+#[test]
+fn a_thread_over_the_wire_line_cap_is_skipped_before_the_extractor_is_asked() {
+    let env = Env::new();
+    let mut evidence = vec![viewer()];
+    evidence.extend(author("U0OWNER", "Felippe Bisca", false));
+    evidence.extend(author("U0ANA", "Ana Duarte", false));
+    evidence.extend(start_message(
+        "C0ENGCHAN",
+        THREAD_TS,
+        "U0ANA",
+        "<@U0OWNER> can you send the doc?",
+    ));
+    // Three replies whose stored text is about 2 MiB: over the 1 MiB line cap, under the old 4 MiB
+    // transcript cap. Each evidence line stays under the cap so the sync stores them.
+    let big = "x".repeat(700_000);
+    for n in 1..=3 {
+        evidence.extend(reply_message(
+            "C0ENGCHAN",
+            &format!("170000000{n}.000200"),
+            THREAD_TS,
+            "U0OWNER",
+            &big,
+        ));
+    }
+    env.script(&sync_script(evidence));
+    env.ok(&[
+        "source",
+        "add",
+        "eng",
+        "--connector",
+        "test",
+        "--scope",
+        "work",
+        "--extract-commitments",
+    ]);
+    env.ok(&["sync", "eng"]);
+    // Bind the counting extractor so a launch would be observed; the pre-check skips before it.
+    env.bind_extractor("lying-extractor");
+    env.tick();
+    env.tick();
+    assert_eq!(env.launches(), 0, "the oversize thread reached the adapter");
+    assert_eq!(
+        env.extractor_launches(),
+        0,
+        "the extractor was asked for a thread the wire cannot carry"
+    );
+    let list = env.ok(&["commitments"]);
+    let source = &list["sources"][0];
+    assert_eq!(
+        source["extraction"]["state"],
+        json!("succeeded"),
+        "{source}"
+    );
+    assert_eq!(source["extraction"]["cause"], json!(null), "{source}");
+    assert_eq!(source["coverage"]["turns_read"], json!(0), "{source}");
+    assert_eq!(source["coverage"]["turns_total"], json!(4), "{source}");
+    assert_eq!(
+        source["coverage"]["reason"],
+        json!("too large: the thread's turns exceed the wire line cap"),
+        "{source}"
+    );
+    assert_eq!(source["hypotheses"], json!([]), "{source}");
+}
+
+/// A turns answer that overruns the wire line cap after the extractor was asked is the same counted
+/// too-large skip, not a failed run with reason "protocol": the thread is not re-run on every tick.
+/// The stored thread is small, but the extractor answers with a turn whose text alone is over the
+/// cap, so the answer line is refused as too long.
+// spec: A thread that cannot be extracted is skipped and counted
+#[test]
+fn a_turns_answer_over_the_wire_line_cap_is_a_counted_skip_not_a_failed_run() {
+    let env = Env::new();
+    env.ok(&[
+        "source",
+        "add",
+        "eng",
+        "--connector",
+        "test",
+        "--scope",
+        "work",
+        "--extract-commitments",
+    ]);
+    env.ok(&["sync", "eng"]);
+    // The extractor answers with one turn whose text is over the line cap: the answer line is too
+    // long to read, even though the stored thread is small.
+    env.set_turns(json!({"turns": [
+        {"speaker": {"identifier": OWNER, "type": "slack:Account"}, "kind": "person",
+         "text": "x".repeat(1_500_000), "cites": "slack:message/C0ENGCHAN/1700000000.000100"}
+    ]}));
+    env.bind_extractor("lying-extractor");
+    env.tick();
+    assert_eq!(
+        env.launches(),
+        0,
+        "the thread with an unreadable answer reached the adapter"
+    );
+    assert_eq!(env.extractor_launches(), 1, "the extractor was asked once");
+    let list = env.ok(&["commitments"]);
+    let source = &list["sources"][0];
+    assert_eq!(
+        source["extraction"]["state"],
+        json!("succeeded"),
+        "{source}"
+    );
+    assert_eq!(source["extraction"]["cause"], json!(null), "{source}");
+    assert_eq!(
+        source["coverage"]["reason"],
+        json!("too large: the thread's turns exceed the wire line cap"),
+        "{source}"
+    );
+    assert_eq!(source["coverage"]["turns_read"], json!(0), "{source}");
+    // A second tick leaves the counted skip alone: the extractor is not launched again.
+    env.tick();
+    assert_eq!(
+        env.extractor_launches(),
+        1,
+        "the too-large thread was extracted again on the next tick"
+    );
+    let list = env.ok(&["commitments"]);
+    assert_eq!(
+        list["sources"][0]["extraction"]["state"],
+        json!("succeeded"),
+        "{list}"
+    );
 }
