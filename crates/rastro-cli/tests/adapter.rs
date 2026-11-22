@@ -354,7 +354,7 @@ fn S1_only_the_candidates_the_cores_checks_pass_are_kept() {
     // What the adapter proposed as a kind is kept with the recorded output.
     let database = rusqlite::Connection::open(env.path("data/rastro.sqlite3")).unwrap();
     let recorded: String = database
-        .query_row("SELECT candidates FROM meeting_output", [], |row| {
+        .query_row("SELECT candidates FROM conversation_output", [], |row| {
             row.get(0)
         })
         .unwrap();
@@ -623,14 +623,14 @@ fn S5_only_the_final_validated_output_becomes_evidence() {
     // survives into the evidence, even the candidate that would have passed.
     let database = rusqlite::Connection::open(env.path("data/rastro.sqlite3")).unwrap();
     let recorded: String = database
-        .query_row("SELECT candidates FROM meeting_output", [], |row| {
+        .query_row("SELECT candidates FROM conversation_output", [], |row| {
             row.get(0)
         })
         .unwrap();
     let recorded: Value = serde_json::from_str(&recorded).unwrap();
     assert_eq!(recorded, json!(final_answer));
     let spans: Vec<String> = database
-        .prepare("SELECT text FROM meeting_span WHERE text != '' ORDER BY turn")
+        .prepare("SELECT text FROM conversation_span WHERE text != '' ORDER BY turn")
         .unwrap()
         .query_map([], |row| row.get(0))
         .unwrap()

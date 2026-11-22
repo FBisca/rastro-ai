@@ -106,6 +106,13 @@
         "author": {
           "type": "string"
         },
+        "capabilities": {
+          "description": "The requests this plugin answers beyond its kind's own: an extractor that makes\nconversation turns declares [`CONVERSATION_TURNS`]. Absent declares none.",
+          "items": {
+            "type": "string"
+          },
+          "type": "array"
+        },
         "command": {
           "type": "string"
         },

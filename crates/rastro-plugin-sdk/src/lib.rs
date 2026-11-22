@@ -25,6 +25,10 @@ pub const JUDGMENT_REQUEST: &str = "judgment.request";
 /// `decision.request` (core to decision adapter): the caller's instructions, input and output
 /// schema, answered with structured output the core validates against that schema (ADR-0016 §5).
 pub const DECISION_REQUEST: &str = "decision.request";
+/// `conversation.turns` (core to extractor): a thread's identity and its message evidence, answered
+/// with the thread's turns (ADR 0011, amendment 2026-11-22). The source's extractor makes the turns;
+/// the core keeps the gates, the queue and accept.
+pub const CONVERSATION_TURNS: &str = "conversation.turns";
 /// The kind of plugin that lets an agent runtime do judgment (decisions/plugins.md §2, §10).
 pub const AGENT_TOOL_ADAPTER_KIND: &str = "agent-tool-adapter";
 /// The kind of plugin that executes actions (ADR 0015). It reads no evidence: it declares its
@@ -394,6 +398,66 @@ pub struct DecisionRequest {
 #[serde(deny_unknown_fields)]
 pub struct DecisionResponse {
     pub output: Value,
+}
+/// `conversation.turns` (core to extractor): one thread's identity and the message evidence the
+/// core holds for it. The thread is named by its channel source and its start message's ts; the
+/// extractor answers with one turn per message, in post order.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct ConversationTurnsRequest {
+    /// The channel source the thread belongs to.
+    pub source: String,
+    /// The scope the source's evidence lives in.
+    pub scope: String,
+    /// The thread start message's ts: with the source, the thread's identity.
+    pub thread: String,
+    /// The thread's messages as stored evidence, in post order.
+    pub messages: Vec<BatchItem>,
+}
+/// Who spoke a turn: an account the source resolved the speaker to, or a label no account
+/// resolved. A label is never an identity.
+#[derive(Clone, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(untagged)]
+pub enum ConversationSpeaker {
+    /// The speaker's account, by its canonical identifier and type.
+    Account(EntityRef),
+    /// A display label no account resolved.
+    Label(String),
+}
+/// Whether a turn's speaker is a person or a bot.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConversationTurnKind {
+    Person,
+    Bot,
+}
+/// One turn of a conversation, as the source's extractor makes it: one per message, in post
+/// order. The text is untrusted content, never instructions.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationTurn {
+    pub speaker: ConversationSpeaker,
+    pub kind: ConversationTurnKind,
+    /// The message's text with mentions resolved to labels.
+    pub text: String,
+    /// The message's time as RFC 3339, when the source knows it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub time: Option<String>,
+    /// The evidence location of the message this turn replies to, when it replies to one.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub reply_to: Option<String>,
+    /// The evidence location of the message this turn was made from. Absent for turns the core
+    /// builds from an imported transcript, which cite no stored evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cites: Option<String>,
+    /// The accounts the message mentions.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub mentions: Vec<EntityRef>,
+}
+/// The `result` of a `conversation.turns`: the thread's turns, one per message, in post order.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct ConversationTurnsResponse {
+    pub turns: Vec<ConversationTurn>,
 }
 /// The type of one declared candidate field: a generic primitive, never a task's domain type.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -939,6 +1003,10 @@ pub struct Manifest {
     /// would read the same data into another scope. `source add` refuses a second one.
     #[serde(default)]
     pub single_source: bool,
+    /// The requests this plugin answers beyond its kind's own: an extractor that makes
+    /// conversation turns declares [`CONVERSATION_TURNS`]. Absent declares none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub capabilities: Vec<String>,
     /// On an action provider: the actions it declares, each with its reach and reversibility
     /// (`[[action]]`). Any other plugin that declares one is refused.
     #[serde(default, rename = "action")]
@@ -1826,6 +1894,104 @@ evidence_requirement = "r"
         let answer = Envelope::response(Some(1.into()), &output).unwrap();
         let parsed: DecisionResponse = answer.result().unwrap();
         assert_eq!(serde_json::to_value(&parsed).unwrap(), output);
+    }
+
+    /// The conversation contract's wire: a request names the thread by its channel source and
+    /// start ts and carries its message evidence; a turn carries its speaker as an account or a
+    /// label, its kind, the resolved text, its time, reply-to, the evidence it cites and the
+    /// accounts it mentions; an unknown field is refused.
+    // spec: A chat thread's turns come from its source's extractor
+    #[test]
+    fn the_conversation_turns_wire_carries_speaker_kind_text_and_citations() {
+        let request = json!({
+            "source": "eng",
+            "scope": "work",
+            "thread": "1700000000.000100",
+            "messages": [{
+                "evidence_id": 7,
+                "source": "eng",
+                "scope": "work",
+                "location": "slack:message/1700000000.000100",
+                "span": {"field": "/text", "start": 0, "end": 19, "quote": "I'll send it Friday"},
+                "captured_at": "2026-11-21T10:00:00.000Z",
+                "trust_class": "untrusted content"
+            }]
+        });
+        let message = Envelope::request(1, CONVERSATION_TURNS, &request).unwrap();
+        let parsed: ConversationTurnsRequest = message.params().unwrap();
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), request);
+
+        let answer = json!({"turns": [
+            {
+                "speaker": {"identifier": "slack:account/U1", "type": "slack:Account"},
+                "kind": "person",
+                "text": "I'll send it Friday",
+                "time": "2026-11-21T10:00:00Z",
+                "reply_to": "slack:message/1700000000.000000",
+                "cites": "slack:message/1700000000.000100",
+                "mentions": [{"identifier": "slack:account/U2", "type": "slack:Account"}]
+            },
+            {
+                "speaker": "Deploy Bot",
+                "kind": "bot",
+                "text": "Release shipped",
+                "cites": "slack:message/1700000000.000200"
+            }
+        ]});
+        let response = Envelope::response(Some(1.into()), &answer).unwrap();
+        let parsed: ConversationTurnsResponse = response.result().unwrap();
+        assert_eq!(serde_json::to_value(&parsed).unwrap(), answer);
+        assert_eq!(
+            parsed.turns[0].speaker,
+            ConversationSpeaker::Account(EntityRef {
+                identifier: "slack:account/U1".into(),
+                entity_type: "slack:Account".into(),
+            })
+        );
+        assert_eq!(
+            parsed.turns[1].speaker,
+            ConversationSpeaker::Label("Deploy Bot".into())
+        );
+        assert_eq!(parsed.turns[1].kind, ConversationTurnKind::Bot);
+        // An unknown field is refused, not kept.
+        let broken = json!({"turns": [{
+            "speaker": "Ana", "kind": "person", "text": "hi",
+            "cites": "slack:message/1", "extra": 1
+        }]});
+        assert!(serde_json::from_value::<ConversationTurnsResponse>(broken).is_err());
+    }
+
+    /// An extractor declares the requests it answers beyond its kind's own: a manifest with
+    /// `capabilities = ["conversation.turns"]` keeps the declaration, and one without declares
+    /// none.
+    // spec: The core refuses turns it cannot trace to the thread
+    #[test]
+    fn an_extractor_manifest_declares_the_requests_it_answers() {
+        let manifest = |capabilities: &str| {
+            Manifest::parse(&format!(
+                r#"
+id = "x"
+name = "X"
+version = "0.1.0"
+author = "Rastro"
+kinds = ["extractor"]
+protocol = 1
+command = "x"
+{capabilities}
+[permissions]
+submit = []
+scopes = []
+env = []
+actions = []
+"#
+            ))
+            .unwrap()
+        };
+        assert_eq!(
+            manifest("capabilities = [\"conversation.turns\"]").capabilities,
+            vec![CONVERSATION_TURNS.to_string()]
+        );
+        assert!(manifest("").capabilities.is_empty());
     }
 
     /// spec: Task templates run without domain logic in the core runner

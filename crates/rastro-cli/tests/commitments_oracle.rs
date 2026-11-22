@@ -582,7 +582,7 @@ fn S8_the_interpretation_is_recorded_replayed_without_a_model_and_never_exported
     let database = rusqlite::Connection::open(env.path("data/rastro.sqlite3")).unwrap();
     database
         .execute(
-            "UPDATE meeting_output SET candidates = replace(candidates, 'budget by Friday', 'budget by Never')",
+            "UPDATE conversation_output SET candidates = replace(candidates, 'budget by Friday', 'budget by Never')",
             [],
         )
         .unwrap();
