@@ -15,7 +15,7 @@ fn open(home: &tempfile::TempDir) -> SqliteStorage {
 }
 
 /// A finished failed run, seeded through the store so the turn history under test is written
-/// against a real `meeting_run` row.
+/// against a real `conversation_run` row.
 fn seed_run(storage: &mut SqliteStorage, meeting: &str, transcript: TranscriptKeep) -> i64 {
     storage
         .record_meeting_run(&RunRecord {

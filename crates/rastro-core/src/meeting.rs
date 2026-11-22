@@ -1,5 +1,7 @@
 //! Meeting commitments: a speaker-labelled transcript goes to the configured extractor, and what
-//! it proposes is kept as cited hypotheses about commitments that involve the owner.
+//! it proposes is kept as cited hypotheses about commitments that involve the owner. The
+//! transcript's turns enter the conversation contract (`conversation.turns`) inside the core
+//! (ADR 0011, amendment 2026-11-22); the judgment wire is unchanged.
 //!
 //! A hypothesis is not a claim (ADR 0011): the transcript is untrusted content, the extractor's
 //! output is not deterministic, and the supporting text must be forgettable. The core therefore
@@ -21,8 +23,8 @@ use crate::{
 use anyhow::{Context, Result, bail, ensure};
 use chrono::{DateTime, Utc};
 use rastro_plugin_sdk::{
-    CandidateKind, GateFeedback, JudgmentTurn, RuleDisposition, TaskFieldType, TaskRule,
-    TaskTemplate,
+    CandidateKind, ConversationSpeaker, ConversationTurn, ConversationTurnKind, GateFeedback,
+    JudgmentTurn, RuleDisposition, TaskFieldType, TaskRule, TaskTemplate,
 };
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
@@ -617,6 +619,45 @@ pub struct Turn {
     pub text: String,
 }
 
+/// The meeting's turns as the conversation contract keeps them (ADR 0011, amendment 2026-11-22):
+/// one per transcript turn, its speaker the label, kind `bot` for a label the owner mapped to a
+/// bot account, and no evidence citation — an imported transcript is not stored evidence.
+fn conversation_turns(turns: &[Turn], people: &People) -> Vec<ConversationTurn> {
+    turns
+        .iter()
+        .map(|turn| ConversationTurn {
+            speaker: ConversationSpeaker::Label(turn.speaker.clone()),
+            kind: if people.bots.contains(&turn.speaker) {
+                ConversationTurnKind::Bot
+            } else {
+                ConversationTurnKind::Person
+            },
+            text: turn.text.clone(),
+            time: None,
+            reply_to: None,
+            cites: None,
+            mentions: Vec::new(),
+        })
+        .collect()
+}
+
+/// The contract turns as the judgment wire carries them: the adapter reads speaker labels and
+/// text, counted from 1. An account speaker reads as its identifier.
+fn judgment_turns(turns: &[ConversationTurn]) -> Vec<JudgmentTurn> {
+    turns
+        .iter()
+        .enumerate()
+        .map(|(index, turn)| JudgmentTurn {
+            turn: (index + 1) as u64,
+            speaker: match &turn.speaker {
+                ConversationSpeaker::Label(label) => label.clone(),
+                ConversationSpeaker::Account(account) => account.identifier.clone(),
+            },
+            text: turn.text.clone(),
+        })
+        .collect()
+}
+
 /// Splits a transcript into turns. A line `Label: text` starts a turn (the label's colon is
 /// followed by white space or the end of the line); any other non-blank line continues the turn
 /// before it.
@@ -1112,17 +1153,11 @@ impl<S: Storage> Rastro<S> {
             };
             extractor = Some(config.plugin.clone());
             let (template, contract) = self.selected_template()?;
-            let judgment_turns: Vec<JudgmentTurn> = turns
-                .iter()
-                .map(|turn| JudgmentTurn {
-                    turn: turn.index as u64,
-                    speaker: turn.speaker.clone(),
-                    text: turn.text.clone(),
-                })
-                .collect();
+            let contract_turns = conversation_turns(&turns, &people);
+            let wire_turns = judgment_turns(&contract_turns);
             let input = host::task::TaskInput {
                 owner_speaker: &people.owner,
-                turns: &judgment_turns,
+                turns: &wire_turns,
                 labels: Some(&people.bots),
             };
             let judged = host::task::run(
@@ -1259,22 +1294,16 @@ impl<S: Storage> Rastro<S> {
                     text: span.text.clone(),
                 };
             }
-            let judgment_turns: Vec<JudgmentTurn> = turns
-                .iter()
-                .map(|turn| JudgmentTurn {
-                    turn: turn.index as u64,
-                    speaker: turn.speaker.clone(),
-                    text: turn.text.clone(),
-                })
-                .collect();
             let people = People {
                 owner: recording.owner_speaker.clone(),
                 mapped,
                 bots,
             };
+            let contract_turns = conversation_turns(&turns, &people);
+            let wire_turns = judgment_turns(&contract_turns);
             let input = host::task::TaskInput {
                 owner_speaker: &people.owner,
-                turns: &judgment_turns,
+                turns: &wire_turns,
                 labels: Some(&people.bots),
             };
             let answer = json!({ "candidates": candidates });
@@ -1628,5 +1657,61 @@ mod tests {
         assert_eq!(turns[2].index, 3);
         assert!(parse_transcript("no label here\nAlice: hi").is_err());
         assert!(parse_transcript("\n  \n").is_err());
+    }
+
+    /// The core builds a meeting's turns into the conversation contract: one per transcript turn,
+    /// the speaker its label, kind `bot` only for a label mapped to a bot account, the text as
+    /// given and no evidence citation; the judgment wire still carries the label and text.
+    // spec: Meetings keep their behaviour in the conversation store
+    #[test]
+    fn meeting_turns_enter_the_conversation_contract() {
+        let turns = [
+            Turn {
+                index: 1,
+                speaker: "Alice".into(),
+                text: "I'll send it.".into(),
+            },
+            Turn {
+                index: 2,
+                speaker: "Deploy".into(),
+                text: "Release shipped".into(),
+            },
+        ];
+        let people = People {
+            owner: "Alice".into(),
+            mapped: BTreeMap::new(),
+            bots: BTreeSet::from(["Deploy".to_string()]),
+        };
+        let contract = conversation_turns(&turns, &people);
+        assert_eq!(contract.len(), 2);
+        assert_eq!(
+            contract[0].speaker,
+            ConversationSpeaker::Label("Alice".into())
+        );
+        assert_eq!(contract[0].kind, ConversationTurnKind::Person);
+        assert_eq!(contract[0].text, "I'll send it.");
+        assert_eq!(contract[1].kind, ConversationTurnKind::Bot);
+        assert!(contract.iter().all(|turn| {
+            turn.cites.is_none()
+                && turn.time.is_none()
+                && turn.reply_to.is_none()
+                && turn.mentions.is_empty()
+        }));
+        // The judgment wire is unchanged: the label and text, counted from 1.
+        assert_eq!(
+            judgment_turns(&contract),
+            vec![
+                JudgmentTurn {
+                    turn: 1,
+                    speaker: "Alice".into(),
+                    text: "I'll send it.".into(),
+                },
+                JudgmentTurn {
+                    turn: 2,
+                    speaker: "Deploy".into(),
+                    text: "Release shipped".into(),
+                },
+            ]
+        );
     }
 }

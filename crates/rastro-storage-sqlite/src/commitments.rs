@@ -38,7 +38,9 @@ pub(crate) fn origins(view: &View, scopes: &[Scope]) -> Result<Vec<Origin>> {
 fn loaded(view: &View, scopes: &[Scope]) -> Result<Vec<StoredMeeting>> {
     let meetings: Vec<String> = view
         .0
-        .prepare("SELECT id FROM meeting ORDER BY captured_at DESC, id")?
+        .prepare(
+            "SELECT id FROM conversation WHERE kind = 'meeting' ORDER BY captured_at DESC, id",
+        )?
         .query_map([], |row| row.get(0))?
         .collect::<Result<_, _>>()?;
     (meetings.iter())

@@ -1,6 +1,6 @@
 //! Per-plugin run facts for the trust view: the wall time of a plugin's finished runs and the
 //! adapter turns they used. Connector and extractor runs live in `runs` by `plugin_id`; meeting
-//! judgment runs live in `meeting_run` by `extractor`, and their turns are the `session_turn`
+//! judgment runs live in `conversation_run` by `extractor`, and their turns are the `session_turn`
 //! rows of the run's session. A meeting run's id is what a shown report names for the items its
 //! content carried; a connector run's content names no queue item.
 use crate::{View, parse_time, scope_parameter};
@@ -40,7 +40,7 @@ pub(crate) fn plugin_runs(view: &View, scopes: &[Scope]) -> Result<Vec<PluginRun
     let mut statement = view.0.prepare(
         "SELECT mr.extractor, mr.id, mr.started_at, mr.finished_at,
                 (SELECT count(*) FROM session_turn st WHERE st.run_id = mr.id)
-         FROM meeting_run mr JOIN meeting m ON m.id = mr.meeting_id
+         FROM conversation_run mr JOIN conversation m ON m.id = mr.conversation_id
          WHERE mr.extractor IS NOT NULL
            AND (?1 IS NULL OR m.scope IN (SELECT value FROM json_each(?1)))",
     )?;
