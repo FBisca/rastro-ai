@@ -5,7 +5,7 @@ Slug: `second-source-one-identity`. Living spec: `docs/specs/identity.md` (new, 
 ## Why now
 Roadmap slice 4 closes M1. Rastro has one connector (GitHub), and on the owner's data the only cross-source entities (FBisca, preston-ai-bot) are already one entity without a merge (knowledge §24). No Person, no owner intent and no link exist in code. Without one identity per thing the assistant contradicts itself (concept §1). Slices 5–7 (commitments, the queue, corrections) need Persons and owner intents to exist first.
 
-The kalios data has one human and no email, so a second source there would join nobody but the owner. The owner's Heritage Linear workspace and the `heritageholdings/svc-platform` repository share a whole team, so they exercise real links, real fuzzy candidates and real non-matches.
+The kalios data has one human and no email, so a second source there would join nobody but the owner. The owner's work Linear workspace and a work GitHub repository share a whole team, so they exercise real links, real fuzzy candidates and real non-matches.
 
 ## Sources
 | Source | What it settles |
@@ -13,7 +13,7 @@ The kalios data has one human and no email, so a second source there would join 
 | Owner, 2026-11-05 session: Q1–Q25 accepted, plan approved (Q1 a; Q2, Q4–Q9 as recommended; Q3 reframed as the slice-7-shaped intent foundation; Q10–Q22 as recommended) | D1–D22 |
 | Codex design review of the intent foundation, 2026-11-05 (agree with changes; all changes accepted by the lead, gaps put to the owner as Q19–Q22) | D6–D11 |
 | Gather report and real DB (immutable copy), 2026-11-05 | 3 sources (`kalios`/work unregistered, `kalios-mobile` never synced, `kalios-api`); 719 entities, 2248 claims all observed, 3 accounts (1 human, 2 bots), 3 login aliases, 0 emails, 0 claim links; 2 entities seen in two sources, already one entity each |
-| Fleet brain, 2026-11-05 | Heritage Linear: 4710 issues across 142 projects; GitHub `heritageholdings/svc-platform`: 581 PRs; no kalios item in either |
+| Fleet brain, 2026-11-05 | Work Linear: 4710 issues across 142 projects; the work GitHub repository: 581 PRs; no kalios item in either |
 | `docs/concept.md` §1; `docs/roadmap.md` slice 4 | One identity per thing; the slice's outcome |
 | `docs/GLOSSARY.md` Person, Entity, Alias, Merge, Intent | An account is linked to a Person, never merged; a merge is a reversible claim between entities of one kind |
 | `docs/decisions/knowledge.md` §4, §12, §24, §33–36, §42, §44, §46, §48, §50–52 | Exact links automatic, fuzzy asks, names never merge; one identifier is one entity; claim ids never re-keyed; merge is an overlay claim, undo records a cannot-link; grouping on read; Person minting and email rules; intents (slice 7 shape); visible-only scoped answers; precious inputs; rebuild carry-over |
@@ -27,7 +27,7 @@ The kalios data has one human and no email, so a second source there would join 
 ## Decisions
 | # | Choice | Rejected | Why | Source |
 |---|---|---|---|---|
-| D1 | Second source: Linear (Heritage workspace). The owner also adds `heritageholdings/svc-platform` as a GitHub `work` source | Slack; an address book; mail | Same team in both; structured API with member emails; feeds slice 5 | Owner Q1 |
+| D1 | Second source: Linear (the owner's work workspace). The owner also adds a work repository as a GitHub `work` source | Slack; an address book; mail | Same team in both; structured API with member emails; feeds slice 5 | Owner Q1 |
 | D2 | Persons exist only through an owner intent (`rastro identity me`, `rastro identity person create`, or a yes to a candidate). An account links on its own to an *existing* Person only through an equal verified email or a token-owner observation (D13–D14). Everything else is a fuzzy candidate. Roadmap wording becomes "exact identifiers link on their own" | A Person per verified email (amends §36); nothing automatic | Matches knowledge §36 and the glossary | Owner Q2 |
 | D3 | Writes are CLI only (`rastro identity …`). MCP stays read-only | MCP write operations | No new write surface for agents in this slice | Owner Q4 |
 | D4 | Fuzzy candidates are computed on read, never stored. The owner's yes or no is stored as an intent; an answered pair never returns | Stored hypothesis claims; no fuzzy matching | Hypotheses are slice 5, the queue slice 6 | Owner Q5 |
@@ -163,7 +163,7 @@ The kalios data has one human and no email, so a second source there would join 
   - The Linear API key and GitHub token are read at sync only; S22 checks the key never lands in the database or config.
   - Scopes: Persons, links and candidates come from visible justifications only (S30, S31); the issuer must see the target (S9).
   - `/user/emails` needs the `user:email` token scope; without it, coverage says so (S13). The owner may need `gh auth refresh -s user:email`.
-  - Work data (Heritage Linear, svc-platform) lives only in the local database under scope `work`.
+  - Work data (the work Linear workspace and repository) lives only in the local database under scope `work`.
 - **Performance:**
   - `about me` spans every linked account's claims; `limit` and the existing work budget bound it (S33). The scoped benchmark gate is rerun with intents.
   - Candidates compare accounts across namespaces on read; expected sizes are tens of GitHub accounts and about a hundred Linear users.
