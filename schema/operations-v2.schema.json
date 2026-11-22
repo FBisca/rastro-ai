@@ -2908,6 +2908,11 @@
           "type": "string"
         },
         {
+          "const": "chat",
+          "description": "A chat thread of an opted-in channel source, listed by the `commitments` list.",
+          "type": "string"
+        },
+        {
           "const": "identity",
           "description": "The identity graph's same-person candidates, computed on read.",
           "type": "string"
@@ -3419,6 +3424,10 @@
           "minLength": 1,
           "type": "string"
         },
+        "extract_commitments": {
+          "description": "Whether the source's chat threads go to the commitment adapter after a sync\n(`source add --extract-commitments`); only a source whose extractor declares\n`conversation.turns` may carry it.",
+          "type": "boolean"
+        },
         "freshness_rule": {
           "pattern": "^[0-9]+[smhd]$",
           "type": "string"
@@ -3555,10 +3564,19 @@
     },
     "SourceKind": {
       "description": "What kind of source a conversation comes from.",
-      "enum": [
-        "meeting"
-      ],
-      "type": "string"
+      "oneOf": [
+        {
+          "enum": [
+            "meeting"
+          ],
+          "type": "string"
+        },
+        {
+          "const": "chat",
+          "description": "A chat thread of an opted-in channel source, named by the source and the thread's start ts.",
+          "type": "string"
+        }
+      ]
     },
     "SourceResultsFrom": {
       "additionalProperties": false,
@@ -5944,6 +5962,11 @@
           "connector": {
             "description": "Connector plugin that reads the source.",
             "type": "string"
+          },
+          "extract_commitments": {
+            "default": false,
+            "description": "Send the source's chat threads to the commitment adapter after each sync; the bound\nextractor must declare `conversation.turns`.",
+            "type": "boolean"
           },
           "freshness_rule": {
             "default": "1h",

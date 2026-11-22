@@ -399,6 +399,7 @@ fn hits_and_coverage_in_one_answer_come_from_the_same_snapshot() {
             freshness_rule: "1h".into(),
             window_start: chrono::Utc::now(),
             keep_original: false,
+            extract_commitments: false,
         };
         use rastro_core::Storage;
         let now = chrono::Utc::now();

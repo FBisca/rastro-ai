@@ -80,6 +80,7 @@ impl Source {
         Self {
             kind: match source.kind {
                 commitments::SourceKind::Meeting => SourceKind::Meeting,
+                commitments::SourceKind::Chat => SourceKind::Chat,
             },
             name: source.name.clone(),
             scope: source.scope.clone(),
@@ -101,6 +102,8 @@ impl Source {
 pub enum SourceKind {
     /// An imported conversation, listed by the `commitments` list.
     Meeting,
+    /// A chat thread of an opted-in channel source, listed by the `commitments` list.
+    Chat,
     /// The identity graph's same-person candidates, computed on read.
     Identity,
     /// A Linear source, which an action proposal writes to.
@@ -1000,6 +1003,7 @@ impl SourceKind {
     fn as_str(self) -> &'static str {
         match self {
             Self::Meeting => "meeting",
+            Self::Chat => "chat",
             Self::Identity => "identity",
             Self::Linear => "linear",
         }

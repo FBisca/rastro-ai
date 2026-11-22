@@ -848,6 +848,7 @@ fn focus_item_block(rank: &str, item: &rastro_core::focus::Item) -> render::Bloc
 fn queue_source_kind(kind: rastro_core::queue::SourceKind) -> &'static str {
     match kind {
         rastro_core::queue::SourceKind::Meeting => "meeting",
+        rastro_core::queue::SourceKind::Chat => "chat",
         rastro_core::queue::SourceKind::Identity => "identity",
         rastro_core::queue::SourceKind::Linear => "linear",
     }

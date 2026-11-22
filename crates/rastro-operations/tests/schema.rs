@@ -94,9 +94,28 @@ fn remove_coverage_gaps(value: &mut serde_json::Value) {
     }
 }
 
+/// The chat opt-in field on a source schema (surfaces.md §64): an optional boolean, removed
+/// so the rest of the source reads exactly as it did before the opt-in.
+fn remove_opt_in_field(source: &mut serde_json::Value) {
+    let object = source.as_object_mut().unwrap();
+    let field = object["properties"]
+        .as_object_mut()
+        .unwrap()
+        .remove("extract_commitments")
+        .unwrap();
+    assert_eq!(field["type"], "boolean");
+    assert!(
+        !object["required"]
+            .as_array()
+            .unwrap()
+            .contains(&serde_json::json!("extract_commitments"))
+    );
+}
+
 /// spec: The generated schema equals the committed file
 /// about and why are additive v2, `sync.extraction` and `claims.rebuild.pairs` are recorded
-/// additions, and existing schemas are unchanged
+/// additions, the chat opt-in is additive on `source.add` and the sources it returns, and
+/// existing schemas are unchanged
 #[test]
 #[expect(
     clippy::too_many_lines,
@@ -220,6 +239,20 @@ fn about_and_why_are_additive_v2_and_existing_schemas_are_unchanged() {
                 });
                 let required = input["required"].as_array_mut().unwrap();
                 required.insert(2, json!("repo"));
+                // The chat opt-in (surfaces.md §64): an optional flag on the request and an
+                // optional field on the source it returns.
+                let opt_in = input["properties"]
+                    .as_object_mut()
+                    .unwrap()
+                    .remove("extract_commitments")
+                    .unwrap();
+                assert_eq!(opt_in["type"], "boolean");
+                assert_eq!(opt_in["default"], json!(false));
+                remove_opt_in_field(&mut new["result"]["properties"]["source"]);
+            }
+            "source.list" => {
+                // The same optional opt-in field on every listed source (surfaces.md §64).
+                remove_opt_in_field(&mut new["result"]["properties"]["sources"]["items"]);
             }
             _ => {}
         }

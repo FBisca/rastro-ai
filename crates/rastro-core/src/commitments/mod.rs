@@ -8,6 +8,7 @@
 //! The list reads through [`Snapshot::commitment_sources`]: storage turns what it keeps for each
 //! kind of source into [`Source`] entries, and the core filters them. A scope that hides a source
 //! hides its entry, and the read still succeeds.
+pub mod chat;
 pub mod vocabulary;
 
 use crate::{
@@ -211,6 +212,16 @@ pub fn is_bot_type(value: &str) -> bool {
 #[serde(rename_all = "snake_case")]
 pub enum SourceKind {
     Meeting,
+    /// A chat thread of an opted-in channel source, named by the source and the thread's start ts.
+    Chat,
+}
+impl SourceKind {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Meeting => "meeting",
+            Self::Chat => "chat",
+        }
+    }
 }
 
 /// How the source's latest extraction went.
@@ -398,7 +409,7 @@ impl<S: Storage> Rastro<S> {
         };
         for (kind, name) in targets {
             let checked = match kind {
-                SourceKind::Meeting => {
+                SourceKind::Meeting | SourceKind::Chat => {
                     let recorded = self
                         .storage
                         .snapshot(|view| view.meeting_recording(&name))?

@@ -26,7 +26,7 @@ use std::{
 
 pub mod actions;
 pub(crate) mod check;
-mod extract;
+pub(crate) mod extract;
 mod io;
 mod judge;
 pub mod plugin_check;

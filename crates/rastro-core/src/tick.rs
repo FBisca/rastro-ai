@@ -1,8 +1,9 @@
 //! `tick`: the one entry point a schedule calls. It finishes every accepted Action run that never
 //! completed and every pending Act whose grace has ended, syncs every source whose last complete
-//! check is older than its freshness rule, and runs at most once at a time.
+//! check is older than its freshness rule, extracts the new chat threads of every opted-in source,
+//! and runs at most once at a time.
 use crate::{
-    CompleteCheck, Locations, Rastro, Source, Storage, coverage, files,
+    CompleteCheck, Locations, Rastro, Source, Storage, coverage, files, host,
     runs::{Silent, StoredTwins},
 };
 use anyhow::Result;
@@ -51,7 +52,9 @@ impl<S: Storage + StoredTwins> Rastro<S> {
     /// Executes each Action run that is not done and has made fewer than 3 failed attempts — a
     /// pending Act only once its grace has ended — then syncs each source past its freshness rule,
     /// one after another, and skips the fresh ones. A run or a source that fails is recorded in the
-    /// report and the next one still goes.
+    /// report and the next one still goes. After the syncs, every source added with
+    /// `--extract-commitments` has its new threads extracted and judged, fresh or just synced; a
+    /// thread's failed run is recorded and named in the commitments list, and never fails the tick.
     ///
     /// Returns [`Tick::AlreadyRunning`] without recording anything when another tick holds
     /// the tick lock. Fails only when the lock or the source list cannot be read.
@@ -90,6 +93,20 @@ impl<S: Storage + StoredTwins> Rastro<S> {
                 Err(error) => report
                     .failed
                     .push((source.name.clone(), format!("{error:#}"))),
+            }
+        }
+        // The opted-in sources' new threads, after the syncs: a manual sync may have stored
+        // them just now, so a fresh source is extracted too. A pass-level failure is a
+        // diagnostic; each thread's own failure is recorded as its run.
+        for source in &sources {
+            if !source.extract_commitments {
+                continue;
+            }
+            if let Err(error) = self.extract_chat_threads(source) {
+                host::notice(&format!(
+                    "chat extraction for source {} failed: {error:#}",
+                    source.name
+                ));
             }
         }
         drop(lock);
