@@ -1900,7 +1900,6 @@ evidence_requirement = "r"
     /// start ts and carries its message evidence; a turn carries its speaker as an account or a
     /// label, its kind, the resolved text, its time, reply-to, the evidence it cites and the
     /// accounts it mentions; an unknown field is refused.
-    // spec: A chat thread's turns come from its source's extractor
     #[test]
     fn the_conversation_turns_wire_carries_speaker_kind_text_and_citations() {
         let request = json!({
@@ -1964,7 +1963,6 @@ evidence_requirement = "r"
     /// An extractor declares the requests it answers beyond its kind's own: a manifest with
     /// `capabilities = ["conversation.turns"]` keeps the declaration, and one without declares
     /// none.
-    // spec: The core refuses turns it cannot trace to the thread
     #[test]
     fn an_extractor_manifest_declares_the_requests_it_answers() {
         let manifest = |capabilities: &str| {
