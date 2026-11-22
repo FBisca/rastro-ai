@@ -511,3 +511,40 @@ The plugin check SHALL be a CLI command and SHALL NOT be exposed as an MCP tool.
 #### Scenario: the MCP tool list
 - WHEN an agent lists MCP tools
 - THEN no plugin check tool is listed
+
+### Requirement: Human records render as blocks
+The CLI's human output SHALL render every record as a block — its quote or header line first, then one labelled field per line — with blank lines between records and no pipe-packed field lines.
+
+#### Scenario: `rastro search <query>` runs with matching evidence
+- WHEN `rastro search <query>` runs with matching evidence
+- THEN each match prints its quote on one line and every citation field (link, field, span, captured time, trust class, scope, source) on its own indented line
+
+#### Scenario: `rastro coverage` runs with two registered sources
+- WHEN `rastro coverage` runs with two registered sources
+- THEN the two source blocks are separated by a blank line
+
+#### Scenario: `rastro queue` prints pending items
+- WHEN `rastro queue` prints pending items
+- THEN each item's content-addressed id stands on its own line, byte-for-byte the id a queue answer names
+
+### Requirement: Human timestamps share one format
+Every timestamp in the CLI's human output SHALL render as `YYYY-MM-DD HH:MM UTC` at minute precision, while `--json` output keeps its full RFC 3339 times.
+
+#### Scenario: `rastro coverage` runs after a sync
+- WHEN `rastro coverage` runs after a sync
+- THEN its checked and fresh-until times print as `YYYY-MM-DD HH:MM UTC`
+
+#### Scenario: the same coverage read runs with `--json`
+- WHEN the same coverage read runs with `--json`
+- THEN its envelope keeps full RFC 3339 timestamps and validates against the committed v2 schema
+
+### Requirement: Empty and no-op results speak with one voice
+An empty human read SHALL print one sentence starting `No ` that names what is absent, and a write that changed nothing SHALL end its message with `; nothing recorded`.
+
+#### Scenario: queue, coverage and search run on a store with nothing to show
+- WHEN queue, coverage and search run on a store with nothing to show
+- THEN each prints a sentence starting `No ` naming what is absent
+
+#### Scenario: a write that changes nothing runs, such as undoing a run with nothing to undo
+- WHEN a write that changes nothing runs, such as undoing a run with nothing to undo
+- THEN its human message ends with `; nothing recorded`
