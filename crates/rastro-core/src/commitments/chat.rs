@@ -24,7 +24,9 @@ use crate::{
     },
 };
 use anyhow::Result;
-use rastro_plugin_sdk::{CandidateKind, ConversationSpeaker, JudgmentTurn};
+use rastro_plugin_sdk::{
+    CandidateKind, ConversationSpeaker, ConversationTurn, ConversationTurnKind, JudgmentTurn,
+};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -150,6 +152,39 @@ struct Validated {
     excluded: usize,
 }
 
+/// Why a thread is skipped without a failed run, counted in its source's coverage.
+/// The owner is in a thread when a turn's speaker or a mentioned account is held by the owner's
+/// Person (decisions D13); a thread with neither is skipped, not failed.
+const OWNER_ABSENT_REASON: &str =
+    "owner absent: no speaker or mentioned account is held by the owner's Person";
+/// A thread whose turns are larger than the core reads is skipped, not failed (decisions D6).
+const TOO_LARGE_REASON: &str = "too large: the thread's turns exceed the transcript cap";
+/// A turn the core cannot trace to a message of the thread is refused, and the thread skipped.
+const TURN_REFUSED_REASON: &str = "a turn was refused: it does not cite a message of the thread";
+
+/// Whether any turn cannot be traced to the thread: it cites no message, or a message outside
+/// the thread. The core refuses such a turn rather than send it to the adapter (ADR 0011,
+/// amendment 2026-11-22; decisions D11).
+fn refuses_a_turn(turns: &[ConversationTurn], thread: &Thread) -> bool {
+    let locations: BTreeSet<&str> = thread
+        .messages
+        .iter()
+        .map(|(_, evidence)| evidence.location.as_str())
+        .collect();
+    turns.iter().any(|turn| {
+        !turn
+            .cites
+            .as_deref()
+            .is_some_and(|cite| locations.contains(cite))
+    })
+}
+
+/// How one thread's run ended: judged through the adapter, or skipped before it with a reason.
+enum Outcome {
+    Judged(Validated, Recorded),
+    Skipped(String),
+}
+
 fn fail(cause: Cause, reason: impl Into<String>) -> Failure {
     Failure {
         cause,
@@ -190,15 +225,14 @@ fn session_history(turns: &[host::task::TaskTurn]) -> Vec<SessionTurn> {
         .collect()
 }
 
-/// Maps the runner's validated candidates to hypotheses with their citations. The owner
-/// speaker — the account the owner's Person holds — maps to the owner's identity; every other
-/// party stays its label, unknown.
+/// Maps the runner's validated candidates to hypotheses with their citations. A party the
+/// thread's speakers identify — the owner's held account, or another author's account — carries
+/// that identity; a label no account resolved stays unknown, shown by its label.
 fn map_candidates(
     candidates: Vec<host::task::CheckedCandidate>,
     excluded: usize,
     turns: &[JudgmentTurn],
-    owner_speaker: &str,
-    owner: Option<&Identity>,
+    parties: &BTreeMap<String, Identity>,
 ) -> Validated {
     let party = |label: Option<&str>| -> Party {
         let Some(label) = label.filter(|l| !l.trim().is_empty()) else {
@@ -208,15 +242,17 @@ fn map_candidates(
                 identity: None,
             };
         };
-        let identity = owner.filter(|_| label == owner_speaker && !owner_speaker.is_empty());
-        Party {
-            state: if identity.is_some() {
-                PartyState::Mapped
-            } else {
-                PartyState::Unknown
+        match parties.get(label) {
+            Some(identity) => Party {
+                state: PartyState::Mapped,
+                label: Some(label.into()),
+                identity: Some(identity.clone()),
             },
-            label: Some(label.into()),
-            identity: identity.cloned(),
+            None => Party {
+                state: PartyState::Unknown,
+                label: Some(label.into()),
+                identity: None,
+            },
         }
     };
     let mut kept = Vec::new();
@@ -270,12 +306,12 @@ fn map_candidates(
 }
 
 /// The record a successful run keeps for replay: the kept candidates, the turns they cite and
-/// the speakers beside those turns, the owner's mapping, and the contract it ran under.
+/// the speakers beside those turns, the account identities the run mapped, and the contract it
+/// ran under.
 fn record_of(
     validated: &Validated,
     turns: &[JudgmentTurn],
-    owner_speaker: &str,
-    owner: Option<&Identity>,
+    parties: &BTreeMap<String, Identity>,
     contract: &str,
 ) -> Recorded {
     let cited: BTreeSet<usize> = validated.proposed.iter().map(|c| c.turn).collect();
@@ -299,10 +335,10 @@ fn record_of(
             })
         })
         .collect();
-    let speakers = owner
-        .filter(|_| !owner_speaker.is_empty())
-        .map(|identity| vec![(owner_speaker.to_string(), identity.clone())])
-        .unwrap_or_default();
+    let speakers = parties
+        .iter()
+        .map(|(label, identity)| (label.clone(), identity.clone()))
+        .collect();
     Recorded {
         candidates: serde_json::to_string(&validated.proposed).expect("candidates serialise"),
         spans,
@@ -368,7 +404,7 @@ impl<S: Storage> Rastro<S> {
         let mut adapter = None;
         let mut owner_speaker = String::new();
         let mut history: Vec<SessionTurn> = Vec::new();
-        let outcome = (|| -> Result<(Validated, Recorded), Failure> {
+        let outcome = (|| -> Result<Outcome, Failure> {
             let turns = match host::extract::conversation_turns(
                 &mut self.storage,
                 &self.locations,
@@ -429,6 +465,59 @@ impl<S: Storage> Rastro<S> {
                 .find(|identifier| speakers.contains(identifier))
                 .unwrap_or_default()
                 .to_string();
+            // The parties the thread's speakers identify: an account the owner's Person holds is
+            // the owner (`me`); every other account speaker is that account by id; a label no
+            // account resolved stays unknown and is absent from this map.
+            let held: BTreeSet<&str> = accounts
+                .iter()
+                .map(|account| account.identifier.as_str())
+                .collect();
+            let mut parties: BTreeMap<String, Identity> = BTreeMap::new();
+            for turn in &turns {
+                if let ConversationSpeaker::Account(account) = &turn.speaker {
+                    let identity = if held.contains(account.identifier.as_str()) {
+                        owner.clone()
+                    } else {
+                        Some(Identity {
+                            id: crate::claims::entity_id(&account.identifier),
+                            identifier: account.identifier.clone(),
+                        })
+                    };
+                    if let Some(identity) = identity {
+                        parties
+                            .entry(account.identifier.clone())
+                            .or_insert(identity);
+                    }
+                }
+            }
+            // A turn that cites outside the thread is refused: the whole thread is skipped
+            // before the adapter is asked, and counted.
+            if refuses_a_turn(&turns, thread) {
+                return Ok(Outcome::Skipped(TURN_REFUSED_REASON.to_string()));
+            }
+            // A thread larger than the transcript cap is skipped before the adapter is asked.
+            let transcript_bytes: usize = turns.iter().map(|turn| turn.text.len()).sum();
+            if transcript_bytes as u64 > meeting::MAX_TRANSCRIPT_BYTES {
+                return Ok(Outcome::Skipped(TOO_LARGE_REASON.to_string()));
+            }
+            // The owner is in the thread when a speaker or a mentioned account is one the Person
+            // holds. A thread with neither is skipped before the adapter is asked, and counted.
+            let involved = turns.iter().any(|turn| {
+                let speaker_held = match &turn.speaker {
+                    ConversationSpeaker::Account(account) => {
+                        held.contains(account.identifier.as_str())
+                    }
+                    ConversationSpeaker::Label(_) => false,
+                };
+                speaker_held
+                    || turn
+                        .mentions
+                        .iter()
+                        .any(|account| held.contains(account.identifier.as_str()))
+            });
+            if !involved {
+                return Ok(Outcome::Skipped(OWNER_ABSENT_REASON.to_string()));
+            }
             let Some(config) = self.config.commitment_adapter.clone() else {
                 return Err(fail(
                     Cause::ExtractorUnconfigured,
@@ -437,7 +526,14 @@ impl<S: Storage> Rastro<S> {
             };
             adapter = Some(config.plugin.clone());
             let (template, contract) = meeting::bundled_contract();
-            let labels = BTreeSet::new();
+            // A candidate whose party is a bot turn is excluded: the runner's bot rule reads the
+            // speakers of the turns the extractor marked kind `bot`.
+            let labels: BTreeSet<String> = turns
+                .iter()
+                .zip(&wire)
+                .filter(|(turn, _)| turn.kind == ConversationTurnKind::Bot)
+                .map(|(_, turn)| turn.speaker.clone())
+                .collect();
             let input = host::task::TaskInput {
                 owner_speaker: &owner_speaker,
                 turns: &wire,
@@ -456,15 +552,9 @@ impl<S: Storage> Rastro<S> {
                 Err(failure) => session_history(&failure.history),
             };
             let output = judged.map_err(task_failure)?;
-            let validated = map_candidates(
-                output.candidates,
-                output.excluded,
-                &wire,
-                &owner_speaker,
-                owner.as_ref(),
-            );
-            let recorded = record_of(&validated, &wire, &owner_speaker, owner.as_ref(), &contract);
-            Ok((validated, recorded))
+            let validated = map_candidates(output.candidates, output.excluded, &wire, &parties);
+            let recorded = record_of(&validated, &wire, &parties, &contract);
+            Ok(Outcome::Judged(validated, recorded))
         })();
         let finished_at = crate::coverage::now()?;
         let captured_at = thread
@@ -497,12 +587,18 @@ impl<S: Storage> Rastro<S> {
             turns: history,
         };
         match outcome {
-            Ok((validated, recorded)) => {
+            Ok(Outcome::Judged(validated, recorded)) => {
                 record.state = RunState::Succeeded;
                 record.turns_read = turns_total;
                 record.excluded = validated.excluded;
                 record.hypotheses = validated.hypotheses;
                 record.recorded = Some(recorded);
+            }
+            Ok(Outcome::Skipped(reason)) => {
+                // A skip is no failed run: the thread is counted in coverage with its reason,
+                // and a later tick leaves it alone until its messages change.
+                record.state = RunState::Succeeded;
+                record.reason = Some(reason);
             }
             Err(failure) => {
                 record.cause = Some(failure.cause);

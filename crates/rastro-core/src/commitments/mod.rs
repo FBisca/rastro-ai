@@ -67,7 +67,8 @@ impl From<rastro_plugin_sdk::CandidateKind> for Kind {
     }
 }
 
-/// An entity a speaker was explicitly mapped to.
+/// An entity a speaker was identified to: the owner's explicit mapping in a meeting, or the
+/// account a chat source's extractor resolved.
 #[derive(Clone, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 pub struct Identity {
     pub id: String,
@@ -77,9 +78,10 @@ pub struct Identity {
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum PartyState {
-    /// The owner explicitly mapped the label to an existing entity.
+    /// The label is identified to an existing entity: the owner's explicit mapping in a meeting,
+    /// or a chat speaker the source's extractor resolved to an account.
     Mapped,
-    /// No explicit mapping: who this is stays unknown.
+    /// No identity: who this is stays unknown, and the label is all there is.
     Unknown,
 }
 #[derive(Clone, Copy, Debug, Deserialize, Eq, JsonSchema, PartialEq, Serialize)]
@@ -108,8 +110,9 @@ pub struct Quote {
     pub end: usize,
 }
 
-/// A person in a hypothesis. `identity` is there only when the owner mapped the label explicitly,
-/// and is null otherwise: a party that is only named carries its label and no identity.
+/// A person in a hypothesis. `identity` is there when the label is identified to an existing
+/// entity — the owner's explicit mapping in a meeting, or the account a chat source's extractor
+/// resolved — and is null otherwise: a party that is only named carries its label and no identity.
 #[derive(Clone, Debug, Eq, JsonSchema, PartialEq, Serialize)]
 #[schemars(rename = "CommitmentParty")]
 pub struct Party {
@@ -327,7 +330,8 @@ impl crate::meeting::StoredMeeting {
                 state: CoverageState::Found,
                 turns_read: latest.turns_read,
                 turns_total: latest.turns_total,
-                reason: None,
+                // A skipped thread's run succeeds with no turn read and the reason it was skipped.
+                reason: latest.reason.clone(),
             },
         };
         Source {
