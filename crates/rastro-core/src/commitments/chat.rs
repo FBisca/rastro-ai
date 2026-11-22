@@ -179,6 +179,29 @@ fn refuses_a_turn(turns: &[ConversationTurn], thread: &Thread) -> bool {
     })
 }
 
+/// The thread's transcript size: the bytes of its messages' text, the untrusted content the
+/// turns are made from. The core measures it from the evidence it already holds, before asking
+/// the extractor, so an oversize thread is skipped without a turn answer one wire line could not
+/// carry (the extractor's answer is a single line bounded by the host's line cap).
+fn transcript_bytes(thread: &Thread) -> u64 {
+    thread
+        .messages
+        .iter()
+        .filter(|(_, evidence)| evidence.trust_class == TrustClass::UntrustedContent)
+        .map(|(_, evidence)| evidence.quote.len() as u64)
+        .sum()
+}
+
+/// How many messages the thread holds: one turn per message, so this is the turns a run would read.
+fn message_count(thread: &Thread) -> usize {
+    thread
+        .messages
+        .iter()
+        .map(|(_, evidence)| evidence.location.as_str())
+        .collect::<BTreeSet<_>>()
+        .len()
+}
+
 /// How one thread's run ended: judged through the adapter, or skipped before it with a reason.
 enum Outcome {
     Judged(Validated, Recorded),
@@ -405,6 +428,14 @@ impl<S: Storage> Rastro<S> {
         let mut owner_speaker = String::new();
         let mut history: Vec<SessionTurn> = Vec::new();
         let outcome = (|| -> Result<Outcome, Failure> {
+            // An oversize thread is skipped before the extractor is asked: its turns would exceed
+            // the transcript cap, and the answer carrying them is one line the host's line cap
+            // could not read. Measuring the stored transcript keeps the skip a counted success on
+            // a real install, not a failed run retried every tick.
+            if transcript_bytes(thread) > meeting::MAX_TRANSCRIPT_BYTES {
+                turns_total = message_count(thread);
+                return Ok(Outcome::Skipped(TOO_LARGE_REASON.to_string()));
+            }
             let turns = match host::extract::conversation_turns(
                 &mut self.storage,
                 &self.locations,
@@ -494,11 +525,6 @@ impl<S: Storage> Rastro<S> {
             // before the adapter is asked, and counted.
             if refuses_a_turn(&turns, thread) {
                 return Ok(Outcome::Skipped(TURN_REFUSED_REASON.to_string()));
-            }
-            // A thread larger than the transcript cap is skipped before the adapter is asked.
-            let transcript_bytes: usize = turns.iter().map(|turn| turn.text.len()).sum();
-            if transcript_bytes as u64 > meeting::MAX_TRANSCRIPT_BYTES {
-                return Ok(Outcome::Skipped(TOO_LARGE_REASON.to_string()));
             }
             // The owner is in the thread when a speaker or a mentioned account is one the Person
             // holds. A thread with neither is skipped before the adapter is asked, and counted.

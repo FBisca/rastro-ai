@@ -366,22 +366,6 @@ impl Env {
         );
         String::from_utf8(out.stdout).unwrap()
     }
-    /// A tick whose plugin line cap is raised, so an oversize thread's turns still reach the core
-    /// and the core's own transcript cap is what skips it.
-    fn tick_with_max_line(&self, bytes: usize) -> String {
-        let out = self
-            .command(&["tick"])
-            .env("RASTRO_HOST_MAX_LINE", bytes.to_string())
-            .output()
-            .unwrap();
-        assert!(
-            out.status.success(),
-            "tick: {}{}",
-            String::from_utf8_lossy(&out.stdout),
-            String::from_utf8_lossy(&out.stderr)
-        );
-        String::from_utf8(out.stdout).unwrap()
-    }
     /// How many adapter processes were launched.
     fn launches(&self) -> usize {
         fs::read_to_string(self.path("launches"))
@@ -747,8 +731,10 @@ fn a_thread_the_owner_is_not_in_is_skipped_and_counted() {
 }
 
 /// S16: a thread whose turns exceed the transcript cap is skipped without a failed run and counted
-/// in coverage. The owner is in it, but its turns are larger than the core reads, so the adapter is
-/// never asked and the list names the gap with the reason.
+/// in coverage. The owner is in it, but its transcript is larger than the core reads, so the core
+/// skips it from the evidence it holds — before asking the extractor, whose one-line turn answer
+/// the default host line cap could not carry — and the adapter is never asked. The tick runs under
+/// the default line cap, so this proves the skip on a real install, not a raised debug cap.
 // spec: A thread that cannot be extracted is skipped and counted
 #[test]
 fn a_thread_over_the_transcript_cap_is_skipped_and_counted() {
@@ -785,7 +771,7 @@ fn a_thread_over_the_transcript_cap_is_skipped_and_counted() {
         "--extract-commitments",
     ]);
     env.ok(&["sync", "eng"]);
-    env.tick_with_max_line(8 * 1024 * 1024);
+    env.tick();
     assert_eq!(env.launches(), 0, "the oversize thread reached the adapter");
     let list = env.ok(&["commitments"]);
     let source = &list["sources"][0];
