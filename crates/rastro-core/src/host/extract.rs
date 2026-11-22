@@ -6,7 +6,8 @@ use crate::{Counts, Evidence, Locations, RunEnd, Source, Storage};
 use anyhow::{Context, Result, ensure};
 use chrono::{SecondsFormat, Utc};
 use rastro_plugin_sdk::{
-    BatchItem, CLAIM_SUBMIT, COULDNT_LOOK_REASONS, EVIDENCE_BATCH, Envelope, EvidenceBatch,
+    BatchItem, CLAIM_SUBMIT, CONVERSATION_TURNS, COULDNT_LOOK_REASONS, ConversationTurn,
+    ConversationTurnsRequest, ConversationTurnsResponse, EVIDENCE_BATCH, Envelope, EvidenceBatch,
     ExtractionBinding, ExtractorInitializeParams, PROTOCOL_VERSION, RUN_FINISH, Role, RunFinish,
     SourceScope, Span, Vocabulary,
 };
@@ -397,6 +398,133 @@ fn checkpoint_boundary(pending: &[(i64, Evidence)]) -> Option<(i64, &Evidence)> 
         .iter()
         .max_by_key(|(id, _)| *id)
         .map(|(id, evidence)| (*id, evidence))
+}
+
+/// Asks the source's extractor for one thread's turns over `conversation.turns` (ADR 0011,
+/// amendment 2026-11-22): the thread's identity and the evidence the core holds for it — its
+/// messages and the source's records beside them, which the extractor reads to resolve
+/// speakers — answered with one turn per message in post order. The call is logged as an
+/// extractor run. `Ok(Err(reason))` is a failed call: the extractor missing, forbidden, silent,
+/// broken, or no longer declaring the capability; `Err` is a storage error.
+pub(crate) fn conversation_turns<S: Storage>(
+    storage: &mut S,
+    locations: &Locations,
+    source: &Source,
+    extractor: &str,
+    thread: &str,
+    evidence: &[(i64, Evidence)],
+) -> Result<std::result::Result<Vec<ConversationTurn>, String>> {
+    let found = discover(locations, extractor, "extractor");
+    let version = found
+        .as_ref()
+        .map_or_else(|_| String::new(), |plugin| plugin.manifest.version.clone());
+    let run_id = storage.start_extraction(source, (extractor, &version), Utc::now())?;
+    let outcome = match &found {
+        Err(reason) => Err((*reason).to_string()),
+        Ok(plugin) if !plugin.manifest.permissions.scopes.contains(&source.scope.0) => {
+            Err("forbidden".to_string())
+        }
+        Ok(plugin)
+            if !plugin
+                .manifest
+                .capabilities
+                .iter()
+                .any(|c| c == CONVERSATION_TURNS) =>
+        {
+            Err(format!(
+                "extractor {extractor} does not declare {CONVERSATION_TURNS}"
+            ))
+        }
+        Ok(plugin) => {
+            let manifest = &plugin.manifest;
+            let mut command = Command::new(resolve(&plugin.dir, &manifest.command));
+            command.env_clear().envs(allowed_environment(manifest));
+            // Discovery found the manifest; a command that won't start is the plugin's fault.
+            match Connector::launch(command, &manifest.id, Limits::from_env()) {
+                Err(_) => Err("protocol".to_string()),
+                Ok(mut process) => {
+                    let asked = ask_turns(
+                        &mut process.wire,
+                        plugin,
+                        source,
+                        run_id,
+                        thread,
+                        evidence,
+                        process.limits.extraction_time,
+                    );
+                    let answered = matches!(asked, Ok(Ok(_)));
+                    process.teardown(answered);
+                    match asked {
+                        Ok(Ok(turns)) => Ok(turns),
+                        Ok(Err(reason)) => Err(reason.to_string()),
+                        Err(error) => Err(format!("{error:#}")),
+                    }
+                }
+            }
+        }
+    };
+    let reason = outcome.as_ref().err().cloned();
+    storage.finish_run(
+        run_id,
+        &RunEnd {
+            status: if reason.is_some() { "failed" } else { "ok" }.into(),
+            reason,
+            finished_at: Utc::now(),
+            counts: Counts::default(),
+        },
+    )?;
+    Ok(outcome)
+}
+
+/// The handshake and the one request, never past `extraction_time`: a plugin that keeps
+/// talking still runs out of time.
+fn ask_turns(
+    wire: &mut Wire,
+    plugin: &Plugin,
+    source: &Source,
+    run_id: i64,
+    thread: &str,
+    evidence: &[(i64, Evidence)],
+    extraction_time: std::time::Duration,
+) -> Result<std::result::Result<Vec<ConversationTurn>, &'static str>> {
+    let manifest = &plugin.manifest;
+    let init = ExtractorInitializeParams {
+        protocol: PROTOCOL_VERSION.into(),
+        manifest_id: manifest.id.clone(),
+        role: Role::Extractor,
+        run: ExtractionBinding {
+            run_id,
+            extractor_version: manifest.version.clone(),
+            pairs: vec![SourceScope {
+                source: source.name.clone(),
+                scope: source.scope.0.clone(),
+            }],
+        },
+    };
+    if let Err(reason) = handshake(wire, plugin, init)? {
+        return Ok(Err(reason));
+    }
+    let request = ConversationTurnsRequest {
+        source: source.name.clone(),
+        scope: source.scope.0.clone(),
+        thread: thread.into(),
+        messages: evidence.iter().map(item).collect(),
+    };
+    if let Err(reason) = wire.send(&Envelope::request(2, CONVERSATION_TURNS, request)?) {
+        return Ok(Err(reason));
+    }
+    let end = Instant::now() + extraction_time;
+    let reply = match wire.recv_by(end) {
+        Ok(reply) => reply,
+        Err(reason) => return Ok(Err(reason)),
+    };
+    if reply.id != Some(2.into()) {
+        return Ok(Err("protocol"));
+    }
+    match reply.result::<ConversationTurnsResponse>() {
+        Ok(response) => Ok(Ok(response.turns)),
+        Err(_) => Ok(Err("protocol")),
+    }
 }
 
 fn item((id, e): &(i64, Evidence)) -> BatchItem {

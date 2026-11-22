@@ -148,6 +148,7 @@ impl Env {
                 scope: "work".into(),
                 captured_at: "2026-11-20T08:00:00Z".parse().unwrap(),
             },
+            kind: rastro_core::commitments::SourceKind::Meeting,
             started_at: started_at.parse().unwrap(),
             finished_at: finished_at.parse().unwrap(),
             state: RunState::Succeeded,

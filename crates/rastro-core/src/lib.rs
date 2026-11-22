@@ -70,6 +70,11 @@ pub struct Source {
     pub freshness_rule: String,
     pub window_start: DateTime<Utc>,
     pub keep_original: bool,
+    /// Whether the source's chat threads go to the commitment adapter after a sync
+    /// (`source add --extract-commitments`); only a source whose extractor declares
+    /// `conversation.turns` may carry it.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub extract_commitments: bool,
 }
 
 impl Source {
@@ -83,6 +88,7 @@ impl Source {
             freshness_rule: "1h".into(),
             window_start: Utc::now() - Duration::days(90),
             keep_original: false,
+            extract_commitments: false,
         }
     }
     pub fn github(name: String, repo: String, scope: Scope) -> Self {
@@ -94,6 +100,7 @@ impl Source {
             freshness_rule: "1h".into(),
             window_start: Utc::now() - Duration::days(90),
             keep_original: false,
+            extract_commitments: false,
         }
     }
     /// The freshness rule as a duration; `validate` guarantees the shape.
@@ -440,6 +447,11 @@ pub trait Storage {
         locations: &[String],
         high_water: (DateTime<Utc>, i64),
     ) -> Result<Vec<(i64, Evidence)>>;
+    /// The source's stored evidence as it stands: the latest observation of each location and
+    /// field, in replay order, each with its id. What a chat extraction reads to find threads.
+    fn source_evidence(&self, _source: &Source) -> Result<Vec<(i64, Evidence)>> {
+        anyhow::bail!("storage does not support source evidence")
+    }
     /// Publishes accepted AND derivations and their checkpoint atomically. A successful
     /// version replay retires the pair's old justifications in the same transaction.
     /// Counts new and unchanged derivations; types and aliases are claims.
@@ -562,6 +574,9 @@ impl<S: Storage> Rastro<S> {
     pub fn add_source(&mut self, source: Source) -> Result<Source> {
         source.validate()?;
         host::check_source_options(&self.locations, &source, None)?;
+        if source.extract_commitments {
+            check_commitments_opt_in(&self.locations, &source)?;
+        }
         let _lock = self.locations.config_lock()?;
         self.config = Config::load(&self.locations)?;
         ensure!(
@@ -609,6 +624,36 @@ impl<S: Storage> Rastro<S> {
             )
         })
     }
+}
+
+/// The opt-in's capability check: a source added with `--extract-commitments` must bind an
+/// extractor that declares `conversation.turns`, so its threads can be made into turns at all.
+/// The connector's manifest names the extractor; a connector or extractor that isn't installed
+/// can't be checked, and the opt-in is refused rather than recorded unverifiable.
+fn check_commitments_opt_in(locations: &Locations, source: &Source) -> Result<()> {
+    let capability = rastro_plugin_sdk::CONVERSATION_TURNS;
+    let Some((connector, _)) = host::find(locations, &source.connector) else {
+        anyhow::bail!(
+            "connector {} is not installed; --extract-commitments needs its extractor to declare {capability}",
+            source.connector
+        );
+    };
+    let Some(extractor) = connector.default_extractor.as_deref() else {
+        anyhow::bail!(
+            "connector {} binds no extractor; --extract-commitments needs an extractor that declares {capability}",
+            source.connector
+        );
+    };
+    let Some((manifest, _)) = host::find(locations, extractor) else {
+        anyhow::bail!(
+            "extractor {extractor} is not installed; --extract-commitments needs it to declare {capability}"
+        );
+    };
+    anyhow::ensure!(
+        manifest.capabilities.iter().any(|c| c == capability),
+        "extractor {extractor} does not declare {capability}"
+    );
+    Ok(())
 }
 
 /// Connector-supplied text made safe for a terminal: control characters escaped, length bounded.

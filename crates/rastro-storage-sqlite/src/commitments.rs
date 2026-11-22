@@ -1,10 +1,10 @@
 //! The commitments list: every kind of source that has hypotheses, read as source-neutral
-//! entries. Meetings are the only kind today.
+//! entries: meetings and the chat threads of opted-in channel sources.
 use crate::{View, meeting, scoped};
 use anyhow::Result;
 use rastro_core::{
     Scope,
-    commitments::Source,
+    commitments::{Source, SourceKind},
     focus::LinearRead,
     meeting::StoredMeeting,
     queue::{KnownCommitment, Origin, Statement},
@@ -14,10 +14,25 @@ use std::collections::{BTreeMap, BTreeSet};
 
 /// Every source visible to `scopes` (empty: every scope), most recently captured first.
 pub(crate) fn sources(view: &View, scopes: &[Scope]) -> Result<Vec<Source>> {
-    Ok(loaded(view, scopes)?
-        .into_iter()
-        .map(|stored| stored.source())
-        .collect())
+    let conversations: Vec<(String, String)> = view
+        .0
+        .prepare("SELECT id, kind FROM conversation ORDER BY captured_at DESC, id")?
+        .query_map([], |row| Ok((row.get(0)?, row.get(1)?)))?
+        .collect::<Result<_, _>>()?;
+    let mut sources = Vec::new();
+    for (id, kind) in conversations {
+        let Some(stored) = meeting::load(view, &id, scopes)? else {
+            continue;
+        };
+        let mut source = stored.source();
+        source.kind = if kind == "chat" {
+            SourceKind::Chat
+        } else {
+            SourceKind::Meeting
+        };
+        sources.push(source);
+    }
+    Ok(sources)
 }
 
 /// The same sources, each with the time its content belongs to and the commitments observed

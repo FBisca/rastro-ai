@@ -78,7 +78,9 @@ fn complete_contract(mut template: TaskTemplate) -> Result<(TaskTemplate, String
     Ok((template, contract))
 }
 
-fn bundled_contract() -> (TaskTemplate, String) {
+/// The bundled meeting contract: the template and its saved declarations. Chat threads run
+/// through the same bundled template (the candidate shape and gates are source-neutral).
+pub(crate) fn bundled_contract() -> (TaskTemplate, String) {
     let template =
         TaskTemplate::parse(BUNDLED_TEMPLATE).expect("the bundled meeting template parses");
     complete_contract(template).expect("the bundled meeting contract is valid")
@@ -531,6 +533,8 @@ pub struct SessionTurn {
 #[derive(Clone, Debug)]
 pub struct RunRecord {
     pub meeting: MeetingRef,
+    /// What kind of conversation the run records: a meeting import or a chat thread extraction.
+    pub kind: crate::commitments::SourceKind,
     pub started_at: DateTime<Utc>,
     pub finished_at: DateTime<Utc>,
     pub state: RunState,
@@ -1184,6 +1188,7 @@ impl<S: Storage> Rastro<S> {
                 scope: request.scope.0.clone(),
                 captured_at: request.captured_at,
             },
+            kind: crate::commitments::SourceKind::Meeting,
             started_at,
             finished_at,
             state: RunState::Failed,
@@ -1332,6 +1337,7 @@ impl<S: Storage> Rastro<S> {
         let finished_at = crate::coverage::now()?;
         let mut record = RunRecord {
             meeting: recording.meeting.clone(),
+            kind: crate::commitments::SourceKind::Meeting,
             started_at,
             finished_at,
             state: RunState::Failed,

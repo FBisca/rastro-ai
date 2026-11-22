@@ -866,6 +866,19 @@ impl Storage for SqliteStorage {
         )?;
         rows.map(|row| row?.into_evidence(source)).collect()
     }
+    fn source_evidence(&self, source: &Source) -> Result<Vec<(i64, Evidence)>> {
+        let mut statement = self.connection.prepare(
+            "SELECT id, location, field, start, end, quote, trust_class, captured_at,
+             source_updated_at FROM (
+                 SELECT e.*, row_number() OVER (PARTITION BY e.location, e.field
+                     ORDER BY e.captured_at DESC, e.id DESC) AS newest
+                 FROM evidence e
+                 WHERE e.source = ?1 AND e.scope = ?2
+             ) WHERE newest = 1 ORDER BY captured_at, id",
+        )?;
+        let rows = statement.query_map(params![source.name, source.scope.0], observation)?;
+        rows.map(|row| row?.into_evidence(source)).collect()
+    }
     #[expect(
         clippy::too_many_lines,
         reason = "the claims, their justifications and the coverage they carry are written in one transaction, so the counts and the checkpoint come from the same commit"
@@ -1642,6 +1655,8 @@ impl Snapshot for View<'_> {
                             freshness_rule,
                             window_start: parse_time(window_start)?,
                             keep_original,
+                            // The opt-in lives in the config; a retained row replays claims only.
+                            extract_commitments: false,
                         },
                         extractor,
                     ))

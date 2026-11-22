@@ -80,6 +80,11 @@ pub struct SourceAddRequest {
     #[arg(long)]
     #[serde(default)]
     pub keep_original: bool,
+    /// Send the source's chat threads to the commitment adapter after each sync; the bound
+    /// extractor must declare `conversation.turns`.
+    #[arg(long)]
+    #[serde(default)]
+    pub extract_commitments: bool,
 }
 
 /// List the registered sources.
@@ -254,6 +259,7 @@ impl SourceAddRequest {
         source.selector = selector;
         source.freshness_rule = self.freshness_rule;
         source.keep_original = self.keep_original;
+        source.extract_commitments = self.extract_commitments;
         if let Some(start) = self.window_start {
             source.window_start = start.parse()?;
         }

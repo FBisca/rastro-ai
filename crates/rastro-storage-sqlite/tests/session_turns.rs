@@ -24,6 +24,7 @@ fn seed_run(storage: &mut SqliteStorage, meeting: &str, transcript: TranscriptKe
                 scope: "work".into(),
                 captured_at: time("2026-11-10T10:00:00Z"),
             },
+            kind: rastro_core::commitments::SourceKind::Meeting,
             started_at: time("2026-11-10T10:00:00Z"),
             finished_at: time("2026-11-10T10:01:00Z"),
             state: RunState::Failed,

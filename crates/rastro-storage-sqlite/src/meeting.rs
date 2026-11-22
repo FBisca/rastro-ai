@@ -378,9 +378,10 @@ pub(crate) fn record(connection: &mut Connection, run: &RunRecord) -> Result<i64
         }
         None => {
             transaction.execute(
-                "INSERT INTO conversation (id, scope, captured_at, created_at) VALUES (?1, ?2, ?3, ?4)",
+                "INSERT INTO conversation (id, kind, scope, captured_at, created_at) VALUES (?1, ?2, ?3, ?4, ?5)",
                 params![
                     id,
+                    run.kind.as_str(),
                     run.meeting.scope,
                     stamp(run.meeting.captured_at),
                     stamp(run.finished_at)
