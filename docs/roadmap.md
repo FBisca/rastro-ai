@@ -90,6 +90,8 @@ Status: `todo` · `planning` · `doing` · `done`
 **Also shipped:** the published connector protocol schema and `rastro plugin check`, a part of slice 15 (#249, #251).
 
 ## Parking lot
+Nothing here is decided or scheduled. A decision file wins over any line here.
+
 - Kill rule and duplicate/stale rate: the usefulness proposal engine (narrow/slow/remove after W low weeks) and per-plugin quality counters, once slice 9's usefulness data accumulates (`decisions/learning.md`, deferred 2026-11-20).
 - Trust spreading to wider cells: propose widening a cell once actions carry person, project, source or channel contexts (`decisions/learning.md` §8, deferred 2026-11-20).
 - Usefulness for views and notification types: measured when their surfaces land in slices 10–11 (deferred from slice 9, 2026-11-20).
@@ -97,7 +99,6 @@ Status: `todo` · `planning` · `doing` · `done`
 - Windows support.
 - Optional agent-runtime adapter for owners already running the fleet; default agent adapters are thin CLI drivers over a shared SDK (`decisions/plugins.md` §36, amended 2026-11-20).
 - Commitments from GitHub and Linear comments: the slice-5 extractor bound to those sources, once their connectors read comments.
-- Mail through the work companion, once chat commitments prove useful. Meetings already shipped as slice 5's first source (`specs/meetings.md`, `adr/0011`): a local transcript import, not a work-companion integration.
-- A versioned structured read contract from the work companion (asked of its maintainers), then a generic MCP bridge with private mapping packs.
-- Agentic connectors (an agent chooses what to read), first for online research. Amends plugins §13 and needs a read broker that constrains tools, scopes and arguments; evidence stays what the broker captured, and "empty" only comes from deterministic reads.
+- Mail handed over by the owner message by message, never synced (`decisions/plugins.md` §57, 2026-11-22), once chat commitments prove useful. Meetings already shipped as slice 5's first source (`specs/meetings.md`, `adr/0011`): a local transcript import, not a work-companion integration.
+- Agentic connectors (an agent chooses what to read), first for online research. Would need an amendment to plugins §13, which stands until then, and a read broker that constrains tools, scopes and arguments; evidence stays what the broker captured, and "empty" only comes from deterministic reads.
 - Open questions in `open-questions.md` get decided inside the slice that first needs them.
