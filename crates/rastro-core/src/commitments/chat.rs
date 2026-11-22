@@ -7,8 +7,9 @@
 //! conversation. The core asks the source's bound extractor for the thread's turns over
 //! `conversation.turns`, sends them through the bundled template to the configured agent tool
 //! adapter, and records the run as a conversation of kind `chat`, named by the channel source
-//! and the thread's start ts. A thread already recorded is left alone; a failed run is recorded
-//! with its cause, so the list names the gap and the last good results stay.
+//! and the thread's start ts. A thread whose latest run succeeded is left alone; one whose
+//! latest run failed is extracted again, and a failed run is recorded with its cause, so the
+//! list names the gap and the last good results stay.
 //!
 //! The owner is the account their Person holds: the judgment names that account as the owner
 //! speaker, and a party it names maps to the owner's identity. Every other speaker stays the
@@ -311,12 +312,13 @@ fn record_of(
 }
 
 impl<S: Storage> Rastro<S> {
-    /// Extracts the opted-in source's new threads: each thread with no conversation recorded
-    /// yet is asked of the bound extractor, judged through the bundled template, and recorded
-    /// as a `chat` conversation named `<source>/<thread ts>`. A thread already recorded is left
-    /// alone; a thread whose run fails keeps its failed run, so the list names the gap. Returns
-    /// the threads this pass recorded, in extraction order. `Err` is a storage failure that
-    /// stopped the pass; a single thread's failure never stops the next.
+    /// Extracts the opted-in source's new threads: each thread whose latest run has not
+    /// succeeded is asked of the bound extractor, judged through the bundled template, and
+    /// recorded as a `chat` conversation named `<source>/<thread ts>`. A thread whose latest
+    /// run succeeded is left alone; one whose latest run failed is extracted again, and a
+    /// failed run keeps its cause, so the list names the gap and the last good results stay.
+    /// Returns the threads this pass recorded, in extraction order. `Err` is a storage failure
+    /// that stopped the pass; a single thread's failure never stops the next.
     pub fn extract_chat_threads(&mut self, source: &Source) -> Result<Vec<String>> {
         let Some(extractor) = host::find(&self.locations, &source.connector)
             .and_then(|(manifest, _)| manifest.default_extractor.clone())
@@ -335,7 +337,9 @@ impl<S: Storage> Rastro<S> {
         for thread in threads(&evidence) {
             let id = format!("{}/{}", source.name, thread.ts);
             let recorded = self.storage.snapshot(|view| view.meeting(&id, &[]))?;
-            if recorded.is_some() {
+            // A thread whose latest run succeeded is left alone; one whose latest run failed
+            // is extracted again, so a failed first run never buries it.
+            if recorded.is_some_and(|stored| stored.latest.state == RunState::Succeeded) {
                 continue;
             }
             self.extract_thread(source, &extractor, &id, &thread, &records)?;
@@ -538,7 +542,8 @@ mod tests {
         )
     }
 
-    /// spec: A chat source's threads reach the adapter only after its opt-in
+    /// A thread is a stored start message with at least one reply; a message with no replies
+    /// and a reply whose start was never stored are no thread (decisions D2).
     #[test]
     fn a_thread_is_a_stored_start_message_with_at_least_one_reply() {
         let evidence = vec![

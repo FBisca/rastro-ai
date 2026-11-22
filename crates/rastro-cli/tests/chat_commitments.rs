@@ -417,3 +417,54 @@ fn an_opt_in_whose_extractor_lacks_turns_is_refused_and_records_nothing() {
     let commitments = env.ok(&["commitments"]);
     assert_eq!(commitments["sources"], json!([]), "{commitments}");
 }
+
+/// A thread whose first run failed is extracted again on a later tick: the failed run never
+/// buries it. The first tick has no adapter configured; once the owner configures one, the
+/// next tick sends the thread and the list shows its hypotheses.
+// spec: A chat source's threads reach the adapter only after its opt-in
+#[test]
+fn a_thread_whose_first_run_failed_is_extracted_again() {
+    let env = Env::new();
+    // No adapter configured yet.
+    fs::write(env.path("config/config.toml"), "").unwrap();
+    env.ok(&[
+        "source",
+        "add",
+        "eng",
+        "--connector",
+        "test",
+        "--scope",
+        "work",
+        "--extract-commitments",
+    ]);
+    env.ok(&["sync", "eng"]);
+    env.tick();
+    assert_eq!(env.launches(), 0);
+    let list = env.ok(&["commitments"]);
+    let sources = list["sources"].as_array().unwrap();
+    assert_eq!(sources.len(), 1, "{list}");
+    assert_eq!(sources[0]["kind"], json!("chat"));
+    assert_eq!(sources[0]["extraction"]["state"], json!("failed"));
+    assert_eq!(
+        sources[0]["extraction"]["cause"],
+        json!("extractor_unconfigured")
+    );
+    // The owner configures the adapter; the next tick retries the failed thread. The source
+    // stays registered: the adapter table joins the config the source add wrote.
+    let mut config = fs::read_to_string(env.path("config/config.toml")).unwrap();
+    config.push_str("\n[commitment_adapter]\nplugin = \"test-adapter\"\n");
+    fs::write(env.path("config/config.toml"), config).unwrap();
+    env.tick();
+    assert_eq!(
+        env.launches(),
+        1,
+        "the failed thread was never extracted again: {}",
+        env.ok(&["commitments"])
+    );
+    let list = env.ok(&["commitments"]);
+    let sources = list["sources"].as_array().unwrap();
+    assert_eq!(sources.len(), 1, "{list}");
+    assert_eq!(sources[0]["name"], json!(format!("eng/{THREAD_TS}")));
+    assert_eq!(sources[0]["extraction"]["state"], json!("succeeded"));
+    assert_eq!(sources[0]["hypotheses"].as_array().unwrap().len(), 2);
+}
