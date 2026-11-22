@@ -185,3 +185,6 @@ Architecture: `../adr/0010-identity-and-owner-intents.md`. Plan: `../plans/2026-
     - **State.** Open or closed is a claim you own. Rastro proposes closing when every anchor is closed and nothing new arrived for a set time, and proposes reopening when a new item matches a closed topic. A closed issue alone never closes a topic (a closed issue may be unresolved).
     - **Finding a topic grows with the number of topics.** Tier 3 narrowing first sends the most recently updated open and recently closed topics; with no match it expands once to a wider set. A later version may add categories above topics, so narrowing picks a category before a topic.
     - **Duplicates.** Two topics on one problem merge as Persons do (`rastro:same_as`, undoable); a split moves members from one topic to another.
+
+## Added 2026-11-22 (owner decision: retention default)
+81. **The full original stays the default, and forgetting comes before wider reach (clarifies §3).** A source keeps its full original unless the owner picks a pointer plus the span (§3); nothing changes for the sources read today. Evidence is kept until keeping becomes a problem, because keeping can be undone later and deleting can't. Forgetting (§14, slice 14) lands before whichever comes first: a source that holds other people's private messages, or a second owner installing Rastro.
