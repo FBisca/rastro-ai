@@ -159,6 +159,31 @@ A Linear connection with no API key SHALL fail with an auth failure shown in cov
 - WHEN no Linear API key is available
 - THEN the pair fails with an auth failure shown in coverage, and the key never appears in the database or config
 
+### Requirement: The Slack token owner holds me
+When the owner's Person exists, a Slack sync that records the token owner SHALL hold that Slack account by the owner's Person with a token-owner justification.
+
+#### Scenario: a Slack sync records the token owner
+- WHEN `me` exists and a Slack source syncs against the scripted API
+- THEN the token owner's `slack:user/<id>` account is `held_by` `me` with a token-owner justification
+
+### Requirement: A Slack sync records accounts with their names
+A Slack source SHALL be bound to the Slack extractor, and each author it records SHALL become a `slack:user/<id>` entity typed `slack:Account` with its name and display-name aliases.
+
+#### Scenario: authors become accounts
+- WHEN a Slack source syncs messages from two authors against the scripted API
+- THEN each author is a `slack:user/<id>` entity typed `slack:Account` with its name and display-name aliases
+
+### Requirement: A Slack bot never links
+A Slack author recorded as a bot SHALL be typed `slack:Bot`, and SHALL never be held by a Person or offered as a link candidate.
+
+#### Scenario: a bot author
+- WHEN a Slack sync records an author whose profile says it is a bot
+- THEN the account is typed `slack:Bot` and no Person holds it
+
+#### Scenario: a bot that shares a name
+- WHEN a Slack bot's folded name equals the name of another source's account
+- THEN no link candidate is offered for the pair
+
 ### Requirement: One folded name makes a candidate
 A GitHub account and a Linear account whose full names are equal after case and accent folding, and that aren't linked to one Person, SHALL appear in `rastro identity candidates` as a pair with reason `same name`.
 

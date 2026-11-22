@@ -1,0 +1,24 @@
+[package]
+name = "rastro-extractor-slack"
+version.workspace = true
+edition.workspace = true
+publish = false
+
+[package.metadata.rastro]
+role = "plugin"
+
+[dependencies]
+anyhow.workspace = true
+rastro-plugin-sdk = { path = "../rastro-plugin-sdk" }
+serde_json.workspace = true
+
+[dev-dependencies]
+chrono.workspace = true
+rusqlite = { version = "0.38", features = ["bundled"] }
+serde_json.workspace = true
+tempfile = "3"
+tiny_http = "0.12"
+toml.workspace = true
+
+[lints]
+workspace = true
