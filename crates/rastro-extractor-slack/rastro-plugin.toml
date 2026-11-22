@@ -1,0 +1,35 @@
+id = "rastro-extractor-slack"
+name = "Rastro Slack extractor"
+version = "0.1.0"
+author = "Rastro"
+# The `slack` vocabulary ships in this package, next to the extractor that uses it.
+kinds = ["extractor", "vocabulary"]
+protocol = 1
+command = "rastro-extractor-slack"
+triggers = []
+dependencies = ["slack"]
+vocabulary = "vocabulary.toml"
+
+# Every rule reads structured fields of one user or viewer observation, at a location that is
+# that record's canonical identifier; none reads a message's text. See src/main.rs.
+[[extraction_rules]]
+id = "account"
+deterministic = true
+
+[[extraction_rules]]
+id = "token-owner"
+deterministic = true
+
+[[extraction_rules]]
+id = "name"
+deterministic = true
+
+[[extraction_rules]]
+id = "display-name"
+deterministic = true
+
+[permissions]
+submit = []
+scopes = ["personal", "work"]
+env = []
+actions = []

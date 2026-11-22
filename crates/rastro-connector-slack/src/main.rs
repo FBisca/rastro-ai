@@ -9,7 +9,8 @@
 //! - a message at `slack:message/<channel>/<ts>`: `/text` as untrusted content, stored raw with
 //!   its mention markup; `/user`, `/thread_ts`, `/subtype` and `/edited/ts` structured. The
 //!   update time is the edit time when the message was edited, else the post time;
-//! - an author at `slack:user/<id>`: `/id`, `/is_bot`, `/name` and `/real_name` structured;
+//! - an author at `slack:user/<id>`: `/id`, `/is_bot`, `/name`, `/real_name` and
+//!   `/profile/display_name` structured;
 //! - whose token it is, at `slack:viewer`: `/id`. One slot, so another token's owner replaces it.
 //!
 //! The conversation is looked up before any history read: a channel shared outside the
@@ -339,6 +340,12 @@ impl<R: BufRead, W: Write> Run<'_, R, W> {
             self.submit(&record, "/is_bot", is_bot.as_deref(), STRUCTURED)?;
             self.submit(&record, "/name", text(user, "/name"), STRUCTURED)?;
             self.submit(&record, "/real_name", text(user, "/real_name"), STRUCTURED)?;
+            self.submit(
+                &record,
+                "/profile/display_name",
+                text(user, "/profile/display_name"),
+                STRUCTURED,
+            )?;
         }
         Ok(())
     }

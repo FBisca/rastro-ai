@@ -1,0 +1,51 @@
+# The `slack` vocabulary: what Rastro may say about a Slack workspace, as read from Slack.
+#
+# Every type and alias kind says what it means, what it isn't, examples and counter-examples,
+# and the evidence it needs. The core refuses a claim outside this file.
+#
+# Canonical identifiers (decisions/vocabulary.md §26): a workspace user is `slack:user/<id>`,
+# the record's own Slack id — `U` (or `W` on Enterprise Grid) and uppercase alphanumerics.
+#
+# Accounts (decisions/vocabulary.md §27): `slack:Account` names the core's `rastro:Account` as
+# its supertype, so only it may be held by a Person. A bot user (`slack:Bot`) may not.
+#
+# The namespace is owner-approved (decisions/plugins.md §47, §55).
+namespace = "slack"
+version = "0.1.0"
+# The Slack extractor claims only types and aliases; it reads no field a predicate would hold.
+predicates = []
+
+[[types]]
+id = "slack:Account"
+supertype = "rastro:Account"
+definition = "A Slack workspace user that is not a bot, identified by its Slack id, whatever its name, real name or display name is now."
+not_to_confuse_with = "A Person: an account doesn't prove a human, and one human may hold accounts in several sources (an account is linked to a Person, never merged into one). Not a channel, nor a bot acting without a user, which is a slack:Bot."
+examples = ["slack:user/U0ANA, name ana.silva, real name Ana Silva"]
+counter_examples = ["the name `Ana Silva` on its own (an alias, not the account)", "a name written in a message", "a GitHub account with the same name", "a user Slack flags `is_bot` true (a slack:Bot)"]
+evidence_requirement = "A structured `/id` observation at the location `slack:user/<id>` whose quote is that id, with no `/is_bot` observation there quoting `true`."
+
+[[types]]
+id = "slack:Bot"
+definition = "A Slack bot user, one Slack flags `is_bot`, identified by its Slack id."
+not_to_confuse_with = "A slack:Account a human uses to run scripts: only Slack's own `is_bot` flag makes a bot. Never held by a Person, never an identity candidate."
+examples = ["slack:user/U0BOT, `/is_bot` true, name Deploy Bot"]
+counter_examples = ["a user whose name ends in Bot but whose `/is_bot` is false", "a message saying an integration posted it"]
+evidence_requirement = "A structured `/id` observation at the location `slack:user/<id>` whose quote is that id, with the latest `/is_bot` observation there quoting `true`."
+
+[[aliases]]
+kind = "name"
+definition = "A name Slack lists for a workspace user or bot when it was observed: its username (`name`) and its full name (`real_name`). A change adds a name; the old one stays an alias of the same account or bot."
+not_to_confuse_with = "The display name (a chosen short name, its own alias kind); a Person's name (`rastro:name/…`, set by the owner); proof that two accounts are one human (names never merge)."
+examples = ["Ana Silva for slack:user/U0ANA", "ana.silva for slack:user/U0ANA", "Deploy Bot for the bot slack:user/U0BOT"]
+counter_examples = ["`Ana` as a display name (a display_name alias)", "a name written in a message"]
+evidence_requirement = "A structured `/name` or `/real_name` observation, with `/id` at the same location."
+domain = ["slack:Account", "slack:Bot"]
+
+[[aliases]]
+kind = "display_name"
+definition = "The display name a Slack workspace user or bot chose (`profile/display_name`) when it was observed. A change adds a display name; the old one stays an alias of the same account or bot."
+not_to_confuse_with = "The account's identity (its Slack id); the username or full name (a `name` alias); a Person's name; proof that two accounts are one human. Never compared across sources as a link signal."
+examples = ["Ana for slack:user/U0ANA"]
+counter_examples = ["`ana.silva`, the username (a name alias)", "a display name written in a message"]
+evidence_requirement = "A structured `/profile/display_name` observation, with `/id` at the same location."
+domain = ["slack:Account", "slack:Bot"]

@@ -7,6 +7,8 @@ protocol = 1
 command = "rastro-connector-slack"
 triggers = []
 dependencies = []
+# Every Slack source is bound to this extractor.
+default_extractor = "rastro-extractor-slack"
 
 [permissions]
 # A message, its author, and whose token it is.
