@@ -61,7 +61,7 @@ Variants:
 
 ## Goals / Non-Goals
 Goals: a deterministic, cited focus read; CLI/MCP parity from one schema; a personal workbench FOCUS card; a real switch day.
-Non-Goals: no mail/calendar/vault/GitHub sources (D5, D6, D8); no notifications or interruption budget (slice 11); no Act or writes — focus is read-only (D4); no model-driven ranking; no vault renderer (slice 10 deferred); no companion MCP bridge (D8, parked).
+Non-Goals: no mail/calendar/vault/GitHub sources (D5, D6, D8); no notifications or interruption budget (slice 11); no Act or writes — focus is read-only (D4); no model-driven ranking; no vault renderer (slice 10 deferred); no bridge to an external MCP server (D8, parked).
 
 ## Decisions
 D1 Use case = focus direction, over fleet-replacement parity: the owner's words — "I'm not organized… I have no routine", "I know exactly where to put my focus" (owner interview, 2026-11-18).
@@ -71,7 +71,7 @@ D4 MCP stays read-only; in-session decisions run the existing CLI writes via the
 D5 Focus v1 sources = Linear + meeting commitments + queue; GitHub out: owner "github doesn't bring much value today, no issue or discussions useful there" (interview).
 D6 Vault is not a focus source: owner calls it unorganized annotations "growing exponentially… not being used for weeks", candidate for deletion (interview). Slice 10's Owner notes connector is deferred until the vault is curated; vault cleanup is a separate effort.
 D7 Proposals appear in focus as a count only, over inline content: owner Q4 "a"; 13 of 14 last-switch-day proposals were outdated (queue.md switch day).
-D8 Companion MCP bridge parked, over building it now: owner "heritage companion responses are text not json, it's fcked anyway" (interview). No structured read contract exists; focus v1 has no calendar/mail.
+D8 Bridge to an external MCP server parked, over building it now: the owner said the server's responses are text, not JSON (interview). No structured read contract exists; focus v1 has no calendar/mail.
 D9 Nothing is built before a visual prototype the owner agrees to, over plan-then-build: owner Q2 "we don't build anything without a visual prototype to be agreed on before" (interview).
 D10 Ranking order = (1) overdue/due-today, (2) people waiting on you, (3) in-progress next action; one recommended focus + up to 3 needs-you, cited, deterministic: owner Q3 "yes" (interview).
 D11 Decisions in-session/terminal is provisional, over a permanent choice: owner Q4 "for now yes until we find usefulness" (interview); revisit with usefulness data (slice 9).
