@@ -277,3 +277,28 @@ Two accounts refused to each other that each qualify for an automatic link to on
 #### Scenario: two cannot-linked accounts qualify over separate intervals
 - WHEN two cannot-linked accounts each qualify for an automatic link to one Person over non-overlapping intervals
 - THEN each holds that Person over its own interval, and over any overlap neither does
+
+### Requirement: The Slack token owner holds me
+When the owner's Person exists, a Slack sync that records the token owner SHALL hold that Slack account by the owner's Person with a token-owner justification.
+
+#### Scenario: a Slack sync records the token owner
+- WHEN `me` exists and a Slack source syncs against the scripted API
+- THEN the token owner's `slack:user/<id>` account is `held_by` `me` with a token-owner justification
+
+### Requirement: A Slack sync records accounts with their names
+A Slack source SHALL be bound to the Slack extractor, and each author it records SHALL become a `slack:user/<id>` entity typed `slack:Account` with its name and display-name aliases.
+
+#### Scenario: authors become accounts
+- WHEN a Slack source syncs messages from two authors against the scripted API
+- THEN each author is a `slack:user/<id>` entity typed `slack:Account` with its name and display-name aliases
+
+### Requirement: A Slack bot never links
+A Slack author recorded as a bot SHALL be typed `slack:Bot`, and SHALL never be held by a Person or offered as a link candidate.
+
+#### Scenario: a bot author
+- WHEN a Slack sync records an author whose profile says it is a bot
+- THEN the account is typed `slack:Bot` and no Person holds it
+
+#### Scenario: a bot that shares a name
+- WHEN a Slack bot's folded name equals the name of another source's account
+- THEN no link candidate is offered for the pair
