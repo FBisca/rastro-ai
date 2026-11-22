@@ -51,7 +51,7 @@ fn stored_evidence_rejects_updates_and_deletes() {
                 row.get(0)
             })
             .unwrap();
-        assert_eq!(version, 29);
+        assert_eq!(version, 30);
     }
 }
 
@@ -94,7 +94,7 @@ fn migrations_apply_once_in_timestamp_order_and_unknown_ones_are_refused() {
         .unwrap();
     connection.pragma_update(None, "user_version", 1).unwrap();
     SqliteStorage::open(&legacy).unwrap();
-    assert_eq!(names(&connection).len(), 29);
+    assert_eq!(names(&connection).len(), 30);
 }
 
 /// spec: Every migration applies once in timestamp order
@@ -1123,7 +1123,7 @@ fn S8_a_replay_checks_the_record_with_no_model_call_and_a_broken_record_fails_st
     rusqlite::Connection::open(env.database())
         .unwrap()
         .execute(
-            "UPDATE meeting_output SET candidates = replace(candidates, 'budget by Friday', 'budget by Never')",
+            "UPDATE conversation_output SET candidates = replace(candidates, 'budget by Friday', 'budget by Never')",
             [],
         )
         .unwrap();
@@ -1200,6 +1200,190 @@ fn S8_an_export_leaves_the_recorded_output_and_the_spans_out() {
     for derived in ["budget", "Friday", "roadmap"] {
         assert!(!text.contains(derived), "{derived} leaked: {text}");
     }
+}
+
+/// Opens the database a directory holds, with every migration applied.
+fn open_at(env: &recorded::Env, dir: &str) -> rastro_core::Rastro<SqliteStorage> {
+    let data = env.path(dir);
+    fs::create_dir_all(&data).unwrap();
+    rastro_core::Rastro::open(
+        rastro_core::Locations {
+            data: data.clone(),
+            config: env.path("config"),
+        },
+        SqliteStorage::open(&data.join("rastro.sqlite3")).unwrap(),
+    )
+    .unwrap()
+}
+
+/// A meeting imported before the move, as a pre-move database holds it: a real import runs on
+/// the current schema, and the rows it kept are copied into the old meeting tables of a database
+/// stopped before the move. Returns the directory holding that database and the list the import
+/// read — what the move must keep. With `failed_reimport`, a second import fails and leaves the
+/// first run's results stale.
+fn imported_before_the_move(
+    env: &recorded::Env,
+    failed_reimport: bool,
+) -> (String, serde_json::Value) {
+    use rastro_core::meeting::{ImportRequest, RunState};
+    let mut rastro = env.open();
+    env.import(&mut rastro, "weekly-1");
+    if failed_reimport {
+        // The quote the adapter proposes is no longer in the transcript: the run fails and the
+        // first run's results stay, stale, with a couldn't-look coverage.
+        fs::write(
+            env.path("transcript.txt"),
+            "Alice: I'll send Bob the budget by Monday.\n\
+Bob: Thanks. I'll review it next week for you if the numbers are final.\n\
+Alice: Bob, can you share the roadmap?\n",
+        )
+        .unwrap();
+        let failed = rastro
+            .import_meeting(&ImportRequest {
+                meeting: "weekly-1".into(),
+                scope: Scope("work".into()),
+                captured_at: "2026-11-11T10:00:00Z".parse().unwrap(),
+                file: env.path("transcript.txt"),
+                owner_speaker: Some("Alice".into()),
+                speakers: Vec::new(),
+                retain_transcript: false,
+            })
+            .unwrap();
+        assert_eq!(failed.extraction.state, RunState::Failed, "{failed:?}");
+        assert!(failed.stale, "{failed:?}");
+    }
+    let list = serde_json::to_value(rastro.commitments(None, None).unwrap()).unwrap();
+    let source = env.database();
+    drop(rastro);
+
+    let before = before_migration("202611221000_conversation_store");
+    let before: Vec<(&str, &str)> = before
+        .iter()
+        .map(|(name, sql)| (name.as_str(), sql.as_str()))
+        .collect();
+    let data = env.path("before");
+    fs::create_dir_all(&data).unwrap();
+    let target = data.join("rastro.sqlite3");
+    drop(SqliteStorage::open_with(&target, &before).unwrap());
+    let from = Connection::open(&source).unwrap();
+    let to = Connection::open(&target).unwrap();
+    to.execute_batch("PRAGMA foreign_keys = ON").unwrap();
+    // Parents first, so every copied row names a row that is already there. The kind column is
+    // the move's own; the pre-move schema has none.
+    for (new, old) in [
+        ("conversation", "meeting"),
+        ("conversation_run", "meeting_run"),
+        ("conversation_hypothesis", "meeting_hypothesis"),
+        ("conversation_output", "meeting_output"),
+        ("conversation_span", "meeting_span"),
+        ("conversation_speaker", "meeting_speaker"),
+        ("conversation_contract", "meeting_contract"),
+        ("conversation_transcript", "meeting_transcript"),
+        ("session_turn", "session_turn"),
+    ] {
+        let mut statement = from.prepare(&format!("SELECT * FROM {new}")).unwrap();
+        let columns: Vec<String> = statement
+            .column_names()
+            .iter()
+            .map(|name| name.to_string())
+            .collect();
+        let mut rows = statement.query([]).unwrap();
+        while let Some(row) = rows.next().unwrap() {
+            let mut names: Vec<&str> = Vec::new();
+            let mut values: Vec<rusqlite::types::Value> = Vec::new();
+            for (index, column) in columns.iter().enumerate() {
+                match column.as_str() {
+                    "kind" => continue,
+                    "conversation_id" => names.push("meeting_id"),
+                    name => names.push(name),
+                }
+                values.push(row.get(index).unwrap());
+            }
+            let sql = format!(
+                "INSERT INTO {old} ({}) VALUES ({})",
+                names.join(", "),
+                vec!["?"; names.len()].join(", ")
+            );
+            to.execute(&sql, rusqlite::params_from_iter(values.iter()))
+                .unwrap();
+        }
+    }
+    drop(to);
+    drop(from);
+    ("before".into(), list)
+}
+
+/// The meeting lives in the conversation store as kind `meeting`, the old meeting table is gone,
+/// and every key still holds: the move happened, not just a compatible read.
+fn assert_moved_to_the_conversation_store(path: &std::path::Path, meeting: &str) {
+    let connection = Connection::open(path).unwrap();
+    let kind: String = connection
+        .query_row(
+            "SELECT kind FROM conversation WHERE id = ?1",
+            [meeting],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(kind, "meeting");
+    let old: i64 = connection
+        .query_row(
+            "SELECT count(*) FROM sqlite_master WHERE type = 'table' AND name = 'meeting'",
+            [],
+            |r| r.get(0),
+        )
+        .unwrap();
+    assert_eq!(old, 0, "the move left the old meeting table behind");
+    let broken: i64 = connection
+        .query_row("SELECT count(*) FROM pragma_foreign_key_check", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(broken, 0, "the move broke a key");
+}
+
+/// A meeting imported before the move keeps its hypotheses, stale flag and coverage when the
+/// database is migrated to the conversation store: the list reads exactly as it did before.
+// spec: Meetings keep their behaviour in the conversation store
+#[test]
+fn a_meeting_imported_before_the_move_keeps_its_list_after_the_migration() {
+    let env = recorded::Env::new();
+    let (dir, expected) = imported_before_the_move(&env, true);
+    let mut rastro = open_at(&env, &dir);
+    assert_moved_to_the_conversation_store(&env.path(&dir).join("rastro.sqlite3"), "weekly-1");
+    let after = serde_json::to_value(rastro.commitments(None, None).unwrap()).unwrap();
+    assert_eq!(expected, after, "the migration changed the meeting's list");
+}
+
+/// A meeting imported before the move replays after the migration with no adapter call: the
+/// record moved with it, and the replay keeps the hypotheses.
+// spec: Meetings keep their behaviour in the conversation store
+#[test]
+fn a_meeting_imported_before_the_move_replays_after_the_migration() {
+    use rastro_core::meeting::RunState;
+    let env = recorded::Env::new();
+    let (dir, expected) = imported_before_the_move(&env, false);
+    assert_eq!(env.calls(), 1);
+    // The adapter is gone: the replay must need no model call.
+    fs::remove_file(env.path("config/plugins/test-adapter/adapter")).unwrap();
+
+    let mut rastro = open_at(&env, &dir);
+    assert_moved_to_the_conversation_store(&env.path(&dir).join("rastro.sqlite3"), "weekly-1");
+    let replayed = rastro.replay_commitments(Some("weekly-1")).unwrap();
+    assert_eq!(replayed.sources.len(), 1, "{replayed:?}");
+    let source = &replayed.sources[0];
+    assert_eq!(source.state, RunState::Succeeded, "{source:?}");
+    assert!(!source.stale, "{source:?}");
+    assert_eq!(env.calls(), 1, "the replay called the adapter");
+    let after = rastro.commitments(None, None).unwrap();
+    assert_eq!(
+        serde_json::to_value(&after.sources[0].hypotheses).unwrap(),
+        expected["sources"][0]["hypotheses"],
+        "the replay changed the hypotheses"
+    );
+    assert_eq!(
+        after.sources[0].extraction.replay_of.as_deref(),
+        expected["sources"][0]["extraction"]["run"].as_str()
+    );
 }
 
 /// The session-turn rename keeps every recorded turn: a database written before the rename

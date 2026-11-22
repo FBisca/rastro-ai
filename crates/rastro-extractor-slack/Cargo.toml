@@ -9,6 +9,7 @@ role = "plugin"
 
 [dependencies]
 anyhow.workspace = true
+chrono.workspace = true
 rastro-plugin-sdk = { path = "../rastro-plugin-sdk" }
 serde_json.workspace = true
 

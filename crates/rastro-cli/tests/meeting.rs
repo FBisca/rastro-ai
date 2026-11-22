@@ -737,7 +737,7 @@ fn a_corrected_quote_on_a_retry_turn_keeps_only_the_final_output_as_evidence() {
         "both turns of the session are recorded"
     );
     let recorded: String = database(&env)
-        .query_row("SELECT candidates FROM meeting_output", [], |row| {
+        .query_row("SELECT candidates FROM conversation_output", [], |row| {
             row.get(0)
         })
         .unwrap();
@@ -746,7 +746,7 @@ fn a_corrected_quote_on_a_retry_turn_keeps_only_the_final_output_as_evidence() {
         json!(kept_answer)
     );
     let spans: Vec<String> = database(&env)
-        .prepare("SELECT text FROM meeting_span WHERE text != '' ORDER BY turn")
+        .prepare("SELECT text FROM conversation_span WHERE text != '' ORDER BY turn")
         .unwrap()
         .query_map([], |row| row.get(0))
         .unwrap()
@@ -1169,7 +1169,7 @@ fn S5_reimport_with_changed_text_marks_last_good_stale_on_failure_and_replaces_o
     let read = env.read();
     assert_eq!(read["stale"], true);
     assert_eq!(read["hypotheses"], first["hypotheses"]);
-    assert_eq!(rows(&env, "meeting"), 1);
+    assert_eq!(rows(&env, "conversation"), 1);
     // The human read carries the stale warning as a field of the meeting block, naming the run
     // and its finished time at minute precision.
     let human = env.human(&["meeting", "commitments", "weekly-1"]);
@@ -1202,9 +1202,9 @@ fn S5_reimport_with_changed_text_marks_last_good_stale_on_failure_and_replaces_o
     assert_eq!(second["hypotheses"][0]["stated_date"]["text"], "by Monday");
     assert_eq!(second["hypotheses"].as_array().unwrap().len(), 3);
     assert_eq!(env.read()["hypotheses"], second["hypotheses"]);
-    assert_eq!(rows(&env, "meeting"), 1);
-    assert_eq!(rows(&env, "meeting_hypothesis"), 3);
-    assert_eq!(rows(&env, "meeting_output"), 1);
+    assert_eq!(rows(&env, "conversation"), 1);
+    assert_eq!(rows(&env, "conversation_hypothesis"), 3);
+    assert_eq!(rows(&env, "conversation_output"), 1);
 }
 
 /// S6: replay re-derives the results from the recorded output with no model call, and forgetting
@@ -1269,29 +1269,33 @@ fn S6_replay_needs_no_model_call_and_forgetting_removes_what_was_retained() {
         env.ok(&["meeting", "replay", "weekly-1"])["hypotheses"],
         imported["hypotheses"]
     );
-    assert_eq!(rows(&env, "meeting_hypothesis"), 6);
+    assert_eq!(rows(&env, "conversation_hypothesis"), 6);
 
     let forgotten = env.ok(&["meeting", "forget", "weekly-1"]);
     assert_eq!(forgotten["meeting"], "weekly-1");
     assert_eq!(forgotten["removed"]["hypotheses"], 3);
     assert!(forgotten["removed"]["spans"].as_i64().unwrap() > 0);
     assert_eq!(forgotten["removed"]["recorded_output"], 1);
-    let of_runs = "run_id IN (SELECT id FROM meeting_run WHERE meeting_id = 'weekly-1')";
+    let of_runs = "run_id IN (SELECT id FROM conversation_run WHERE conversation_id = 'weekly-1')";
     for table in [
-        "meeting_hypothesis",
-        "meeting_span",
-        "meeting_output",
-        "meeting_speaker",
+        "conversation_hypothesis",
+        "conversation_span",
+        "conversation_output",
+        "conversation_speaker",
     ] {
         assert_eq!(count_where(&env, table, of_runs), 0, "{table}");
     }
     assert_eq!(
-        count_where(&env, "meeting_run", "meeting_id = 'weekly-1'"),
+        count_where(&env, "conversation_run", "conversation_id = 'weekly-1'"),
         0
     );
-    assert_eq!(count_where(&env, "meeting", "id = 'weekly-1'"), 0);
+    assert_eq!(count_where(&env, "conversation", "id = 'weekly-1'"), 0);
     assert_eq!(
-        count_where(&env, "meeting_transcript", "meeting_id = 'weekly-1'"),
+        count_where(
+            &env,
+            "conversation_transcript",
+            "conversation_id = 'weekly-1'"
+        ),
         0
     );
     assert!(!holds(&stored_bytes(&env), "I'll update the Q4 plan."));
@@ -1315,7 +1319,7 @@ fn S6_replay_without_recorded_output_is_an_error_and_records_nothing() {
     let (ok, failed) = env.import(&["--owner-speaker", "Alice"]);
     assert!(!ok);
     assert_eq!(failed["extraction"]["state"], "failed");
-    let runs = rows(&env, "meeting_run");
+    let runs = rows(&env, "conversation_run");
     let (ok, error) = env.run(&["meeting", "replay", "weekly-1"]);
     assert!(!ok);
     assert!(
@@ -1324,7 +1328,7 @@ fn S6_replay_without_recorded_output_is_an_error_and_records_nothing() {
             .unwrap()
             .contains("nothing recorded")
     );
-    assert_eq!(rows(&env, "meeting_run"), runs);
+    assert_eq!(rows(&env, "conversation_run"), runs);
 }
 
 /// S7: by default the supporting spans and the recorded output are kept for replay and the full
@@ -1336,9 +1340,9 @@ fn S6_replay_without_recorded_output_is_an_error_and_records_nothing() {
 fn S7_default_import_retains_spans_and_output_but_not_the_transcript() {
     let env = Env::new();
     env.import_ok(&["--owner-speaker", "Alice"]);
-    assert_eq!(rows(&env, "meeting_transcript"), 0);
-    assert_eq!(rows(&env, "meeting_output"), 1);
-    assert!(rows(&env, "meeting_span") >= 3);
+    assert_eq!(rows(&env, "conversation_transcript"), 0);
+    assert_eq!(rows(&env, "conversation_output"), 1);
+    assert!(rows(&env, "conversation_span") >= 3);
     let bytes = stored_bytes(&env);
     // Cited turns are kept as spans; a turn nothing cites is not a span, and the full transcript
     // is not retained. The session history records the request the core sent (every turn) as the
@@ -1347,7 +1351,7 @@ fn S7_default_import_retains_spans_and_output_but_not_the_transcript() {
     assert_eq!(
         count_where(
             &env,
-            "meeting_span",
+            "conversation_span",
             "text LIKE '%I will email Dave the notes tomorrow%'"
         ),
         0
@@ -1355,7 +1359,7 @@ fn S7_default_import_retains_spans_and_output_but_not_the_transcript() {
     assert_eq!(
         count_where(
             &env,
-            "meeting_span",
+            "conversation_span",
             "text LIKE '%Thanks. I''ll review it next week%'"
         ),
         0
@@ -1385,7 +1389,7 @@ fn S7_default_import_retains_spans_and_output_but_not_the_transcript() {
         2,
         "the run recorded no history to leave out"
     );
-    assert_eq!(rows(&env, "meeting_transcript"), 1);
+    assert_eq!(rows(&env, "conversation_transcript"), 1);
     assert!(holds(
         &stored_bytes(&env),
         "I will email Dave the notes tomorrow"
@@ -1408,7 +1412,7 @@ fn S7_default_import_retains_spans_and_output_but_not_the_transcript() {
 
     // Importing again without the opt-in does not keep the earlier opt-in's text.
     env.import_ok(&["--owner-speaker", "Alice"]);
-    assert_eq!(rows(&env, "meeting_transcript"), 0);
+    assert_eq!(rows(&env, "conversation_transcript"), 0);
     assert_eq!(env.read()["transcript_retained"], false);
 }
 
@@ -1421,7 +1425,7 @@ fn S6_a_replay_that_no_longer_validates_fails_and_marks_the_results_stale() {
     let imported = env.import_ok(&["--owner-speaker", "Alice"]);
     database(&env)
         .execute(
-            "UPDATE meeting_output SET candidates = replace(candidates, 'budget by Friday', 'budget by Never')",
+            "UPDATE conversation_output SET candidates = replace(candidates, 'budget by Friday', 'budget by Never')",
             [],
         )
         .unwrap();
@@ -1592,7 +1596,7 @@ fn S1_a_commitments_hypothesis_keeps_its_kind_and_defaults_to_a_promise() {
     let database = rusqlite::Connection::open(env.path("data/rastro.sqlite3")).unwrap();
     database
         .execute(
-            "UPDATE meeting_output SET candidates = replace(candidates, '\"kind\":', '\"old\":')",
+            "UPDATE conversation_output SET candidates = replace(candidates, '\"kind\":', '\"old\":')",
             [],
         )
         .unwrap();
@@ -1727,13 +1731,15 @@ fn replay_uses_the_saved_contract_after_the_original_template_changed() {
     // The run's original contract differs from the current bundled default: it also excludes
     // every promise. This stands in for a template that has since changed or been uninstalled.
     let saved: String = database(&env)
-        .query_row("SELECT contract FROM meeting_contract", [], |r| r.get(0))
+        .query_row("SELECT contract FROM conversation_contract", [], |r| {
+            r.get(0)
+        })
         .unwrap();
     let changed = format!(
         "{saved}\n[[rules]]\nkind = \"equals\"\nfield = \"kind\"\nvalue = \"promise\"\ndisposition = \"exclude\"\n"
     );
     database(&env)
-        .execute("UPDATE meeting_contract SET contract = ?1", [changed])
+        .execute("UPDATE conversation_contract SET contract = ?1", [changed])
         .unwrap();
 
     // The adapter is gone; nothing may be sent to it.
@@ -1805,10 +1811,12 @@ fn replay_of_a_pre_contract_recording_ignores_the_selected_template() {
 
     // The first run's recording now predates contracts and kinds: no saved contract, no kind field.
     database(&env)
-        .execute("DELETE FROM meeting_contract", [])
+        .execute("DELETE FROM conversation_contract", [])
         .unwrap();
     let recorded: String = database(&env)
-        .query_row("SELECT candidates FROM meeting_output", [], |r| r.get(0))
+        .query_row("SELECT candidates FROM conversation_output", [], |r| {
+            r.get(0)
+        })
         .unwrap();
     let mut candidates: Vec<Value> = serde_json::from_str(&recorded).unwrap();
     for candidate in &mut candidates {
@@ -1816,7 +1824,7 @@ fn replay_of_a_pre_contract_recording_ignores_the_selected_template() {
     }
     database(&env)
         .execute(
-            "UPDATE meeting_output SET candidates = ?1",
+            "UPDATE conversation_output SET candidates = ?1",
             [serde_json::to_string(&candidates).unwrap()],
         )
         .unwrap();
@@ -1849,15 +1857,19 @@ fn replay_of_a_pre_contract_recording_ignores_the_selected_template() {
 fn forgetting_a_meeting_removes_its_saved_replay_contract() {
     let env = Env::new();
     env.import_ok(&["--owner-speaker", "Alice"]);
-    assert_eq!(rows(&env, "meeting_contract"), 1);
-    assert!(rows(&env, "meeting_span") > 0);
-    assert_eq!(rows(&env, "meeting_output"), 1);
+    assert_eq!(rows(&env, "conversation_contract"), 1);
+    assert!(rows(&env, "conversation_span") > 0);
+    assert_eq!(rows(&env, "conversation_output"), 1);
 
     let forgotten = env.ok(&["meeting", "forget", "weekly-1"]);
     assert_eq!(forgotten["meeting"], "weekly-1");
-    assert_eq!(rows(&env, "meeting_contract"), 0, "the contract survived");
-    assert_eq!(rows(&env, "meeting_span"), 0);
-    assert_eq!(rows(&env, "meeting_output"), 0);
+    assert_eq!(
+        rows(&env, "conversation_contract"),
+        0,
+        "the contract survived"
+    );
+    assert_eq!(rows(&env, "conversation_span"), 0);
+    assert_eq!(rows(&env, "conversation_output"), 0);
 }
 
 /// S5: with a compatible local template selected and the adapter binding unchanged, the adapter

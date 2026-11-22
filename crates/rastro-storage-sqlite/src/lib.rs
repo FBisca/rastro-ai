@@ -36,7 +36,7 @@ const INTENT_END: &str = "202611081000_intent_justification_end";
 /// A migration that starts with this line rebuilds a table other tables name, so the open runs
 /// it with foreign keys off and checks them before it commits.
 const FOREIGN_KEYS_OFF: &str = "-- foreign_keys = off";
-const MIGRATIONS: [(&str, &str); 29] = [
+const MIGRATIONS: [(&str, &str); 30] = [
     (
         "202611041200_initial",
         include_str!("../migrations/202611041200_initial.sql"),
@@ -152,6 +152,10 @@ const MIGRATIONS: [(&str, &str); 29] = [
     (
         "202611211100_read_log",
         include_str!("../migrations/202611211100_read_log.sql"),
+    ),
+    (
+        "202611221000_conversation_store",
+        include_str!("../migrations/202611221000_conversation_store.sql"),
     ),
 ];
 
@@ -1356,10 +1360,10 @@ impl Snapshot for View<'_> {
             .0
             .query_row(
                 &format!(
-                    "SELECT finished_at FROM meeting_run
-                     WHERE meeting_id = ?1 AND state = 'succeeded'
-                       AND id > coalesce((SELECT max(id) FROM meeting_run
-                                          WHERE meeting_id = ?1 AND state = 'succeeded'
+                    "SELECT finished_at FROM conversation_run
+                     WHERE conversation_id = ?1 AND state = 'succeeded'
+                       AND id > coalesce((SELECT max(id) FROM conversation_run
+                                          WHERE conversation_id = ?1 AND state = 'succeeded'
                                             AND id > ?2 AND {carried}), ?2)
                        AND ({dropped})
                      ORDER BY id LIMIT 1"

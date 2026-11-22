@@ -9,6 +9,9 @@ command = "rastro-extractor-slack"
 triggers = []
 dependencies = ["slack"]
 vocabulary = "vocabulary.toml"
+# The extractor also makes a chat thread's turns from its evidence (ADR 0011, amendment
+# 2026-11-22); the core asks for them with `conversation.turns`.
+capabilities = ["conversation.turns"]
 
 # Every rule reads structured fields of one user or viewer observation, at a location that is
 # that record's canonical identifier; none reads a message's text. See src/main.rs.

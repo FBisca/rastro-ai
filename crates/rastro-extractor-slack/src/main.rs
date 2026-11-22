@@ -2,10 +2,19 @@
 //! evidence into `slack` claims (ADR 0008; decisions/vocabulary.md §24–§27, decisions/plugins.md
 //! §55).
 //!
-//! It reads only `structured` observations of five fields: `/id`, `/is_bot`, `/name`,
-//! `/real_name` and `/profile/display_name`, plus the location they were observed at. It never
-//! reads a message's text or any other field, so no claim and no alias comes from text a person
-//! wrote in a channel.
+//! For claims it reads only `structured` observations of five fields: `/id`, `/is_bot`,
+//! `/name`, `/real_name` and `/profile/display_name`, plus the location they were observed at.
+//! It never reads a message's text for a claim, so no claim and no alias comes from text a
+//! person wrote in a channel.
+//!
+//! # Conversation turns
+//! The extractor also answers `conversation.turns` (ADR 0011, amendment 2026-11-22): the core
+//! sends a thread's identity and its evidence — the messages' observations and the structured
+//! user records of their authors — and the extractor makes one turn per message in post order.
+//! A speaker is the account the evidence resolves (`slack:Account`, or `slack:Bot` with kind
+//! `bot`), never a name parsed from text; an author no record resolves is a label of its id.
+//! The text keeps the message's own bytes with user mentions resolved to display labels (the
+//! id appended when authors share one), and each turn cites its message.
 //!
 //! # The location rule
 //! A location names a record when it is exactly `slack:user/<id>`, with `<id>` a Slack user id
@@ -34,10 +43,12 @@
 //! Observations are read in replay order. At each one, the claims its location supports given
 //! the latest observation of each field so far are sent, each once per run.
 use anyhow::{Context, Result, bail};
+use chrono::{DateTime, SecondsFormat, Utc};
 use rastro_plugin_sdk::{
-    BatchItem, CLAIM_SUBMIT, ClaimObject, ClaimSubmit, EntityRef, Envelope, EvidenceBatch,
-    ExtractorInitializeParams, InitializeResult, PROTOCOL_VERSION, RUN_FINISH, Role, RunFinish,
-    SupportRef, Transport,
+    BatchItem, CLAIM_SUBMIT, CONVERSATION_TURNS, ClaimObject, ClaimSubmit, ConversationSpeaker,
+    ConversationTurn, ConversationTurnKind, ConversationTurnsRequest, ConversationTurnsResponse,
+    EVIDENCE_BATCH, EntityRef, Envelope, EvidenceBatch, ExtractorInitializeParams,
+    InitializeResult, PROTOCOL_VERSION, RUN_FINISH, Role, RunFinish, SupportRef, Transport,
 };
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -122,11 +133,7 @@ type Fields<'a> = BTreeMap<&'a str, (usize, &'a BatchItem)>;
 /// An `is_bot` flag: the observation and whether it says the user is a bot. Anything but
 /// `true` or `false` is no flag.
 fn flag(item: &BatchItem) -> Option<(&BatchItem, bool)> {
-    match item.span.quote.as_str() {
-        "true" => Some((item, true)),
-        "false" => Some((item, false)),
-        _ => None,
-    }
+    flag_value(&item.span.quote).map(|bot| (item, bot))
 }
 /// A user's type given its flag, and the supports the flag adds.
 fn user_type(bot: Option<(&BatchItem, bool)>) -> (&'static str, Vec<&BatchItem>) {
@@ -236,6 +243,271 @@ fn extract(items: &[BatchItem]) -> Vec<ClaimSubmit> {
     claims
 }
 
+/// An author the request's evidence resolves: its type and the names a label can come from.
+struct Author<'a> {
+    kind: &'static str,
+    display_name: Option<&'a str>,
+    real_name: Option<&'a str>,
+    name: Option<&'a str>,
+}
+impl Author<'_> {
+    /// The display label: the display name, else the full name, else the username, else the id.
+    fn label<'a>(&'a self, id: &'a str) -> &'a str {
+        self.display_name
+            .or(self.real_name)
+            .or(self.name)
+            .unwrap_or(id)
+    }
+}
+
+/// The authors the request's evidence resolves: a user record's latest `/id` must quote its
+/// location's id, and its latest `/is_bot` flag types it, exactly as the extraction rules type
+/// it. An author no record resolves is absent.
+fn authors(items: &[BatchItem]) -> BTreeMap<String, Author<'_>> {
+    let mut fields: BTreeMap<&str, BTreeMap<&str, &BatchItem>> = BTreeMap::new();
+    for item in items.iter().filter(|i| i.trust_class == "structured") {
+        if record(&item.location).is_some() {
+            fields
+                .entry(&item.location)
+                .or_default()
+                .insert(&item.span.field, item);
+        }
+    }
+    let mut resolved = BTreeMap::new();
+    for (location, fields) in fields {
+        let Some(id) = record(location) else { continue };
+        let quote = |field: &str| fields.get(field).map(|i| i.span.quote.as_str());
+        if quote("/id") != Some(id) {
+            continue;
+        }
+        let kind = match quote("/is_bot").and_then(flag_value) {
+            Some(true) => BOT,
+            _ => ACCOUNT,
+        };
+        let named = |field: &str| quote(field).filter(|q| name(q));
+        resolved.insert(
+            id.to_string(),
+            Author {
+                kind,
+                display_name: named("/profile/display_name"),
+                real_name: named("/real_name"),
+                name: named("/name"),
+            },
+        );
+    }
+    resolved
+}
+/// An `/is_bot` quote: anything but `true` or `false` is no flag.
+fn flag_value(quote: &str) -> Option<bool> {
+    match quote {
+        "true" => Some(true),
+        "false" => Some(false),
+        _ => None,
+    }
+}
+
+/// The label each resolved id reads as: its display label, with the id appended when two or
+/// more users in the request's evidence share that label, so a shared name never collapses
+/// two authors into one.
+fn display_labels<'a>(
+    authors: &'a BTreeMap<String, Author<'a>>,
+    owner: Option<&'a str>,
+) -> BTreeMap<String, String> {
+    fn base<'a>(id: &'a str, authors: &'a BTreeMap<String, Author<'a>>) -> &'a str {
+        authors.get(id).map(|a| a.label(id)).unwrap_or(id)
+    }
+    let ids = || {
+        authors
+            .keys()
+            .map(String::as_str)
+            .chain(owner.filter(|id| !authors.contains_key(*id)))
+    };
+    let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
+    for id in ids() {
+        *counts.entry(base(id, authors)).or_default() += 1;
+    }
+    ids()
+        .map(|id| {
+            let label = base(id, authors);
+            let label = if counts.get(label).is_some_and(|n| *n > 1) {
+                format!("{label} ({id})")
+            } else {
+                label.to_string()
+            };
+            (id.to_string(), label)
+        })
+        .collect()
+}
+
+/// The label a mentioned id reads as, and the account it resolves to: a recorded author, the
+/// token owner (an account even without a profile), or a bare id no evidence resolves.
+fn mention(
+    id: &str,
+    authors: &BTreeMap<String, Author<'_>>,
+    owner: Option<&str>,
+    labels: &BTreeMap<String, String>,
+) -> (String, Option<EntityRef>) {
+    let identifier = format!("slack:user/{id}");
+    let label = labels.get(id).map(String::as_str).unwrap_or(id).to_string();
+    match authors.get(id) {
+        Some(author) => (label, Some(entity(&identifier, author.kind))),
+        None if Some(id) == owner => (label, Some(entity(&identifier, ACCOUNT))),
+        None => (label, None),
+    }
+}
+
+/// The message text with user mentions resolved to labels, and the accounts it mentions in
+/// first-appearance order. Anything that is not a user mention stays as written.
+fn resolve_mentions(
+    text: &str,
+    authors: &BTreeMap<String, Author<'_>>,
+    owner: Option<&str>,
+    labels: &BTreeMap<String, String>,
+) -> (String, Vec<EntityRef>) {
+    let mut out = String::new();
+    let mut mentions = Vec::new();
+    let mut seen = BTreeSet::new();
+    let mut rest = text;
+    while let Some(at) = rest.find("<@") {
+        out.push_str(&rest[..at]);
+        let after = &rest[at + 2..];
+        let Some(end) = after.find('>') else {
+            out.push_str(&rest[at..]);
+            rest = "";
+            break;
+        };
+        let inner = &after[..end];
+        let id = inner.split('|').next().unwrap_or(inner);
+        if slack_id(id) {
+            let (label, account) = mention(id, authors, owner, labels);
+            out.push_str(&label);
+            if let Some(account) = account
+                && seen.insert(id.to_string())
+            {
+                mentions.push(account);
+            }
+        } else {
+            out.push_str(&rest[at..at + 2 + end + 1]);
+        }
+        rest = &after[end + 1..];
+    }
+    out.push_str(rest);
+    (out, mentions)
+}
+
+/// The channel and ts a message location names, with the ts as epoch seconds and
+/// microseconds: `slack:message/<channel>/<ts>`. Anything else names no message.
+fn message_ts(location: &str) -> Option<(&str, &str, i64, u32)> {
+    let (channel, ts) = location.strip_prefix("slack:message/")?.rsplit_once('/')?;
+    if channel.is_empty() {
+        return None;
+    }
+    let (secs, frac) = ts.split_once('.')?;
+    let secs: i64 = secs.parse().ok()?;
+    let mut frac = frac.to_string();
+    frac.truncate(6);
+    while frac.len() < 6 {
+        frac.push('0');
+    }
+    let micros: u32 = frac.parse().ok()?;
+    Some((channel, ts, secs, micros))
+}
+
+/// The thread's turns, one per message in post order: the speaker the evidence resolves — an
+/// account, `slack:Bot` with kind `bot`, or a label of the id when no record resolves it — the
+/// message's own text with user mentions resolved to display labels, its time, its reply-to,
+/// the accounts it mentions, and its own location as the citation. Only the named thread's
+/// messages become turns.
+fn make_turns(request: &ConversationTurnsRequest) -> Vec<ConversationTurn> {
+    let authors = authors(&request.messages);
+    // Whose token it is: the viewer's latest `/id` names the owner's account.
+    let owner = request
+        .messages
+        .iter()
+        .rev()
+        .find(|i| {
+            i.trust_class == "structured"
+                && i.location == "slack:viewer"
+                && i.span.field == "/id"
+                && slack_id(&i.span.quote)
+        })
+        .map(|i| i.span.quote.as_str());
+    let labels = display_labels(&authors, owner);
+    // The latest observation of each field at each message location. The text is untrusted
+    // content; who wrote it and what thread it answers are structured.
+    let mut messages: BTreeMap<&str, BTreeMap<&str, &BatchItem>> = BTreeMap::new();
+    for item in &request.messages {
+        if !item.location.starts_with("slack:message/") {
+            continue;
+        }
+        let field = item.span.field.as_str();
+        let read = match field {
+            "/text" => true,
+            "/user" | "/thread_ts" | "/subtype" => item.trust_class == "structured",
+            _ => false,
+        };
+        if read {
+            messages
+                .entry(&item.location)
+                .or_default()
+                .insert(field, item);
+        }
+    }
+    let mut turns = Vec::new();
+    let mut ordered = Vec::new();
+    for (location, fields) in &messages {
+        let Some((channel, ts, secs, micros)) = message_ts(location) else {
+            continue;
+        };
+        // Only the named thread: its start message and the replies that name it.
+        let thread_ts = fields.get("/thread_ts").map(|i| i.span.quote.as_str());
+        if ts != request.thread && thread_ts != Some(request.thread.as_str()) {
+            continue;
+        }
+        ordered.push((secs, micros, channel, ts, *location, fields));
+    }
+    ordered.sort_by_key(|(secs, micros, ..)| (*secs, *micros));
+    for (secs, micros, channel, ts, location, fields) in ordered {
+        let quote = |field: &str| fields.get(field).map(|i| i.span.quote.as_str());
+        let speaker = match quote("/user").filter(|id| slack_id(id)) {
+            Some(id) => match authors.get(id) {
+                Some(author) => {
+                    ConversationSpeaker::Account(entity(&format!("slack:user/{id}"), author.kind))
+                }
+                None if Some(id) == owner => {
+                    ConversationSpeaker::Account(entity(&format!("slack:user/{id}"), ACCOUNT))
+                }
+                None => ConversationSpeaker::Label(id.into()),
+            },
+            None => ConversationSpeaker::Label("unknown".into()),
+        };
+        let kind = match &speaker {
+            ConversationSpeaker::Account(account) if account.entity_type == BOT => {
+                ConversationTurnKind::Bot
+            }
+            _ if quote("/subtype") == Some("bot_message") => ConversationTurnKind::Bot,
+            _ => ConversationTurnKind::Person,
+        };
+        let (text, mentions) =
+            resolve_mentions(quote("/text").unwrap_or_default(), &authors, owner, &labels);
+        let time = DateTime::<Utc>::from_timestamp(secs, micros * 1000)
+            .map(|at| at.to_rfc3339_opts(SecondsFormat::Millis, true));
+        let reply_to = quote("/thread_ts")
+            .filter(|thread| *thread != ts)
+            .map(|thread| format!("slack:message/{channel}/{thread}"));
+        turns.push(ConversationTurn {
+            speaker,
+            kind,
+            text,
+            time,
+            reply_to,
+            cites: Some(location.into()),
+            mentions,
+        });
+    }
+    turns
+}
+
 fn main() -> Result<()> {
     let mut transport = Transport::new(io::stdin().lock(), io::stdout().lock());
     let request = transport.read()?.context("core closed before initialize")?;
@@ -252,25 +524,42 @@ fn main() -> Result<()> {
     )?)?;
     let mut items = Vec::new();
     loop {
-        let batch: EvidenceBatch = transport.read()?.context("core closed")?.params()?;
-        items.extend(batch.items);
-        if batch.last {
+        let Some(message) = transport.read()? else {
             break;
+        };
+        match message.method.as_deref() {
+            Some(EVIDENCE_BATCH) => {
+                let batch: EvidenceBatch = message.params()?;
+                items.extend(batch.items);
+                if batch.last {
+                    let claims = extract(&items);
+                    for claim in &claims {
+                        transport.send(&Envelope::notification(CLAIM_SUBMIT, claim)?)?;
+                    }
+                    let finish = RunFinish {
+                        status: "ok".into(),
+                        submitted: claims.len() as u64,
+                        reason: None,
+                    };
+                    transport.send(&Envelope::request(1, RUN_FINISH, finish)?)?;
+                    transport
+                        .read()?
+                        .context("core closed before answering run.finish")?;
+                    return Ok(());
+                }
+            }
+            Some(CONVERSATION_TURNS) => {
+                let request: ConversationTurnsRequest = message.params()?;
+                let turns = make_turns(&request);
+                transport.send(&Envelope::response(
+                    message.id,
+                    ConversationTurnsResponse { turns },
+                )?)?;
+            }
+            // Responses and anything else carry no work for an extractor.
+            _ => {}
         }
     }
-    let claims = extract(&items);
-    for claim in &claims {
-        transport.send(&Envelope::notification(CLAIM_SUBMIT, claim)?)?;
-    }
-    let finish = RunFinish {
-        status: "ok".into(),
-        submitted: claims.len() as u64,
-        reason: None,
-    };
-    transport.send(&Envelope::request(1, RUN_FINISH, finish)?)?;
-    transport
-        .read()?
-        .context("core closed before answering run.finish")?;
     Ok(())
 }
 #[cfg(test)]
@@ -468,5 +757,267 @@ mod tests {
         };
         assert!(vocabulary.has_type("slack:Bot"));
         assert!(account("slack:Account") && !account("slack:Bot"));
+    }
+
+    const CHANNEL: &str = "C0ENG";
+    const START: &str = "1700000000.000100";
+
+    fn message_location(ts: &str) -> String {
+        format!("slack:message/{CHANNEL}/{ts}")
+    }
+    /// One message's stored observations: its text untrusted, its author and thread structured.
+    fn message_items(
+        id: i64,
+        ts: &str,
+        author: &str,
+        text: &str,
+        thread_ts: Option<&str>,
+    ) -> Vec<BatchItem> {
+        let location = message_location(ts);
+        let mut items = vec![
+            observed(id, &location, "/text", text, "untrusted content"),
+            observed(id + 1, &location, "/user", author, "structured"),
+        ];
+        if let Some(thread) = thread_ts {
+            items.push(observed(
+                id + 2,
+                &location,
+                "/thread_ts",
+                thread,
+                "structured",
+            ));
+        }
+        items
+    }
+    fn turns_request(thread: &str, messages: Vec<BatchItem>) -> ConversationTurnsRequest {
+        ConversationTurnsRequest {
+            source: "s".into(),
+            scope: "work".into(),
+            thread: thread.into(),
+            messages,
+        }
+    }
+    fn account_speaker(id: &str, entity_type: &str) -> ConversationSpeaker {
+        ConversationSpeaker::Account(EntityRef {
+            identifier: format!("slack:user/{id}"),
+            entity_type: entity_type.into(),
+        })
+    }
+
+    /// spec: A chat thread's turns come from its source's extractor
+    /// A message whose second line starts `Note:` is one turn by its author, carrying the
+    /// whole text: no speaker comes from the text
+    #[test]
+    fn a_multi_line_message_is_one_turn_with_no_speaker_from_its_text() {
+        let text = "I'll send it Friday\nNote: bring the doc";
+        let mut items = user(&format!("slack:user/{ANA}"), ANA);
+        items.extend(message_items(10, START, ANA, text, None));
+        let turns = make_turns(&turns_request(START, items));
+        assert_eq!(turns.len(), 1, "{turns:?}");
+        let turn = &turns[0];
+        assert_eq!(turn.speaker, account_speaker(ANA, ACCOUNT));
+        assert_eq!(turn.text, text);
+        assert_eq!(
+            turn.cites.as_deref(),
+            Some(message_location(START).as_str())
+        );
+    }
+
+    /// spec: A chat thread's turns come from its source's extractor
+    /// An author Slack flags as a bot speaks as its `slack:Bot` account with kind `bot`, a
+    /// human author with kind `person`; a bot message with no author id is still kind `bot`
+    #[test]
+    fn a_bot_authors_turn_is_kind_bot_with_its_bot_account() {
+        let mut items = user(&format!("slack:user/{ANA}"), ANA);
+        let bot_location = format!("slack:user/{BOT}");
+        items.extend([
+            observed(20, &bot_location, "/id", BOT, "structured"),
+            observed(21, &bot_location, "/is_bot", "true", "structured"),
+        ]);
+        items.extend(message_items(10, START, ANA, "hi", None));
+        items.extend(message_items(
+            30,
+            "1700000060.000200",
+            BOT,
+            "deployed",
+            Some(START),
+        ));
+        let orphan = "1700000120.000300";
+        let location = message_location(orphan);
+        items.extend([
+            observed(
+                40,
+                &location,
+                "/text",
+                "release shipped",
+                "untrusted content",
+            ),
+            observed(41, &location, "/thread_ts", START, "structured"),
+            observed(42, &location, "/subtype", "bot_message", "structured"),
+        ]);
+        let turns = make_turns(&turns_request(START, items));
+        assert_eq!(turns.len(), 3, "{turns:?}");
+        assert_eq!(turns[0].speaker, account_speaker(ANA, ACCOUNT));
+        assert_eq!(turns[0].kind, ConversationTurnKind::Person);
+        assert_eq!(turns[1].speaker, account_speaker(BOT, "slack:Bot"));
+        assert_eq!(turns[1].kind, ConversationTurnKind::Bot);
+        assert_eq!(
+            turns[2].speaker,
+            ConversationSpeaker::Label("unknown".into())
+        );
+        assert_eq!(turns[2].kind, ConversationTurnKind::Bot);
+    }
+
+    /// spec: A chat thread's turns come from its source's extractor
+    /// A mention of the token owner by id reads as the owner's label in the turn text, and
+    /// the owner's account is among the turn's mentions — with a profile the label is the
+    /// display name, without one the id itself
+    #[test]
+    fn a_mention_of_the_owner_reads_as_the_owners_label() {
+        let owner = "U0OWNER";
+        let owner_location = format!("slack:user/{owner}");
+        let with_profile = [
+            user(&format!("slack:user/{ANA}"), ANA),
+            vec![
+                observed(20, &owner_location, "/id", owner, "structured"),
+                observed(
+                    21,
+                    &owner_location,
+                    "/profile/display_name",
+                    "Owner",
+                    "structured",
+                ),
+                observed(22, "slack:viewer", "/id", owner, "structured"),
+            ],
+            message_items(10, START, ANA, "<@U0OWNER> can you send the doc?", None),
+        ]
+        .concat();
+        let viewer_only = [
+            user(&format!("slack:user/{ANA}"), ANA),
+            vec![observed(22, "slack:viewer", "/id", owner, "structured")],
+            message_items(10, START, ANA, "<@U0OWNER> can you send the doc?", None),
+        ]
+        .concat();
+        for (items, label) in [(with_profile, "Owner"), (viewer_only, owner)] {
+            let turns = make_turns(&turns_request(START, items));
+            assert_eq!(turns.len(), 1, "{turns:?}");
+            assert_eq!(turns[0].text, format!("{label} can you send the doc?"));
+            assert_eq!(
+                turns[0].mentions,
+                vec![EntityRef {
+                    identifier: format!("slack:user/{owner}"),
+                    entity_type: ACCOUNT.into(),
+                }]
+            );
+        }
+    }
+
+    /// spec: A chat thread's turns come from its source's extractor
+    /// Two authors with the same display name keep turn labels that differ by their ids, and
+    /// a mention of either reads as a label carrying its id
+    #[test]
+    fn two_authors_sharing_a_display_name_turn_labels_differ_by_id() {
+        let ana2 = "U0AN2";
+        let mut items = user(&format!("slack:user/{ANA}"), ANA);
+        let other = format!("slack:user/{ana2}");
+        items.extend([
+            observed(20, &other, "/id", ana2, "structured"),
+            observed(21, &other, "/profile/display_name", "Ana", "structured"),
+        ]);
+        items.extend(message_items(10, START, ANA, "hi", None));
+        items.extend(message_items(
+            30,
+            "1700000060.000200",
+            ana2,
+            "hello",
+            Some(START),
+        ));
+        items.extend(message_items(
+            40,
+            "1700000120.000300",
+            ANA,
+            "<@U0ANA> and <@U0AN2> pair up",
+            Some(START),
+        ));
+        let turns = make_turns(&turns_request(START, items));
+        assert_eq!(turns.len(), 3, "{turns:?}");
+        assert_eq!(turns[0].speaker, account_speaker(ANA, ACCOUNT));
+        assert_eq!(turns[1].speaker, account_speaker(ana2, ACCOUNT));
+        assert_ne!(turns[0].speaker, turns[1].speaker);
+        assert_eq!(turns[2].text, "Ana (U0ANA) and Ana (U0AN2) pair up");
+    }
+
+    /// spec: A chat thread's turns come from its source's extractor
+    /// Each turn cites its own message and carries its time; a reply names the thread start's
+    /// location as its reply-to, the start names none; turns come in post order whatever
+    /// order the evidence arrives in
+    #[test]
+    fn each_turn_cites_its_message_and_replies_to_the_thread_start() {
+        let reply_ts = "1700000060.000200";
+        let mut items = user(&format!("slack:user/{ANA}"), ANA);
+        // Delivered reply-first: post order must not depend on delivery order.
+        items.extend(message_items(30, reply_ts, ANA, "hello", Some(START)));
+        items.extend(message_items(10, START, ANA, "hi", None));
+        let turns = make_turns(&turns_request(START, items));
+        assert_eq!(turns.len(), 2, "{turns:?}");
+        assert_eq!(
+            turns[0].cites.as_deref(),
+            Some(message_location(START).as_str())
+        );
+        assert_eq!(turns[0].reply_to, None);
+        assert_eq!(turns[0].time.as_deref(), Some("2023-11-14T22:13:20.000Z"));
+        assert_eq!(turns[0].text, "hi");
+        assert_eq!(
+            turns[1].cites.as_deref(),
+            Some(message_location(reply_ts).as_str())
+        );
+        assert_eq!(
+            turns[1].reply_to.as_deref(),
+            Some(message_location(START).as_str())
+        );
+        assert_eq!(turns[1].time.as_deref(), Some("2023-11-14T22:14:20.000Z"));
+        assert_eq!(turns[1].text, "hello");
+    }
+
+    /// spec: A chat thread's turns come from its source's extractor
+    /// Only the named thread's messages become turns: another thread's messages delivered
+    /// with the evidence make none
+    #[test]
+    fn messages_outside_the_thread_make_no_turn() {
+        let other_start = "1700000000.000900";
+        let reply_ts = "1700000060.000200";
+        let mut items = user(&format!("slack:user/{ANA}"), ANA);
+        items.extend(message_items(10, START, ANA, "hi", None));
+        items.extend(message_items(30, reply_ts, ANA, "reply", Some(START)));
+        items.extend(message_items(40, other_start, ANA, "elsewhere", None));
+        items.extend(message_items(
+            50,
+            "1700000060.000900",
+            ANA,
+            "other reply",
+            Some(other_start),
+        ));
+        let turns = make_turns(&turns_request(START, items));
+        let cites: Vec<_> = turns.iter().map(|t| t.cites.clone()).collect();
+        assert_eq!(
+            cites,
+            [
+                Some(message_location(START)),
+                Some(message_location(reply_ts))
+            ],
+            "{turns:?}"
+        );
+    }
+
+    /// spec: A chat thread's turns come from its source's extractor
+    /// An author no user record resolves is a label of its id, never a fabricated account: a
+    /// profile the sync could not read leaves the speaker unresolved
+    #[test]
+    fn an_author_without_a_profile_is_a_label_not_an_account() {
+        let items = message_items(10, START, ANA, "hi", None);
+        let turns = make_turns(&turns_request(START, items));
+        assert_eq!(turns.len(), 1, "{turns:?}");
+        assert_eq!(turns[0].speaker, ConversationSpeaker::Label(ANA.into()));
+        assert_eq!(turns[0].kind, ConversationTurnKind::Person);
     }
 }
